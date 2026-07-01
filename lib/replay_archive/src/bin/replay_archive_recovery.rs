@@ -1,9 +1,10 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use zksync_os_replay_archive::{
-    FileSystemReplayArchiveReader, S3ReplayArchiveAuthMode, S3ReplayArchiveConfig,
-    S3ReplayArchiveReader, download_all_replay_archive_objects, parse_age_x25519_identity,
-    read_age_x25519_identity, recover_replay_records_to_rocksdb_with_optional_decryption,
+    FileSystemReplayArchiveReader, GcsReplayArchiveAuthMode, GcsReplayArchiveConfig,
+    GcsReplayArchiveReader, S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader,
+    download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
+    recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 
 #[derive(Debug, Parser)]
@@ -20,12 +21,12 @@ enum Command {
         /// Root folder of the replay archive storage.
         #[arg(
             long,
-            conflicts_with = "s3_bucket_base_url",
-            required_unless_present = "s3_bucket_base_url"
+            conflicts_with_all = ["s3_bucket_base_url", "gcs_bucket_base_url"],
+            required_unless_present_any = ["s3_bucket_base_url", "gcs_bucket_base_url"]
         )]
         archive_root: Option<PathBuf>,
         /// S3 bucket of the replay archive storage.
-        #[arg(long, conflicts_with = "archive_root")]
+        #[arg(long, conflicts_with_all = ["archive_root", "gcs_bucket_base_url"])]
         s3_bucket_base_url: Option<String>,
         /// Path to the S3 credentials file.
         #[arg(long, requires = "s3_bucket_base_url")]
@@ -43,6 +44,19 @@ enum Command {
         /// Optional S3 bucket region.
         #[arg(long, requires = "s3_bucket_base_url")]
         s3_region: Option<String>,
+        /// GCS bucket of the replay archive storage.
+        #[arg(long, conflicts_with_all = ["archive_root", "s3_bucket_base_url"])]
+        gcs_bucket_base_url: Option<String>,
+        /// Path to the GCS credentials file.
+        #[arg(long, requires = "gcs_bucket_base_url")]
+        gcs_credential_file_path: Option<PathBuf>,
+        /// Use anonymous GCS access. This is only useful for public buckets.
+        #[arg(
+            long,
+            requires = "gcs_bucket_base_url",
+            conflicts_with = "gcs_credential_file_path"
+        )]
+        gcs_anonymous: bool,
         /// Local folder where downloaded objects should be written.
         #[arg(long)]
         output_root: PathBuf,
@@ -87,10 +101,29 @@ async fn main() -> anyhow::Result<()> {
             s3_anonymous,
             s3_endpoint,
             s3_region,
+            gcs_bucket_base_url,
+            gcs_credential_file_path,
+            gcs_anonymous,
             output_root,
         } => {
             let downloaded = if let Some(archive_root) = archive_root {
                 let reader = FileSystemReplayArchiveReader::new(archive_root);
+                download_all_replay_archive_objects(&reader, &output_root).await?
+            } else if let Some(gcs_bucket_base_url) = gcs_bucket_base_url {
+                let auth_mode = if let Some(path) = gcs_credential_file_path {
+                    GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path)
+                } else {
+                    anyhow::ensure!(
+                        gcs_anonymous,
+                        "--gcs-credential-file-path is required unless --gcs-anonymous is set"
+                    );
+                    GcsReplayArchiveAuthMode::Anonymous
+                };
+                let reader = GcsReplayArchiveReader::new(GcsReplayArchiveConfig {
+                    bucket_base_url: gcs_bucket_base_url,
+                    auth_mode,
+                })
+                .await?;
                 download_all_replay_archive_objects(&reader, &output_root).await?
             } else {
                 let auth_mode = if let Some(path) = s3_credential_file_path {

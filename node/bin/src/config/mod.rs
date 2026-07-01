@@ -1640,6 +1640,23 @@ pub enum ReplayArchiveConfig {
         #[config(nest, default)]
         encryption: ReplayArchiveEncryptionConfig,
     },
+    /// GCS backend using ambient authentication (workload identity). This is the recommended
+    /// mode when the node runs on GCP.
+    Gcs {
+        /// Name of the GCS bucket.
+        bucket_base_url: String,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
+    /// GCS backend authenticating via a credentials file, for deployments not running on GCP.
+    GcsWithCredentialFile {
+        /// Name of the GCS bucket.
+        bucket_base_url: String,
+        /// Path to the GCS credentials file.
+        gcs_credential_file_path: PathBuf,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
 }
 
 /// Replay archive encryption applied before data is written to cold storage.
@@ -1680,6 +1697,30 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                         ),
                     endpoint,
                     region,
+                },
+                encryption: encryption.into(),
+            },
+            ReplayArchiveConfig::Gcs {
+                bucket_base_url,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::Gcs {
+                config: zksync_os_replay_archive::GcsReplayArchiveConfig {
+                    bucket_base_url,
+                    auth_mode: zksync_os_replay_archive::GcsReplayArchiveAuthMode::Authenticated,
+                },
+                encryption: encryption.into(),
+            },
+            ReplayArchiveConfig::GcsWithCredentialFile {
+                bucket_base_url,
+                gcs_credential_file_path,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::Gcs {
+                config: zksync_os_replay_archive::GcsReplayArchiveConfig {
+                    bucket_base_url,
+                    auth_mode:
+                        zksync_os_replay_archive::GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(
+                            gcs_credential_file_path,
+                        ),
                 },
                 encryption: encryption.into(),
             },
@@ -2461,10 +2502,7 @@ mod tests {
                 assert_eq!(root_path, PathBuf::from("/tmp/replay-archive"));
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
-            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
-                panic!("expected file system replay archive config")
-            }
+            _ => panic!("expected file system replay archive config"),
         }
     }
 
@@ -2498,9 +2536,54 @@ mod tests {
                 assert_eq!(region.as_deref(), Some("us-east-2"));
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop | ReplayArchiveConfig::FileSystem { .. } => {
-                panic!("expected S3 replay archive config")
+            _ => panic!("expected S3 replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcs_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "Gcs"),
+            ("REPLAY_ARCHIVE_BUCKET_BASE_URL", "replay-archive"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::Gcs {
+                bucket_base_url,
+                encryption,
+            } => {
+                assert_eq!(bucket_base_url, "replay-archive");
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
+            _ => panic!("expected GCS replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcs_with_credential_file_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "GcsWithCredentialFile"),
+            ("REPLAY_ARCHIVE_BUCKET_BASE_URL", "replay-archive"),
+            (
+                "REPLAY_ARCHIVE_GCS_CREDENTIAL_FILE_PATH",
+                "/path/to/credentials.json",
+            ),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::GcsWithCredentialFile {
+                bucket_base_url,
+                gcs_credential_file_path,
+                encryption,
+            } => {
+                assert_eq!(bucket_base_url, "replay-archive");
+                assert_eq!(
+                    gcs_credential_file_path,
+                    PathBuf::from("/path/to/credentials.json")
+                );
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
+            }
+            _ => panic!("expected GCS-with-credential-file replay archive config"),
         }
     }
 
@@ -2522,10 +2605,7 @@ mod tests {
                     panic!("expected age X25519 replay archive encryption")
                 }
             },
-            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
-            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
-                panic!("expected file system replay archive config")
-            }
+            _ => panic!("expected file system replay archive config"),
         }
     }
 

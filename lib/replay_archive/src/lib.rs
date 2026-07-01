@@ -1,4 +1,5 @@
 use alloy::primitives::{BlockHash, BlockNumber};
+use anyhow::Context as _;
 use async_trait::async_trait;
 use std::fmt;
 use std::str::FromStr;
@@ -9,6 +10,7 @@ mod age_encrypted;
 mod component;
 mod filesystem;
 mod gate_component;
+mod gcs;
 mod init;
 mod metrics;
 mod reader;
@@ -23,6 +25,10 @@ pub use filesystem::{
     FileSystemReplayArchiveReader, FileSystemReplayArchiveStorage, FileSystemReplayArchiver,
 };
 pub use gate_component::ReplayArchiveGateComponent;
+pub use gcs::{
+    GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
+    GcsReplayArchiveStorage,
+};
 pub use init::{
     InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
     init_replay_archive,
@@ -163,6 +169,44 @@ fn format_block_hash(block_hash: BlockHash) -> String {
     alloy::hex::encode_prefixed(block_hash.0)
 }
 
+/// Channel size used by object-store backends to stream listed objects to callers.
+pub(crate) const REPLAY_ARCHIVE_OBJECT_LIST_CHANNEL_SIZE: usize = 128;
+
+/// Marker object name written under `<session>/` to mark a session as created.
+pub(crate) const SESSION_MARKER_FILE_NAME: &str = ".session";
+
+/// Backend-agnostic key for the marker object that marks a session as created.
+pub(crate) fn session_marker_key(session: &ReplayArchiveSession) -> String {
+    format!("{session}/{SESSION_MARKER_FILE_NAME}")
+}
+
+/// Parses a flat object-store key back into a [`ReplayArchiveKey`], skipping the session marker
+/// and any key that doesn't match the `<session>/<block_number>/<block_hash>` layout.
+pub(crate) fn parse_archive_object_key(
+    object_key: &str,
+) -> anyhow::Result<Option<ReplayArchiveKey>> {
+    let parts = object_key.split('/').collect::<Vec<_>>();
+    if parts.len() != 3 || parts[2] == SESSION_MARKER_FILE_NAME {
+        return Ok(None);
+    }
+
+    let session = parts[0]
+        .parse::<ReplayArchiveSession>()
+        .with_context(|| format!("failed to parse replay archive session in {object_key}"))?;
+    let block_number = parts[1]
+        .parse::<BlockNumber>()
+        .with_context(|| format!("failed to parse replay archive block number in {object_key}"))?;
+    let block_hash = parts[2]
+        .parse::<BlockHash>()
+        .with_context(|| format!("failed to parse replay archive block hash in {object_key}"))?;
+
+    Ok(Some(ReplayArchiveKey::new(
+        session,
+        block_number,
+        block_hash,
+    )))
+}
+
 /// Session-bound byte storage using the session/block/hash layout.
 ///
 /// Implementations must be append-only. Creating storage must create or mark exactly one session
@@ -274,6 +318,33 @@ mod tests {
         assert_eq!(
             key.object_path(),
             "42-node-a/7/0x0000000000000000000000000000000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn parses_archive_object_key() {
+        let block_hash = B256::with_last_byte(1);
+        let object_key = format!("42-node-a/7/{}", format_block_hash(block_hash));
+
+        let parsed = parse_archive_object_key(&object_key).unwrap().unwrap();
+
+        assert_eq!(
+            parsed,
+            ReplayArchiveKey::new(
+                ReplayArchiveSession::new(42, "node-a").unwrap(),
+                7,
+                block_hash
+            )
+        );
+    }
+
+    #[test]
+    fn archive_object_key_parser_skips_session_marker_and_non_archive_keys() {
+        assert!(parse_archive_object_key("other/key").unwrap().is_none());
+        assert!(
+            parse_archive_object_key("42-node-a/.session")
+                .unwrap()
+                .is_none()
         );
     }
 

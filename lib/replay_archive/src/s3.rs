@@ -13,9 +13,6 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-const LIST_OBJECTS_CHANNEL_SIZE: usize = 128;
-const SESSION_MARKER_FILE_NAME: &str = ".session";
-
 /// Authentication mode for S3 replay archive access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -84,10 +81,6 @@ impl S3ReplayArchiveStorage {
         ReplayArchiveKey::new(self.session.clone(), block_number, block_hash).object_path()
     }
 
-    fn session_marker_key(&self) -> String {
-        format!("{}/{}", self.session, SESSION_MARKER_FILE_NAME)
-    }
-
     async fn put_new_object(&self, key: &str, object: Vec<u8>) -> anyhow::Result<()> {
         self.client
             .put_object()
@@ -123,7 +116,7 @@ impl ReplayArchiveStorage for S3ReplayArchiveStorage {
             client,
         };
         storage
-            .put_new_object(&storage.session_marker_key(), Vec::new())
+            .put_new_object(&crate::session_marker_key(&storage.session), Vec::new())
             .await
             .with_context(|| {
                 format!(
@@ -195,7 +188,7 @@ impl ReplayArchiveStorageReader for S3ReplayArchiveReader {
     async fn list_objects(&self) -> ReplayArchiveObjectStream {
         let config = self.config.clone();
         let client = self.client.clone();
-        let (sender, receiver) = mpsc::channel(LIST_OBJECTS_CHANNEL_SIZE);
+        let (sender, receiver) = mpsc::channel(crate::REPLAY_ARCHIVE_OBJECT_LIST_CHANNEL_SIZE);
         tokio::spawn(async move {
             if let Err(err) = list_objects(config, client, sender.clone()).await {
                 let _ = sender.send(Err(err)).await;
@@ -256,7 +249,7 @@ async fn list_objects(
             let Some(object_key) = object.key() else {
                 continue;
             };
-            let Some(key) = parse_s3_archive_key(object_key)? else {
+            let Some(key) = crate::parse_archive_object_key(object_key)? else {
                 continue;
             };
             let bytes = client
@@ -301,72 +294,9 @@ async fn list_objects(
     Ok(())
 }
 
-fn parse_s3_archive_key(object_key: &str) -> anyhow::Result<Option<ReplayArchiveKey>> {
-    let parts = object_key.split('/').collect::<Vec<_>>();
-    if parts.len() != 3 || parts[2] == SESSION_MARKER_FILE_NAME {
-        return Ok(None);
-    }
-
-    let session = parts[0]
-        .parse::<ReplayArchiveSession>()
-        .with_context(|| format!("failed to parse replay archive S3 session in {object_key}"))?;
-    let block_number = parts[1].parse::<BlockNumber>().with_context(|| {
-        format!("failed to parse replay archive S3 block number in {object_key}")
-    })?;
-    let block_hash = parts[2]
-        .parse::<BlockHash>()
-        .with_context(|| format!("failed to parse replay archive S3 block hash in {object_key}"))?;
-
-    Ok(Some(ReplayArchiveKey::new(
-        session,
-        block_number,
-        block_hash,
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format_block_hash;
-    use alloy::primitives::B256;
-
-    #[test]
-    fn s3_object_key_uses_archive_layout() {
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-        let key = ReplayArchiveKey::new(session, 7, B256::ZERO);
-
-        assert_eq!(
-            key.object_path(),
-            "42-node-a/7/0x0000000000000000000000000000000000000000000000000000000000000000"
-        );
-    }
-
-    #[test]
-    fn s3_parser_skips_session_marker_and_non_archive_keys() {
-        assert!(parse_s3_archive_key("other/key").unwrap().is_none());
-        assert!(
-            parse_s3_archive_key("42-node-a/.session")
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn s3_parser_accepts_archive_key() {
-        let block_hash = B256::with_last_byte(1);
-        let object_key = format!("42-node-a/7/{}", format_block_hash(block_hash));
-
-        let parsed = parse_s3_archive_key(&object_key).unwrap().unwrap();
-
-        assert_eq!(
-            parsed,
-            ReplayArchiveKey::new(
-                ReplayArchiveSession::new(42, "node-a").unwrap(),
-                7,
-                block_hash
-            )
-        );
-    }
 
     #[test]
     fn s3_config_builds_credential_file_auth_mode() {
