@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vast.ai Benchmark Runner"
+  short_description: "Choose, create, prepare, and benchmark Vast.ai instances"
+  default_prompt: "Use $vastai-benchmark-runner to rent a suitable Vast.ai machine, set it up, and run benchmark tests."
