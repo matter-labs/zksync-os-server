@@ -3,6 +3,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_internal_config::InternalConfigManager;
+use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::ReadFinality;
 
@@ -25,18 +26,18 @@ impl PipelineComponent for BatchSink {
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = ();
 
-    const NAME: &'static str = "batch_sink";
-    const OUTPUT_BUFFER_SIZE: usize = 1; // No output
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BatchSink;
 
     async fn run(
         self,
-        input: PeekableReceiver<Self::Input>,
+        mut input: PeekableReceiver<Self::Input>,
         _output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let mut input = input.into_inner();
         let mut internal_config = self.internal_config_manager.read_config()?;
         loop {
-            let Some(envelope) = input.recv().await else {
+            let Some(envelope) = input.recv_and_record_picked(&state_reporter).await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
@@ -49,12 +50,18 @@ impl PipelineComponent for BatchSink {
                 proof = ?envelope.data,
                 " ▶▶▶ Batch has been fully processed"
             );
+            state_reporter.record_processed(
+                envelope.batch.last_block_number,
+                None,
+                Some(envelope.batch_number()),
+            );
             if let Some(n) = internal_config.failing_block
                 && envelope.batch.last_block_number >= n
             {
                 let message = "Removing `failing_block` from the internal config";
                 tracing::info!(message);
                 internal_config.failing_block = None;
+                internal_config.failing_block_hash = None;
                 self.internal_config_manager
                     .write_config_and_panic(&internal_config, message)?;
             }
@@ -87,15 +94,14 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
     type Input = T;
     type Output = ();
 
-    const NAME: &'static str = "noop_sink";
-    const OUTPUT_BUFFER_SIZE: usize = 1; // No output
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId = zksync_os_pipeline::ComponentId::NoopSink;
 
     async fn run(
         self,
-        input: PeekableReceiver<Self::Input>,
+        mut input: PeekableReceiver<Self::Input>,
         _output: mpsc::Sender<Self::Output>,
+        _state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let mut input = input.into_inner();
         while input.recv().await.is_some() {
             // No-op: just receive and discard
         }
@@ -121,6 +127,7 @@ pub async fn clear_failing_block_config_task<F: ReadFinality>(
                 let message = "Removing `failing_block` from the internal config";
                 tracing::info!(message);
                 internal_config.failing_block = None;
+                internal_config.failing_block_hash = None;
                 internal_config_manager
                     .write_config_and_panic(&internal_config, message)
                     .expect("failed to write internal config");

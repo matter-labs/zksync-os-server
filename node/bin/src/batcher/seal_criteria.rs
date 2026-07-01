@@ -1,9 +1,8 @@
 use std::collections::HashSet;
 use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
 use zksync_os_batcher_metrics::BATCHER_METRICS;
-use zksync_os_interface::types::BlockOutput;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{ProtocolSemanticVersion, SystemTxType, ZkTxType};
+use zksync_os_types::{BlockOutput, ProtocolSemanticVersion, SystemTxType, ZkTxType};
 
 #[derive(Default, Clone)]
 pub(crate) struct BatchInfoAccumulator {
@@ -68,11 +67,12 @@ impl BatchInfoAccumulator {
             .sum::<u64>();
 
         // If there is a chain id update transaction not in the first block(note `self.block_count > 1`), we need to seal the batch for gateway migration(so it goes in the first block of the next batch)
-        if replay_record
-            .transactions
-            .iter()
-            .any(|tx| matches!(tx.as_system_tx_type(), Some(SystemTxType::SetSLChainId(_))))
-            && self.block_count > 1
+        if replay_record.transactions.iter().any(|tx| {
+            matches!(
+                tx.as_system_tx_type(),
+                Some(SystemTxType::SetSLChainId(_, _))
+            )
+        }) && self.block_count > 1
         {
             self.should_seal_for_gateway_migration = true;
         }
@@ -91,7 +91,7 @@ impl BatchInfoAccumulator {
                         && replay_record.protocol_version.minor == 31
                         && matches!(
                             replay_record.transactions[1].as_system_tx_type(),
-                            Some(SystemTxType::SetSLChainId(u64::MAX))
+                            Some(SystemTxType::SetSLChainId(_, u64::MAX))
                         )),
                 "upgrade tx must be the only tx in the block (or followed by a single SetSLChainId tx for v31): {replay_record:?}"
             );

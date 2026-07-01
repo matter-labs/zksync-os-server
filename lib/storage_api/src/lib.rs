@@ -1,5 +1,10 @@
+mod metered_state;
+pub use metered_state::{MeteredViewState, StateAccessLabel};
+
 mod model;
-pub use model::{FinalityStatus, ReplayRecord, StoredTxData, TxMeta};
+pub use model::{
+    BlockContext, BlockHashes, FinalityStatus, ReplayRecord, StoredTxData, TreeBlock, TxMeta,
+};
 
 mod replay;
 pub use replay::{ReadReplay, ReadReplayExt, WriteReplay};
@@ -17,9 +22,6 @@ pub use repository::{
     LogIndex, ReadRepository, RepositoryBlock, RepositoryError, RepositoryResult, WriteRepository,
 };
 
-mod metered_state;
-pub use metered_state::{MeteredViewState, StateAccessLabel};
-
 mod state;
 pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState};
 
@@ -29,4 +31,4 @@ pub use state_override_view::OverriddenStateView;
 mod read_multichain_root;
 pub use read_multichain_root::read_multichain_root;
 mod overlay_buffer;
-pub use overlay_buffer::{BlockOverlay, OverlayBuffer};
+pub use overlay_buffer::OverlayBuffer;

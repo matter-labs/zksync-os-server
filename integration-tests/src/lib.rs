@@ -1,11 +1,11 @@
 use crate::config::{ChainLayout, load_chain_config};
-use crate::dyn_wallet_provider::EthDynProvider;
-use crate::network::Zksync;
 use crate::node_log::NodeLogState;
 use crate::prover_tester::ProverTester;
-use crate::provider::{ZksyncApi, ZksyncTestingProvider};
+use crate::provider::ZksyncTestingProvider;
 use crate::rpc_recorder::{HttpRpcRecorder, RpcRecordConfig};
-use crate::test_config::{build_node_config, disable_prover_input_generation};
+use crate::test_config::{
+    TEST_PROVIDER_POLL_INTERVAL, build_node_config, disable_prover_input_generation,
+};
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
 use alloy::primitives::U256;
@@ -18,7 +18,7 @@ use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use anyhow::Context;
 use backon::ConstantBuilder;
 use backon::Retryable;
-use reth_tasks::{PanickedTaskError, Runtime, RuntimeBuilder, RuntimeConfig};
+use reth_tasks::{PanickedTaskError, Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -27,16 +27,20 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
+use zksync_os_alloy_ext::network::Zksync;
+use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
-use zksync_os_server::config::Config;
-pub use zksync_os_server::config::DeploymentFilterConfig;
+use zksync_os_provider::NodeProvider;
+use zksync_os_server::config::{Config, ProviderConfig};
+pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::{
     NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
 };
 use zksync_os_state_full_diffs::FullDiffsState;
+use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
 };
@@ -44,8 +48,7 @@ use zksync_os_types::{
 pub mod assert_traits;
 pub mod config;
 pub mod contracts;
-pub mod dyn_wallet_provider;
-mod network;
+pub mod l1_helpers;
 mod node_log;
 mod prover_tester;
 pub mod provider;
@@ -53,6 +56,7 @@ pub mod rpc_recorder;
 pub mod test_config;
 pub mod upgrade;
 mod utils;
+pub mod wallets;
 
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
@@ -104,7 +108,7 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 /// shutdown. We put 60s here until zksync-os v0.4.0 which will get rid of RISC-V simulator and
 /// allow async/abortable prover input generation.
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
-const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(15);
+const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
 const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
@@ -167,8 +171,12 @@ impl TestEnvironment {
                     chain_index: 0,
                 };
                 let l1 = AnvilL1::start(ChainLayout::Gateway { protocol_version }).await?;
-                let mut gateway_config =
-                    build_node_config(&l1, ChainLayout::Gateway { protocol_version }).await?;
+                let mut gateway_config = build_node_config(
+                    &l1,
+                    ChainLayout::Gateway { protocol_version },
+                    cfg!(feature = "prover-tests"),
+                )
+                .await?;
                 if !prover_input_generation_enabled() {
                     disable_prover_input_generation(&mut gateway_config);
                 }
@@ -191,9 +199,12 @@ impl TestEnvironment {
     }
 
     pub async fn default_config(&self) -> anyhow::Result<Config> {
-        let mut config = build_node_config(&self.l1, self.chain_layout).await?;
+        let mut config = build_node_config(&self.l1, self.chain_layout, false).await?;
         if let Some(gateway) = &self.gateway {
-            config.general_config.gateway_rpc_url = Some(gateway.rpc_url.clone());
+            config.gateway_provider_config = Some(ProviderConfig::new(
+                gateway.rpc_url.clone(),
+                TEST_PROVIDER_POLL_INTERVAL,
+            ));
         }
         Tester::bind_runtime_config(
             &self.l1,
@@ -220,15 +231,19 @@ impl TestEnvironment {
             &self.prepared_runtime.ports,
         );
         let supporting_gateway = if let Some(gateway) = self.gateway.take() {
-            config
-                .general_config
-                .gateway_rpc_url
-                .get_or_insert_with(|| gateway.rpc_url.clone());
+            if config.gateway_provider_config.is_none() {
+                config.gateway_provider_config = Some(ProviderConfig::new(
+                    gateway.rpc_url.clone(),
+                    TEST_PROVIDER_POLL_INTERVAL,
+                ));
+            }
             wait_for_gateway_readiness(&self.l1, &gateway.rpc_url, &config).await?;
             Some(gateway.node)
         } else {
             None
         };
+        #[cfg(feature = "prover-tests")]
+        let enable_prover = !config.prover_api_config.fake_fri_provers.enabled;
         let mut tester = Tester::launch_node_inner(
             self.l1,
             config,
@@ -242,6 +257,14 @@ impl TestEnvironment {
         if let Some(gateway) = supporting_gateway {
             tester.owned_supporting_nodes.push(gateway);
         }
+        #[cfg(feature = "prover-tests")]
+        if enable_prover {
+            let mut sequencer_urls = vec![tester.prover_api_address.clone()];
+            for node in &tester.owned_supporting_nodes {
+                sequencer_urls.push(format!("http://localhost:{}", node._ports.prover_api.port));
+            }
+            spawn_prover_service(&tester, &sequencer_urls, sequencer_urls.len()).await;
+        }
         Ok(tester)
     }
 }
@@ -251,7 +274,7 @@ impl TestEnvironment {
 #[derive(Debug)]
 pub struct Tester {
     l1: AnvilL1,
-    pub l2_provider: EthDynProvider,
+    pub l2_provider: NodeProvider,
     /// ZKsync OS-specific provider. Generally prefer to use `l2_provider` as we strive for the
     /// system to be Ethereum-compatible. But this can be useful if you need to assert custom fields
     /// that are only present in ZKsync OS response types (`l2ToL1Logs`, `commitTx`, etc).
@@ -263,6 +286,7 @@ pub struct Tester {
     runtime: Runtime,
     task_manager_handle: Option<JoinHandle<Result<(), PanickedTaskError>>>,
     config: Config,
+    ports: Ports,
 
     #[allow(dead_code)]
     tempdir: Arc<tempfile::TempDir>,
@@ -270,13 +294,14 @@ pub struct Tester {
     // Needed to be able to connect external nodes
     node_record: NodeRecord,
     l2_rpc_address: String,
-    #[expect(dead_code)]
     status_server_url: String,
     gateway_rpc_url: Option<String>,
-    sl_provider: EthDynProvider,
+    sl_provider: NodeProvider,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
     owned_supporting_nodes: Vec<SupportingNode>,
+    #[cfg(feature = "prover-tests")]
+    prover_api_address: String,
 }
 
 /// A stopped test node that keeps its database, effective config and L1 alive so it can be
@@ -285,6 +310,7 @@ pub struct Tester {
 pub struct StoppedTester {
     l1: AnvilL1,
     config: Config,
+    ports: Ports,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
@@ -292,16 +318,19 @@ pub struct StoppedTester {
 }
 
 #[derive(Debug)]
-struct SupportingNode {
+pub struct SupportingNode {
     runtime: Runtime,
+    pub prover_tester: ProverTester,
+    _ports: Ports,
     _tempdir: Arc<TempDir>,
 }
 
-struct Ports {
-    l2_rpc: LockedPort,
-    prover_api: LockedPort,
-    network: LockedPort,
-    status: LockedPort,
+#[derive(Debug)]
+pub(crate) struct Ports {
+    pub(crate) l2_rpc: LockedPort,
+    pub(crate) prover_api: LockedPort,
+    pub(crate) network: LockedPort,
+    pub(crate) status: LockedPort,
 }
 
 impl Tester {
@@ -313,7 +342,10 @@ impl Tester {
         config.general_config.node_role = NodeRole::ExternalNode;
         config.network_config.boot_nodes = vec![self.node_record.into()];
         config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
-        config.general_config.gateway_rpc_url = self.gateway_rpc_url.clone();
+        config.gateway_provider_config = self
+            .gateway_rpc_url
+            .clone()
+            .map(|rpc_url| ProviderConfig::new(rpc_url, TEST_PROVIDER_POLL_INTERVAL));
         config.prover_api_config.fake_fri_provers.enabled = true;
         config.prover_api_config.fake_snark_provers.enabled = true;
         config.prover_input_generator_config.logging_enabled = false;
@@ -321,7 +353,7 @@ impl Tester {
         config.l1_sender_config.pubdata_mode = None;
     }
 
-    pub fn l1_provider(&self) -> &EthDynProvider {
+    pub fn l1_provider(&self) -> &NodeProvider {
         &self.l1.provider
     }
 
@@ -329,16 +361,16 @@ impl Tester {
         &self.l1.wallet
     }
 
-    pub fn sl_provider(&self) -> &EthDynProvider {
+    pub fn sl_provider(&self) -> &NodeProvider {
         &self.sl_provider
     }
 
     /// Returns the gateway provider if a gateway RPC URL is configured, `None` otherwise.
     /// Use this when calling [`L1State::fetch`] or [`L1State::fetch_finalized`].
-    pub fn gateway_eth_provider(&self) -> Option<DynProvider> {
+    pub fn gateway_eth_provider(&self) -> Option<NodeProvider> {
         self.gateway_rpc_url
             .as_ref()
-            .map(|_| self.sl_provider.clone().erased())
+            .map(|_| self.sl_provider.clone())
     }
 
     pub async fn gateway_provider(&self) -> anyhow::Result<Option<DynProvider<Zksync>>> {
@@ -357,6 +389,18 @@ impl Tester {
                 None
             };
         Ok(provider)
+    }
+
+    /// Returns true if the node's runtime has reported a critical-task panic.
+    ///
+    /// Mirrors what a production orchestrator observes when a `reth_tasks` critical task
+    /// panics: the runtime is dying and the node should be respawned. Non-destructive — the
+    /// task-manager handle is left in place so the caller can still consume it via
+    /// [`Self::wait_for_fatal_error_with_timeout`] if desired.
+    pub fn has_crashed(&self) -> bool {
+        self.task_manager_handle
+            .as_ref()
+            .is_some_and(|h| h.is_finished())
     }
 
     /// Waits until the node reports a fatal critical-task error through the runtime task manager.
@@ -401,6 +445,13 @@ impl Tester {
         let mut config = self.config.clone();
         self.apply_external_node_defaults(&mut config);
         config
+    }
+
+    pub async fn status(&self) -> anyhow::Result<StatusResponse> {
+        let response = reqwest::get(format!("{}/status", self.status_server_url))
+            .await?
+            .error_for_status()?;
+        Ok(response.json::<StatusResponse>().await?)
     }
 
     pub async fn wait_for_initial_deposit(&self) -> anyhow::Result<()> {
@@ -458,12 +509,16 @@ impl Tester {
             runtime,
             l1,
             config,
+            ports,
             tempdir,
             log_state,
             chain_layout,
             owned_supporting_nodes,
             ..
         } = self;
+        // NOTE: supporting nodes (e.g. gateway) are kept alive across stop/start so that
+        // `restart()` works for `NEXT_TO_GATEWAY` topology.  They are only torn down in
+        // `StoppedTester::shutdown()` or when `StoppedTester` is dropped.
         shutdown_runtime(runtime).await?;
         Ok(StoppedTester {
             l1,
@@ -471,6 +526,7 @@ impl Tester {
             log_state,
             chain_layout,
             config,
+            ports,
             owned_supporting_nodes,
         })
     }
@@ -521,7 +577,7 @@ impl Tester {
 
     fn bind_runtime_config(l1: &AnvilL1, tempdir: &TempDir, config: &mut Config, ports: &Ports) {
         config.general_config.rocks_db_path = tempdir.path().join("rocksdb");
-        config.general_config.l1_rpc_url = l1.address.clone();
+        config.l1_provider_config.rpc_url = l1.address.clone();
         config.rpc_config.address = format!("0.0.0.0:{}", ports.l2_rpc.port);
         config.prover_api_config.address = format!("0.0.0.0:{}", ports.prover_api.port);
         config.prover_api_config.proof_storage.path = tempdir.path().join("proof_storage_path");
@@ -534,19 +590,24 @@ impl Tester {
 
     async fn launch_node_inner(
         l1: AnvilL1,
-        config: Config,
+        mut config: Config,
         tempdir: Arc<TempDir>,
         chain_layout: ChainLayout<'static>,
         log_state: Option<NodeLogState>,
         wait_for_initial_deposit: bool,
         held_ports: Option<Ports>,
     ) -> anyhow::Result<Self> {
-        let _ports = match held_ports {
+        let ports = match held_ports {
             Some(ports) => ports,
             None => Ports::from_config(&config).await?,
         };
-        #[cfg(feature = "prover-tests")]
-        let enable_prover = !config.prover_api_config.fake_fri_provers.enabled;
+        // In-process fake provers use job managers directly; keep the HTTP API only for tests
+        // that can hand jobs to external prover workers.
+        if config.prover_api_config.fake_fri_provers.enabled
+            && config.prover_api_config.fake_snark_provers.enabled
+        {
+            config.prover_api_config.enabled = false;
+        }
         let l2_rpc_address = config.rpc_config.address.clone();
         let l2_rpc_ws_url = format!("ws://localhost:{}", parse_local_port(&l2_rpc_address)?);
         let status_server_url = config
@@ -574,13 +635,22 @@ impl Tester {
         let node_role = config.general_config.node_role;
         let log_state = log_state.unwrap_or_else(|| NodeLogState::fresh(node_role));
         let log_tag = log_state.tag();
-        let gateway_rpc_url = config.general_config.gateway_rpc_url.clone();
+        let gateway_rpc_url = config
+            .gateway_provider_config
+            .as_ref()
+            .map(|config| config.rpc_url.clone());
         #[cfg(feature = "prover-tests")]
-        let prover_api_address = config.prover_api_config.address.clone();
+        let prover_api_address = config
+            .prover_api_config
+            .address
+            .clone()
+            .replace("0.0.0.0:", "http://localhost:");
 
-        let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
-            .build()
-            .expect("failed to build runtime");
+        let runtime = RuntimeBuilder::new(
+            RuntimeConfig::default().with_tokio(TokioConfig::existing_handle(Handle::current())),
+        )
+        .build()
+        .expect("failed to build runtime");
         let node_span = tracing::info_span!(
             "node",
             node = %log_tag,
@@ -593,51 +663,6 @@ impl Tester {
         let task_manager_handle = runtime
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
-
-        #[cfg(feature = "prover-tests")]
-        if enable_prover {
-            let base_url = prover_api_address.replace("0.0.0.0:", "http://localhost:");
-            let app_bin_path = utils::materialize_multiblock_batch_bin(
-                &tempdir.path().join("app_bins"),
-                "v6",
-                zksync_os_multivm::apps::v6::MULTIBLOCK_BATCH,
-            );
-            let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
-            let output_dir = tempdir.path().join("outputs");
-            std::fs::create_dir_all(&output_dir).unwrap();
-
-            let path = download_prover_and_unpack(cfg!(feature = "gpu-prover-tests")).await;
-
-            let mut child = tokio::process::Command::new(path)
-                .arg("--sequencer-urls")
-                .arg(base_url)
-                .arg("--app-bin-path")
-                .arg(app_bin_path)
-                .arg("--circuit-limit")
-                .arg("10000")
-                .arg("--output-dir")
-                .arg(output_dir)
-                .arg("--trusted-setup-file")
-                .arg(trusted_setup_file)
-                .arg("--iterations")
-                .arg("1")
-                .arg("--max-fris-per-snark")
-                .arg("1")
-                .arg("--disable-zk")
-                .spawn()
-                .expect("failed to spawn prover service");
-            tokio::task::spawn(async move {
-                let code = child
-                    .wait()
-                    .await
-                    .expect("failed to wait for prover service");
-                if code.success() {
-                    tracing::info!("prover service finished running");
-                } else {
-                    panic!("prover service terminated with exit code {}", code);
-                }
-            });
-        }
 
         let l2_wallet = EthereumWallet::new(
             // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
@@ -691,26 +716,27 @@ impl Tester {
                 tracing::info!(%err, ?dur, "retrying connection to L2 node");
             })
             .await?;
-            EthDynProvider::new(sl_provider)
+            NodeProvider::new(sl_provider).await?
         } else {
             l1.provider.clone()
         };
         let gateway_eth_provider = gateway_rpc_url.as_ref().map(|_| sl_provider.clone());
         let prover_tester = ProverTester::new(
-            EthDynProvider::new(l1.provider.clone()),
+            NodeProvider::new(l1.provider.clone()).await?,
             gateway_eth_provider,
-            EthDynProvider::new(l2_provider.clone()),
+            NodeProvider::new(l2_provider.clone()).await?,
             DynProvider::new(l2_zk_provider.clone()),
         );
         let tester = Tester {
             l1,
-            l2_provider: EthDynProvider::new(l2_provider.clone()),
+            l2_provider: NodeProvider::new(l2_provider.clone()).await?,
             l2_zk_provider: DynProvider::new(l2_zk_provider.clone()),
             l2_wallet,
             prover_tester,
             runtime,
             task_manager_handle: Some(task_manager_handle),
             config,
+            ports,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             status_server_url,
             gateway_rpc_url,
@@ -720,11 +746,17 @@ impl Tester {
             tempdir: tempdir.clone(),
             chain_layout,
             owned_supporting_nodes: Vec::new(),
+            #[cfg(feature = "prover-tests")]
+            prover_api_address,
         };
         if wait_for_initial_deposit {
             tester.wait_for_initial_deposit().await?;
         }
         Ok(tester)
+    }
+
+    pub fn owned_supporting_nodes(&self) -> &[SupportingNode] {
+        &self.owned_supporting_nodes
     }
 }
 
@@ -733,7 +765,7 @@ impl StoppedTester {
         &self.config
     }
 
-    pub fn l1_provider(&self) -> &EthDynProvider {
+    pub fn l1_provider(&self) -> &NodeProvider {
         &self.l1.provider
     }
 
@@ -758,9 +790,16 @@ impl StoppedTester {
             chain_layout,
             log_state,
             owned_supporting_nodes,
+            ports,
             ..
         } = self;
-        let ports = Ports::from_config(&config).await?;
+        let ports = if ports.matches_config(&config)? {
+            ports.wait_until_unused().await?;
+            ports
+        } else {
+            drop(ports);
+            Ports::from_config(&config).await?
+        };
         let mut tester = Tester::launch_node_inner(
             l1,
             config,
@@ -789,13 +828,17 @@ impl SupportingNode {
     fn from_tester(tester: Tester) -> Self {
         let Tester {
             runtime,
+            ports,
             tempdir,
             owned_supporting_nodes,
+            prover_tester,
             ..
         } = tester;
         drop(owned_supporting_nodes);
         Self {
             runtime,
+            prover_tester,
+            _ports: ports,
             _tempdir: tempdir,
         }
     }
@@ -820,7 +863,7 @@ impl Drop for SupportingNode {
 }
 
 impl Ports {
-    async fn acquire_unused() -> anyhow::Result<Self> {
+    pub(crate) async fn acquire_unused() -> anyhow::Result<Self> {
         Ok(Self {
             l2_rpc: LockedPort::acquire_unused().await?,
             prover_api: LockedPort::acquire_unused().await?,
@@ -869,6 +912,35 @@ impl Ports {
             })?,
         })
     }
+
+    fn matches_config(&self, config: &Config) -> anyhow::Result<bool> {
+        Ok(
+            self.l2_rpc.port == parse_local_port(&config.rpc_config.address)?
+                && self.prover_api.port == parse_local_port(&config.prover_api_config.address)?
+                && self.network.port == config.network_config.port
+                && self.status.port == parse_local_port(&config.status_server_config.address)?,
+        )
+    }
+
+    async fn wait_until_unused(&self) -> anyhow::Result<()> {
+        wait_for_port_to_be_unused(self.l2_rpc.port)
+            .await
+            .with_context(|| format!("failed waiting for L2 RPC port {}", self.l2_rpc.port))?;
+        wait_for_port_to_be_unused(self.prover_api.port)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed waiting for prover API port {}",
+                    self.prover_api.port
+                )
+            })?;
+        wait_for_port_to_be_unused(self.network.port)
+            .await
+            .with_context(|| format!("failed waiting for network port {}", self.network.port))?;
+        wait_for_port_to_be_unused(self.status.port)
+            .await
+            .with_context(|| format!("failed waiting for status server port {}", self.status.port))
+    }
 }
 
 fn parse_local_port(address: &str) -> anyhow::Result<u16> {
@@ -899,6 +971,24 @@ async fn acquire_port_with_retry(port: u16) -> anyhow::Result<LockedPort> {
     }
 }
 
+async fn wait_for_port_to_be_unused(port: u16) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + PORT_ACQUISITION_TIMEOUT;
+    loop {
+        match LockedPort::check_port_is_unused(port).await {
+            Ok(_) => return Ok(()),
+            Err(err) if tokio::time::Instant::now() < deadline => {
+                tracing::info!(port, %err, "waiting for port to become unused");
+                tokio::time::sleep(PORT_ACQUISITION_POLL_INTERVAL).await;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("port {port} did not become unused within {PORT_ACQUISITION_TIMEOUT:?}")
+                });
+            }
+        }
+    }
+}
+
 async fn shutdown_runtime(runtime: Runtime) -> anyhow::Result<()> {
     let shutdown_ok = tokio::task::spawn_blocking(move || {
         runtime.graceful_shutdown_with_timeout(NODE_SHUTDOWN_TIMEOUT)
@@ -913,7 +1003,7 @@ async fn shutdown_runtime(runtime: Runtime) -> anyhow::Result<()> {
 
 async fn ensure_test_wallet_funded(
     l1: &AnvilL1,
-    l2_provider: &EthDynProvider,
+    l2_provider: &NodeProvider,
     l2_zk_provider: &DynProvider<Zksync>,
     l2_wallet: &EthereumWallet,
 ) -> anyhow::Result<()> {
@@ -1042,6 +1132,7 @@ pub struct GatewayTesterBuilder {
     protocol_version: &'static str,
     num_chains: Option<usize>,
     deployment_filter: Option<DeploymentFilterConfig>,
+    policy_service: Option<PolicyServiceConfig>,
 }
 
 impl Default for GatewayTesterBuilder {
@@ -1050,6 +1141,7 @@ impl Default for GatewayTesterBuilder {
             protocol_version: PROTOCOL_VERSION_V31_0,
             num_chains: None,
             deployment_filter: None,
+            policy_service: None,
         }
     }
 }
@@ -1071,13 +1163,19 @@ impl GatewayTesterBuilder {
         self
     }
 
+    /// Set the policy-service client config for all chains.
+    pub fn policy_service(mut self, config: PolicyServiceConfig) -> Self {
+        self.policy_service = Some(config);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<GatewayTester> {
         let num_chains = self.num_chains.unwrap_or(2);
 
         let protocol_version = self.protocol_version;
         let l1 = AnvilL1::start(ChainLayout::Gateway { protocol_version }).await?;
         let mut gateway_config =
-            build_node_config(&l1, ChainLayout::Gateway { protocol_version }).await?;
+            build_node_config(&l1, ChainLayout::Gateway { protocol_version }, false).await?;
         if !prover_input_generation_enabled() {
             disable_prover_input_generation(&mut gateway_config);
         }
@@ -1103,17 +1201,24 @@ impl GatewayTesterBuilder {
             wait_for_gateway_readiness(&l1, gateway.l2_rpc_url(), &chain_config).await?;
             let gateway_rpc_url = gateway_rpc_url.clone();
             let deployment_filter = self.deployment_filter.clone();
+            let policy_service = self.policy_service.clone();
 
-            let mut tester_config = build_node_config(&l1, chain_layout).await?;
+            let mut tester_config = build_node_config(&l1, chain_layout, false).await?;
             if !prover_input_generation_enabled() {
                 disable_prover_input_generation(&mut tester_config);
             }
-            tester_config.general_config.gateway_rpc_url = Some(gateway_rpc_url);
+            tester_config.gateway_provider_config = Some(ProviderConfig::new(
+                gateway_rpc_url,
+                TEST_PROVIDER_POLL_INTERVAL,
+            ));
             if let Some(deployment_filter) = deployment_filter {
                 tester_config
                     .sequencer_config
                     .tx_validator
                     .deployment_filter = deployment_filter;
+            }
+            if let Some(policy_service) = policy_service {
+                tester_config.sequencer_config.tx_validator.policy_service = policy_service;
             }
 
             let tester =
@@ -1153,13 +1258,14 @@ async fn wait_for_gateway_readiness(
 
     (|| async {
         let gateway_provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::new(PrivateKeySigner::random()))
             .connect(gateway_rpc_url)
             .await
             .with_context(|| format!("failed to connect to gateway RPC at {gateway_rpc_url}"))?;
 
         L1State::fetch_finalized(
-            DynProvider::new(l1.provider.clone()),
-            Some(DynProvider::new(gateway_provider)),
+            l1.provider.clone(),
+            Some(NodeProvider::new(gateway_provider).await?),
             bridgehub_address,
             chain_id,
         )
@@ -1181,7 +1287,7 @@ async fn wait_for_gateway_readiness(
 #[derive(Debug, Clone)]
 pub struct AnvilL1 {
     pub address: String,
-    pub provider: EthDynProvider,
+    pub provider: NodeProvider,
     pub wallet: EthereumWallet,
 
     // Temporary directory that holds uncompressed l1-state.json used to initialize Anvil's state.
@@ -1197,14 +1303,10 @@ impl AnvilL1 {
         std::fs::write(&l1_state_path, &l1_state)
             .context("failed to write L1 state to temporary state file")?;
 
-        let locked_port = LockedPort::acquire_unused().await?;
-        let address = format!("http://localhost:{}", locked_port.port);
-
         // --slots-in-an-epoch defines what blocks are "finalized" in Anvil, last finalized block is `latest - 2 * slots_in_an_epoch`
         // so we set block time to 0.25s and slots in epoch set to 10 and finalization delays is about 10*0.25s*2=5s which is reasonable for tests.
         let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             anvil
-                .port(locked_port.port)
                 .chain_id(L1_CHAIN_ID)
                 .arg("--block-time")
                 .arg("0.25")
@@ -1214,6 +1316,7 @@ impl AnvilL1 {
                 .arg("--slots-in-an-epoch")
                 .arg("10")
         })?;
+        let address = provider.inner().anvil().endpoint();
 
         let wallet = provider.wallet().clone();
 
@@ -1236,7 +1339,7 @@ impl AnvilL1 {
 
         Ok(Self {
             address,
-            provider: EthDynProvider::new(provider),
+            provider: NodeProvider::new(provider).await?,
             wallet,
             _tempdir: Arc::new(tempdir),
         })
@@ -1244,24 +1347,96 @@ impl AnvilL1 {
 }
 
 #[cfg(feature = "prover-tests")]
-async fn download_prover_and_unpack(gpu: bool) -> String {
-    const RELEASE_VERSION: &str = "v0.7.1";
-    const RELEASE_BASE_URL: &str =
-        "https://github.com/matter-labs/zksync-airbender-prover/releases/download/v0.7.1";
+async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
+    let protocol_version = tester.chain_layout.protocol_version();
+    let app_bin_path = match protocol_version {
+        PROTOCOL_VERSION => utils::materialize_multiblock_batch_bin(
+            &tester.tempdir.path().join("app_bins"),
+            "v6",
+            zksync_os_multivm::apps::v6::MULTIBLOCK_BATCH,
+        ),
+        PROTOCOL_VERSION_V31_0 => utils::materialize_multiblock_batch_bin(
+            &tester.tempdir.path().join("app_bins"),
+            "v7",
+            zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH,
+        ),
+        _ => panic!("unsupported protocol version for prover tests"),
+    };
+    let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
+    let output_dir = tester.tempdir.path().join("outputs");
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let path =
+        download_prover_and_unpack(protocol_version, cfg!(feature = "gpu-prover-tests")).await;
+
+    let mut child = tokio::process::Command::new(path)
+        .arg("--sequencer-urls")
+        .arg(sequencer_urls.join(","))
+        .arg("--app-bin-path")
+        .arg(app_bin_path)
+        .arg("--circuit-limit")
+        .arg("10000")
+        .arg("--output-dir")
+        .arg(output_dir)
+        .arg("--trusted-setup-file")
+        .arg(trusted_setup_file)
+        .arg("--iterations")
+        .arg(iterations.to_string())
+        .arg("--max-fris-per-snark")
+        .arg("1")
+        .arg("--disable-zk")
+        .spawn()
+        .expect("failed to spawn prover service");
+    tokio::task::spawn(async move {
+        let code = child
+            .wait()
+            .await
+            .expect("failed to wait for prover service");
+        if code.success() {
+            tracing::info!("prover service finished running");
+        } else {
+            panic!("prover service terminated with exit code {}", code);
+        }
+    });
+}
+
+#[cfg(feature = "prover-tests")]
+fn prover_release_for_protocol(protocol_version: &str) -> &'static str {
+    match protocol_version {
+        PROTOCOL_VERSION => "v0.7.1",
+        PROTOCOL_VERSION_V31_0 => "v0.8.0",
+        _ => {
+            panic!("unsupported protocol version `{protocol_version}` for prover binary selection")
+        }
+    }
+}
+
+#[cfg(feature = "prover-tests")]
+async fn download_prover_and_unpack(protocol_version: &str, gpu: bool) -> String {
+    let release_version = prover_release_for_protocol(protocol_version);
+    let release_base_url = format!(
+        "https://github.com/matter-labs/zksync-airbender-prover/releases/download/{release_version}"
+    );
 
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     let asset_name = match (os, arch, gpu) {
         ("linux", "x86_64", true) => {
-            "zksync-os-prover-service-v0.7.1-x86_64-unknown-linux-gnu-gpu.tar.gz"
+            format!(
+                "zksync-os-prover-service-{release_version}-x86_64-unknown-linux-gnu-gpu.tar.gz"
+            )
         }
         ("linux", "x86_64", false) => {
-            "zksync-os-prover-service-v0.7.1-x86_64-unknown-linux-gnu-cpu.tar.gz"
+            format!(
+                "zksync-os-prover-service-{release_version}-x86_64-unknown-linux-gnu-cpu.tar.gz"
+            )
         }
         ("macos", _, true) => {
-            panic!("GPU prover binary is not available for macOS in {RELEASE_VERSION}")
+            panic!("GPU prover binary is not available for macOS in {release_version}")
         }
-        ("macos", _, false) => "zksync-os-prover-service-v0.7.1-universal-apple-darwin-cpu.tar.gz",
+        ("macos", _, false) => {
+            format!("zksync-os-prover-service-{release_version}-universal-apple-darwin-cpu.tar.gz")
+        }
         ("linux", _, _) => panic!(
             "unsupported Linux architecture `{arch}` for prover binaries; supported architecture: x86_64"
         ),
@@ -1285,9 +1460,9 @@ async fn download_prover_and_unpack(gpu: bool) -> String {
         return binary_path.display().to_string();
     }
 
-    let archive_path = dir.join(asset_name);
+    let archive_path = dir.join(&asset_name);
     if !std::fs::exists(archive_path.as_path()).expect("failed to check archive existence") {
-        let url = format!("{RELEASE_BASE_URL}/{asset_name}");
+        let url = format!("{release_base_url}/{asset_name}");
         tracing::info!(
             "downloading prover service archive from {url} to {}",
             archive_path.display()

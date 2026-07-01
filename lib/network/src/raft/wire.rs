@@ -18,6 +18,16 @@ pub enum RaftRequest {
     InstallSnapshot(InstallSnapshotRequest<RaftTypeConfig>),
 }
 
+impl std::fmt::Display for RaftRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AppendEntries(_) => f.write_str("append_entries"),
+            Self::Vote(_) => f.write_str("vote"),
+            Self::InstallSnapshot(_) => f.write_str("install_snapshot"),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RaftResponse {
     AppendEntries(AppendEntriesResponse<PeerId>),

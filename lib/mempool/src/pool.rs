@@ -1,3 +1,4 @@
+use crate::interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig, LocalEthCall};
 use crate::metrics::TRANSACTION_POOL_METRICS;
 use crate::subpools::interop_fee::InteropFeeSubpool;
 use crate::subpools::interop_roots::InteropRootsSubpool;
@@ -6,49 +7,217 @@ use crate::subpools::l2::{L2Subpool, L2TransactionsStreamMarker};
 use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::{UpgradeSubpool, UpgradeTransactionsStream};
 use alloy::consensus::{Header, Sealed};
-use alloy::primitives::TxHash;
+use alloy::primitives::{Address, ChainId, TxHash};
+use alloy::providers::Provider;
+use anyhow::Context;
 use futures::stream::{BoxStream, PollNext};
 use futures::{Stream, StreamExt};
+use reth_ethereum_primitives::{Block, BlockBody};
 use reth_execution_types::ChangedAccount;
-use reth_primitives::{Block, BlockBody};
 use reth_primitives_traits::SealedBlock;
+use reth_tasks::Runtime;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
 use tokio::time::Instant;
+use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
+use zksync_os_contract_interface::l1_discovery::L1State;
+use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::AccountDiff;
+use zksync_os_l1_watcher::{
+    GatewayMigrationWatcher, InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig,
+    SegmentResolver, StartResolver,
+};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, FeeParams, L1TxSerialId, SystemTxType, UpgradeMetadata, ZkEnvelope,
-    ZkTransaction,
+    ExecutionVersion, FeeParams, L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo, UpgradeMetadata,
+    ZkEnvelope, ZkTransaction,
 };
 
 /// General pool that provides unified access to all transaction sources in the system.
 ///
 /// Consists of multiple smaller subpools, see [`crate::subpools`] for more information.
 pub struct Pool<T> {
+    runtime: Runtime,
+    genesis: Genesis,
     upgrade_subpool: UpgradeSubpool,
     sl_chain_id_subpool: SlChainIdSubpool,
     interop_fee_subpool: InteropFeeSubpool,
     interop_roots_subpool: InteropRootsSubpool,
     l1_subpool: L1Subpool,
     l2_subpool: T,
+    subcomponents: Subcomponents,
+}
+
+struct Subcomponents {
+    upgrade_watcher: Option<StartResolver<ProtocolSemanticVersion, L1UpgradeTxWatcher>>,
+    l1_tx_watcher: Option<StartResolver<u64, L1TxWatcher>>,
+    interop_watcher: Option<SegmentResolver<u64, InteropWatcher>>,
+    gateway_migration_watcher: Option<StartResolver<u64, GatewayMigrationWatcher>>,
+    /// Polls local + gateway state and enqueues interop-fee-update system txs into
+    /// `interop_fee_subpool`.
+    /// `None` unless this node is responsible for interop fee updates (main node settling on
+    /// Gateway) - see [`Pool::new`].
+    interop_fee_updater: Option<InteropFeeUpdater>,
+}
+
+pub struct Config {
+    pub node_role: NodeRole,
+    pub chain_id: ChainId,
+    pub gateway_chain_id: ChainId,
+    pub interop_roots_per_tx: usize,
+    pub bytecode_supplier_address: Address,
+    pub l1_watcher_config: L1WatcherConfig,
+    pub interop_fee_updater_config: InteropFeeUpdaterConfig,
 }
 
 impl<T: L2Subpool> Pool<T> {
-    pub fn new(
-        upgrade_subpool: UpgradeSubpool,
-        sl_chain_id_subpool: SlChainIdSubpool,
-        interop_fee_subpool: InteropFeeSubpool,
-        interop_roots_subpool: InteropRootsSubpool,
-        l1_subpool: L1Subpool,
+    pub async fn new(
+        runtime: Runtime,
+        genesis: Genesis,
+        l1_state: &L1State,
+        config: Config,
+        eth_call: Box<dyn LocalEthCall>,
+        base_token_price: BaseTokenPriceHandle,
         l2_subpool: T,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        let upgrade_subpool = UpgradeSubpool::default();
+        let sl_chain_id_subpool = SlChainIdSubpool::default();
+        let interop_fee_subpool = InteropFeeSubpool::default();
+        let interop_roots_subpool = InteropRootsSubpool::new(config.interop_roots_per_tx);
+        let l1_subpool = L1Subpool::new(10);
+
+        // The interop fee updater only runs on the main node and only when it is settling on Gateway.
+        let interop_fee_updater = if config.node_role.is_main() && l1_state.settles_on_gateway() {
+            Some(InteropFeeUpdater::new(
+                eth_call,
+                l1_state.diamond_proxy_sl.provider().clone().erased(),
+                base_token_price,
+                interop_fee_subpool.clone(),
+                config.interop_fee_updater_config.clone(),
+            ))
+        } else {
+            None
+        };
+
+        let upgrade_watcher = L1UpgradeTxWatcher::create_watcher(
+            config.l1_watcher_config.clone(),
+            config.chain_id,
+            l1_state.bridgehub_l1.clone(),
+            l1_state.diamond_proxy_l1.clone(),
+            l1_state.diamond_proxy_sl.clone(),
+            config.bytecode_supplier_address,
+            upgrade_subpool.clone(),
+        )
+        .await
+        .context("failed to start L1 upgrade transaction watcher")?;
+
+        let interop_watcher = InteropWatcher::create_watcher(
+            l1_state.settlement_layer_intervals.clone(),
+            config.l1_watcher_config.clone(),
+            config.chain_id,
+            interop_roots_subpool.clone(),
+        )
+        .context("failed to create interop roots watcher")?;
+
+        let l1_tx_watcher = L1TxWatcher::create_watcher(
+            config.l1_watcher_config.clone(),
+            l1_state.diamond_proxy_l1.clone(),
+            l1_state.diamond_proxy_sl.clone(),
+            l1_subpool.clone(),
+        )
+        .await
+        .context("failed to create L1 transaction watcher")?;
+
+        let gateway_migration_watcher = GatewayMigrationWatcher::create_watcher(
+            l1_state.diamond_proxy_l1.clone(),
+            l1_state.bridgehub_l1.clone(),
+            config.chain_id,
+            l1_state.l1_chain_id,
+            config.gateway_chain_id,
+            config.l1_watcher_config.clone(),
+            sl_chain_id_subpool.clone(),
+        )
+        .await
+        .context("failed to create gateway migration watcher")?;
+
+        let subcomponents = Subcomponents {
+            upgrade_watcher: Some(upgrade_watcher),
+            l1_tx_watcher: Some(l1_tx_watcher),
+            interop_watcher,
+            gateway_migration_watcher: Some(gateway_migration_watcher),
+            interop_fee_updater,
+        };
+
+        Ok(Self {
+            runtime,
+            genesis,
             upgrade_subpool,
             sl_chain_id_subpool,
             interop_fee_subpool,
             interop_roots_subpool,
             l1_subpool,
             l2_subpool,
+            subcomponents,
+        })
+    }
+
+    /// Initializes mempool with the starting block, expects to be called exactly once during the
+    /// node's lifetime.
+    pub async fn init(&mut self, replay: &ReplayRecord) {
+        let current_protocol_version = &replay.protocol_version;
+        self.upgrade_subpool
+            .init(current_protocol_version.clone())
+            .await;
+
+        // If we start from genesis, we should start by sending upgrade tx for genesis. Same thing
+        // for block #1 as it contains this upgrade tx required during replay.
+        if replay.block_context.block_number <= 1 {
+            let genesis_upgrade = self.genesis.genesis_upgrade_tx().await;
+            let upgrade_tx = UpgradeInfo {
+                tx: Some(genesis_upgrade.tx.clone()),
+                metadata: UpgradeMetadata {
+                    protocol_version: genesis_upgrade.protocol_version.clone(),
+                    timestamp: 0, // No restrictions on timestamp.
+                    force_preimages: genesis_upgrade.force_deploy_preimages.clone(),
+                },
+            };
+            self.upgrade_subpool.insert(upgrade_tx).await;
+        }
+
+        self.interop_fee_subpool
+            .init(replay.starting_cursors.interop_fee_number)
+            .await;
+
+        if let Some(upgrade_watcher) = self.subcomponents.upgrade_watcher.take() {
+            self.runtime.spawn_critical_task(
+                "L1 upgrade transaction watcher",
+                upgrade_watcher.run(current_protocol_version.clone()),
+            );
+        }
+        if let Some(l1_tx_watcher) = self.subcomponents.l1_tx_watcher.take() {
+            self.runtime.spawn_critical_task(
+                "L1 transaction watcher",
+                l1_tx_watcher.run(replay.starting_cursors.l1_priority_id),
+            );
+        }
+        if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
+            if let Some(gateway_migration_watcher) =
+                self.subcomponents.gateway_migration_watcher.take()
+            {
+                self.runtime.spawn_critical_task(
+                    "gateway migration watcher",
+                    gateway_migration_watcher.run(replay.starting_cursors.migration_number),
+                );
+            }
+            if let Some(interop_watcher) = self.subcomponents.interop_watcher.take() {
+                self.runtime.spawn_critical_task(
+                    "interop roots watcher",
+                    interop_watcher.run(replay.starting_cursors.interop_root_id),
+                );
+            }
+            if let Some(interop_fee_updater) = self.subcomponents.interop_fee_updater.take() {
+                self.runtime
+                    .spawn_critical_task("interop fee updater", interop_fee_updater.run());
+            }
         }
     }
 
@@ -58,10 +227,15 @@ impl<T: L2Subpool> Pool<T> {
     /// Also provides upgrade information is there is one (which is not necessarily accompanied by
     /// an upgrade transaction).
     ///
+    /// `include_interop_traffic` should be `false` whenever the chain currently settles on L1 --
+    /// in that case interop-root and interop-fee system txs are not valid downstream (they only
+    /// flow through Gateway settlement) and must not be included in produced blocks.
+    ///
     /// Returns `None` if all transaction sources are closed.
     pub async fn best_transactions_stream<'a>(
         &'a mut self,
         next_interop_tx_allowed_after: Instant,
+        include_interop_traffic: bool,
     ) -> Option<StreamOutcome<'a>> {
         let mut upgrade_info_stream = self.upgrade_subpool.upgrade_info_stream().await;
 
@@ -140,7 +314,7 @@ impl<T: L2Subpool> Pool<T> {
                         stream: MarkingTxStream::unmarkable(sl_chain_id_stream),
                     });
                 }
-                Some(_) = interop_related_stream.peek() => {
+                Some(_) = interop_related_stream.peek(), if include_interop_traffic => {
                     return Some(StreamOutcome {
                         upgrade_metadata,
                         stream: MarkingTxStream::unmarkable(interop_related_stream),
@@ -212,7 +386,7 @@ impl<T: L2Subpool> Pool<T> {
                     SystemTxType::SetInteropFee(_) => {
                         interop_fee_txs.push(system_tx);
                     }
-                    SystemTxType::SetSLChainId(_) => {
+                    SystemTxType::SetSLChainId(_, _) => {
                         sl_chain_id_txs.push(system_tx);
                     }
                 },
@@ -238,7 +412,7 @@ impl<T: L2Subpool> Pool<T> {
             .interop_fee_subpool
             .on_canonical_state_change(interop_fee_txs, strict_subpool_cleanup)
             .await;
-        let last_migration_number = self
+        let sl_chain_id_outcome = self
             .sl_chain_id_subpool
             .on_canonical_state_change(sl_chain_id_txs)
             .await;
@@ -281,7 +455,8 @@ impl<T: L2Subpool> Pool<T> {
         StateChangeOutcome {
             last_interop_log_id,
             last_l1_priority_id,
-            last_migration_number,
+            last_migration_number: sl_chain_id_outcome.map(|o| o.last_migration_number),
+            last_sl_chain_id_target: sl_chain_id_outcome.map(|o| o.last_sl_chain_id_target),
             last_interop_fee_number,
         }
     }
@@ -304,6 +479,9 @@ pub struct StateChangeOutcome {
     pub last_l1_priority_id: Option<L1TxSerialId>,
     /// Last migration number that was executed after canonical state change.
     pub last_migration_number: Option<u64>,
+    /// Target settlement-layer chain id of the last `SetSLChainId` system tx applied in the
+    /// block (excluding the `u64::MAX` upgrade placeholder).
+    pub last_sl_chain_id_target: Option<ChainId>,
     /// Last interop fee update number that was executed after canonical state change.
     pub last_interop_fee_number: Option<u64>,
 }

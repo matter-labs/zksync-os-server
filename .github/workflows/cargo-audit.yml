@@ -30,7 +30,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Run cargo audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # 'RUSTSEC-2025-0055' todo: waiting for ark-relations to release a patch https://github.com/arkworks-rs/snark/issues/413

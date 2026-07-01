@@ -8,13 +8,15 @@ use crate::debug_impl::DebugError;
 use crate::eth_call_handler::EthCallError;
 use crate::eth_filter::EthFilterError;
 use crate::eth_impl::EthError;
+use crate::rpc_storage::RpcStorageError;
+use crate::tx_forwarder::TxForwardError;
 use crate::tx_handler::{EthSendRawTransactionError, EthSendRawTransactionSyncError};
 use crate::unstable_impl::UnstableError;
 use crate::zks_impl::ZksError;
 use alloy::primitives::Bytes;
 use alloy::rpc::types::error::EthRpcErrorCode;
 use alloy::sol_types::{ContractError, RevertReason};
-use alloy::transports::{RpcError, TransportErrorKind};
+use alloy::transports::RpcError;
 use jsonrpsee::core::RpcResult;
 use std::fmt;
 use std::fmt::Display;
@@ -49,6 +51,9 @@ impl<Ok> ToRpcResult<Ok, EthError> for Result<Ok, EthError> {
             EthError::BlockNotFound(_)
             | EthError::NonceMaxValue
             | EthError::InvalidRewardPercentiles => invalid_params_rpc_err(err.to_string()),
+            EthError::RpcStorage(RpcStorageError::BlockNotFound(_)) => {
+                invalid_params_rpc_err(err.to_string())
+            }
             EthError::RpcStorage(_) | EthError::Repository(_) | EthError::State(_) => {
                 internal_rpc_err(err.to_string())
             }
@@ -83,9 +88,15 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
             EthSendRawTransactionError::NotAcceptingTransactions(_) => {
                 internal_rpc_err(err.to_string())
             }
-            EthSendRawTransactionError::ForwardError(ref rpc_err) => {
-                forward_error_to_rpc_err(rpc_err, &err)
+            EthSendRawTransactionError::ForwardError(ref forward_err) => {
+                forward_error_to_rpc_err(forward_err, &err)
             }
+            EthSendRawTransactionError::PolicyDenied => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
+            EthSendRawTransactionError::JudgeSimFailed(_) => internal_rpc_err(err.to_string()),
         })
     }
 }
@@ -112,6 +123,32 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 revert.to_string(),
                 revert.output.as_ref().map(|out| out.as_ref()),
             ),
+            EthCallError::SimulateInvalidParams(_)
+            | EthCallError::SimulateInvalidBlockOverride(_) => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            // Error codes -380xx follow the reth implementation of the eth_simulateV1 spec.
+            EthCallError::SimulateBlockNumberInvalid { .. } => {
+                rpc_error_with_code(-38020, err.to_string())
+            }
+            EthCallError::SimulateBlockTimestampInvalid { .. } => {
+                rpc_error_with_code(-38021, err.to_string())
+            }
+            EthCallError::SimulateBlockGasLimitExceeded => {
+                rpc_error_with_code(-38015, err.to_string())
+            }
+            EthCallError::SimulateMovePrecompileNotSupported => {
+                invalid_params_rpc_err(err.to_string())
+            }
+            EthCallError::PolicyDenied => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
+            EthCallError::CallFees(_) => invalid_params_rpc_err(err.to_string()),
+            EthCallError::Storage(RpcStorageError::BlockNotFound(_)) => {
+                invalid_params_rpc_err(err.to_string())
+            }
             err => internal_rpc_err(err.to_string()),
         })
     }
@@ -132,21 +169,29 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionSyncError>
                 // Code 4 is used as per EIP-7966 (see https://eips.ethereum.org/EIPS/eip-7966)
                 rpc_error_with_code(4, err.to_string())
             }
+            err @ EthSendRawTransactionSyncError::RejectedDuringExecution(_) => rpc_err(
+                EthRpcErrorCode::TransactionRejected.code(),
+                err.to_string(),
+                None,
+            ),
         })
     }
 }
 
-/// Converts an alloy `RpcError` from tx forwarding into a jsonrpsee error object,
-/// preserving the original JSON-RPC error code when the main node returned one.
-/// Falls back to internal error (-32603) for transport failures.
+/// Converts tx forwarding errors into a jsonrpsee error object.
+/// Preserves the original JSON-RPC error code when the remote node returned one.
+/// Local routing failures and transport failures fall back to internal error (-32603).
 fn forward_error_to_rpc_err(
-    rpc_err: &RpcError<TransportErrorKind>,
+    forward_err: &TxForwardError,
     display: &impl fmt::Display,
 ) -> jsonrpsee::types::error::ErrorObject<'static> {
-    if let RpcError::ErrorResp(payload) = rpc_err {
-        rpc_error_with_code(payload.code as i32, display.to_string())
-    } else {
-        internal_rpc_err(display.to_string())
+    match forward_err {
+        TxForwardError::Rpc(RpcError::ErrorResp(payload)) => {
+            rpc_error_with_code(payload.code as i32, display.to_string())
+        }
+        TxForwardError::Rpc(_) | TxForwardError::NoKnownLeader | TxForwardError::NoProvider(_) => {
+            internal_rpc_err(display.to_string())
+        }
     }
 }
 

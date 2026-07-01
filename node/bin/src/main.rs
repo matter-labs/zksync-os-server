@@ -1,17 +1,18 @@
 use clap::{Parser, Subcommand};
-use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig};
+use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig};
 use smart_config::{ConfigRepository, ConfigSources, Environment};
 use std::sync::mpsc;
 use std::{path::Path, path::PathBuf, str::FromStr, time::Duration};
 use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::task::JoinHandle;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
-    Config, ConfigArgs, ConfigValidate, ProofStorageConfig, RebuildBlocksConfig,
-    StateBackendConfig, build_external_config, load_config_file_sources,
+    Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBounds,
+    RebuildConfig, StateBackendConfig, build_external_config, load_config_file_sources,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
@@ -24,6 +25,14 @@ static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemall
 
 const IMMEDIATE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+/// Push interval for push exporter (almost all metrics are pull)
+/// We don't have to report it frequently, because final push is guaranteed.
+/// However, setting this to 60s or more,
+/// will cause a lot of reconnection log spam, due to our infra setup
+const PROMETHEUS_PUSH_INTERVAL: Duration = Duration::from_secs(30);
+/// Push exporter graceful shutdown timeout, the shutdown is nearly instant
+/// We need a graceful shutdown because push metrics can be used for alerts
+const PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
@@ -93,9 +102,11 @@ pub async fn main() {
         .install_default()
         .expect("failed to install rustls ring crypto provider");
 
-    let runtime = RuntimeBuilder::new(RuntimeConfig::with_existing_handle(Handle::current()))
-        .build()
-        .expect("failed to build runtime");
+    let runtime = RuntimeBuilder::new(
+        RuntimeConfig::default().with_tokio(TokioConfig::existing_handle(Handle::current())),
+    )
+    .build()
+    .expect("failed to build runtime");
 
     let opt = Cli::parse();
 
@@ -169,22 +180,25 @@ pub async fn main() {
     // ======= Run tasks ===========
     let ephemeral_enabled = config.general_config.ephemeral;
     let _ephemeral_guard = ephemeral_enabled.then(|| enable_ephemeral_mode(&mut config));
-    let prometheus_port = config.observability_config.prometheus.port;
+    let prometheus_config = config.observability_config.prometheus.clone();
+    let prometheus_port = prometheus_config.port;
 
     match config.general_config.state_backend {
         StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config).await,
         StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config).await,
     };
 
-    runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
-        if ephemeral_enabled {
-            tracing::info!("Ephemeral mode enabled, skipping Prometheus exporter");
-        } else {
+    let prometheus_push_shutdown = if ephemeral_enabled {
+        tracing::info!("Ephemeral mode enabled, skipping Prometheus push exporter");
+        None
+    } else {
+        runtime.spawn_critical_with_graceful_shutdown_signal("prometheus", |shutdown| async move {
             let prometheus: PrometheusExporterConfig =
                 PrometheusExporterConfig::pull(prometheus_port);
             prometheus.run(shutdown).await.expect("prometheus failed");
-        }
-    });
+        });
+        spawn_prometheus_push_exporter(&runtime, &prometheus_config)
+    };
 
     let task_manager_handle = runtime
         .take_task_manager_handle()
@@ -193,12 +207,66 @@ pub async fn main() {
     tokio::select! {
         task_manager_result = task_manager_handle => {
             if let Ok(Err(err)) = task_manager_result {
-                tracing::error!("shutting down due to error");
+                tracing::error!(%err, "shutting down due to critical task error");
+                // Graceful shutdown for push exporter. Very fast.
+                // This is needed for REVM alert.
+                wait_for_prometheus_push_shutdown(prometheus_push_shutdown).await;
                 eprintln!("Error: {err:?}");
                 std::process::exit(1);
             }
         },
         _ = handle_delayed_termination(runtime) => {},
+    }
+}
+
+/// Exports metric groups with `PushMetrics` suffix
+fn spawn_prometheus_push_exporter(
+    runtime: &Runtime,
+    prometheus_config: &PrometheusConfig,
+) -> Option<JoinHandle<()>> {
+    let Some(push_gateway_url) = prometheus_config.push_gateway_url.clone() else {
+        tracing::warn!(
+            "Prometheus push gateway URL is not configured; push-only metrics will not be exported"
+        );
+        return None;
+    };
+
+    let handle = runtime.spawn_critical_with_graceful_shutdown_signal(
+        "prometheus push",
+        |shutdown| async move {
+            let push_gateway_endpoint =
+                PrometheusExporterConfig::gateway_endpoint(&push_gateway_url);
+            let prometheus =
+                PrometheusExporterConfig::push(push_gateway_endpoint, PROMETHEUS_PUSH_INTERVAL);
+            prometheus
+                .run(shutdown)
+                .await
+                .expect("prometheus push failed");
+        },
+    );
+
+    Some(handle)
+}
+
+async fn wait_for_prometheus_push_shutdown(handle: Option<JoinHandle<()>>) {
+    let Some(handle) = handle else {
+        tracing::warn!("Prometheus push exporter was not configured; nothing to wait for");
+        return;
+    };
+
+    match tokio::time::timeout(PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT, handle).await {
+        Ok(Ok(())) => {
+            tracing::info!("Prometheus push exporter shutdown completed");
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(%err, "Prometheus push exporter task did not complete cleanly");
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout = ?PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT,
+                "Timed out waiting for Prometheus push exporter shutdown"
+            );
+        }
     }
 }
 
@@ -249,7 +317,6 @@ fn enable_ephemeral_mode(config: &mut Config) -> Option<TempDir> {
         path = %tempdir_path.display(),
         "Ephemeral mode enabled. Using temporary directory for RocksDB and proof storage"
     );
-
     // Update config to use temporary directory
     config.general_config.rocks_db_path = tempdir_path.join("node");
     config.prover_api_config.proof_storage = ProofStorageConfig {
@@ -292,17 +359,23 @@ fn load_internal_config(config: &mut Config) {
         .l2_signer_blacklist
         .extend(internal_config.l2_signer_blacklist);
     if let Some(failing_block) = internal_config.failing_block {
-        if config.sequencer_config.block_rebuild.is_some() {
+        if config.sequencer_config.rebuild.is_some() {
             panic!(
                 "External config specifies block rebuild: {:?} and internal config specifies failing block: {}. \
                  Please remove one of these settings to avoid conflicts.",
-                config.sequencer_config.block_rebuild, failing_block
+                config.sequencer_config.rebuild, failing_block
             );
         } else {
-            config.sequencer_config.block_rebuild = Some(RebuildBlocksConfig {
-                from_block: failing_block,
-                blocks_to_empty: vec![failing_block],
-                reset_timestamps: false,
+            config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
+                bounds: RebuildBounds {
+                    from_block_number: failing_block,
+                    from_block_hash: internal_config.failing_block_hash.expect(
+                        "internal_config.json has `failing_block` but no `failing_block_hash`; \
+                         clear `failing_block` manually if the rebuild already ran",
+                    ),
+                    blocks_to_empty: vec![failing_block],
+                    reset_timestamps: false,
+                },
             });
         }
     }

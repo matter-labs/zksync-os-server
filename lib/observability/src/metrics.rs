@@ -19,11 +19,6 @@ pub struct GeneralMetrics {
     #[metrics(labels = ["stage"])]
     pub startup_time: LabeledFamily<&'static str, Gauge<f64>>,
 
-    #[metrics(labels = ["fee_collector_address"])]
-    pub fee_collector_address: LabeledFamily<&'static str, Gauge, 1>,
-
-    pub chain_id: Gauge<u64>,
-
     /// Number of blacklisted addresses in the internal config on server startup
     pub blacklisted_addresses_count: Gauge<usize>,
 }

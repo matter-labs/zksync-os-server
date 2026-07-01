@@ -14,8 +14,9 @@ use crate::IZKChain::IZKChainInstance;
 use alloy::contract::SolCallBuilder;
 use alloy::eips::BlockId;
 use alloy::network::Ethereum;
-use alloy::primitives::{Address, B256, TxHash, U256};
+use alloy::primitives::{Address, B256, U256};
 use alloy::providers::Provider;
+use zksync_os_provider::NodeProvider;
 
 alloy::sol! {
     // `Messaging.sol`
@@ -49,6 +50,7 @@ alloy::sol! {
     interface ServerNotifier {
         event MigrateToGateway(uint256 indexed chainId, uint256 migrationNumber);
         event MigrateFromGateway(uint256 indexed chainId, uint256 migrationNumber);
+        event UpgradeTimestampUpdated(uint256 indexed chainId, uint256 indexed protocolVersion, uint256 upgradeTimestamp);
     }
 
     interface ISystemContext {
@@ -255,6 +257,15 @@ alloy::sol! {
         function upgradeCutDataBlock(uint256 protocolVersion) external view returns (uint256);
     }
 
+    // `ValidatorTimelock.sol`
+    // Used by the node startup flow to revert committed batches before local block rebuild.
+    #[sol(rpc)]
+    interface IValidatorTimelock {
+        function REVERTER_ROLE() external view returns (bytes32);
+        function hasRoleForChainId(uint256 _chainId, bytes32 _role, address _address) external view returns (bool);
+        function revertBatchesSharedBridge(address _chainAddress, uint256 _newLastBatch) external;
+    }
+
     // `SettlementLayerV31UpgradeBase.sol` — the per-chain upgrade init contract.
     // `NewUpgradeCutData` carries a placeholder `additionalForceDeploymentsData`
     // that `upgradeChainFromVersion` rewrites per-chain inside the delegatecall
@@ -284,8 +295,6 @@ alloy::sol! {
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
-        function getL2SystemContractsUpgradeTxHash() external view returns (bytes32);
-        function getL2SystemContractsUpgradeBatchNumber() external view returns (uint256);
         function baseTokenGasPriceMultiplierNominator() external view returns (uint128);
         function baseTokenGasPriceMultiplierDenominator() external view returns (uint128);
         function getBaseToken() external view returns (address);
@@ -507,15 +516,14 @@ impl<P: Provider> MessageRoot<P> {
             .map(|n| n.saturating_to())
             .enrich("interopRootLogId", Some(block_id))
     }
+}
 
-    pub async fn code_exists_at_block(&self, block_id: BlockId) -> alloy::contract::Result<bool> {
-        let code = self
-            .provider()
-            .get_code_at(*self.address())
-            .block_id(block_id)
-            .await?;
-
-        Ok(!code.0.is_empty())
+impl MessageRoot<NodeProvider> {
+    /// L1 block at which this message root contract was deployed, used as the lower bound for
+    /// binary searches over L1 history. Convenience over [`NodeProvider::deployment_block`] that
+    /// the provider caches per address.
+    pub async fn deployment_block(&self) -> anyhow::Result<u64> {
+        self.provider().deployment_block(self.address).await
     }
 }
 
@@ -764,6 +772,15 @@ pub struct ZkChain<P: Provider> {
     instance: IZKChainInstance<P, Ethereum>,
 }
 
+impl ZkChain<NodeProvider> {
+    /// L1 block at which this diamond proxy was deployed, used as the lower bound for binary
+    /// searches over L1 history. Convenience over [`NodeProvider::deployment_block`] that the
+    /// provider caches per address.
+    pub async fn deployment_block(&self) -> anyhow::Result<u64> {
+        self.provider().deployment_block(*self.address()).await
+    }
+}
+
 impl<P: Provider> ZkChain<P> {
     pub fn new(address: Address, provider: P) -> Self {
         let instance = IZKChainInstance::new(address, provider);
@@ -872,27 +889,6 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("getProtocolVersion", Some(block_id))
-    }
-
-    /// Returns current upgrade transaction waiting to be executed. Zeroed out if not present.
-    pub async fn get_upgrade_tx_hash(&self, block_id: BlockId) -> Result<TxHash> {
-        self.instance
-            .getL2SystemContractsUpgradeTxHash()
-            .block(block_id)
-            .call()
-            .await
-            .enrich("getL2SystemContractsUpgradeTxHash", Some(block_id))
-    }
-
-    /// Returns batch number that contains current upgrade transaction. Returns `0` if not present.
-    pub async fn get_upgrade_batch_number(&self, block_id: BlockId) -> Result<u64> {
-        self.instance
-            .getL2SystemContractsUpgradeBatchNumber()
-            .block(block_id)
-            .call()
-            .await
-            .map(|n| n.saturating_to())
-            .enrich("getL2SystemContractsUpgradeBatchNumber", Some(block_id))
     }
 
     /// Returns base token address.

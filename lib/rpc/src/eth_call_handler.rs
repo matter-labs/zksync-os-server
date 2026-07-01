@@ -1,9 +1,10 @@
 use crate::call_fees::{CallFees, CallFeesError};
 use crate::config::RpcConfig;
 use crate::js_tracer;
+use crate::metrics::API_METRICS;
 use crate::result::RevertError;
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
-use crate::sandbox::{call_trace_simulate, execute};
+use crate::sandbox::{call_trace_simulate, execute, execute_with};
 use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559, TxEip2930, TxLegacy, TxType};
 use alloy::eips::BlockId;
@@ -12,19 +13,21 @@ use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
 use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
+use derive_more::Deref;
 use serde_json::Value as JsonValue;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_interface::types::{BlockHashes, ExecutionOutput};
+use zk_os_api::helpers::get_nonce;
+use zksync_os_interface::types::ExecutionOutput;
 use zksync_os_interface::{
     error::InvalidTransaction,
-    types::{BlockContext, ExecutionResult},
+    types::{ExecutionResult, TxOutput},
 };
-use zksync_os_storage_api::ViewState;
 use zksync_os_storage_api::{
-    RepositoryError, StateError, state_override_view::OverriddenStateView,
+    BlockContext, BlockHashes, RepositoryError, StateError, ViewState,
+    state_override_view::OverriddenStateView,
 };
+use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient, PolicySession};
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
@@ -32,20 +35,73 @@ use zksync_os_types::{
     ZkTransaction, ZkTxType,
 };
 
-const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
-
 #[derive(Clone, Debug)]
 pub struct EthCallHandler<RpcStorage> {
-    config: RpcConfig,
-    storage: RpcStorage,
-    chain_id: u64,
+    pub(crate) config: RpcConfig,
+    pub(crate) storage: RpcStorage,
+    pub(crate) chain_id: u64,
     /// Last block context constructed by sequencer but not necessarily executed yet.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+    /// Optional policy client. When set, `eth_call` and `eth_estimateGas`
+    /// route their simulation through it (admit + judge fired by the
+    /// bootloader inside `simulate_tx`). Block-build remains authoritative.
+    policy_client: Option<PolicyClient>,
+}
+
+/// Lets the interop fee updater (in `zksync_os_mempool`) issue read-only local `eth_call`s
+/// without depending on this crate.
+impl<RpcStorage: ReadRpcStorage> zksync_os_mempool::LocalEthCall for EthCallHandler<RpcStorage> {
+    fn call(&self, request: TransactionRequest, block: Option<BlockId>) -> anyhow::Result<Bytes> {
+        self.call_impl(request, block, None, None)
+            .map_err(anyhow::Error::from)
+    }
 }
 
 struct ExecutionEnv {
     block_context: BlockContext,
     transaction: ZkTransaction,
+}
+
+/// Builds new block context for theoretical pending block using current system state.
+pub(crate) fn build_pending_block_context(
+    storage: &impl ReadRpcStorage,
+    chain_id: u64,
+) -> BlockContext {
+    let latest_block_number = storage.replay_storage().latest_record();
+    let latest_block = storage
+        .replay_storage()
+        .get_replay_record(latest_block_number)
+        .expect("latest block record must exist");
+    let latest_block_context = latest_block.block_context;
+
+    // Shift block hashes one to the left and append latest block's hash
+    let mut block_hashes = latest_block_context.block_hashes.0;
+    block_hashes.rotate_left(1);
+    block_hashes[255] = U256::from_be_bytes(latest_block.block_output_hash.0);
+
+    // Use current timestamp for pending block
+    let millis_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("incorrect system time")
+        .as_millis();
+    let timestamp = (millis_since_epoch / 1000) as u64;
+
+    BlockContext {
+        chain_id,
+        block_number: latest_block_number + 1,
+        block_hashes: BlockHashes(block_hashes),
+        timestamp,
+        // Presume all other fields are the same as latest block, subject to change in the future
+        eip1559_basefee: latest_block_context.eip1559_basefee,
+        pubdata_price: latest_block_context.pubdata_price,
+        native_price: latest_block_context.native_price,
+        coinbase: latest_block_context.coinbase,
+        gas_limit: latest_block_context.gas_limit,
+        pubdata_limit: latest_block_context.pubdata_limit,
+        mix_hash: latest_block_context.mix_hash,
+        execution_version: latest_block_context.execution_version,
+        blob_fee: latest_block_context.blob_fee,
+    }
 }
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
@@ -54,20 +110,22 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         storage: RpcStorage,
         chain_id: u64,
         last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+        policy_client: Option<PolicyClient>,
     ) -> Self {
         Self {
             config,
             storage,
             chain_id,
             last_constructed_block_context,
+            policy_client,
         }
     }
 
-    fn create_tx_from_request(
+    pub(crate) fn create_tx_from_request(
         &self,
         request: TransactionRequest,
         block_context: &BlockContext,
-        for_estimate_gas: bool,
+        relax_fee_validation: bool,
     ) -> Result<ZkTransaction, EthCallError> {
         let tx_type = request.minimal_tx_type();
 
@@ -113,7 +171,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             block_context.eip1559_basefee.saturating_to(),
-            for_estimate_gas,
+            relax_fee_validation,
         )?;
         let chain_id = chain_id.unwrap_or(self.chain_id);
         let from = from.unwrap_or_default();
@@ -207,46 +265,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         Ok(Recovered::new_unchecked(tx, from).into())
     }
 
-    /// Builds new block context for theoretical pending block using current system state.
-    fn build_pending_block_context(&self) -> BlockContext {
-        let latest_block_number = self.storage.replay_storage().latest_record();
-        let latest_block = self
-            .storage
-            .replay_storage()
-            .get_replay_record(latest_block_number)
-            .expect("latest block record must exist");
-        let latest_block_context = latest_block.block_context;
-
-        // Shift block hashes one to the left and append latest block's hash
-        let mut block_hashes = latest_block_context.block_hashes.0;
-        block_hashes.rotate_left(1);
-        block_hashes[255] = U256::from_be_bytes(latest_block.block_output_hash.0);
-
-        // Use current timestamp for pending block
-        let millis_since_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("incorrect system time")
-            .as_millis();
-        let timestamp = (millis_since_epoch / 1000) as u64;
-
-        BlockContext {
-            chain_id: self.chain_id,
-            block_number: latest_block_number + 1,
-            block_hashes: BlockHashes(block_hashes),
-            timestamp,
-            // Presume all other fields are the same as latest block, subject to change in the future
-            eip1559_basefee: latest_block_context.eip1559_basefee,
-            pubdata_price: latest_block_context.pubdata_price,
-            native_price: latest_block_context.native_price,
-            coinbase: latest_block_context.coinbase,
-            gas_limit: latest_block_context.gas_limit,
-            pubdata_limit: latest_block_context.pubdata_limit,
-            mix_hash: latest_block_context.mix_hash,
-            execution_version: latest_block_context.execution_version,
-            blob_fee: latest_block_context.blob_fee,
-        }
-    }
-
     fn resolve_block_context(
         &self,
         block_id: Option<BlockId>,
@@ -262,7 +280,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 Ok(pending_block_context)
             } else {
                 // If it has, we build new block context using current system state
-                Ok(self.build_pending_block_context())
+                Ok(build_pending_block_context(&self.storage, self.chain_id))
             }
         } else {
             let Some(block_number) = self.storage.resolve_block_number(block_id)? else {
@@ -302,25 +320,34 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<Bytes, EthCallError> {
         let mut execution_env = self.prepare_execution_env(request, block, block_overrides)?;
+        execution_env.block_context.eip1559_basefee = U256::from(0);
+
         let storage_view = self
             .storage
             .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
+        let state_view = OverriddenStateView::with_state_overrides(
+            storage_view,
+            state_overrides.unwrap_or_default(),
+        );
 
-        execution_env.block_context.eip1559_basefee = U256::from(0);
-        let res = match state_overrides {
-            Some(overrides) => execute(
-                execution_env.transaction,
-                execution_env.block_context,
-                OverriddenStateView::with_state_overrides(storage_view, overrides),
-            ),
-            None => execute(
-                execution_env.transaction,
-                execution_env.block_context,
-                storage_view,
-            ),
-        }
+        let tx_type = execution_env.transaction.tx_type();
+        // New session per call so concurrent simulations don't share captured
+        // frames. Read intent because `eth_call` is read-only.
+        let mut policy_session = self
+            .policy_client
+            .as_ref()
+            .filter(|_| tx_type_runs_policy(tx_type))
+            .map(|client| client.session(AccessType::Read));
+        let res = simulate_with_optional_policy(
+            execution_env.transaction,
+            execution_env.block_context,
+            state_view,
+            policy_session.as_mut(),
+        )
         .map_err(EthCallError::ForwardSubsystemError)?
-        .map_err(EthCallError::InvalidTransaction)?;
+        .map_err(map_simulate_invalid_to_call_error)?;
+
+        API_METRICS.call_gas_used[&"eth_call".to_string()].observe(res.gas_used);
 
         match res.execution_result {
             ExecutionResult::Success(
@@ -377,10 +404,11 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             .storage
             .state_at_block_number_or_latest(execution_env.block_context.block_number)?;
 
+        let limits = js_tracer::tracer::JsTracerLimits::from_config(&self.config);
         let mut tracer_output = match state_overrides {
             Some(overrides) => {
                 let view = OverriddenStateView::with_state_overrides(storage_view, overrides);
-                let mut tracer = js_tracer::tracer::JsTracer::new(view.clone(), js_cfg)
+                let mut tracer = js_tracer::tracer::JsTracer::new(view.clone(), js_cfg, limits)
                     .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
 
                 zksync_os_multivm::simulate_tx(
@@ -389,6 +417,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     view.clone(),
                     view,
                     &mut tracer,
+                    &mut zksync_os_interface::tracing::NopValidator,
                 )
                 .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
                 .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
@@ -396,8 +425,9 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 tracer
             }
             None => {
-                let mut tracer = js_tracer::tracer::JsTracer::new(storage_view.clone(), js_cfg)
-                    .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
+                let mut tracer =
+                    js_tracer::tracer::JsTracer::new(storage_view.clone(), js_cfg, limits)
+                        .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))?;
 
                 zksync_os_multivm::simulate_tx(
                     execution_env.transaction.encode(),
@@ -405,6 +435,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                     storage_view.clone(),
                     storage_view,
                     &mut tracer,
+                    &mut zksync_os_interface::tracing::NopValidator,
                 )
                 .map_err(|e| EthCallError::ForwardSubsystemError(anyhow::anyhow!(e)))
                 .and_then(|inner| inner.map_err(EthCallError::InvalidTransaction))?;
@@ -450,215 +481,214 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 }
 
 impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
-    fn estimate_gas_with_view<V: ViewState + Clone>(
+    fn build_estimate_tx<V: ViewState>(
         &self,
         mut request: TransactionRequest,
+        block_context: &BlockContext,
+        storage_view: &mut V,
+    ) -> Result<ZkTransaction, EthCallError> {
+        let block_gas_limit = block_context.gas_limit;
+        let mut highest_gas_limit = request.gas.unwrap_or(block_gas_limit).min(block_gas_limit);
+
+        let effective_gas_price = request
+            .gas_price
+            .or(request.max_fee_per_gas)
+            .unwrap_or_default();
+        if effective_gas_price > 0 {
+            let gas_limit_from_balance =
+                max_gas_from_balance(&request, block_context.eip1559_basefee, storage_view)?;
+            highest_gas_limit = highest_gas_limit.min(gas_limit_from_balance);
+        }
+        request.set_gas_limit(highest_gas_limit);
+        self.create_tx_from_request(request, block_context, true)
+    }
+
+    // The flow was heavily borrowed from reth, which in turn closely follows the original geth logic. Source:
+    // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
+    fn estimate_gas_with_view<V: ViewState + Clone>(
+        &self,
+        request: TransactionRequest,
         block_context: BlockContext,
         mut storage_view: V,
     ) -> Result<U256, EthCallError> {
         tracing::trace!("Estimating gas with block context {block_context:?}");
-        // Rest of the flow was heavily borrowed from reth, which in turn closely follows the
-        // original geth logic. Source:
-        // https://github.com/paradigmxyz/reth/blob/5bc8589162b6e23b07919d82a57eee14353f2862/crates/rpc/rpc-eth-api/src/helpers/estimate.rs
 
-        // the gas limit of the corresponding block
-        let block_gas_limit = block_context.gas_limit;
+        let tx = self.build_estimate_tx(request, &block_context, &mut storage_view)?;
 
-        // Determine the highest possible gas limit, considering both the request's specified limit
-        // and the block's limit.
-        let mut highest_gas_limit = request
-            .gas
-            .map(|mut tx_gas_limit| {
-                if block_gas_limit < tx_gas_limit {
-                    // requested gas limit is higher than the allowed gas limit, capping
-                    tx_gas_limit = block_gas_limit;
-                }
-                tx_gas_limit
-            })
-            .unwrap_or(block_gas_limit);
-
-        // Check funds of the sender (only useful to check if transaction gas price is more than 0).
-        //
-        // The caller allowance is check by doing `(account.balance - tx.value) / tx.gas_price`
-        if request
-            .gas_price
-            .or(request.max_fee_per_gas)
-            .unwrap_or_default()
-            > 0
-        {
-            let balance = storage_view
-                .get_account(request.from.unwrap_or_default())
-                .as_ref()
-                .map(get_balance)
-                .unwrap_or_default();
-
-            let value = request.value.unwrap_or_default();
-            // Subtract transferred value from the caller balance. Return error if the caller has
-            // insufficient funds.
-            let balance = balance
-                .checked_sub(value)
-                .ok_or(EthCallError::InvalidTransaction(
-                    InvalidTransaction::LackOfFundForMaxFee {
-                        fee: value,
-                        balance,
-                    },
-                ))?;
-            // Cap the highest gas limit by max gas caller can afford with given gas price
-            highest_gas_limit = highest_gas_limit.min(
-                // Calculate the amount of gas the caller can afford with the specified gas price.
-                balance
-                    .checked_div(block_context.eip1559_basefee)
-                    // This will be 0 if gas price is 0. It is fine, because we check it before.
-                    .unwrap_or_default()
-                    .saturating_to(),
-            );
-        }
-        request.set_gas_limit(
-            request
-                .gas
-                .unwrap_or(highest_gas_limit)
-                .min(highest_gas_limit),
-        );
-        let tx = self.create_tx_from_request(request, &block_context, true)?;
-
-        // Execute the transaction with the highest possible gas limit.
-        let mut res = execute(tx.clone(), block_context, storage_view.clone())
-            .map_err(EthCallError::ForwardSubsystemError)?
-            .map_err(EthCallError::InvalidTransaction)?;
-        tracing::trace!(
-            "Executed tx in estimate_gas with highest gas limit {}, result {res:?}",
-            tx.gas_limit(),
-        );
-        match res.execution_result {
-            ExecutionResult::Success(_) => {
-                // Transaction succeeded with the highest possible gas limit, we can proceed with
-                // binary search
-            }
-            ExecutionResult::Revert(output) => {
-                let error = RevertError::new(Bytes::from(output));
-                return Err(EthCallError::Revert(error));
-            }
-        }
-
-        // we know the tx succeeded with the configured gas limit, so we can use that as the
-        // highest, in case we applied a gas cap due to caller allowance above
-        highest_gas_limit = tx.gas_limit();
-
-        // NOTE: this is the gas the transaction used, which is less than the
-        // transaction requires to succeed.
-        let mut gas_used = res.gas_used;
-        // the lowest value is capped by the gas used by the unconstrained transaction
-        let mut lowest_gas_limit = gas_used.saturating_sub(1);
-
-        // As stated in Geth, there is a good chance that the transaction will pass if we set the
-        // gas limit to the execution gas used plus the gas refund, so we check this first
-        // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135
-        //
-        // Calculate the optimistic gas limit by adding gas used and gas refund,
-        // then applying a 64/63 multiplier to account for gas forwarding rules.
-        let optimistic_gas_limit = (gas_used + res.gas_refunded + 2_300) * 64 / 63;
-        if optimistic_gas_limit < highest_gas_limit {
-            // Set the transaction's gas limit to the calculated optimistic gas limit.
-            let mut optimistic_tx = tx.clone();
-            set_gas_limit(&mut optimistic_tx, optimistic_gas_limit);
-
-            // Re-execute the transaction with the new gas limit and update the result and
-            // environment.
-            res = execute(optimistic_tx, block_context, storage_view.clone())
-                .map_err(EthCallError::ForwardSubsystemError)?
-                .map_err(EthCallError::InvalidTransaction)?;
-            tracing::trace!(
-                "Executed tx in estimate_gas with optimistic gas limit {}, result {res:?}",
-                tx.gas_limit()
-            );
-
-            // Update the gas used based on the new result.
-            gas_used = res.gas_used;
-            // Update the gas limit estimates (highest and lowest) based on the execution result.
-            update_estimated_gas_range(
-                res.execution_result,
-                optimistic_gas_limit,
-                &mut highest_gas_limit,
-                &mut lowest_gas_limit,
-            )?;
+        let run_at = |gas_limit: u64| {
+            let mut attempt = tx.clone();
+            set_gas_limit(&mut attempt, gas_limit);
+            execute(attempt, block_context, storage_view.clone())
+                .map_err(EthCallError::ForwardSubsystemError)
         };
 
-        if tx.tx_type() == ZkTxType::L1 {
-            // L1 contracts enforce a higher minimal limit for extra security
-            gas_used = gas_used.max(L1_TX_MINIMAL_GAS_LIMIT);
-            lowest_gas_limit = lowest_gas_limit.max(L1_TX_MINIMAL_GAS_LIMIT);
-            highest_gas_limit = highest_gas_limit.max(L1_TX_MINIMAL_GAS_LIMIT);
+        // Execute the transaction with the highest possible gas limit.
+        let res = run_at(tx.gas_limit())?.map_err(EthCallError::InvalidTransaction)?;
+        tracing::trace!(
+            "Executed tx in eth_estimateGas with gas limit: {:?}, result {res:?}",
+            Probe::Highest(tx.gas_limit())
+        );
+        if let ExecutionResult::Revert(output) = res.execution_result {
+            return Err(EthCallError::Revert(RevertError::new(Bytes::from(output))));
         }
 
-        // Pick a point that's close to the estimated gas
-        let mut mid_gas_limit = std::cmp::min(
-            gas_used * 3,
-            ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64,
-        );
+        // NOTE: this is the gas the transaction used, which is less than the transaction requires to succeed.
+        let gas_used = res.gas_used;
+        let mut range = GasRange::new(gas_used.saturating_sub(1), tx.gas_limit());
+
+        if tx.tx_type() == ZkTxType::L1 {
+            range.apply_floor(L1_TX_MINIMAL_GAS_LIMIT);
+        }
+
+        // Optimistic check: tx likely passes at gas_used + refund + stipend, scaled by 64/63 (EIP-150).
+        // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L135>
+        const GAS_STIPEND: u64 = 2_300;
+        let optimistic_gas_limit = (gas_used + res.gas_refunded + GAS_STIPEND) * 64 / 63;
+        if optimistic_gas_limit > range.lowest && optimistic_gas_limit < range.highest {
+            range.apply_probe(
+                run_at(optimistic_gas_limit)?,
+                Probe::Optimistic(optimistic_gas_limit),
+            )?;
+        }
 
         // Binary search narrows the range to find the minimum gas limit needed for the transaction
         // to succeed.
-        while lowest_gas_limit + 1 < highest_gas_limit {
-            // An estimation error is allowed once the current gas limit range used in the binary
-            // search is small enough (less than 1.5% of the highest gas limit)
-            // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L152
-            if (highest_gas_limit - lowest_gas_limit) as f64 / (highest_gas_limit as f64)
-                < ESTIMATE_GAS_ERROR_RATIO
-            {
-                break;
-            };
-
-            let mut mid_tx = tx.clone();
-            set_gas_limit(&mut mid_tx, mid_gas_limit);
-            tracing::trace!(
-                "trying to simulate transaction with gas_limit {}",
-                mid_tx.gas_limit()
-            );
-
-            // Execute transaction and handle potential gas errors, adjusting limits accordingly.
-            match execute(mid_tx, block_context, storage_view.clone())
-                .map_err(EthCallError::ForwardSubsystemError)?
-            {
-                Err(InvalidTransaction::CallerGasLimitMoreThanBlock) => {
-                    // Decrease the highest gas limit if gas is too high
-                    highest_gas_limit = mid_gas_limit;
-                }
-                Err(
-                    InvalidTransaction::CallGasCostMoreThanGasLimit
-                    | InvalidTransaction::OutOfGasDuringValidation
-                    | InvalidTransaction::OutOfNativeResourcesDuringValidation,
-                ) => {
-                    // Increase the lowest gas limit if gas is too low
-                    lowest_gas_limit = mid_gas_limit;
-                }
-                // Handle other cases, including successful transactions.
-                ethres => {
-                    // Unpack the result and environment if the transaction was successful.
-                    res = ethres.map_err(EthCallError::InvalidTransaction)?;
-                    tracing::trace!(
-                        "Executed tx in estimate_gas with gas limit {}, result {res:?}",
-                        tx.gas_limit(),
-                    );
-                    // Update the estimated gas range based on the transaction result.
-                    update_estimated_gas_range(
-                        res.execution_result,
-                        mid_gas_limit,
-                        &mut highest_gas_limit,
-                        &mut lowest_gas_limit,
-                    )?;
-                }
-            }
-
-            // New midpoint
-            mid_gas_limit = ((highest_gas_limit as u128 + lowest_gas_limit as u128) / 2) as u64;
+        // <https://github.com/ethereum/go-ethereum/blob/a5a4fa7032bb248f5a7c40f4e8df2b131c4186a4/eth/gasestimator/gasestimator.go#L152>
+        let mut mid = range.biased_midpoint();
+        while !range.is_narrow_enough() {
+            tracing::trace!("Trying to simulate transaction with gas_limit {mid}");
+            range.apply_probe(run_at(mid)?, Probe::Midpoint(mid))?;
+            mid = range.midpoint();
         }
-        tracing::trace!("Estimated gas limit: {highest_gas_limit}");
+        tracing::trace!("Estimated gas limit: {}", range.highest);
 
-        Ok(U256::from(highest_gas_limit))
+        // Re-execute the resolved gas limit once with the validator wired in.
+        // The binary search runs without the validator (one round-trip per
+        // iteration would be 30+ calls). `Write` intent: gas is
+        // state-dependent, so a read-only caller estimating gas would
+        // sidechannel state.
+        if let Some(policy_client) = &self.policy_client
+            && tx_type_runs_policy(tx.tx_type())
+        {
+            let mut judged_tx = tx.clone();
+            set_gas_limit(&mut judged_tx, range.highest);
+            let mut policy_session = policy_client.session(AccessType::Write);
+            simulate_with_optional_policy(
+                judged_tx,
+                block_context,
+                storage_view,
+                Some(&mut policy_session),
+            )
+            .map_err(EthCallError::ForwardSubsystemError)?
+            .map_err(map_simulate_invalid_to_call_error)?;
+        }
+
+        Ok(U256::from(range.highest))
     }
 
     pub fn last_constructed_block_context(&self) -> Option<BlockContext> {
         *self.last_constructed_block_context.borrow()
+    }
+}
+
+/// Simulate `tx`, optionally wiring `policy` as the validator. With a
+/// validator, the bootloader fires admit + judge inline; without, the
+/// simulation runs with `NopValidator` + `NopTracer`.
+fn simulate_with_optional_policy<V: ViewState>(
+    tx: ZkTransaction,
+    block_context: BlockContext,
+    view: V,
+    policy: Option<&mut PolicySession>,
+) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
+    if let Some(policy) = policy {
+        let mut tracer = policy.paired_tracer();
+        execute_with(tx, block_context, view, &mut tracer, policy)
+    } else {
+        execute(tx, block_context, view)
+    }
+}
+
+/// Surface validator denials as `PolicyDenied` so the rpc layer maps them
+/// to `TransactionRejected` rather than a generic invalid-transaction error.
+fn map_simulate_invalid_to_call_error(err: InvalidTransaction) -> EthCallError {
+    match err {
+        InvalidTransaction::FilteredByValidator => EthCallError::PolicyDenied,
+        _ => EthCallError::InvalidTransaction(err),
+    }
+}
+
+/// L1 priority and upgrade txs bypass the validator end-to-end (block-build
+/// doesn't fire it on them either). Exhaustive match (no `_` arm) so a
+/// future `ZkTxType` variant can't silently bypass the policy.
+fn tx_type_runs_policy(tx_type: ZkTxType) -> bool {
+    match tx_type {
+        ZkTxType::L2(_) => true,
+        ZkTxType::L1 | ZkTxType::Upgrade | ZkTxType::System => false,
+    }
+}
+
+#[derive(Debug, Deref)]
+enum Probe {
+    Midpoint(u64),
+    Highest(u64),
+    Optimistic(u64),
+}
+
+const ESTIMATE_GAS_ERROR_RATIO: f64 = 0.015;
+
+fn is_out_of_gas(err: &InvalidTransaction) -> bool {
+    matches!(
+        err,
+        InvalidTransaction::CallGasCostMoreThanGasLimit
+            | InvalidTransaction::OutOfGasDuringValidation
+            | InvalidTransaction::OutOfNativeResourcesDuringValidation
+    )
+}
+
+// Invariant: tx fails at `lowest` (false), tx succeeds at `highest` (true).
+struct GasRange {
+    lowest: u64,
+    highest: u64,
+}
+
+impl GasRange {
+    fn new(lowest: u64, highest: u64) -> Self {
+        Self { lowest, highest }
+    }
+
+    fn is_narrow_enough(&self) -> bool {
+        (self.highest - self.lowest) as f64 / (self.highest as f64) < ESTIMATE_GAS_ERROR_RATIO
+    }
+
+    fn midpoint(&self) -> u64 {
+        u64::midpoint(self.lowest, self.highest)
+    }
+
+    fn biased_midpoint(&self) -> u64 {
+        (self.lowest * 3).min(self.midpoint())
+    }
+
+    fn apply_floor(&mut self, floor: u64) {
+        self.lowest = self.lowest.max(floor);
+        self.highest = self.highest.max(floor);
+    }
+
+    fn apply_probe(
+        &mut self,
+        result: Result<TxOutput, InvalidTransaction>,
+        probe: Probe,
+    ) -> Result<(), EthCallError> {
+        if result.as_ref().is_err_and(is_out_of_gas) {
+            self.lowest = *probe;
+            return Ok(());
+        }
+        let res = result.map_err(EthCallError::InvalidTransaction)?;
+        tracing::trace!("Executed tx in eth_estimateGas with gas limit: {probe:?}, result {res:?}");
+        match res.execution_result {
+            ExecutionResult::Success(_) => self.highest = *probe,
+            ExecutionResult::Revert(_) => self.lowest = *probe,
+        }
+        Ok(())
     }
 }
 
@@ -681,40 +711,52 @@ fn set_gas_limit(tx: &mut ZkTransaction, gas_limit: u64) {
     }
 }
 
-#[inline]
-pub fn update_estimated_gas_range(
-    result: ExecutionResult,
-    tx_gas_limit: u64,
-    highest_gas_limit: &mut u64,
-    lowest_gas_limit: &mut u64,
-) -> Result<(), EthCallError> {
-    match result {
-        ExecutionResult::Success { .. } => {
-            // Cap the highest gas limit with the succeeding gas limit.
-            *highest_gas_limit = tx_gas_limit;
-        }
-        ExecutionResult::Revert { .. } => {
-            // We know that transaction succeeded with a higher gas limit before, so any failure
-            // means that we need to increase it.
-            //
-            // We are ignoring all halts here, and not just OOG errors because there are cases when
-            // non-OOG halt might flag insufficient gas limit as well.
-            //
-            // Common usage of invalid opcode in OpenZeppelin:
-            // <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/94697be8a3f0dfcd95dfb13ffbd39b5973f5c65d/contracts/metatx/ERC2771Forwarder.sol#L360-L367>
-            *lowest_gas_limit = tx_gas_limit;
-        }
-    };
+/// Returns how much gas the sender can afford: `(balance - value) / gas_price`.
+fn max_gas_from_balance<V: ViewState>(
+    request: &TransactionRequest,
+    gas_price: U256,
+    storage_view: &mut V,
+) -> Result<u64, EthCallError> {
+    let balance = storage_view.balance(request.from.unwrap_or_default());
 
-    Ok(())
+    let value = request.value.unwrap_or_default();
+    let balance = balance
+        .checked_sub(value)
+        .ok_or(EthCallError::InvalidTransaction(
+            InvalidTransaction::LackOfFundForMaxFee {
+                fee: value,
+                balance,
+            },
+        ))?;
+
+    Ok(balance
+        .checked_div(gas_price)
+        .unwrap_or_default()
+        .saturating_to())
 }
 
 /// Error types returned by `eth_call` implementation
 #[derive(Debug, thiserror::Error)]
 pub enum EthCallError {
+    /// Policy service rejected the simulation request at the RPC admit
+    /// boundary.
+    #[error("simulation denied by policy service")]
+    PolicyDenied,
     // todo: temporary, needs to be supported eventually
     #[error("block overrides are not supported in `eth_call`")]
     BlockOverridesNotSupported,
+    #[error("invalid `eth_simulateV1` params: {0}")]
+    SimulateInvalidParams(String),
+    #[error("invalid block override in `eth_simulateV1`: {0}")]
+    SimulateInvalidBlockOverride(&'static str),
+    #[error("block numbers must be in order: {got} <= {parent}")]
+    SimulateBlockNumberInvalid { got: u64, parent: u64 },
+    #[error("block timestamps must be in order: {got} <= {parent}")]
+    SimulateBlockTimestampInvalid { got: u64, parent: u64 },
+    #[error("block gas limit exceeded by the block's transactions")]
+    SimulateBlockGasLimitExceeded,
+    #[error("movePrecompileToAddress is not supported by this execution backend")]
+    SimulateMovePrecompileNotSupported,
     // todo(EIP-4844)
     #[error("EIP-4844 transactions are not supported")]
     Eip4844NotSupported,
@@ -757,4 +799,19 @@ pub enum EthCallError {
     /// Error occurred during debug tracing
     #[error("Tracer error: {0:?}")]
     CallTracerError(anyhow::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tx_type_runs_policy_only_for_l2_variants() {
+        use alloy::consensus::TxType;
+        assert!(tx_type_runs_policy(ZkTxType::L2(TxType::Legacy.into())));
+        assert!(tx_type_runs_policy(ZkTxType::L2(TxType::Eip1559.into())));
+        assert!(!tx_type_runs_policy(ZkTxType::L1));
+        assert!(!tx_type_runs_policy(ZkTxType::Upgrade));
+        assert!(!tx_type_runs_policy(ZkTxType::System));
+    }
 }

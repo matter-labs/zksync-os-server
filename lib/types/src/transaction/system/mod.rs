@@ -17,7 +17,9 @@ use zksync_os_contract_interface::InteropRoot;
 
 pub mod tx;
 pub mod utils;
-pub use utils::{L2_INTEROP_ROOT_STORAGE_ADDRESS, SYSTEM_TX_TYPE_ID, SystemTxType};
+pub use utils::{
+    L2_INTEROP_ROOT_STORAGE_ADDRESS, SYSTEM_CONTEXT_ADDRESS, SYSTEM_TX_TYPE_ID, SystemTxType,
+};
 use zksync_os_contract_interface::IInteropCenter::setInteropFeeCall;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,8 +129,8 @@ impl SystemTxEnvelope {
                 SystemTxInput::ImportInteropRoots(roots) => {
                     SystemTxType::ImportInteropRoots(roots.len() as u64)
                 }
-                SystemTxInput::SetSLChainId(_, migration_number) => {
-                    SystemTxType::SetSLChainId(migration_number)
+                SystemTxInput::SetSLChainId(chain_id, migration_number) => {
+                    SystemTxType::SetSLChainId(chain_id, migration_number)
                 }
                 SystemTxInput::SetInteropFee(_, interop_fee_number) => {
                     SystemTxType::SetInteropFee(interop_fee_number)

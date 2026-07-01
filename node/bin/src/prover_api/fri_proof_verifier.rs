@@ -1,7 +1,26 @@
 use crate::prover_api::fri_job_manager::SubmitError;
-use alloy::primitives::B256;
-use zk_os_basic_system::system_implementation::system::BatchPublicInput;
+use alloy::primitives::{B256, keccak256};
 use zksync_os_contract_interface::models::StoredBatchInfo;
+
+#[derive(Debug)]
+struct BatchPublicInput {
+    /// State commitment before the batch.
+    /// It should commit for everything needed for trustless execution(state, block number, hashes, etc).
+    pub state_before: B256,
+    /// State commitment after the batch.
+    pub state_after: B256,
+    /// Batch output to be opened on the settlement layer, needed to process DA, l1 <> l2 messaging, validate inputs.
+    pub batch_output: B256,
+}
+
+impl BatchPublicInput {
+    ///
+    /// Calculate keccak256 hash of public input
+    ///
+    pub fn hash(&self) -> B256 {
+        keccak256([self.state_before.0, self.state_after.0, self.batch_output.0].concat())
+    }
+}
 
 pub fn verify_fri_proof(
     previous_state_commitment: B256,
@@ -9,9 +28,9 @@ pub fn verify_fri_proof(
     proof: execution_utils::ProgramProof,
 ) -> Result<(), SubmitError> {
     let expected_pi = BatchPublicInput {
-        state_before: previous_state_commitment.0.into(),
-        state_after: stored_batch_info.state_commitment.0.into(),
-        batch_output: stored_batch_info.commitment.0.into(),
+        state_before: previous_state_commitment,
+        state_after: stored_batch_info.state_commitment,
+        batch_output: stored_batch_info.commitment,
     };
 
     let expected_hash_u32s: [u32; 8] = batch_output_hash_as_register_values(&expected_pi);
@@ -43,6 +62,7 @@ pub fn verify_fri_proof(
 fn batch_output_hash_as_register_values(public_input: &BatchPublicInput) -> [u32; 8] {
     public_input
         .hash()
+        .0
         .chunks_exact(4)
         .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("Slice with incorrect length")))
         .collect::<Vec<u32>>()

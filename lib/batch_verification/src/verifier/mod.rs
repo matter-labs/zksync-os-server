@@ -7,22 +7,20 @@ use block_cache::BlockCache;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
 use tokio::sync::{broadcast, mpsc};
-use zksync_os_batch_types::BlockMerkleTreeData;
-use zksync_os_batch_types::{BatchSignature, ExtendedCommitBatchInfo};
+use zksync_os_batch_types::{BatchSignature, PendingBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_interface::types::BlockOutput;
-use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
+use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
-use zksync_os_storage_api::{ReplayRecord, StateError, read_multichain_root};
+use zksync_os_storage_api::{StateError, TreeBlock, read_multichain_root};
 
 mod block_cache;
 mod metrics;
 
-type VerificationInput = (BlockOutput, ReplayRecord, BlockMerkleTreeData);
+type VerificationInput = TreeBlock;
 
 /// Batch verification responder that consumes requests from the network.
 pub struct BatchVerificationResponder<Finality, ReadState> {
@@ -30,7 +28,7 @@ pub struct BatchVerificationResponder<Finality, ReadState> {
     diamond_proxy_sl: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality, (BlockOutput, ReplayRecord, BlockMerkleTreeData)>,
+    block_cache: BlockCache<Finality, TreeBlock>,
     read_state: ReadState,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
@@ -40,8 +38,6 @@ pub struct BatchVerificationResponder<Finality, ReadState> {
 enum BatchVerificationError {
     #[error("Missing records for block {0}")]
     MissingBlock(u64),
-    #[error("Tree error")]
-    TreeError,
     #[error("Batch data mismatch")]
     BatchDataMismatch,
     #[error("State error: {0}")]
@@ -97,41 +93,28 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             request.last_block_number,
         );
 
-        let blocks: Vec<(&BlockOutput, &ReplayRecord, TreeBatchOutput)> =
-            (request.first_block_number..=request.last_block_number)
-                .map(|block_number| {
-                    let (block_output, replay_record, tree_data) = self
-                        .block_cache
-                        .get(block_number)
-                        .ok_or(BatchVerificationError::MissingBlock(block_number))?;
-
-                    let (root_hash, leaf_count) = tree_data
-                        .block_end
-                        .clone()
-                        .root_info()
-                        .map_err(|_| BatchVerificationError::TreeError)?;
-
-                    let tree_output = TreeBatchOutput {
-                        root_hash,
-                        leaf_count,
-                    };
-                    Ok((block_output, replay_record, tree_output))
-                })
-                .collect::<Result<Vec<_>, BatchVerificationError>>()?;
+        let blocks = (request.first_block_number..=request.last_block_number)
+            .map(|block_number| {
+                let cached = self
+                    .block_cache
+                    .get(block_number)
+                    .ok_or(BatchVerificationError::MissingBlock(block_number))?;
+                let (block_output, replay_record, tree_data) =
+                    (&cached.output, &cached.record, &cached.tree);
+                let tree_output = tree_data.output;
+                Ok((block_output, replay_record, tree_output))
+            })
+            .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
+        let (_, last_replay_record, _) = blocks.last().unwrap();
 
-        let (batch_info, _) = ExtendedCommitBatchInfo::build(
+        let (batch_info, _) = PendingBatchInfo::build(
             blocks
                 .iter()
                 .map(|(block_output, replay_record, tree)| {
-                    (
-                        *block_output,
-                        &replay_record.block_context,
-                        replay_record.transactions.as_slice(),
-                        tree,
-                    )
+                    (*block_output, replay_record.transactions.as_slice(), tree)
                 })
                 .collect(),
             self.chain_id,
@@ -140,6 +123,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             self.l1_state.sl_chain_id,
             multichain_root,
             &blocks.first().unwrap().1.protocol_version,
+            &last_replay_record.block_context.block_hashes.0,
         );
 
         let expected_commit_data = normalized_commit_data(
@@ -198,24 +182,27 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
     type Input = VerificationInput;
     type Output = ();
 
-    const NAME: &'static str = "batch_verification_responder";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::BatchVerificationResponder;
 
     async fn run(
         mut self,
         mut input: PeekableReceiver<Self::Input>,
         _output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
         tracing::info!("starting batch verification responder");
         loop {
+            state_reporter.enter_state(GenericComponentState::Idle);
             tokio::select! {
                 block = input.recv() => {
                     match block {
-                        Some((block_output, replay_record, tree_data)) => {
-                            self.block_cache.insert(
-                                replay_record.block_context.block_number,
-                                (block_output, replay_record, tree_data),
-                            )?;
+                        Some(tree_block) => {
+                            state_reporter.enter_state(GenericComponentState::Active);
+                            let block_number = tree_block.record.block_context.block_number;
+                            let block_timestamp = tree_block.record.block_context.timestamp;
+                            self.block_cache.insert(block_number, tree_block)?;
+                            state_reporter.record_processed(block_number, Some(block_timestamp), None);
                         }
                         None => return Ok(()),
                     }
@@ -224,6 +211,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
                     let Some(request) = request else {
                         return Ok(());
                     };
+                    state_reporter.enter_state(GenericComponentState::Active);
                     let peer_id = request.peer_id;
                     let request_id = request.message.request_id;
                     let batch_number = request.message.batch_number;

@@ -12,7 +12,7 @@ use zksync_os_contract_interface::{IExecutor, IMultisigCommitter};
 
 #[derive(Debug)]
 pub struct CommitCommand {
-    pub(super) input: SignedBatchEnvelope<FriProof>,
+    pub input: SignedBatchEnvelope<FriProof>,
     pub(super) signatures: Option<BatchSignatureSet>,
 }
 
@@ -75,7 +75,8 @@ impl CommitCommand {
 }
 
 impl SendToL1 for CommitCommand {
-    const NAME: &'static str = "commit";
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::L1SenderCommit;
     const SENT_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxSent;
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1Passthrough;

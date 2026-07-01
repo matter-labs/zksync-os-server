@@ -37,6 +37,19 @@ pub trait MerkleTreeProver: Send + Sync + fmt::Debug {
         keys: &[B256],
     ) -> anyhow::Result<Option<(BatchTreeProof, TreeBatchOutput)>>;
 
+    /// Specialized version of [`Self::prove()`] that receives an existing 0-based leaf index instead of the leaf key
+    /// as an input.
+    ///
+    /// # Errors
+    ///
+    /// In addition to [`Self::prove()`] errors, this method will error if a leaf with `index`
+    /// does not exist in the specified tree `version`.
+    fn prove_index(
+        &self,
+        version: u64,
+        index: u64,
+    ) -> anyhow::Result<Option<(BatchTreeProof, TreeBatchOutput)>>;
+
     /// Returns flattened proofs of existence / absence for each of the requested `keys` in the tree at the specified
     /// `version`. The proofs are returned in the order of keys.
     ///
@@ -61,5 +74,34 @@ pub trait MerkleTreeProver: Send + Sync + fmt::Debug {
             .map(|(proof, key)| flat::StorageSlotProof { key: *key, proof });
         let proofs = proofs.collect();
         Ok(Some((proofs, batch_output)))
+    }
+
+    /// Same as [`Self::prove_index()`], but returns a flattened proof.
+    fn prove_index_flat(
+        &self,
+        version: u64,
+        index: u64,
+    ) -> anyhow::Result<Option<flat::StorageSlotProofEntryWithKey>> {
+        let Some((proof, batch_output)) = self.prove_index(version, index)? else {
+            return Ok(None);
+        };
+
+        let leaf = *proof
+            .sorted_leaves
+            .values()
+            .next()
+            .expect("batch proof doesn't contain requested data");
+        let proof = proof
+            .to_flat(self.tree_depth(), batch_output.leaf_count)
+            .next()
+            .expect("batch proof doesn't contain requested data");
+        let flat::InnerStorageSlotProof::Existing(entry) = proof else {
+            unreachable!("requested index must exist in tree");
+        };
+
+        Ok(Some(flat::StorageSlotProofEntryWithKey {
+            inner: entry,
+            leaf_key: leaf.key,
+        }))
     }
 }

@@ -10,7 +10,7 @@ use reth_transaction_pool::{
     TransactionValidator,
 };
 use std::sync::RwLock;
-use zk_os_api_dev::helpers::validate_l2_tx_intrinsic_native_resources;
+use zk_os_api::helpers::validate_l2_tx_intrinsic_native_resources;
 use zksync_os_types::{ExecutionVersion, FeeParams};
 
 /// A wrapper around [`EthTransactionValidator`] that adds ZKSync OS specific

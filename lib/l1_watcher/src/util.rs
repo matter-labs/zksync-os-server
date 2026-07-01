@@ -1,32 +1,29 @@
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
-use alloy::eips::BlockId;
-use alloy::primitives::{Address, BlockNumber, TxHash, U256};
-use alloy::providers::{DynProvider, Provider};
+use alloy::primitives::{Address, BlockNumber, Log, TxHash, U256};
+use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
-use anyhow::Context;
 use backon::{ConstantBuilder, Retryable};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_batch_types::{DiscoveredCommittedBatch, ExtendedCommitBatchInfo};
+use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IChainAssetHandler;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
+use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
-use zksync_os_types::ProtocolSemanticVersion;
-
-pub const ANVIL_L1_CHAIN_ID: u64 = 31337;
+use zksync_os_provider::NodeProvider;
 
 /// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
-/// using binary search.
+/// using binary search. Returns latest block if migration number is not reached yet.
 ///
 /// Used by both [`GatewayMigrationWatcher`][crate::GatewayMigrationWatcher] (on L1) and
 /// [`MigrationCompleteWatcher`][crate::MigrationCompleteWatcher] (on the current settlement layer)
 /// to determine the block from which to start scanning for migration events.
 pub async fn find_block_by_migration_number(
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain: ZkChain<NodeProvider>,
     chain_asset_handler: Address,
     chain_id: u64,
     migration_number: u64,
@@ -36,8 +33,30 @@ pub async fn find_block_by_migration_number(
         zk_chain.provider().clone(),
     ));
     let target = U256::from(migration_number);
+    let latest = instance.provider().get_block_number().await?;
+    let latest_migration_number = match instance
+        .migrationNumber(U256::from(chain_id))
+        .block(latest.into())
+        .call()
+        .await
+    {
+        Ok(n) => n,
+        // Pre-V31 `ChainAssetHandler` does not expose `migrationNumber`. No Gateway migrations can
+        // exist in that era, so there is nothing to scan for — start from the latest block.
+        Err(err) if is_method_missing(&err) => return Ok(latest),
+        Err(err) => return Err(err.into()),
+    };
+    // If this migration has not been reached yet, return the latest block.
+    if latest_migration_number < migration_number {
+        return Ok(latest);
+    }
 
-    find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| {
+    // The chain's diamond proxy deployment block is a safe lower bound for CAH searches: the proxy
+    // can only exist when the bridgehub ecosystem (including CAH, when present) is at least
+    // partially up. The predicate still guards against CAH being absent for the V30→V31 migration
+    // window where the proxy existed before CAH was deployed.
+    let start_block = zk_chain.deployment_block().await?;
+    find_l1_block_by_predicate(Arc::new(zk_chain), start_block, move |zk, block| {
         let instance = instance.clone();
         async move {
             let code = zk
@@ -48,11 +67,19 @@ pub async fn find_block_by_migration_number(
             if code.0.is_empty() {
                 return Ok(false);
             }
-            let res = instance
+            // At this block the address may have code but not yet be the ChainAssetHandler
+            // (e.g. a proxy upgraded to it only later), so `migrationNumber` reverts. Treat a
+            // revert as "not deployed yet" (false); real RPC errors still propagate.
+            let res = match instance
                 .migrationNumber(U256::from(chain_id))
                 .block(block.into())
                 .call()
-                .await?;
+                .await
+            {
+                Ok(res) => res,
+                Err(err) if is_method_missing(&err) => return Ok(false),
+                Err(err) => return Err(err.into()),
+            };
             Ok(res >= target)
         }
     })
@@ -64,42 +91,32 @@ pub async fn find_block_by_migration_number(
 /// Rough calculations: 10min * 10 req/s * 1000 blocks/req = 600 * 10 * 1000 = 6_000_000
 const MAX_L1_BLOCKS_TO_SCAN_LINEARLY: u64 = 6_000_000;
 
+/// Binary-searches `[start_block_number, latest]` for the first block at which `predicate` returns
+/// `true`. The predicate must be monotonic over the search range (caller's responsibility).
+///
+/// **Caller must ensure `start_block_number >= contract.deployment_block`** — the predicate is
+/// invoked without a code-presence guard, so calling it at blocks where the contract is not yet
+/// deployed will produce undefined results (typically an RPC error or a `false`-returning revert).
 pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool>>>(
-    zk_chain: Arc<ZkChain<DynProvider>>,
+    zk_chain: Arc<ZkChain<NodeProvider>>,
     start_block_number: BlockNumber,
-    predicate: impl Fn(Arc<ZkChain<DynProvider>>, u64) -> Fut,
+    predicate: impl Fn(Arc<ZkChain<NodeProvider>>, u64) -> Fut,
 ) -> anyhow::Result<BlockNumber> {
-    if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
-        // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
-        // even for recent blocks. We default to `start_block_number` in this case - `eth_getLogs`
-        // are still supported.
-        return Ok(start_block_number);
-    }
-
     let latest = zk_chain.provider().get_block_number().await?;
 
-    let guarded_predicate =
-        async |zk: Arc<ZkChain<DynProvider>>, block: u64| -> anyhow::Result<bool> {
-            if !zk.code_exists_at_block(block.into()).await? {
-                // return early if contract is not deployed yet - otherwise `predicate` might fail
-                return Ok(false);
-            }
-            predicate(zk, block).await
-        };
-
     // Ensure the predicate is true by the upper bound, or bail early.
-    if !guarded_predicate(zk_chain.clone(), latest).await? {
+    if !predicate(zk_chain.clone(), latest).await? {
         anyhow::bail!(
             "Condition not satisfied up to latest block: contract not deployed yet \
              or target not reached.",
         );
     }
 
-    // Binary search on [0, latest] for the first block where predicate is true.
+    // Binary search on [start_block_number, latest] for the first block where predicate is true.
     let (mut lo, mut hi) = (start_block_number, latest);
     while lo < hi {
         let mid = (lo + hi) / 2;
-        if guarded_predicate(zk_chain.clone(), mid).await? {
+        if predicate(zk_chain.clone(), mid).await? {
             hi = mid;
         } else {
             lo = mid + 1;
@@ -114,7 +131,7 @@ pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool
 /// if there is not any.
 async fn find_last_matching_event<E: SolEvent + Debug>(
     address: Address,
-    provider: &DynProvider,
+    provider: &NodeProvider,
     start_block_number: BlockNumber,
     max_blocks_to_scan: u64,
     predicate: impl Fn(&E) -> bool,
@@ -185,7 +202,7 @@ async fn find_last_matching_event<E: SolEvent + Debug>(
 ///
 /// Batch `batch_number` MUST have been committed before `start_block_number`.
 async fn find_latest_l1_revert(
-    zk_chain: &ZkChain<DynProvider>,
+    zk_chain: &ZkChain<NodeProvider>,
     batch_number: u64,
     start_block_number: BlockNumber,
     max_blocks_to_scan: u64,
@@ -209,42 +226,26 @@ async fn find_latest_l1_revert(
 /// `b` CAN contain commit event for `B` that happened either before `T` or after `T` but MUST NOT
 /// contain both. See comments inside the implementation for more details.
 pub async fn find_l1_commit_block_by_batch_number(
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain: ZkChain<NodeProvider>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
-    if zk_chain.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
-        // Binary search may error on Anvil with `--load-state` - as it doesn't support `eth_call`
-        // for historical blocks. We run linear search as a fallback.
-        if batch_number == 0 {
-            // For genesis we must return L1 block where `zk_chain` got deployed. For Anvil it's okay
-            // to return 0 here as the chain should not be long anyway.
-            return Ok(0);
-        }
-        return find_last_matching_event::<ReportCommittedBatchRangeZKsyncOS>(
-            *zk_chain.address(),
-            zk_chain.provider(),
-            0,
-            max_l1_blocks_to_scan,
-            |e| e.batchNumber == batch_number,
-        )
-        .await?
-        .with_context(|| {
-            format!("linear search failed to find where batch {batch_number} was committed")
-        });
-    }
-
-    let is_batch_committed = move |zk: Arc<ZkChain<DynProvider>>, block: BlockNumber| async move {
+    let is_batch_committed = move |zk: Arc<ZkChain<NodeProvider>>, block: BlockNumber| async move {
         let res = zk.get_total_batches_committed(block.into()).await?;
         Ok(res >= batch_number)
     };
+    let deployment_block = zk_chain.deployment_block().await?;
     // This predicate is not monotonic because committed batches can be reverted. Even then, this
     // binary search will find **some** L1 block that commits our batch. If revert and another commit
     // happen after the found L1 block, then we will find them as handled by logic in the rest of the
     // function. If there are none, then we will not find anything and return this L1 block as a
     // result.
-    let l1_block_with_commit =
-        find_l1_block_by_predicate(Arc::new(zk_chain.clone()), 0, is_batch_committed).await?;
+    let l1_block_with_commit = find_l1_block_by_predicate(
+        Arc::new(zk_chain.clone()),
+        deployment_block,
+        is_batch_committed,
+    )
+    .await?;
     tracing::debug!(
         batch_number,
         l1_block_with_commit,
@@ -303,32 +304,30 @@ pub async fn find_l1_commit_block_by_batch_number(
 ///
 /// Returns latest L1 block is there is none.
 pub async fn find_l1_execute_block_by_batch_number(
-    zk_chain: ZkChain<DynProvider>,
+    zk_chain: ZkChain<NodeProvider>,
     batch_number: u64,
 ) -> anyhow::Result<BlockNumber> {
     // Execution cannot be reverted, so unlike in `find_l1_commit_block_by_batch_number`, we do not need
     // to take L1 reverts into account here.
-    find_l1_block_by_predicate(Arc::new(zk_chain), 0, move |zk, block| async move {
-        let res = zk.get_total_batches_executed(block.into()).await?;
-        Ok(res >= batch_number)
-    })
+    let deployment_block = zk_chain.deployment_block().await?;
+    find_l1_block_by_predicate(
+        Arc::new(zk_chain),
+        deployment_block,
+        move |zk, block| async move {
+            let res = zk.get_total_batches_executed(block.into()).await?;
+            Ok(res >= batch_number)
+        },
+    )
     .await
 }
 
 /// Finds the first L1 block where `interopRootLogId >= next_interop_root_id`.
 /// Uses binary search for efficiency.
 pub async fn find_l1_block_by_interop_root_id(
-    bridgehub: Bridgehub<DynProvider>,
+    bridgehub: Bridgehub<NodeProvider>,
     next_interop_root_id: u64,
 ) -> anyhow::Result<BlockNumber> {
     if next_interop_root_id == 0 {
-        return Ok(0);
-    }
-
-    // Binary search via `eth_call` with historical block IDs is not supported on Anvil with
-    // `--load-state`. Fall back to block 0 so the watcher starts from genesis and catches up
-    // via `eth_getLogs`, which Anvil does support.
-    if bridgehub.provider().get_chain_id().await? == ANVIL_L1_CHAIN_ID {
         return Ok(0);
     }
 
@@ -339,27 +338,27 @@ pub async fn find_l1_block_by_interop_root_id(
     ));
 
     let latest = message_root.provider().get_block_number().await?;
+    // The provider's cache resolves (and remembers) the MessageRoot deployment block, giving the
+    // search a tight lower bound without a per-iteration code-existence guard.
+    let deployment_block = message_root.deployment_block().await?;
 
-    let guarded_predicate =
-        async |message_root: Arc<MessageRoot<DynProvider>>, block: u64| -> anyhow::Result<bool> {
-            if !message_root.code_exists_at_block(block.into()).await? {
-                return Ok(false);
-            }
+    let predicate =
+        async |message_root: Arc<MessageRoot<NodeProvider>>, block: u64| -> anyhow::Result<bool> {
             let res = message_root.interop_root_log_id(block.into()).await?;
             Ok(res >= next_interop_root_id)
         };
 
-    if !guarded_predicate(message_root.clone(), latest).await? {
+    if !predicate(message_root.clone(), latest).await? {
         anyhow::bail!(
             "Condition not satisfied up to latest block: contract not deployed yet \
              or target not reached.",
         );
     }
 
-    let (mut lo, mut hi) = (0, latest);
+    let (mut lo, mut hi) = (deployment_block, latest);
     while lo < hi {
         let mid = (lo + hi) / 2;
-        if guarded_predicate(message_root.clone(), mid).await? {
+        if predicate(message_root.clone(), mid).await? {
             hi = mid;
         } else {
             lo = mid + 1;
@@ -373,10 +372,33 @@ pub async fn find_l1_block_by_interop_root_id(
 /// committed in `l1_block_number`. Returns `None` if requested batch has not been committed in
 /// the given L1 block.
 pub async fn fetch_stored_batch_data(
-    zk_chain: &ZkChain<DynProvider>,
+    zk_chain: &ZkChain<NodeProvider>,
     l1_block_number: BlockNumber,
     batch_number: u64,
 ) -> anyhow::Result<Option<DiscoveredCommittedBatch>> {
+    let Some((commit_log, tx_hash)) =
+        find_commit_log(zk_chain, l1_block_number, batch_number).await?
+    else {
+        return Ok(None);
+    };
+    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash, l1_block_number, batch_number)
+        .await?
+        .into_stored();
+
+    Ok(Some(DiscoveredCommittedBatch {
+        batch_info,
+        block_range: commit_log.firstBlockNumber..=commit_log.lastBlockNumber,
+    }))
+}
+
+/// Finds the `ReportCommittedBatchRangeZKsyncOS` commit event for `batch_number` in
+/// `l1_block_number`, returning the decoded event together with the hash of the transaction that
+/// emitted it, or `None` if no matching event is present in that block.
+pub(crate) async fn find_commit_log(
+    zk_chain: &ZkChain<NodeProvider>,
+    l1_block_number: BlockNumber,
+    batch_number: u64,
+) -> anyhow::Result<Option<(Log<ReportCommittedBatchRangeZKsyncOS>, TxHash)>> {
     let logs = zk_chain
         .provider()
         .get_logs(
@@ -387,99 +409,111 @@ pub async fn fetch_stored_batch_data(
                 .to_block(l1_block_number),
         )
         .await?;
-    let Some((log, tx_hash)) = logs.into_iter().find_map(|log| {
+    Ok(logs.into_iter().find_map(|log| {
         let batch_log = ReportCommittedBatchRangeZKsyncOS::decode_log(&log.inner)
             .expect("unable to decode `ReportCommittedBatchRangeZKsyncOS` log");
-        if batch_log.batchNumber == batch_number {
-            Some((
+        (batch_log.batchNumber == batch_number).then(|| {
+            (
                 batch_log,
                 log.transaction_hash.expect("indexed log without tx hash"),
-            ))
-        } else {
-            None
-        }
-    }) else {
-        return Ok(None);
-    };
-    let batch_info = fetch_committed_batch_data(zk_chain, tx_hash)
-        .await?
-        .into_stored();
-
-    Ok(Some(DiscoveredCommittedBatch {
-        batch_info,
-        block_range: log.firstBlockNumber..=log.lastBlockNumber,
+            )
+        })
     }))
 }
 
 /// Fetches batch commit transaction and extra data from L1 required to construct `CommitedBatch`.
 /// Retries if the transaction is pending (exists but has no block number yet) or not yet visible.
 pub async fn fetch_committed_batch_data(
-    zk_chain: &ZkChain<DynProvider>,
+    zk_chain: &ZkChain<NodeProvider>,
     tx_hash: TxHash,
-) -> Result<ExtendedCommitBatchInfo, L1WatcherError> {
-    let tx = (|| async {
-        let tx = zk_chain
-            .provider()
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .map_err(|e| L1WatcherError::Other(e.into()))?
-            .ok_or_else(|| {
-                L1WatcherError::Other(anyhow::anyhow!("commit tx {tx_hash} not found"))
-            })?;
-        tx.block_number.ok_or_else(|| {
-            L1WatcherError::Other(anyhow::anyhow!(
-                "commit tx {tx_hash} has no block number (still pending)"
-            ))
-        })?;
-        Ok::<_, L1WatcherError>(tx)
-    })
-    .retry(
+    l1_block_number: BlockNumber,
+    batch_number: u64,
+) -> Result<CommittedBatchInfo, L1WatcherError> {
+    // The commit transaction (which carries the `CommitBatchInfo` calldata) and the `BlockCommit`
+    // event (which carries the commitment) are independent given the batch number, so we fetch
+    // them concurrently. Both can transiently lag right after the commit is observed when hitting
+    // a load-balanced RPC, so each is retried.
+    let retry_policy = || {
         ConstantBuilder::default()
             .with_delay(Duration::from_millis(200))
-            .with_max_times(50),
-    )
-    .await?;
+            .with_max_times(50)
+    };
+
+    let tx_fut = async {
+        (|| async {
+            let tx = zk_chain
+                .provider()
+                .get_transaction_by_hash(tx_hash)
+                .await
+                .map_err(|e| L1WatcherError::Other(e.into()))?
+                .ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!("commit tx {tx_hash} not found"))
+                })?;
+            tx.block_number.ok_or_else(|| {
+                L1WatcherError::Other(anyhow::anyhow!(
+                    "commit tx {tx_hash} has no block number (still pending)"
+                ))
+            })?;
+            Ok::<_, L1WatcherError>(tx)
+        })
+        .retry(retry_policy())
+        .await
+    };
+
+    // The batch commitment is emitted in the `BlockCommit` event (indexed by batch number) of the
+    // commit transaction. Reading it from L1 directly is safe and accurate, unlike deriving it from
+    // the current protocol version / upgrade transaction hash, which reflect the latest chain state
+    // rather than the state at the moment this batch was committed. Filtering on the indexed
+    // `batchNumber` topic isolates this batch's event directly (a single commit tx covers a range
+    // of L2 blocks, and an L1 block may contain commits for several batches).
+    let log_fut = async {
+        (|| async {
+            zk_chain
+                .provider()
+                .get_logs(
+                    &Filter::new()
+                        .address(*zk_chain.address())
+                        .event_signature(IExecutor::BlockCommit::SIGNATURE_HASH)
+                        .topic1(U256::from(batch_number))
+                        .from_block(l1_block_number)
+                        .to_block(l1_block_number),
+                )
+                .await
+                .map_err(|e| L1WatcherError::Other(e.into()))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    L1WatcherError::Other(anyhow::anyhow!(
+                        "`BlockCommit` event for batch {batch_number} not found in L1 block {l1_block_number}"
+                    ))
+                })
+        })
+        .retry(retry_policy())
+        .await
+    };
+
+    let (tx, log) = tokio::try_join!(tx_fut, log_fut)?;
 
     let CommitCalldata {
         commit_batch_info, ..
     } = CommitCalldata::decode(tx.input()).map_err(L1WatcherError::Other)?;
+    if commit_batch_info.batch_number != batch_number {
+        return Err(L1WatcherError::Other(anyhow::anyhow!(
+            "commit tx {tx_hash} encodes batch {} but batch {batch_number} was expected",
+            commit_batch_info.batch_number
+        )));
+    }
 
-    // L1 block where this batch got committed.
-    let l1_block_id = BlockId::number(
-        tx.block_number
-            .expect("mined transaction has no block number"),
-    );
+    let commitment = IExecutor::BlockCommit::decode_log(&log.inner)
+        .map_err(|e| {
+            L1WatcherError::Other(anyhow::anyhow!(
+                "failed to decode `BlockCommit` event for batch {batch_number}: {e}"
+            ))
+        })?
+        .commitment;
 
-    // To recreate batch's commitment (and hence it's `StoredBatchInfo` form) we need to
-    // know any potential upgrade transaction hash that was applied in this batch.
-    //
-    // Unfortunately, this information is not passed in `CommitBatchInfo` so we must derive
-    // it through other means. Querying `getL2SystemContractsUpgradeTxHash()` and
-    // `getL2SystemContractsUpgradeBatchNumber()` should work for the vast majority of cases
-    // except when the batch got committed and executed in the same L1 block (which should
-    // never happen in current implementation as commit->prove->execute operations are submitted
-    // sequentially after at least 1 block confirmation).
-    let upgrade_batch_number = zk_chain.get_upgrade_batch_number(l1_block_id).await?;
-    let upgrade_tx_hash = if upgrade_batch_number == commit_batch_info.batch_number {
-        // If the latest upgrade transaction belongs to this batch then current upgrade tx
-        // hash must also be present on L1. Thus, we fetch it.
-        Some(zk_chain.get_upgrade_tx_hash(l1_block_id).await?)
-    } else {
-        // Either latest in-progress upgrade transaction belongs to a different batch or
-        // there is none. If none, `upgrade_batch_number` would be `0` and thus never equal
-        // to the currently inspected batch as genesis does not get committed via this flow.
-        None
-    };
-    // Fetch active protocol version at the moment the batch got committed. This should work
-    // for the vast majority of cases except when upgrade gets applied in the same L1 block
-    // but after batch was committed.
-    let packed_protocol_version = zk_chain.get_raw_protocol_version(l1_block_id).await?;
-
-    Ok(ExtendedCommitBatchInfo {
+    Ok(CommittedBatchInfo {
         commit_info: commit_batch_info,
-        upgrade_tx_hash,
-        protocol_version: ProtocolSemanticVersion::try_from(packed_protocol_version)
-            .context("invalid protocol version fetched from L1")
-            .map_err(L1WatcherError::Other)?,
+        commitment,
     })
 }

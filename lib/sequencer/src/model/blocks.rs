@@ -1,10 +1,52 @@
-use alloy::primitives::B256;
+use alloy::primitives::{B256, TxHash};
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::time::Duration;
-use zksync_os_interface::types::BlockContext;
+use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_mempool::MarkingTxStream;
+use zksync_os_pipeline::HasBlockRangeEnd;
+use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
+use zksync_os_types::{BlockOutput, BlockStartCursors, ProtocolSemanticVersion};
+
+/// Block output with additional information about storage slots read during execution.
+#[derive(Debug)]
+pub struct BlockOutputWithReads {
+    inner: BlockOutput,
+    /// Keys read, but not written during block execution.
+    read_keys: HashSet<B256>,
+}
+
+impl BlockOutputWithReads {
+    pub(crate) fn new(inner: BlockOutput, mut read_keys: HashSet<B256>) -> Self {
+        for write in &inner.storage_writes {
+            read_keys.remove(&write.key);
+        }
+        // Reclaim unnecessary capacity; the read keys are immutable after this point.
+        read_keys.shrink_to_fit();
+
+        Self { inner, read_keys }
+    }
+
+    /// Returns block output + keys read, but not written during block execution.
+    pub fn into_parts(self) -> (BlockOutput, HashSet<B256>) {
+        (self.inner, self.read_keys)
+    }
+
+    pub(crate) fn inner_mut(&mut self) -> &mut BlockOutput {
+        &mut self.inner
+    }
+
+    pub(crate) fn read_keys(&self) -> &HashSet<B256> {
+        &self.read_keys
+    }
+}
+
+impl AsRef<BlockOutput> for BlockOutputWithReads {
+    fn as_ref(&self) -> &BlockOutput {
+        &self.inner
+    }
+}
 
 /// `BlockCommand`s drive the sequencer execution.
 /// Produced by `CommandProducer` - first blocks are `Replay`ed from block replay storage
@@ -28,6 +70,42 @@ pub enum BlockCommandType {
     Replay,
     Produce,
     Rebuild,
+}
+
+/// Message flowing from `BlockExecutor` → `BlockCanonizer` → `BlockApplier`.
+#[derive(Debug)]
+pub struct BlockPayload {
+    pub output: BlockOutputWithReads,
+    pub record: ReplayRecord,
+    pub command_type: BlockCommandType,
+    /// L2 txs the VM rejected during block building (purged from mempool).
+    /// Surfaced so RPC subscribers can report a reason instead of timing out.
+    pub failed_transactions: Vec<(TxHash, InvalidTransaction)>,
+}
+
+impl HasBlockRangeEnd for BlockPayload {
+    fn block_number(&self) -> u64 {
+        self.record.block_context.block_number
+    }
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.record.block_context.timestamp)
+    }
+}
+
+/// Message flowing from `BlockApplier` → `TreeManager`.
+#[derive(Debug)]
+pub struct AppliedBlock {
+    pub output: BlockOutputWithReads,
+    pub record: ReplayRecord,
+}
+
+impl HasBlockRangeEnd for AppliedBlock {
+    fn block_number(&self) -> u64 {
+        self.record.block_context.block_number
+    }
+    fn block_timestamp(&self) -> Option<u64> {
+        Some(self.record.block_context.timestamp)
+    }
 }
 
 /// Command to produce a new block.

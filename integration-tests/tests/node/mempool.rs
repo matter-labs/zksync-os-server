@@ -1,5 +1,5 @@
 use alloy::eips::Encodable2718;
-use alloy::network::TransactionBuilder;
+use alloy::network::{NetworkTransactionBuilder, TransactionBuilder};
 use alloy::primitives::{Address, U128, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
@@ -7,10 +7,10 @@ use alloy::signers::local::PrivateKeySigner;
 use futures::FutureExt;
 use std::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::dyn_wallet_provider::EthWalletProvider;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestEnvironment, Tester, test_multisetup,
 };
+use zksync_os_provider::EthWalletProvider;
 use zksync_os_server::config::FeeConfig;
 
 #[test_multisetup([CURRENT_TO_L1])]

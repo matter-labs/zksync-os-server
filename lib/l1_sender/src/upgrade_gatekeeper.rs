@@ -1,23 +1,24 @@
 use crate::commands::{L1SenderCommand, commit::CommitCommand};
-use alloy::{eips::BlockId, providers::DynProvider};
+use alloy::eips::BlockId;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use std::cmp::Ordering;
 use tokio::sync::mpsc;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
-use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
+use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_provider::NodeProvider;
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Receives Batches with proofs - potentially with incompatible protocol version.
 /// Makes sure that batches are only passed to L1 if batch version matches the current protocol version.
 #[derive(Debug)]
 pub struct UpgradeGatekeeper {
-    zk_chain_sl: ZkChain<DynProvider>,
+    zk_chain_sl: ZkChain<NodeProvider>,
 }
 
 impl UpgradeGatekeeper {
-    pub fn new(zk_chain_sl: ZkChain<DynProvider>) -> Self {
+    pub fn new(zk_chain_sl: ZkChain<NodeProvider>) -> Self {
         Self { zk_chain_sl }
     }
 
@@ -81,36 +82,32 @@ impl PipelineComponent for UpgradeGatekeeper {
     type Input = L1SenderCommand<CommitCommand>;
     type Output = L1SenderCommand<CommitCommand>;
 
-    const NAME: &'static str = "upgrade_gatekeeper";
-    const OUTPUT_BUFFER_SIZE: usize = 5;
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::UpgradeGatekeeper;
 
     async fn run(
         self,
         mut input: PeekableReceiver<Self::Input>,
         output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let latency_tracker = ComponentStateReporter::global()
-            .handle_for("upgrade_gatekeeper", GenericComponentState::WaitingRecv);
-
         loop {
-            latency_tracker.enter_state(GenericComponentState::WaitingRecv);
-            let Some(command) = input.recv().await else {
+            state_reporter.enter_state(GenericComponentState::Idle);
+            let Some(command) = input.recv_and_record_picked(&state_reporter).await else {
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
 
             if let L1SenderCommand::SendToL1(command) = &command {
-                latency_tracker.enter_state(GenericComponentState::Processing);
+                state_reporter.enter_state(GenericComponentState::Active);
 
                 let batch_protocol_version =
                     command.input().batch.batch_info.protocol_version.clone();
-
                 self.wait_until_protocol_version(&batch_protocol_version)
                     .await?;
             }
 
-            latency_tracker.enter_state(GenericComponentState::WaitingSend);
-            output.send(command).await?;
+            output.send_and_record(command, &state_reporter)?;
         }
     }
 }

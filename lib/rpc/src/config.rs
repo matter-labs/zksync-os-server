@@ -1,6 +1,74 @@
+use crate::limits::Limits;
 use alloy::primitives::Address;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
 use std::time::Duration;
+
+/// Rate-limit configuration.
+#[derive(Clone, Debug, Default)]
+pub enum RateLimits {
+    /// No rate limiting.
+    #[default]
+    None,
+    /// One global cap, plus per-method buckets: `m_rps` applied to each entry in
+    /// `m_methods`, and the explicit RPS in `custom_methods` for each entry there.
+    ///
+    /// Production example:
+    ///
+    /// ```yaml
+    /// rpc:
+    ///   rate_limits:
+    ///     type: Tiered
+    ///     global_rps: 1000
+    ///     m_rps: 200
+    ///     m_methods:
+    ///       - eth_call
+    ///       - eth_estimateGas
+    ///       - eth_getBlockReceipts
+    ///       - eth_fillTransaction
+    ///       - zks_getProof
+    ///       - ots_getBlockTransactions
+    ///       - txpool_inspect
+    ///     custom_methods:
+    ///       eth_getLogs: 200
+    ///       eth_simulateV1: 1
+    ///       debug_traceTransaction: 10
+    ///       debug_traceCall: 10
+    ///       debug_traceBlockByHash: 10
+    ///       debug_traceBlockByNumber: 10
+    ///       zks_getL2ToL1LogProof: 10
+    ///       ots_searchTransactionsBefore: 10
+    ///       ots_searchTransactionsAfter: 10
+    ///       txpool_content: 10
+    /// ```
+    Tiered {
+        global_rps: NonZeroU32,
+        m_rps: NonZeroU32,
+        m_methods: HashSet<String>,
+        custom_methods: HashMap<String, NonZeroU32>,
+    },
+}
+
+impl RateLimits {
+    pub(crate) fn into_limits(self) -> Limits {
+        match self {
+            Self::None => Limits::default(),
+            Self::Tiered {
+                global_rps,
+                m_rps,
+                m_methods,
+                custom_methods,
+            } => Limits {
+                global_rps: Some(global_rps),
+                methods: m_methods
+                    .into_iter()
+                    .map(|name| (name, m_rps))
+                    .chain(custom_methods)
+                    .collect(),
+            },
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct RpcConfig {
@@ -9,6 +77,18 @@ pub struct RpcConfig {
 
     /// Gas limit of transactions executed via eth_call
     pub eth_call_gas: usize,
+
+    /// Maximum execution time of a single JS tracer run
+    pub js_tracer_timeout: Duration,
+
+    /// Maximum memory growth (in bytes) allowed during a single JS tracer run, measured via
+    /// jemalloc per-thread allocation counters; `0` disables the check
+    pub js_tracer_max_memory_bytes: usize,
+
+    /// Maximum block gas limit accepted for an `eth_simulateV1` block override. Applies only
+    /// when the caller explicitly overrides `blockOverrides.gasLimit`; unset overrides fall
+    /// back to the executing block's own gas limit.
+    pub eth_simulate_block_gas_limit: u64,
 
     /// Number of concurrent API connections (passed to jsonrpsee, default value there is 128)
     pub max_connections: u32,
@@ -42,6 +122,14 @@ pub struct RpcConfig {
     /// users submitting unexecutable transactions (fail with `OutOfNativeResourcesDuringValidation`)
     /// because pubdata price increase in-between estimation and sequencing.
     pub estimate_gas_pubdata_price_factor: f64,
+
+    /// Rate limits for incoming requests.
+    pub rate_limits: RateLimits,
+
+    /// List of disabled methods.
+    /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
+    /// They get rejected with -32601 "Method disabled".
+    pub method_filter: HashSet<String>,
 }
 
 impl RpcConfig {
