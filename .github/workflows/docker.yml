@@ -90,3 +90,15 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           cache-from: 'type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:buildcache'
           cache-to: ${{ steps.set-cache-to.outputs.cache-to }}
+
+  sbom-generation:
+    name: SBOM
+    needs: [ 'build-images' ]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/sbom-analysis-reusable.yaml
+    secrets: inherit
+    with:
+      version: ${{ inputs.tag_name || (github.ref_type == 'tag' && github.ref_name) || github.sha }}
