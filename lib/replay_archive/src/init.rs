@@ -6,9 +6,10 @@ use anyhow::Context as _;
 use reth_tasks::Runtime;
 
 use crate::{
-    AgeEncryptedReplayArchiver, FileSystemReplayArchiveStorage, ReplayArchiveComponent,
-    ReplayArchiveSender, ReplayArchiveSession, ReplayArchiveStorage, ReplayArchiver,
-    ReplayRecordArchiver, S3ReplayArchiveConfig, S3ReplayArchiveStorage,
+    AgeEncryptedReplayArchiver, FileSystemReplayArchiveStorage, GcsReplayArchiveConfig,
+    GcsReplayArchiveStorage, ReplayArchiveComponent, ReplayArchiveSender, ReplayArchiveSession,
+    ReplayArchiveStorage, ReplayArchiver, ReplayRecordArchiver, S3ReplayArchiveConfig,
+    S3ReplayArchiveStorage,
 };
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,10 @@ pub enum ReplayArchiveConfig {
     },
     S3 {
         config: S3ReplayArchiveConfig,
+        encryption: ReplayArchiveEncryptionConfig,
+    },
+    Gcs {
+        config: GcsReplayArchiveConfig,
         encryption: ReplayArchiveEncryptionConfig,
     },
 }
@@ -61,6 +66,13 @@ pub async fn init_replay_archive(
                 .await
                 .with_context(|| format!("failed to create replay archive S3 session {session}"))
                 .expect("failed to initialize S3 replay archive");
+            archive_for_storage(storage, encryption)
+        }
+        ReplayArchiveConfig::Gcs { config, encryption } => {
+            let storage = GcsReplayArchiveStorage::init(config.clone(), session.clone())
+                .await
+                .with_context(|| format!("failed to create replay archive GCS session {session}"))
+                .expect("failed to initialize GCS replay archive");
             archive_for_storage(storage, encryption)
         }
     };
