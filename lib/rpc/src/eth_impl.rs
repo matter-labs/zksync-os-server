@@ -23,6 +23,9 @@ use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::get_code;
@@ -35,6 +38,127 @@ use zksync_os_rpc_api::types::{
 use zksync_os_storage_api::{BlockContext, RepositoryError, StateError, TxMeta, ViewState};
 use zksync_os_tx_validators::policy_client::PolicyClient;
 use zksync_os_types::{L2Envelope, TransactionAcceptanceState, ZkEnvelope, ZkReceiptEnvelope};
+
+const SEND_RAW_METHOD_PROFILE_LOG_EVERY: u64 = 100_000;
+
+static SEND_RAW_METHOD_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
+static SEND_RAW_METHOD_PROFILE_STATS: SendRawMethodProfileStats = SendRawMethodProfileStats::new();
+
+struct SendRawMethodProfileStats {
+    total: AtomicU64,
+    errors: AtomicU64,
+    in_flight: AtomicU64,
+    max_in_flight: AtomicU64,
+    total_micros: AtomicU64,
+}
+
+impl SendRawMethodProfileStats {
+    const fn new() -> Self {
+        Self {
+            total: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            in_flight: AtomicU64::new(0),
+            max_in_flight: AtomicU64::new(0),
+            total_micros: AtomicU64::new(0),
+        }
+    }
+}
+
+fn send_raw_method_profile_enabled() -> bool {
+    *SEND_RAW_METHOD_PROFILE_ENABLED.get_or_init(|| {
+        std::env::var("RPC_ADMISSION_PROFILE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
+
+fn update_send_raw_method_max(max: &AtomicU64, value: u64) {
+    let mut current = max.load(Ordering::Relaxed);
+    while value > current {
+        match max.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+struct SendRawMethodProfileGuard {
+    start: Instant,
+}
+
+impl SendRawMethodProfileGuard {
+    fn new() -> Option<Self> {
+        if !send_raw_method_profile_enabled() {
+            return None;
+        }
+        let in_flight = SEND_RAW_METHOD_PROFILE_STATS
+            .in_flight
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        update_send_raw_method_max(&SEND_RAW_METHOD_PROFILE_STATS.max_in_flight, in_flight);
+        Some(Self {
+            start: Instant::now(),
+        })
+    }
+
+    fn record(&self, is_err: bool) {
+        SEND_RAW_METHOD_PROFILE_STATS
+            .total_micros
+            .fetch_add(self.start.elapsed().as_micros() as u64, Ordering::Relaxed);
+        if is_err {
+            SEND_RAW_METHOD_PROFILE_STATS
+                .errors
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        let total = SEND_RAW_METHOD_PROFILE_STATS
+            .total
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if total % SEND_RAW_METHOD_PROFILE_LOG_EVERY == 0 {
+            log_send_raw_method_profile(total);
+        }
+    }
+}
+
+impl Drop for SendRawMethodProfileGuard {
+    fn drop(&mut self) {
+        SEND_RAW_METHOD_PROFILE_STATS
+            .in_flight
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+fn avg_send_raw_method_duration(total_micros: u64, count: u64) -> Duration {
+    if count == 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_micros(total_micros / count)
+    }
+}
+
+fn log_send_raw_method_profile(total: u64) {
+    let errors = SEND_RAW_METHOD_PROFILE_STATS.errors.load(Ordering::Relaxed);
+    let in_flight = SEND_RAW_METHOD_PROFILE_STATS
+        .in_flight
+        .load(Ordering::Relaxed);
+    let max_in_flight = SEND_RAW_METHOD_PROFILE_STATS
+        .max_in_flight
+        .load(Ordering::Relaxed);
+    let avg_total = avg_send_raw_method_duration(
+        SEND_RAW_METHOD_PROFILE_STATS
+            .total_micros
+            .load(Ordering::Relaxed),
+        total,
+    );
+    tracing::error!(
+        total,
+        errors,
+        in_flight,
+        max_in_flight,
+        ?avg_total,
+        "rpc sendRawTransaction method profile"
+    );
+}
 
 pub struct EthNamespace<RpcStorage, Mempool> {
     config: RpcConfig,
@@ -790,13 +914,19 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthApiServer
     }
 
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
-        self.tx_handler
+        let profile = SendRawMethodProfileGuard::new();
+        let result = self
+            .tx_handler
             .send_raw_transaction_impl(bytes)
             .await
             .inspect_err(|err| {
                 TX_SUBMISSION.rejections[&TxRejectionReason::from(err)].inc();
             })
-            .to_rpc_result()
+            .to_rpc_result();
+        if let Some(profile) = &profile {
+            profile.record(result.is_err());
+        }
+        result
     }
 
     async fn send_raw_transaction_sync(

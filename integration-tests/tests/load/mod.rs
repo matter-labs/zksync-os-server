@@ -2,8 +2,9 @@ use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559};
 use alloy::eips::eip2718::{Decodable2718, Encodable2718};
 use alloy::network::{ReceiptResponse, TransactionBuilder};
-use alloy::primitives::{Address, Signature, TxKind, U128, U256, keccak256};
-use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U128, U256, keccak256};
+use alloy::providers::{DynProvider, PendingTransactionBuilder, Provider, ProviderBuilder};
+use alloy::rpc::client::ClientBuilder;
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::SignerSync;
 use alloy::signers::local::PrivateKeySigner;
@@ -817,8 +818,16 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
 /// dropped tx). `LOAD_TEST_WALLETS` should stay comfortably above `PARALLEL_BLOCKS` so every lane
 /// gets at least one wallet — an empty lane stalls the round.
 ///
+/// Submission is **nonce-major**: each round sends one tx per wallet, all at the same nonce, split
+/// into JSON-RPC batches of up to `LOAD_TEST_SUBMIT_PIPELINE` txs. A batch's calls are all distinct
+/// accounts, so their (concurrent) processing order is irrelevant; and the next nonce round starts
+/// only after the current round's sends return, so each wallet's nonce n reaches its lane before its
+/// nonce n+1. This preserves per-wallet order WITHOUT relying on the node processing a batch in order
+/// (jsonrpsee dispatches batch entries concurrently) — a plain per-wallet pipeline of >1 in-flight
+/// txs reorders and gets purged `NonceTooHigh`.
+///
 /// Tunables: `PARALLEL_BLOCKS` (default 2), `LOAD_TEST_DURATION_SECS` (60), `LOAD_TEST_WALLETS`
-/// (128), `LOAD_TEST_CONCURRENCY` (16384).
+/// (128), `LOAD_TEST_CONCURRENCY` (16384), `LOAD_TEST_SUBMIT_PIPELINE` (batch size, default 1).
 #[test_multisetup([NEXT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
 async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
@@ -859,11 +868,16 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
     let num_wallets: usize = env_or("LOAD_TEST_WALLETS", 128);
     let concurrency: usize = env_or("LOAD_TEST_CONCURRENCY", 16384);
+    let submit_pipeline: usize = env_or("LOAD_TEST_SUBMIT_PIPELINE", 1);
+    let wait_for_receipts = env_or("LOAD_TEST_WAIT_FOR_RECEIPTS", true);
+    let wait_for_final_receipts = !wait_for_receipts && env_or("LOAD_TEST_FINAL_RECEIPTS", false);
+    let rpc_urls = tester.l2_rpc_ws_urls();
     assert!(
         num_wallets >= k,
         "LOAD_TEST_WALLETS must be >= PARALLEL_BLOCKS (and ideally well above it)"
     );
     assert!(concurrency > 0, "LOAD_TEST_CONCURRENCY must be > 0");
+    assert!(submit_pipeline > 0, "LOAD_TEST_SUBMIT_PIPELINE must be > 0");
 
     // 10x buffer on gas price so the funding txs never get stuck/evicted in the mempool.
     let gas_price = tester.l2_provider.get_gas_price().await? * 10;
@@ -875,22 +889,21 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // (`bench_addr(i)`), so the per-`from` lane router yields K blocks whose touched account sets
     // ({wallet_i, recipient_i}) are disjoint across lanes.
     let mut signers = Vec::with_capacity(num_wallets);
-    let mut providers = Vec::with_capacity(num_wallets);
     let mut recipients = Vec::with_capacity(num_wallets);
     for i in 0..num_wallets {
         let key = keccak256(format!("zksync-os-loadtest-signer-{i}"));
-        let signer = PrivateKeySigner::from_slice(key.as_slice()).expect("valid signing key");
-        signers.push(signer);
+        signers.push(PrivateKeySigner::from_slice(key.as_slice()).expect("valid signing key"));
         recipients.push(bench_addr(i as u64));
-        // Connect over WebSocket: at high `LOAD_TEST_CONCURRENCY` the per-wallet provider multiplexes
-        // all its requests over one persistent connection and `get_receipt` waits on block
-        // subscriptions, instead of churning per-request HTTP connections (which exhausts localhost
-        // ephemeral ports — `tcp connect: Resource temporarily unavailable`).
-        let provider = ProviderBuilder::new()
-            .connect(tester.l2_rpc_ws_url())
-            .await?;
-        providers.push(DynProvider::new(provider));
     }
+    // A pool of `RpcClient`s (one per RPC listener) for issuing cross-wallet JSON-RPC batches over
+    // WebSocket — `client.new_batch()` isn't reachable from a built provider — plus a single provider
+    // (on the first client) for receipt watching (`get_receipt` shares one block subscription).
+    let mut clients = Vec::with_capacity(rpc_urls.len());
+    for url in &rpc_urls {
+        clients.push(ClientBuilder::default().connect(url.as_str()).await?);
+    }
+    let receipt_provider = DynProvider::new(ProviderBuilder::new().connect_client(clients[0].clone()));
+    let root = receipt_provider.root().clone();
 
     // Each wallet's real-signed corpus (one-time; real ECDSA signing is expensive). A distinct
     // corpus family from `effective_tps` so the two tests never invalidate each other's files; the
@@ -957,7 +970,10 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let sem = Arc::new(Semaphore::new(concurrency));
     let submitted = Arc::new(AtomicU64::new(0));
     let confirmed = Arc::new(AtomicU64::new(0));
+    let final_receipts_confirmed = Arc::new(AtomicU64::new(0));
+    let submit_latency_micros = Arc::new(AtomicU64::new(0));
     let latency_micros = Arc::new(AtomicU64::new(0));
+    let final_receipt_latency_micros = Arc::new(AtomicU64::new(0));
 
     // Optional CPU profiling: `LOAD_TEST_FLAMEGRAPH=<path>` samples the whole (in-process node +
     // client) for the run and writes a flamegraph SVG, to attribute where CPU actually goes on the
@@ -974,48 +990,95 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let start = Instant::now();
     let deadline = start + duration;
 
-    // One submitter task per wallet, all sharing the in-flight semaphore + counters. Each accepted
-    // tx spawns a detached receipt waiter that releases its permit on confirmation (bounds memory
-    // and applies backpressure). A single wallet pipelines many in-flight txs into its lane, so each
-    // lane stays fed even with one wallet per lane.
-    let mut submitters = Vec::with_capacity(num_wallets);
-    for (provider, path) in providers.into_iter().zip(paths) {
-        let sem = sem.clone();
-        let submitted = submitted.clone();
-        let confirmed = confirmed.clone();
-        let latency_micros = latency_micros.clone();
-        submitters.push(tokio::spawn(async move {
-            let mut reader = corpus::CorpusReader::open(&path)?;
-            let mut receipts = JoinSet::new();
-            'submit: while Instant::now() < deadline {
-                let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
-                let Some(raw) = reader.next_record()? else {
-                    break; // corpus exhausted
-                };
-                let sent_at = Instant::now();
-                // The node throttles ingestion ("not currently accepting transactions") when the
-                // pipeline (notably the tree) lags. Treat that as transient: back off and retry the
-                // same tx — a real client behaviour — so the run measures the sustainable rate
-                // instead of hard-failing. Any other RPC error is a real failure.
-                let pending = loop {
-                    match provider.send_raw_transaction(&raw).await {
-                        Ok(pending) => break pending,
-                        Err(err) if err.to_string().contains("accepting") => {
-                            if Instant::now() >= deadline {
-                                drop(permit);
-                                break 'submit;
-                            }
-                            tokio::time::sleep(Duration::from_millis(5)).await;
-                        }
-                        Err(err) => return Err(err.into()),
-                    }
-                };
-                submitted.fetch_add(1, Ordering::Relaxed);
+    // Submit "nonce-major": each round sends one tx PER WALLET, all at the SAME nonce. A batch's
+    // calls are then all distinct accounts, so their order within the batch is irrelevant (jsonrpsee
+    // dispatches batch entries concurrently) — and we only start the next nonce after the whole
+    // round's sends have returned, so every wallet's nonce n reaches its lane before its nonce n+1.
+    // This preserves per-wallet order WITHOUT relying on in-order batch processing. Within a round the
+    // wallets are split into batches of up to `submit_pipeline` txs, sent concurrently over the
+    // client pool (`round-robin`). Receipts are watched by a detached waiter per tx, permit-bounded.
+    let mut readers: Vec<corpus::CorpusReader> = paths
+        .iter()
+        .map(|p| corpus::CorpusReader::open(p))
+        .collect::<anyhow::Result<_>>()?;
+    let mut receipts = JoinSet::new();
+    let mut last_round_hashes: Vec<B256> = Vec::new();
+    let mut last_round_sent_at = start;
+    'rounds: while Instant::now() < deadline {
+        // One tx from every wallet — all at the current nonce (readers advance in lockstep).
+        let mut round: Vec<Vec<u8>> = Vec::with_capacity(num_wallets);
+        for reader in &mut readers {
+            match reader.next_record()? {
+                Some(raw) => round.push(raw),
+                None => break 'rounds, // a wallet's corpus is exhausted
+            }
+        }
 
+        // Send this nonce's txs as chunked JSON-RPC batches, concurrently across the client pool.
+        // Throttling ("not currently accepting transactions") is a global gate, so a batch is rejected
+        // atomically; resend it after a short backoff. Any other RPC error is a real failure.
+        let sent_at = Instant::now();
+        let mut batch_tasks = JoinSet::new();
+        for (idx, chunk) in round.chunks(submit_pipeline).enumerate() {
+            let client = clients[idx % clients.len()].clone();
+            let chunk: Vec<Vec<u8>> = chunk.to_vec();
+            batch_tasks.spawn(async move {
+                loop {
+                    let mut batch = client.new_batch();
+                    let mut waiters = Vec::with_capacity(chunk.len());
+                    for raw in &chunk {
+                        waiters.push(batch.add_call::<_, B256>(
+                            "eth_sendRawTransaction",
+                            &(Bytes::copy_from_slice(raw),),
+                        )?);
+                    }
+                    batch.send().await?;
+                    let mut hs = Vec::with_capacity(chunk.len());
+                    let mut throttled = 0usize;
+                    for w in waiters {
+                        match w.await {
+                            Ok(h) => hs.push(h),
+                            Err(e) if e.to_string().contains("accepting") => throttled += 1,
+                            Err(e) => return Err(anyhow::Error::from(e)),
+                        }
+                    }
+                    if throttled > 0 {
+                        anyhow::ensure!(
+                            hs.is_empty(),
+                            "partial batch admission: {} of {} accepted",
+                            hs.len(),
+                            chunk.len()
+                        );
+                        if Instant::now() >= deadline {
+                            return anyhow::Ok(Vec::new());
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        continue; // resend the whole chunk
+                    }
+                    return anyhow::Ok(hs);
+                }
+            });
+        }
+
+        // Barrier: every batch of this nonce must be accepted before we advance to the next nonce.
+        let mut hashes = Vec::with_capacity(round.len());
+        while let Some(res) = batch_tasks.join_next().await {
+            hashes.extend(res??);
+        }
+        if hashes.is_empty() {
+            break; // deadline reached mid-round
+        }
+        submitted.fetch_add(hashes.len() as u64, Ordering::Relaxed);
+        submit_latency_micros.fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+
+        if wait_for_receipts {
+            for hash in hashes {
+                let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
                 let confirmed = confirmed.clone();
                 let latency_micros = latency_micros.clone();
+                let root = root.clone();
                 receipts.spawn(async move {
-                    let receipt = pending
+                    let receipt = PendingTransactionBuilder::new(root, hash)
                         .with_timeout(Some(RECEIPT_TIMEOUT))
                         .get_receipt()
                         .await?;
@@ -1026,19 +1089,35 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
                         receipt.transaction_hash()
                     );
                     confirmed.fetch_add(1, Ordering::Relaxed);
-                    latency_micros
-                        .fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+                    latency_micros.fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
                     anyhow::Ok(())
                 });
             }
-            while let Some(res) = receipts.join_next().await {
-                res??;
-            }
-            anyhow::Ok(())
-        }));
+        } else if wait_for_final_receipts {
+            last_round_hashes = hashes;
+            last_round_sent_at = sent_at;
+        }
     }
-    for submitter in submitters {
-        submitter.await??;
+
+    // In final-receipts mode, confirm the last submitted nonce round landed (proxy for the run).
+    if wait_for_final_receipts {
+        for hash in last_round_hashes {
+            let receipt = PendingTransactionBuilder::new(root.clone(), hash)
+                .with_timeout(Some(RECEIPT_TIMEOUT))
+                .get_receipt()
+                .await?;
+            anyhow::ensure!(
+                receipt.status(),
+                "transaction reverted: {:?}",
+                receipt.transaction_hash()
+            );
+            final_receipts_confirmed.fetch_add(1, Ordering::Relaxed);
+            final_receipt_latency_micros
+                .fetch_add(last_round_sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
+    }
+    while let Some(res) = receipts.join_next().await {
+        res??;
     }
 
     // Render the flamegraph (if profiling was enabled) before computing the summary.
@@ -1056,9 +1135,24 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let elapsed = start.elapsed();
     let submitted = submitted.load(Ordering::Relaxed);
     let confirmed = confirmed.load(Ordering::Relaxed);
+    let final_receipts_confirmed = final_receipts_confirmed.load(Ordering::Relaxed);
+    let submitted_tps = submitted as f64 / elapsed.as_secs_f64();
+    let submitted_window_tps = submitted as f64 / duration.as_secs_f64();
     let effective_tps = confirmed as f64 / elapsed.as_secs_f64();
+    let avg_submit_latency = if submitted > 0 {
+        Duration::from_micros(submit_latency_micros.load(Ordering::Relaxed) / submitted)
+    } else {
+        Duration::ZERO
+    };
     let avg_latency = if confirmed > 0 {
         Duration::from_micros(latency_micros.load(Ordering::Relaxed) / confirmed)
+    } else {
+        Duration::ZERO
+    };
+    let avg_final_receipt_latency = if final_receipts_confirmed > 0 {
+        Duration::from_micros(
+            final_receipt_latency_micros.load(Ordering::Relaxed) / final_receipts_confirmed,
+        )
     } else {
         Duration::ZERO
     };
@@ -1066,11 +1160,20 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
         k,
         num_wallets,
         concurrency,
+        wait_for_receipts,
+        wait_for_final_receipts,
+        submit_pipeline,
+        rpc_listeners = rpc_urls.len(),
         submitted,
         confirmed,
+        final_receipts_confirmed,
         ?elapsed,
+        submitted_parallel_tps = submitted_tps,
+        submitted_window_tps,
         effective_parallel_tps = effective_tps,
+        ?avg_submit_latency,
         ?avg_latency,
+        ?avg_final_receipt_latency,
         "parallel effective load test complete"
     );
 

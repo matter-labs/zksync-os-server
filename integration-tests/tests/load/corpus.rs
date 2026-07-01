@@ -43,7 +43,12 @@ pub fn fingerprint(parts: &[u64]) -> u64 {
 /// Ensure `path` holds at least `count` records produced with `fingerprint`. Regenerates (atomically,
 /// via a temp file + rename) when the file is missing, the header's magic/version/fingerprint differs,
 /// or it holds fewer than `count` records. `gen(record_index) -> bytes` is invoked in parallel.
-pub fn ensure_corpus<F>(path: &Path, count: u64, fingerprint: u64, generate: F) -> anyhow::Result<()>
+pub fn ensure_corpus<F>(
+    path: &Path,
+    count: u64,
+    fingerprint: u64,
+    generate: F,
+) -> anyhow::Result<()>
 where
     F: Fn(u64) -> Vec<u8> + Sync,
 {

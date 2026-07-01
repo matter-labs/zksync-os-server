@@ -5,14 +5,24 @@ use alloy::consensus::Sealed;
 use alloy::primitives::BlockNumber;
 use anyhow::Context as _;
 use async_trait::async_trait;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{
-    RepositoryResult, ReplayRecord, WriteReplay, WriteRepository, WriteState,
+    ReplayRecord, RepositoryResult, WriteReplay, WriteRepository, WriteState,
 };
+
+fn parallel_producer_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("PARALLEL_PRODUCER_PROFILE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
 
 /// Persists blocks in various local storages.
 /// Used to be part of the Sequencer - was split into `BlockExecutor` and `BlockApplier`.
@@ -121,7 +131,10 @@ where
             self.state.add_block_result(
                 block_number,
                 block_output.storage_writes.clone(),
-                block_output.published_preimages.iter().map(|(k, v)| (*k, v)),
+                block_output
+                    .published_preimages
+                    .iter()
+                    .map(|(k, v)| (*k, v)),
                 override_allowed,
             )?;
             let add_state_elapsed = t_add_state.elapsed();
@@ -165,7 +178,17 @@ where
                     &state_reporter,
                 )?;
                 let output_send_elapsed = t_output_send.elapsed();
-                if self.config.parallel_blocks > 1 {
+                if parallel_producer_profile_enabled() {
+                    tracing::error!(
+                        block_number = bn,
+                        in_flight_window = window,
+                        ?add_state_elapsed,
+                        ?populate_spawn_elapsed,
+                        ?populate_wait_elapsed,
+                        ?output_send_elapsed,
+                        "block_applier block profile"
+                    );
+                } else if self.config.parallel_blocks > 1 {
                     tracing::info!(
                         block_number = bn,
                         ?add_state_elapsed,

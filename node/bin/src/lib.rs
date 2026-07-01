@@ -857,9 +857,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // Capture the lane senders + the router activation flag for the RPC layer before `direct_tx` is
     // moved into `DirectTxSource` below. The router uses its OWN flag (the last tuple element), not
     // the sequencer's, so a "kick" can reach the mempool after direct injection is on. `None` in prod.
-    let direct_lane_router = direct_tx.as_ref().map(|(_, _, lane_senders, _seq_active, router_active)| {
-        DirectLaneRouter::new(lane_senders.clone(), router_active.clone())
-    });
+    let direct_lane_router =
+        direct_tx
+            .as_ref()
+            .map(|(_, _, lane_senders, _seq_active, router_active)| {
+                DirectLaneRouter::new(lane_senders.clone(), router_active.clone())
+            });
     let block_context_provider = BlockContextProvider::new(
         fee_provider,
         pool,
@@ -1037,8 +1040,45 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .tx_validator
         .policy_service
         .build_client(zksync_os_tx_validators::policy_client::Component::Rpc);
+    let rpc_config = config.rpc_config.clone();
+    let extra_rpc_listeners = std::env::var("LOAD_TEST_RPC_LISTENERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(1);
+    for offset in 1..extra_rpc_listeners {
+        let mut extra_rpc_config = rpc_config.clone();
+        let (_host, port) = extra_rpc_config
+            .address
+            .rsplit_once(':')
+            .expect("rpc address should contain a port");
+        let port = port.parse::<u16>().expect("rpc port should be numeric");
+        let port = port
+            .checked_add(offset as u16)
+            .expect("extra rpc listener port overflow");
+        extra_rpc_config.address = format!("0.0.0.0:{port}");
+        zksync_os_rpc::spawn(
+            extra_rpc_config.into(),
+            chain_id,
+            bridgehub_address,
+            bytecode_supplier_address,
+            rpc_storage.clone(),
+            l2_subpool.clone(),
+            direct_lane_router.clone(),
+            genesis_input_source.clone(),
+            combined_acceptance_rx.clone(),
+            last_constructed_block_ctx_receiver.clone(),
+            tx_forwarder.clone(),
+            gateway_provider.clone().map(|p| p.erased()),
+            rpc_policy_client.clone(),
+            runtime,
+            async {},
+        )
+        .await
+        .expect("failed to spawn extra rpc server");
+    }
     zksync_os_rpc::spawn(
-        config.rpc_config.into(),
+        rpc_config.into(),
         chain_id,
         bridgehub_address,
         bytecode_supplier_address,

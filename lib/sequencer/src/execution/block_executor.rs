@@ -8,6 +8,7 @@ use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -19,6 +20,15 @@ use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, WriteState};
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_tx_validators::policy_client::AccessType;
 use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
+
+fn parallel_producer_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("PARALLEL_PRODUCER_PROFILE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
 
 /// Executes blocks, while only updating local in-memory state (mempool, block context).
 /// Does not persist anything to disk.
@@ -152,6 +162,7 @@ where
                     results.push(handle.await.context("execute_block_in_vm task join")?);
                 }
                 let exec_elapsed = t_exec.elapsed();
+                let blocks = results.len();
 
                 // Apply state + flush downstream strictly in block order.
                 let t_downstream = Instant::now();
@@ -167,7 +178,8 @@ where
                         exec_result
                             .map_err(|dump| {
                                 let error = anyhow::anyhow!("{}", dump.error);
-                                if let Err(err) = save_dump(self.config.block_dump_path.clone(), dump)
+                                if let Err(err) =
+                                    save_dump(self.config.block_dump_path.clone(), dump)
                                 {
                                     tracing::error!(?err, "Failed to write block dump");
                                 }
@@ -215,21 +227,40 @@ where
                     output_send_elapsed += t_output_send.elapsed();
                 }
                 last_processed_block_at = Some(Instant::now());
-                tracing::info!(
-                    k,
-                    base_block_number,
-                    downstream_txs,
-                    ?produce_parallel_elapsed,
-                    ?base_view_elapsed,
-                    ?exec_elapsed,
-                    downstream_elapsed = ?t_downstream.elapsed(),
-                    ?decode_elapsed,
-                    ?canonical_elapsed,
-                    ?purge_elapsed,
-                    ?overlay_elapsed,
-                    ?output_send_elapsed,
-                    "block_executor parallel round done"
-                );
+                if parallel_producer_profile_enabled() {
+                    tracing::error!(
+                            k,
+                            base_block_number,
+                            blocks,
+                            downstream_txs,
+                        ?produce_parallel_elapsed,
+                        ?base_view_elapsed,
+                        ?exec_elapsed,
+                        downstream_elapsed = ?t_downstream.elapsed(),
+                        ?decode_elapsed,
+                        ?canonical_elapsed,
+                        ?purge_elapsed,
+                        ?overlay_elapsed,
+                        ?output_send_elapsed,
+                        "block_executor parallel round profile"
+                    );
+                } else {
+                    tracing::info!(
+                        k,
+                        base_block_number,
+                        downstream_txs,
+                        ?produce_parallel_elapsed,
+                        ?base_view_elapsed,
+                        ?exec_elapsed,
+                        downstream_elapsed = ?t_downstream.elapsed(),
+                        ?decode_elapsed,
+                        ?canonical_elapsed,
+                        ?purge_elapsed,
+                        ?overlay_elapsed,
+                        ?output_send_elapsed,
+                        "block_executor parallel round done"
+                    );
+                }
                 continue;
             }
 

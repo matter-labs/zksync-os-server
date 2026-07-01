@@ -231,7 +231,9 @@ fn compute_prover_input(
         | ProvingVersion::V5
         | ProvingVersion::V6 => {
             // V6 (pre-0.3.0) proving dropped for the native-transfers bench; restore before merging.
-            panic!("computing prover input for prover version v1-v6 is not supported in this build");
+            panic!(
+                "computing prover input for prover version v1-v6 is not supported in this build"
+            );
         }
         ProvingVersion::V7 => {
             use zk_ee::{

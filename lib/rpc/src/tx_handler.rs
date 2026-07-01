@@ -7,8 +7,8 @@ use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::transports::RpcError;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_interface::error::InvalidTransaction;
@@ -29,6 +29,178 @@ const SEND_RAW_TRANSACTION_SYNC_MAX_TIMEOUT: Duration = Duration::from_secs(30);
 /// JSON-RPC error code used by EIP-7966 to signal a sync-send timeout.
 const EIP_7966_TIMEOUT_CODE: i64 = 4;
 
+const ADMISSION_PROFILE_LOG_EVERY: u64 = 100_000;
+
+static ADMISSION_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
+static ADMISSION_PROFILE_STATS: AdmissionProfileStats = AdmissionProfileStats::new();
+
+struct AdmissionProfileStats {
+    total: AtomicU64,
+    direct: AtomicU64,
+    in_flight: AtomicU64,
+    max_in_flight: AtomicU64,
+    decode_micros: AtomicU64,
+    recover_micros: AtomicU64,
+    hash_signer_micros: AtomicU64,
+    lane_send_micros: AtomicU64,
+    total_micros: AtomicU64,
+}
+
+impl AdmissionProfileStats {
+    const fn new() -> Self {
+        Self {
+            total: AtomicU64::new(0),
+            direct: AtomicU64::new(0),
+            in_flight: AtomicU64::new(0),
+            max_in_flight: AtomicU64::new(0),
+            decode_micros: AtomicU64::new(0),
+            recover_micros: AtomicU64::new(0),
+            hash_signer_micros: AtomicU64::new(0),
+            lane_send_micros: AtomicU64::new(0),
+            total_micros: AtomicU64::new(0),
+        }
+    }
+}
+
+fn admission_profile_enabled() -> bool {
+    *ADMISSION_PROFILE_ENABLED.get_or_init(|| {
+        std::env::var("RPC_ADMISSION_PROFILE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
+
+fn update_max_atomic(max: &AtomicU64, value: u64) {
+    let mut current = max.load(Ordering::Relaxed);
+    while value > current {
+        match max.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+struct AdmissionProfileGuard {
+    start: Instant,
+}
+
+impl AdmissionProfileGuard {
+    fn new() -> Option<Self> {
+        if !admission_profile_enabled() {
+            return None;
+        }
+        let in_flight = ADMISSION_PROFILE_STATS
+            .in_flight
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        update_max_atomic(&ADMISSION_PROFILE_STATS.max_in_flight, in_flight);
+        Some(Self {
+            start: Instant::now(),
+        })
+    }
+
+    fn record(
+        &self,
+        decode: Duration,
+        recover: Duration,
+        hash_signer: Duration,
+        lane_send: Duration,
+        direct: bool,
+    ) {
+        ADMISSION_PROFILE_STATS
+            .decode_micros
+            .fetch_add(decode.as_micros() as u64, Ordering::Relaxed);
+        ADMISSION_PROFILE_STATS
+            .recover_micros
+            .fetch_add(recover.as_micros() as u64, Ordering::Relaxed);
+        ADMISSION_PROFILE_STATS
+            .hash_signer_micros
+            .fetch_add(hash_signer.as_micros() as u64, Ordering::Relaxed);
+        ADMISSION_PROFILE_STATS
+            .lane_send_micros
+            .fetch_add(lane_send.as_micros() as u64, Ordering::Relaxed);
+        ADMISSION_PROFILE_STATS
+            .total_micros
+            .fetch_add(self.start.elapsed().as_micros() as u64, Ordering::Relaxed);
+        if direct {
+            ADMISSION_PROFILE_STATS
+                .direct
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        let total = ADMISSION_PROFILE_STATS
+            .total
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if total % ADMISSION_PROFILE_LOG_EVERY == 0 {
+            log_admission_profile(total);
+        }
+    }
+}
+
+impl Drop for AdmissionProfileGuard {
+    fn drop(&mut self) {
+        ADMISSION_PROFILE_STATS
+            .in_flight
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+fn avg_duration(total_micros: u64, count: u64) -> Duration {
+    if count == 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_micros(total_micros / count)
+    }
+}
+
+fn log_admission_profile(total: u64) {
+    let direct = ADMISSION_PROFILE_STATS.direct.load(Ordering::Relaxed);
+    let in_flight = ADMISSION_PROFILE_STATS.in_flight.load(Ordering::Relaxed);
+    let max_in_flight = ADMISSION_PROFILE_STATS
+        .max_in_flight
+        .load(Ordering::Relaxed);
+    let avg_decode = avg_duration(
+        ADMISSION_PROFILE_STATS
+            .decode_micros
+            .load(Ordering::Relaxed),
+        total,
+    );
+    let avg_recover = avg_duration(
+        ADMISSION_PROFILE_STATS
+            .recover_micros
+            .load(Ordering::Relaxed),
+        total,
+    );
+    let avg_hash_signer = avg_duration(
+        ADMISSION_PROFILE_STATS
+            .hash_signer_micros
+            .load(Ordering::Relaxed),
+        total,
+    );
+    let avg_lane_send = avg_duration(
+        ADMISSION_PROFILE_STATS
+            .lane_send_micros
+            .load(Ordering::Relaxed),
+        direct,
+    );
+    let avg_total = avg_duration(
+        ADMISSION_PROFILE_STATS.total_micros.load(Ordering::Relaxed),
+        total,
+    );
+    tracing::error!(
+        total,
+        direct,
+        in_flight,
+        max_in_flight,
+        ?avg_decode,
+        ?avg_recover,
+        ?avg_hash_signer,
+        ?avg_lane_send,
+        ?avg_total,
+        "rpc admission profile"
+    );
+}
+
 /// Test/bench-only: routes RPC-admitted transactions straight into the sequencer's parallel
 /// direct-injection lanes, sharded by sender, bypassing the (reth) mempool entirely — no nonce,
 /// balance, or tip ordering. Mirrors `DirectTxSource` on the ingestion side and shares its
@@ -41,7 +213,10 @@ pub struct DirectLaneRouter {
 }
 
 impl DirectLaneRouter {
-    pub fn new(lanes: Vec<tokio::sync::mpsc::Sender<ZkTransaction>>, active: Arc<AtomicBool>) -> Self {
+    pub fn new(
+        lanes: Vec<tokio::sync::mpsc::Sender<ZkTransaction>>,
+        active: Arc<AtomicBool>,
+    ) -> Self {
         Self { lanes, active }
     }
 
@@ -112,6 +287,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         &self,
         tx_bytes: &Bytes,
     ) -> Result<B256, EthSendRawTransactionError> {
+        let profile = AdmissionProfileGuard::new();
         if let TransactionAcceptanceState::NotAccepting(reasons) = &*self.acceptance_state.borrow()
         {
             return Err(EthSendRawTransactionError::NotAcceptingTransactions(
@@ -119,15 +295,22 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             ));
         }
 
+        let decode_started_at = Instant::now();
         let transaction = L2Envelope::decode_2718(&mut tx_bytes.as_ref())
             .map_err(|_| EthSendRawTransactionError::FailedToDecodeSignedTransaction)?;
+        let decode_elapsed = decode_started_at.elapsed();
+        let recover_started_at = Instant::now();
         let l2_tx: L2Transaction = transaction
             .try_into_recovered()
             .map_err(|_| EthSendRawTransactionError::InvalidTransactionSignature)?;
+        let recover_elapsed = recover_started_at.elapsed();
+        let hash_signer_started_at = Instant::now();
         let hash = *l2_tx.hash();
-        if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
+        let signer = l2_tx.signer();
+        if self.config.l2_signer_blacklist.contains(&signer) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
         }
+        let hash_signer_elapsed = hash_signer_started_at.elapsed();
 
         // Test/bench-only: with the direct-injection lane router active, shard by sender into the
         // sequencer's parallel lanes and skip the mempool entirely (no nonce/balance/tip ordering).
@@ -135,12 +318,23 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         if let Some(router) = &self.direct_lanes
             && router.is_active()
         {
-            let lane = router.lane_for(&l2_tx.signer());
+            let lane = router.lane_for(&signer);
             let zk_tx: ZkTransaction = l2_tx.into();
+            let lane_send_started_at = Instant::now();
             router.lanes[lane]
                 .send(zk_tx)
                 .await
                 .map_err(|_| EthSendRawTransactionError::DirectLaneClosed)?;
+            let lane_send_elapsed = lane_send_started_at.elapsed();
+            if let Some(profile) = &profile {
+                profile.record(
+                    decode_elapsed,
+                    recover_elapsed,
+                    hash_signer_elapsed,
+                    lane_send_elapsed,
+                    true,
+                );
+            }
             return Ok(hash);
         }
 
@@ -191,6 +385,15 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         {
             let _guard = MempoolLatencyGuard::new();
             self.mempool.add_l2_transaction(l2_tx).await?;
+        }
+        if let Some(profile) = &profile {
+            profile.record(
+                decode_elapsed,
+                recover_elapsed,
+                hash_signer_elapsed,
+                Duration::ZERO,
+                false,
+            );
         }
         Ok(hash)
     }

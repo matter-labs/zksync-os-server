@@ -307,6 +307,8 @@ pub struct Tester {
     /// requests multiplex over one persistent connection (and receipt waits use block subscriptions),
     /// instead of churning per-request HTTP connections and exhausting localhost TCP ports.
     l2_rpc_ws_url: String,
+    /// Additional benchmark-only RPC listener URLs. Empty unless `LOAD_TEST_RPC_LISTENERS > 1`.
+    extra_l2_rpc_ws_urls: Vec<String>,
     status_server_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: NodeProvider,
@@ -357,6 +359,7 @@ pub struct SupportingNode {
 #[derive(Debug)]
 pub(crate) struct Ports {
     pub(crate) l2_rpc: LockedPort,
+    pub(crate) extra_l2_rpc: Vec<LockedPort>,
     pub(crate) prover_api: LockedPort,
     pub(crate) network: LockedPort,
     pub(crate) status: LockedPort,
@@ -471,6 +474,12 @@ impl Tester {
     /// exhausts localhost ephemeral ports), and `get_receipt` waits on block subscriptions.
     pub fn l2_rpc_ws_url(&self) -> &str {
         &self.l2_rpc_ws_url
+    }
+
+    pub fn l2_rpc_ws_urls(&self) -> Vec<String> {
+        std::iter::once(self.l2_rpc_ws_url.clone())
+            .chain(self.extra_l2_rpc_ws_urls.iter().cloned())
+            .collect()
     }
 
     pub fn record_l2_http_rpc(&self, config: RpcRecordConfig) -> HttpRpcRecorder {
@@ -679,6 +688,11 @@ impl Tester {
         }
         let l2_rpc_address = config.rpc_config.address.clone();
         let l2_rpc_ws_url = format!("ws://localhost:{}", parse_local_port(&l2_rpc_address)?);
+        let extra_l2_rpc_ws_urls = ports
+            .extra_l2_rpc
+            .iter()
+            .map(|port| format!("ws://localhost:{}", port.port))
+            .collect();
         let status_server_url = config
             .status_server_config
             .address
@@ -852,6 +866,7 @@ impl Tester {
             ports,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
             l2_rpc_ws_url,
+            extra_l2_rpc_ws_urls,
             status_server_url,
             gateway_rpc_url,
             sl_provider,
@@ -1024,8 +1039,11 @@ impl Drop for SupportingNode {
 
 impl Ports {
     pub(crate) async fn acquire_unused() -> anyhow::Result<Self> {
+        let l2_rpc = LockedPort::acquire_unused().await?;
+        let extra_l2_rpc = acquire_extra_rpc_ports(l2_rpc.port).await?;
         Ok(Self {
-            l2_rpc: LockedPort::acquire_unused().await?,
+            l2_rpc,
+            extra_l2_rpc,
             prover_api: LockedPort::acquire_unused().await?,
             network: LockedPort::acquire_unused().await?,
             status: LockedPort::acquire_unused().await?,
@@ -1033,15 +1051,18 @@ impl Ports {
     }
 
     async fn from_config(config: &Config) -> anyhow::Result<Self> {
+        let l2_rpc = acquire_port_with_retry(parse_local_port(&config.rpc_config.address)?)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to acquire L2 RPC port {}",
+                    config.rpc_config.address
+                )
+            })?;
+        let extra_l2_rpc = acquire_extra_rpc_ports(l2_rpc.port).await?;
         Ok(Self {
-            l2_rpc: acquire_port_with_retry(parse_local_port(&config.rpc_config.address)?)
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to acquire L2 RPC port {}",
-                        config.rpc_config.address
-                    )
-                })?,
+            l2_rpc,
+            extra_l2_rpc,
             prover_api: acquire_port_with_retry(parse_local_port(
                 &config.prover_api_config.address,
             )?)
@@ -1086,6 +1107,11 @@ impl Ports {
         wait_for_port_to_be_unused(self.l2_rpc.port)
             .await
             .with_context(|| format!("failed waiting for L2 RPC port {}", self.l2_rpc.port))?;
+        for port in &self.extra_l2_rpc {
+            wait_for_port_to_be_unused(port.port)
+                .await
+                .with_context(|| format!("failed waiting for extra L2 RPC port {}", port.port))?;
+        }
         wait_for_port_to_be_unused(self.prover_api.port)
             .await
             .with_context(|| {
@@ -1101,6 +1127,30 @@ impl Ports {
             .await
             .with_context(|| format!("failed waiting for status server port {}", self.status.port))
     }
+}
+
+fn load_test_rpc_listeners() -> usize {
+    std::env::var("LOAD_TEST_RPC_LISTENERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(1)
+}
+
+async fn acquire_extra_rpc_ports(base_port: u16) -> anyhow::Result<Vec<LockedPort>> {
+    let count = load_test_rpc_listeners().saturating_sub(1);
+    let mut ports = Vec::with_capacity(count);
+    for offset in 1..=count {
+        let port = base_port
+            .checked_add(offset as u16)
+            .context("LOAD_TEST_RPC_LISTENERS overflows u16 port range")?;
+        ports.push(
+            acquire_port_with_retry(port)
+                .await
+                .with_context(|| format!("failed to acquire extra L2 RPC port {port}"))?,
+        );
+    }
+    Ok(ports)
 }
 
 fn parse_local_port(address: &str) -> anyhow::Result<u16> {
