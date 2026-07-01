@@ -183,18 +183,18 @@ pub(crate) async fn create_gcs_client(config: &GcsReplayArchiveConfig) -> anyhow
     Ok(Client::new(client_config))
 }
 
-async fn get_client_config(
-    auth_mode: GcsReplayArchiveAuthMode,
-) -> Result<ClientConfig, google_cloud_auth::error::Error> {
+async fn get_client_config(auth_mode: GcsReplayArchiveAuthMode) -> anyhow::Result<ClientConfig> {
     match auth_mode {
         GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path) => {
             // The `google_cloud_auth` API requests a string here (an owned one at that!), but
             // converts it to a `Path` internally.
-            let path = path.into_os_string().into_string().expect("non-UTF8 path");
+            let path = path.into_os_string().into_string().map_err(|path| {
+                anyhow::anyhow!("GCS credential file path is not valid UTF-8: {path:?}")
+            })?;
             let cred_file = CredentialsFile::new_from_file(path).await?;
-            ClientConfig::default().with_credentials(cred_file).await
+            Ok(ClientConfig::default().with_credentials(cred_file).await?)
         }
-        GcsReplayArchiveAuthMode::Authenticated => ClientConfig::default().with_auth().await,
+        GcsReplayArchiveAuthMode::Authenticated => Ok(ClientConfig::default().with_auth().await?),
         GcsReplayArchiveAuthMode::Anonymous => Ok(ClientConfig::default().anonymous()),
     }
 }
@@ -331,5 +331,30 @@ mod tests {
                 "/path/to/credentials.json"
             ))
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn gcs_client_reports_non_utf8_credential_path() {
+        use futures::FutureExt as _;
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let config = GcsReplayArchiveConfig::with_credential_file(
+            "bucket",
+            PathBuf::from(OsString::from_vec(vec![0xff])),
+        );
+
+        let result = std::panic::AssertUnwindSafe(create_gcs_client(&config))
+            .catch_unwind()
+            .await;
+        let err = match result
+            .expect("non-UTF8 credential file path should return an error, not panic")
+        {
+            Ok(_) => panic!("non-UTF8 credential file path unexpectedly created a GCS client"),
+            Err(err) => err,
+        };
+
+        assert!(format!("{err:#}").contains("GCS credential file path is not valid UTF-8"));
     }
 }
