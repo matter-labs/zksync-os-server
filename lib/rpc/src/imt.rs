@@ -175,7 +175,7 @@ impl IndexedMerkleTree {
         self.nodes[0][index] = item_hash;
         let mut current_hash = item_hash;
         for i in 0..self.height {
-            if index % 2 == 0 {
+            if index.is_multiple_of(2) {
                 let right = if max_node_number == index as u64 {
                     self.zeros[i]
                 } else {
@@ -208,7 +208,7 @@ impl IndexedMerkleTree {
         let mut index = start_index as usize;
         let mut proof = Vec::with_capacity(self.height);
         for i in 0..self.height {
-            let sibling = if index % 2 == 0 {
+            let sibling = if index.is_multiple_of(2) {
                 if max_node_number == index as u64 {
                     self.zeros[i]
                 } else {
