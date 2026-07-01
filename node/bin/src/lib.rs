@@ -104,7 +104,7 @@ use zksync_os_replay_archive::{
 };
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
-use zksync_os_rpc::{EthCallHandler, RpcStorage};
+use zksync_os_rpc::{DirectLaneRouter, EthCallHandler, RpcStorage};
 use zksync_os_rpc_api::eth::EthApiClient;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
@@ -132,6 +132,21 @@ const REPOSITORY_DB_NAME: &str = "repository";
 const BATCH_DB_NAME: &str = "batch";
 pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 
+/// Test/bench-only channels for direct tx injection (always `None` in the production binary):
+/// - serial receiver (single direct-injection channel),
+/// - per-lane receivers (wired into `DirectTxSource.lanes` for parallel block production),
+/// - per-lane senders (handed to the RPC layer so admission can shard into the lanes),
+/// - the sequencer activation flag flipped by `Tester::activate_direct_injection`,
+/// - the RPC lane-router activation flag flipped by `Tester::activate_router` (kept separate so a
+///   "kick" can still reach the mempool after direct injection is on but before routing starts).
+type DirectTxChannels = (
+    tokio::sync::mpsc::Receiver<ZkTransaction>,
+    Vec<tokio::sync::mpsc::Receiver<ZkTransaction>>,
+    Vec<tokio::sync::mpsc::Sender<ZkTransaction>>,
+    Arc<std::sync::atomic::AtomicBool>,
+    Arc<std::sync::atomic::AtomicBool>,
+);
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
@@ -140,11 +155,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // directly from these channels (bypassing RPC + mempool) instead of
     // `pool.best_transactions_stream()`. The first receiver is the serial path; lane receivers are
     // used by parallel load tests. Always `None` in the production binary.
-    direct_tx: Option<(
-        tokio::sync::mpsc::Receiver<ZkTransaction>,
-        Vec<tokio::sync::mpsc::Receiver<ZkTransaction>>,
-        Arc<std::sync::atomic::AtomicBool>,
-    )>,
+    direct_tx: Option<DirectTxChannels>,
     // Test/bench only: when `Some`, the freshly built `State` handle (shared / `Arc`-backed) is sent
     // here right after construction, so a benchmark can snapshot the live post-upgrade state and
     // drive `run_block` directly against it. Always `None` in the production binary.
@@ -843,6 +854,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await
     .expect("failed to create mempool");
+    // Capture the lane senders + the router activation flag for the RPC layer before `direct_tx` is
+    // moved into `DirectTxSource` below. The router uses its OWN flag (the last tuple element), not
+    // the sequencer's, so a "kick" can reach the mempool after direct injection is on. `None` in prod.
+    let direct_lane_router = direct_tx.as_ref().map(|(_, _, lane_senders, _seq_active, router_active)| {
+        DirectLaneRouter::new(lane_senders.clone(), router_active.clone())
+    });
     let block_context_provider = BlockContextProvider::new(
         fee_provider,
         pool,
@@ -857,10 +874,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
             // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
             interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+            parallel_block_linger: config.sequencer_config.parallel_block_linger,
         },
         &node_startup_state.l1_state.settlement_layer_intervals,
         last_constructed_block_ctx_sender,
-        direct_tx.map(|(rx, lane_rxs, active)| {
+        direct_tx.map(|(rx, lane_rxs, _lane_senders, active, _router_active)| {
             zksync_os_sequencer::execution::block_context_provider::DirectTxSource {
                 rx: Arc::new(Mutex::new(rx)),
                 lanes: lane_rxs
@@ -1026,6 +1044,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         bytecode_supplier_address,
         rpc_storage,
         l2_subpool,
+        direct_lane_router,
         genesis_input_source,
         combined_acceptance_rx,
         last_constructed_block_ctx_receiver,

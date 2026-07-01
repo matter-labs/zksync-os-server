@@ -4,7 +4,7 @@ use crate::eth_call_handler::EthCallHandler;
 use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
-use crate::tx_handler::{EthSendRawTransactionSyncError, TxHandler};
+use crate::tx_handler::{DirectLaneRouter, EthSendRawTransactionSyncError, TxHandler};
 use alloy::consensus::TrieAccount;
 use alloy::consensus::transaction::Recovered;
 use alloy::dyn_abi::TypedData;
@@ -55,6 +55,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         config: RpcConfig,
         storage: RpcStorage,
         mempool: Mempool,
+        direct_lanes: Option<DirectLaneRouter>,
         eth_call_handler: EthCallHandler<RpcStorage>,
         chain_id: u64,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
@@ -67,6 +68,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
             storage.clone(),
             chain_id,
             mempool.clone(),
+            direct_lanes,
             acceptance_state,
             tx_forwarder,
             policy_client,

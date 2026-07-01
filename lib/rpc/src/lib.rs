@@ -29,6 +29,7 @@ mod trace_filter;
 mod tx_forwarder;
 pub use tx_forwarder::{TxForwardEndpoint, TxForwarder};
 mod tx_handler;
+pub use tx_handler::DirectLaneRouter;
 mod txpool_impl;
 mod types;
 mod unstable_impl;
@@ -81,6 +82,9 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     bytecode_supplier_address: Address,
     storage: RpcStorage,
     mempool: Mempool,
+    // Test/bench only: when `Some`, RPC admission shards transactions into the sequencer's parallel
+    // direct-injection lanes (once activated) instead of the mempool. Always `None` in production.
+    direct_lane_router: Option<DirectLaneRouter>,
     genesis_input_source: Arc<dyn GenesisInputSource>,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
@@ -106,6 +110,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             config.clone(),
             storage.clone(),
             mempool.clone(),
+            direct_lane_router,
             eth_call_handler.clone(),
             chain_id,
             acceptance_state,

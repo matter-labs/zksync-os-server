@@ -82,12 +82,34 @@ pub struct Config {
     pub service_block_delay: Duration,
     pub max_transactions_in_block: usize,
     pub interop_roots_per_block: u64,
+    /// Bench-only: per-round linger for `produce_parallel`'s lane fast-path — batches bursty
+    /// direct-injection arrivals into larger blocks. `ZERO` = seal immediately (default / injection
+    /// bench / production).
+    pub parallel_block_linger: Duration,
 }
 
 struct LastBlock {
     record: ReplayRecord,
     hash: BlockHash,
     next_cursors: BlockStartCursors,
+}
+
+/// Bench-only: non-blocking drain of a direct-injection lane channel into its overflow buffer, up to
+/// `max_tx`. Never awaits — the `std::sync::Mutex` guard is released before returning, so this must
+/// not be called across an `.await` point.
+fn drain_lane(
+    rx: &Mutex<mpsc::Receiver<ZkTransaction>>,
+    queue: &mut std::collections::VecDeque<ZkTransaction>,
+    max_tx: usize,
+) {
+    let mut guard = rx.lock().unwrap();
+    while queue.len() < max_tx {
+        match guard.try_recv() {
+            Ok(tx) => queue.push_back(tx),
+            // Channel momentarily empty (reader behind) — take what's buffered so far.
+            Err(_) => break,
+        }
+    }
 }
 
 impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
@@ -368,31 +390,66 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                     .resize_with(direct_lanes.len(), Default::default);
             }
 
-            let mut commands = Vec::with_capacity(k);
-            for (lane_index, rx) in direct_lanes.into_iter().take(k).enumerate() {
-                if self.direct_lane_buffers[lane_index].is_empty() {
-                    // Park each empty lane until its pusher supplies at least one tx. The parallel
-                    // benchmark has one pusher per lane, so no shared receiver drain/rebucket is
-                    // needed on the hot path.
-                    let Some(first) =
-                        std::future::poll_fn(|cx| rx.lock().unwrap().poll_recv(cx)).await
-                    else {
-                        continue;
-                    };
-                    self.direct_lane_buffers[lane_index].push_back(first);
-                }
-                {
-                    let queue = &mut self.direct_lane_buffers[lane_index];
-                    let mut guard = rx.lock().unwrap();
-                    while queue.len() < max_tx {
-                        match guard.try_recv() {
-                            Ok(tx) => queue.push_back(tx),
-                            // Lane momentarily empty (reader behind) - emit what this lane has.
-                            Err(_) => break,
+            let lanes: Vec<_> = direct_lanes.into_iter().take(k).collect();
+
+            // Accumulate this round's transactions before sealing. Under an RPC feed the producer
+            // outruns ingestion and would otherwise seal near-empty lanes every loop, burying the
+            // per-block Merkle tree in tiny blocks (the effective-path bottleneck). We (1) drain
+            // whatever each lane already has, (2) if the whole round is empty, park until the first tx
+            // lands on ANY lane, then (3) linger once so bursty arrivals batch into large blocks — all
+            // K lane channels keep filling concurrently during the single sleep (RPC admission shards
+            // into them in the background), so the added latency per round is one `linger`, not `k`.
+            // `linger == 0` (default / injection bench / production) never sleeps, preserving the old
+            // immediate-seal behaviour.
+            let linger = self.config.parallel_block_linger;
+
+            for (lane_index, rx) in lanes.iter().enumerate() {
+                drain_lane(rx, &mut self.direct_lane_buffers[lane_index], max_tx);
+            }
+
+            // If no lane has work yet, park until the first tx arrives on ANY lane. Polling every
+            // receiver (not just lane 0) is essential: parking on one specific lane would let a busy
+            // lane's transactions sit unbuilt behind an idle lane, and their receipts would time out.
+            if (0..k).all(|i| self.direct_lane_buffers[i].is_empty()) {
+                let first = std::future::poll_fn(|cx| {
+                    let mut all_closed = true;
+                    for (i, rx) in lanes.iter().enumerate() {
+                        match rx.lock().unwrap().poll_recv(cx) {
+                            std::task::Poll::Ready(Some(tx)) => {
+                                return std::task::Poll::Ready(Some((i, tx)));
+                            }
+                            // This lane closed; keep checking the others.
+                            std::task::Poll::Ready(None) => {}
+                            std::task::Poll::Pending => all_closed = false,
                         }
                     }
+                    if all_closed {
+                        std::task::Poll::Ready(None)
+                    } else {
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+                match first {
+                    Some((i, tx)) => self.direct_lane_buffers[i].push_back(tx),
+                    None => return Ok(Vec::new()), // all lane channels closed
                 }
+            }
 
+            // Linger once (skip only if every lane is already full — nothing to gain), then re-drain
+            // what accumulated across all lanes during the wait.
+            if linger > Duration::ZERO
+                && !(0..k).all(|i| self.direct_lane_buffers[i].len() >= max_tx)
+            {
+                tokio::time::sleep(linger).await;
+                for (lane_index, rx) in lanes.iter().enumerate() {
+                    drain_lane(rx, &mut self.direct_lane_buffers[lane_index], max_tx);
+                }
+            }
+
+            // Emit one block per non-empty lane, numbered contiguously from the base.
+            let mut commands = Vec::with_capacity(k);
+            for lane_index in 0..lanes.len() {
                 let queue = &mut self.direct_lane_buffers[lane_index];
                 if queue.is_empty() {
                     continue;

@@ -303,6 +303,10 @@ pub struct Tester {
     // Needed to be able to connect external nodes
     node_record: NodeRecord,
     l2_rpc_address: String,
+    /// WebSocket URL for the same RPC server. Load tests should connect over WS so many concurrent
+    /// requests multiplex over one persistent connection (and receipt waits use block subscriptions),
+    /// instead of churning per-request HTTP connections and exhausting localhost TCP ports.
+    l2_rpc_ws_url: String,
     status_server_url: String,
     gateway_rpc_url: Option<String>,
     sl_provider: NodeProvider,
@@ -318,6 +322,10 @@ pub struct Tester {
     /// Flips direct injection on. Kept dormant so the node first finishes startup (upgrade + initial
     /// deposit) via the normal mempool path before any direct streaming begins.
     direct_tx_active: Arc<std::sync::atomic::AtomicBool>,
+    /// Flips the RPC lane router on (separate from `direct_tx_active`). Lets a parallel *RPC* load
+    /// test keep RPC admission on the mempool path while it sends a "kick" to wake the in-flight
+    /// serial `produce()` after activating direct injection, then switch admission to the lanes.
+    direct_tx_router_active: Arc<std::sync::atomic::AtomicBool>,
     /// Bench hook: the node's (shared) state handle, captured at startup. Lets parallel-execution
     /// benchmarks snapshot the live post-upgrade state and drive `run_block` directly against it.
     state: FullDiffsState,
@@ -456,6 +464,13 @@ impl Tester {
 
     pub fn l2_rpc_url(&self) -> &str {
         &self.l2_rpc_address
+    }
+
+    /// WebSocket RPC URL. Prefer this over [`Tester::l2_rpc_url`] for high-concurrency load: one
+    /// persistent multiplexed connection per provider avoids per-request HTTP connect churn (which
+    /// exhausts localhost ephemeral ports), and `get_receipt` waits on block subscriptions.
+    pub fn l2_rpc_ws_url(&self) -> &str {
+        &self.l2_rpc_ws_url
     }
 
     pub fn record_l2_http_rpc(&self, config: RpcRecordConfig) -> HttpRpcRecorder {
@@ -717,6 +732,7 @@ impl Tester {
         // mempool path until `Tester::activate_direct_injection` flips it on (load tests only), so
         // this has no effect on regular tests.
         let direct_tx_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let direct_tx_router_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (direct_tx_sender, direct_tx_rx) = tokio::sync::mpsc::channel(500_000);
         let direct_tx_lane_count = config.sequencer_config.parallel_blocks.max(1);
         let direct_tx_lane_blocks = std::env::var("DIRECT_TX_LANE_BLOCKS")
@@ -743,7 +759,13 @@ impl Tester {
         zksync_os_server::run::<FullDiffsState>(
             &runtime,
             config.clone(),
-            Some((direct_tx_rx, direct_tx_lane_rxs, direct_tx_active.clone())),
+            Some((
+                direct_tx_rx,
+                direct_tx_lane_rxs,
+                direct_tx_lane_senders.clone(),
+                direct_tx_active.clone(),
+                direct_tx_router_active.clone(),
+            )),
             Some(state_tx),
         )
         .instrument(node_span)
@@ -829,6 +851,7 @@ impl Tester {
             config,
             ports,
             l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
+            l2_rpc_ws_url,
             status_server_url,
             gateway_rpc_url,
             sl_provider,
@@ -840,6 +863,7 @@ impl Tester {
             direct_tx_sender,
             direct_tx_lane_senders,
             direct_tx_active,
+            direct_tx_router_active,
             state,
             #[cfg(feature = "prover-tests")]
             prover_api_address,
@@ -879,6 +903,15 @@ impl Tester {
     /// finished startup (protocol upgrade + initial deposit), which must go through the mempool.
     pub fn activate_direct_injection(&self) {
         self.direct_tx_active
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Switches RPC admission over to the parallel lane router (sharding by `from`). Call this only
+    /// after [`Tester::activate_direct_injection`] and after the "kick" that wakes the in-flight
+    /// serial `produce()` — until then RPC admission must stay on the mempool path so the kick can
+    /// reach it. Parallel RPC load tests only.
+    pub fn activate_router(&self) {
+        self.direct_tx_router_active
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 

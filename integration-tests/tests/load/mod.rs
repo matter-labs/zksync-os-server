@@ -134,6 +134,7 @@ fn spawn_corpus_pusher(
 /// encoded for `eth_sendRawTransaction`. Generated once — real ECDSA signing (~tens of µs each), so
 /// this is by far the most expensive corpus to build; keep `count` and the wallet count modest.
 fn ensure_rpc_corpus(
+    family: &str,
     chain_id: u64,
     index: usize,
     signer: &PrivateKeySigner,
@@ -141,8 +142,12 @@ fn ensure_rpc_corpus(
     value: U256,
     count: u64,
 ) -> anyhow::Result<std::path::PathBuf> {
-    let fp = corpus::fingerprint(&[chain_id, 1 /* rpc scheme version */]);
-    let path = corpus::signer_file("rpc", index);
+    // Fold the recipient into the fingerprint so a changed recipient scheme (e.g. the per-wallet
+    // recipients of `effective_parallel_tps` vs. the single shared recipient of `effective_tps`)
+    // regenerates the corpus instead of silently reusing stale, wrongly-addressed signed txs.
+    let recipient_lo = u64::from_be_bytes(recipient.as_slice()[12..20].try_into().unwrap());
+    let fp = corpus::fingerprint(&[chain_id, 2 /* rpc scheme version */, recipient_lo]);
+    let path = corpus::signer_file(family, index);
     let signer = signer.clone();
     corpus::ensure_corpus(&path, count, fp, move |n| {
         let tx = TxEip1559 {
@@ -230,7 +235,9 @@ async fn effective_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let paths: Vec<std::path::PathBuf> = signers
         .iter()
         .enumerate()
-        .map(|(i, signer)| ensure_rpc_corpus(chain_id, i, signer, recipient, value, txs_per_file()))
+        .map(|(i, signer)| {
+            ensure_rpc_corpus("rpc", chain_id, i, signer, recipient, value, txs_per_file())
+        })
         .collect::<anyhow::Result<_>>()?;
 
     // 2. Fund every sender from alice (covers the per-tx value; fees are 0). Split at most half of
@@ -788,6 +795,283 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
         blocks_produced,
         blocks_per_sec = blocks_produced as f64 / measured.as_secs_f64(),
         "parallel-injection load test complete"
+    );
+
+    Ok(())
+}
+
+/// Like [`effective_tps`], but drives the sequencer's **parallel** block production from the RPC
+/// path. A "simple mempool" — the sharding router `DirectLaneRouter` — stands in for the reth pool:
+/// once direct injection is activated, each RPC-admitted tx is sharded by `from` into one of K
+/// sequencer lanes (no nonce / balance / tip ordering), and `BlockExecutor` produces K slot-disjoint
+/// blocks per round in parallel (see `BlockContextProvider::produce_parallel`). RPC ingestion, real
+/// ECDSA recovery, and receipt polling all stay in the path, so this measures the *effective*
+/// throughput of the parallel pipeline — the counterpart to [`parallel_injection_tps`], which feeds
+/// the lanes directly and bypasses RPC + mempool.
+///
+/// Correctness rests on the K parallel blocks touching **disjoint accounts** (they all read the same
+/// base snapshot and are applied last-writer-wins): routing by `from` keeps every wallet in a single
+/// lane, and each wallet sends to its OWN unique recipient (`bench_addr(i)`), so no two lanes write
+/// the same account. Fees are 0 so the shared coinbase is never written, and the seal config matches
+/// [`direct_injection_tps`] so no tx is dropped into a permanent nonce gap (a lane can't re-serve a
+/// dropped tx). `LOAD_TEST_WALLETS` should stay comfortably above `PARALLEL_BLOCKS` so every lane
+/// gets at least one wallet — an empty lane stalls the round.
+///
+/// Tunables: `PARALLEL_BLOCKS` (default 2), `LOAD_TEST_DURATION_SECS` (60), `LOAD_TEST_WALLETS`
+/// (128), `LOAD_TEST_CONCURRENCY` (16384).
+#[test_multisetup([NEXT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    let k: usize = env_or("PARALLEL_BLOCKS", 2);
+    let mut config = env.default_config().await?;
+    config.prover_input_generator_config.enable_input_generation = false;
+    config.fee_config = FeeConfig {
+        base_fee_override: Some(U128::from(0)),
+        pubdata_price_override: Some(U128::from(0)),
+        ..Default::default()
+    };
+    config.mempool_config.minimal_protocol_basefee = 0;
+    config.sequencer_config.revm_consistency_checker_enabled = false;
+    config.batcher_config.enabled = false;
+    config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
+    // Match `direct_injection_tps`'s seal-safety knobs: a count-based seal just under the VM's
+    // NativeCycles limit, and a gas limit high enough that no block seals on `GasLimit` (which
+    // consumes-without-executing the triggering tx and would open a permanent nonce gap the lane
+    // cannot re-serve).
+    config.sequencer_config.max_transactions_in_block = 29_200;
+    config.sequencer_config.block_gas_limit = 1_000_000_000_000;
+    config.sequencer_config.parallel_blocks = k;
+    // Batch bursty RPC arrivals into larger blocks: without lingering the producer outruns ingestion
+    // and seals near-empty lanes every loop (~4-5 txs/block), and the per-block Merkle `tree_manager`
+    // — the slowest consumer — can't keep up, so throughput is block-rate-bound far below the
+    // injection path. A few ms of linger lets each round accumulate many more txs per lane, cutting
+    // the block rate the tree must sustain. Tunable via `PARALLEL_BLOCK_LINGER_MS` (default 5).
+    config.sequencer_config.parallel_block_linger =
+        Duration::from_millis(env_or("PARALLEL_BLOCK_LINGER_MS", 5));
+    // Backpressure stays ENABLED (default limits). Even with lingering the tree is the slowest
+    // consumer; when it falls behind the node gracefully stops accepting txs. Disabling backpressure
+    // instead lets the applier->tree channel overflow and panic ("consumer is catastrophically
+    // behind"), crashing the node. The submit loop below treats "not accepting" as transient and
+    // backs off, so the measured rate self-regulates to what the full pipeline (tree included) can
+    // sustain.
+    let tester = env.launch(config).await?;
+
+    let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
+    let num_wallets: usize = env_or("LOAD_TEST_WALLETS", 128);
+    let concurrency: usize = env_or("LOAD_TEST_CONCURRENCY", 16384);
+    assert!(
+        num_wallets >= k,
+        "LOAD_TEST_WALLETS must be >= PARALLEL_BLOCKS (and ideally well above it)"
+    );
+    assert!(concurrency > 0, "LOAD_TEST_CONCURRENCY must be > 0");
+
+    // 10x buffer on gas price so the funding txs never get stuck/evicted in the mempool.
+    let gas_price = tester.l2_provider.get_gas_price().await? * 10;
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+    let value = U256::from(1);
+
+    // Deterministic sender wallets (so the pre-signed corpus is reusable across runs) + a plain
+    // provider per wallet for RPC concurrency. Each wallet sends to its OWN unique recipient
+    // (`bench_addr(i)`), so the per-`from` lane router yields K blocks whose touched account sets
+    // ({wallet_i, recipient_i}) are disjoint across lanes.
+    let mut signers = Vec::with_capacity(num_wallets);
+    let mut providers = Vec::with_capacity(num_wallets);
+    let mut recipients = Vec::with_capacity(num_wallets);
+    for i in 0..num_wallets {
+        let key = keccak256(format!("zksync-os-loadtest-signer-{i}"));
+        let signer = PrivateKeySigner::from_slice(key.as_slice()).expect("valid signing key");
+        signers.push(signer);
+        recipients.push(bench_addr(i as u64));
+        // Connect over WebSocket: at high `LOAD_TEST_CONCURRENCY` the per-wallet provider multiplexes
+        // all its requests over one persistent connection and `get_receipt` waits on block
+        // subscriptions, instead of churning per-request HTTP connections (which exhausts localhost
+        // ephemeral ports — `tcp connect: Resource temporarily unavailable`).
+        let provider = ProviderBuilder::new()
+            .connect(tester.l2_rpc_ws_url())
+            .await?;
+        providers.push(DynProvider::new(provider));
+    }
+
+    // Each wallet's real-signed corpus (one-time; real ECDSA signing is expensive). A distinct
+    // corpus family from `effective_tps` so the two tests never invalidate each other's files; the
+    // per-wallet recipient is folded into the fingerprint.
+    let paths: Vec<std::path::PathBuf> = signers
+        .iter()
+        .enumerate()
+        .map(|(i, signer)| {
+            ensure_rpc_corpus(
+                "rpc-parallel",
+                chain_id,
+                i,
+                signer,
+                recipients[i],
+                value,
+                txs_per_file(),
+            )
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    // Fund every sender from alice (covers the per-tx value; fees are 0). Split at most half of
+    // alice's balance evenly so total funding never exceeds what she holds.
+    let alice = tester.l2_wallet.default_signer().address();
+    let alice_balance = tester.l2_provider.get_balance(alice).await?;
+    let funding = alice_balance / U256::from((num_wallets * 2) as u64);
+    let mut funding_txs = Vec::with_capacity(num_wallets);
+    for signer in &signers {
+        let tx = TransactionRequest::default()
+            .with_to(signer.address())
+            .with_value(funding)
+            .with_gas_price(gas_price)
+            .with_gas_limit(LOAD_GAS_LIMIT);
+        funding_txs.push(tester.l2_provider.send_transaction(tx).await?);
+    }
+    funding_txs.expect_successful_receipts().await?;
+    tracing::info!(num_wallets, k, %funding, "funded sender wallets");
+
+    // Switch block production onto the parallel direct-injection path. This mirrors the transition
+    // in `parallel_injection_tps`: let the producer settle into the serial `produce()` parked on the
+    // (now-empty) mempool, activate direct injection, then send a "kick" through the mempool. The
+    // in-flight serial call consumes the kick, seals, and only the *next* loop iteration hits the
+    // parallel gate — entering `produce_parallel`, parked on the (still-empty) lanes. Crucially the
+    // RPC router stays on the mempool path here so the kick actually reaches it; we flip admission
+    // over to the lanes only afterwards. (A naive activate-then-submit hangs: the in-flight serial
+    // `best_transactions_stream().await` blocks forever on the empty mempool, so the loop never
+    // re-checks the parallel gate.)
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    tester.activate_direct_injection();
+    let kick = TransactionRequest::default()
+        .with_to(Address::repeat_byte(0x42))
+        .with_value(U256::ZERO)
+        .with_gas_price(0)
+        .with_gas_limit(LOAD_GAS_LIMIT);
+    tester
+        .l2_provider
+        .send_transaction(kick)
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    // From here, RPC admission shards each tx by `from` into one of the K lanes instead of the
+    // mempool, and the producer drains those lanes into K parallel blocks per round.
+    tester.activate_router();
+
+    let sem = Arc::new(Semaphore::new(concurrency));
+    let submitted = Arc::new(AtomicU64::new(0));
+    let confirmed = Arc::new(AtomicU64::new(0));
+    let latency_micros = Arc::new(AtomicU64::new(0));
+
+    // Optional CPU profiling: `LOAD_TEST_FLAMEGRAPH=<path>` samples the whole (in-process node +
+    // client) for the run and writes a flamegraph SVG, to attribute where CPU actually goes on the
+    // RPC path (e.g. ECDSA signature recovery in ingestion).
+    let flamegraph_path = std::env::var("LOAD_TEST_FLAMEGRAPH").ok();
+    let profiler_guard = flamegraph_path.as_ref().map(|_| {
+        pprof::ProfilerGuardBuilder::default()
+            .frequency(499)
+            .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+            .build()
+            .expect("failed to start profiler")
+    });
+
+    let start = Instant::now();
+    let deadline = start + duration;
+
+    // One submitter task per wallet, all sharing the in-flight semaphore + counters. Each accepted
+    // tx spawns a detached receipt waiter that releases its permit on confirmation (bounds memory
+    // and applies backpressure). A single wallet pipelines many in-flight txs into its lane, so each
+    // lane stays fed even with one wallet per lane.
+    let mut submitters = Vec::with_capacity(num_wallets);
+    for (provider, path) in providers.into_iter().zip(paths) {
+        let sem = sem.clone();
+        let submitted = submitted.clone();
+        let confirmed = confirmed.clone();
+        let latency_micros = latency_micros.clone();
+        submitters.push(tokio::spawn(async move {
+            let mut reader = corpus::CorpusReader::open(&path)?;
+            let mut receipts = JoinSet::new();
+            'submit: while Instant::now() < deadline {
+                let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
+                let Some(raw) = reader.next_record()? else {
+                    break; // corpus exhausted
+                };
+                let sent_at = Instant::now();
+                // The node throttles ingestion ("not currently accepting transactions") when the
+                // pipeline (notably the tree) lags. Treat that as transient: back off and retry the
+                // same tx — a real client behaviour — so the run measures the sustainable rate
+                // instead of hard-failing. Any other RPC error is a real failure.
+                let pending = loop {
+                    match provider.send_raw_transaction(&raw).await {
+                        Ok(pending) => break pending,
+                        Err(err) if err.to_string().contains("accepting") => {
+                            if Instant::now() >= deadline {
+                                drop(permit);
+                                break 'submit;
+                            }
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        Err(err) => return Err(err.into()),
+                    }
+                };
+                submitted.fetch_add(1, Ordering::Relaxed);
+
+                let confirmed = confirmed.clone();
+                let latency_micros = latency_micros.clone();
+                receipts.spawn(async move {
+                    let receipt = pending
+                        .with_timeout(Some(RECEIPT_TIMEOUT))
+                        .get_receipt()
+                        .await?;
+                    drop(permit);
+                    anyhow::ensure!(
+                        receipt.status(),
+                        "transaction reverted: {:?}",
+                        receipt.transaction_hash()
+                    );
+                    confirmed.fetch_add(1, Ordering::Relaxed);
+                    latency_micros
+                        .fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+                    anyhow::Ok(())
+                });
+            }
+            while let Some(res) = receipts.join_next().await {
+                res??;
+            }
+            anyhow::Ok(())
+        }));
+    }
+    for submitter in submitters {
+        submitter.await??;
+    }
+
+    // Render the flamegraph (if profiling was enabled) before computing the summary.
+    if let (Some(guard), Some(path)) = (profiler_guard, flamegraph_path.as_ref()) {
+        match guard.report().build() {
+            Ok(report) => {
+                let file = std::fs::File::create(path)?;
+                report.flamegraph(file)?;
+                tracing::info!(path, "wrote flamegraph");
+            }
+            Err(err) => tracing::warn!(%err, "failed to build profiler report"),
+        }
+    }
+
+    let elapsed = start.elapsed();
+    let submitted = submitted.load(Ordering::Relaxed);
+    let confirmed = confirmed.load(Ordering::Relaxed);
+    let effective_tps = confirmed as f64 / elapsed.as_secs_f64();
+    let avg_latency = if confirmed > 0 {
+        Duration::from_micros(latency_micros.load(Ordering::Relaxed) / confirmed)
+    } else {
+        Duration::ZERO
+    };
+    tracing::error!(
+        k,
+        num_wallets,
+        concurrency,
+        submitted,
+        confirmed,
+        ?elapsed,
+        effective_parallel_tps = effective_tps,
+        ?avg_latency,
+        "parallel effective load test complete"
     );
 
     Ok(())

@@ -85,9 +85,8 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
             | EthSendRawTransactionError::InvalidTransactionSignature
             | EthSendRawTransactionError::BlacklistedSigner
             | EthSendRawTransactionError::PoolError(_) => invalid_params_rpc_err(err.to_string()),
-            EthSendRawTransactionError::NotAcceptingTransactions(_) => {
-                internal_rpc_err(err.to_string())
-            }
+            EthSendRawTransactionError::NotAcceptingTransactions(_)
+            | EthSendRawTransactionError::DirectLaneClosed => internal_rpc_err(err.to_string()),
             EthSendRawTransactionError::ForwardError(ref forward_err) => {
                 forward_error_to_rpc_err(forward_err, &err)
             }

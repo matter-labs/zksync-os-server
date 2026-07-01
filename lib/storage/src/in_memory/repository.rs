@@ -219,7 +219,26 @@ impl RepositoryInMemory {
         self.block_receipt_repository.insert(block.clone());
         let block_receipt_latency = block_receipt_latency_observer.observe();
 
-        self.latest_block.send_replace(block_number);
+        // Advance the watermark to the highest CONTIGUOUS populated block, not just `block_number`.
+        // With `parallel_blocks > 1` the `BlockApplier` spawns per-block `populate_in_memory`
+        // concurrently (sliding window), so adjacent blocks can finish out of order. A plain
+        // `send_replace(block_number)` would let the watermark jump to N+1 while block N is still
+        // mid-populate, breaking the "present in all repositories" guarantee that
+        // `wait_for_block_number` relies on (the persist loop would then read a missing block and
+        // panic). `send_if_modified` holds the watch lock, so concurrent populates serialize here;
+        // each only advances past blocks whose data is already inserted above.
+        let block_receipt_repository = &self.block_receipt_repository;
+        self.latest_block.send_if_modified(|latest| {
+            let mut advanced = false;
+            while block_receipt_repository
+                .get_by_number(*latest + 1)
+                .is_some()
+            {
+                *latest += 1;
+                advanced = true;
+            }
+            advanced
+        });
 
         let total_latency = total_latency_observer.observe();
         REPOSITORIES_METRICS

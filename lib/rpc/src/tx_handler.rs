@@ -5,8 +5,10 @@ use crate::tx_forwarder::{TxForwardError, TxForwarder};
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
-use alloy::primitives::{B256, Bytes, U256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::transports::RpcError;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_interface::error::InvalidTransaction;
@@ -27,12 +29,45 @@ const SEND_RAW_TRANSACTION_SYNC_MAX_TIMEOUT: Duration = Duration::from_secs(30);
 /// JSON-RPC error code used by EIP-7966 to signal a sync-send timeout.
 const EIP_7966_TIMEOUT_CODE: i64 = 4;
 
+/// Test/bench-only: routes RPC-admitted transactions straight into the sequencer's parallel
+/// direct-injection lanes, sharded by sender, bypassing the (reth) mempool entirely — no nonce,
+/// balance, or tip ordering. Mirrors `DirectTxSource` on the ingestion side and shares its
+/// activation flag, so admission only diverts to lanes once `active` is set (the same instant the
+/// sequencer flips onto its parallel path). Always `None` in production.
+#[derive(Clone)]
+pub struct DirectLaneRouter {
+    lanes: Vec<tokio::sync::mpsc::Sender<ZkTransaction>>,
+    active: Arc<AtomicBool>,
+}
+
+impl DirectLaneRouter {
+    pub fn new(lanes: Vec<tokio::sync::mpsc::Sender<ZkTransaction>>, active: Arc<AtomicBool>) -> Self {
+        Self { lanes, active }
+    }
+
+    fn is_active(&self) -> bool {
+        !self.lanes.is_empty() && self.active.load(Ordering::Relaxed)
+    }
+
+    /// Deterministic, sender-stable lane index, so every tx from one account lands in the same lane
+    /// (keeping its nonces contiguous in a single FIFO). Address bytes are effectively uniform, so
+    /// the low 8 bytes modulo the lane count spread wallets across lanes evenly enough for a load test.
+    fn lane_for(&self, signer: &Address) -> usize {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&signer.as_slice()[12..20]);
+        (u64::from_le_bytes(buf) % self.lanes.len() as u64) as usize
+    }
+}
+
 /// Handles transactions received in API
 pub struct TxHandler<RpcStorage, Mempool> {
     config: RpcConfig,
     storage: RpcStorage,
     chain_id: u64,
     mempool: Mempool,
+    /// Test/bench-only lane router. When present and active, RPC admission shards transactions into
+    /// the sequencer's parallel lanes instead of the mempool. `None` in production.
+    direct_lanes: Option<DirectLaneRouter>,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     tx_forwarder: Option<TxForwarder>,
     /// Optional policy client. When set, each incoming tx is simulated
@@ -53,6 +88,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         storage: RpcStorage,
         chain_id: u64,
         mempool: Mempool,
+        direct_lanes: Option<DirectLaneRouter>,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
         tx_forwarder: Option<TxForwarder>,
         policy_client: Option<PolicyClient>,
@@ -63,6 +99,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             storage,
             chain_id,
             mempool,
+            direct_lanes,
             acceptance_state,
             tx_forwarder,
             policy_client,
@@ -90,6 +127,21 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         let hash = *l2_tx.hash();
         if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
+        }
+
+        // Test/bench-only: with the direct-injection lane router active, shard by sender into the
+        // sequencer's parallel lanes and skip the mempool entirely (no nonce/balance/tip ordering).
+        // Signature recovery above is still paid, so this stays faithful to the "effective" path.
+        if let Some(router) = &self.direct_lanes
+            && router.is_active()
+        {
+            let lane = router.lane_for(&l2_tx.signer());
+            let zk_tx: ZkTransaction = l2_tx.into();
+            router.lanes[lane]
+                .send(zk_tx)
+                .await
+                .map_err(|_| EthSendRawTransactionError::DirectLaneClosed)?;
+            return Ok(hash);
         }
 
         if let Some(policy_client) = &self.policy_client {
@@ -294,6 +346,9 @@ pub enum EthSendRawTransactionError {
     ForwardError(#[from] TxForwardError),
     #[error("Signer is blacklisted")]
     BlacklistedSigner,
+    /// Direct-injection lane channel closed (sequencer gone). Test/bench only.
+    #[error("direct injection lane closed")]
+    DirectLaneClosed,
     /// Policy service rejected the transaction.
     #[error("transaction denied by policy service")]
     PolicyDenied,
@@ -311,6 +366,7 @@ impl From<&EthSendRawTransactionError> for TxRejectionReason {
             EthSendRawTransactionError::InvalidTransactionSignature => Self::InvalidSignature,
             EthSendRawTransactionError::NotAcceptingTransactions(_) => Self::NotAccepting,
             EthSendRawTransactionError::BlacklistedSigner => Self::BlacklistedSigner,
+            EthSendRawTransactionError::DirectLaneClosed => Self::NotAccepting,
             EthSendRawTransactionError::ForwardError(err) => match err {
                 TxForwardError::Rpc(RpcError::ErrorResp(_)) => Self::ForwardRejected,
                 _ => Self::ForwardTransportError,
