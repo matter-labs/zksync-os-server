@@ -455,7 +455,8 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
     ///
     /// Reads the index-ordered leaf set via `leafCount()` / `leafAt(i)` at the historical block,
     /// rebuilds the tree with the off-chain engine (bit-for-bit identical to the on-chain
-    /// `IndexedMerkleTreeLib`), and returns the leaf, its index, and its 32-sibling Merkle path.
+    /// `IndexedMerkleTree` / `FullMerkle`), and returns the leaf, its index, and its dynamic-height
+    /// Merkle path (length == the tree's current height).
     fn get_imt_inclusion_proof_impl(
         &self,
         commit_value: U256,
