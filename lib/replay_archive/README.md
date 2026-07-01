@@ -27,7 +27,7 @@ For the filesystem backend, the full path is:
 <archive_root>/<timestamp_millis>-<node_id>/<block_number>/<block_hash>
 ```
 
-For the S3 backend, the object key is:
+For the S3 and GCS backends, the object key is:
 
 ```text
 <timestamp_millis>-<node_id>/<block_number>/<block_hash>
@@ -60,6 +60,7 @@ Current archive implementations:
 - `FileSystemReplayArchiveStorage`: append-only object storage on local disk.
 - `FileSystemReplayArchiver`: filesystem archiver that stores plaintext JSON replay records.
 - `S3ReplayArchiveStorage`: append-only object storage in S3 or an S3-compatible service.
+- `GcsReplayArchiveStorage`: append-only object storage in Google Cloud Storage.
 - `AgeEncryptedReplayArchiver`: wrapper that JSON-encodes replay records and encrypts them with
   age X25519 before storing them in any `ReplayArchiveStorage`.
 
@@ -67,6 +68,7 @@ Current reader implementation:
 
 - `FileSystemReplayArchiveReader`: lists archive objects from the filesystem layout.
 - `S3ReplayArchiveReader`: lists archive objects from S3.
+- `GcsReplayArchiveReader`: lists archive objects from Google Cloud Storage.
 
 Other storage backends should implement:
 
@@ -139,6 +141,25 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --s3-bucket-base-url my-replay-archive \
   --s3-credential-file-path ./s3-credentials \
   --s3-region us-east-2 \
+  --output-root ./replay_archive_downloaded
+```
+
+Download archive objects from GCS using ambient authentication, e.g. workload identity:
+
+```bash
+cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
+  download \
+  --gcs-bucket-base-url my-replay-archive \
+  --output-root ./replay_archive_downloaded
+```
+
+Download archive objects from GCS using a credentials file:
+
+```bash
+cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
+  download \
+  --gcs-bucket-base-url my-replay-archive \
+  --gcs-credential-file-path ./gcs-credentials.json \
   --output-root ./replay_archive_downloaded
 ```
 
@@ -221,3 +242,30 @@ The S3 backend follows the old object-store initialization path: credentials are
 configured credentials file, `endpoint` overrides S3 API endpoint for S3-compatible
 providers, and `region` is used as the first region provider before falling back to the SDK
 defaults and then `auto`.
+
+GCS archive with workload identity / ambient GCP authentication:
+
+```yaml
+replay_archive:
+  type: Gcs
+  bucket_base_url: my-replay-archive
+  encryption:
+    type: AgeX25519
+    recipient: age1...
+```
+
+GCS archive with a credentials file:
+
+```yaml
+replay_archive:
+  type: GcsWithCredentialFile
+  bucket_base_url: my-replay-archive
+  gcs_credential_file_path: ./gcs-credentials.json
+  encryption:
+    type: AgeX25519
+    recipient: age1...
+```
+
+The GCS backend uses the Google Cloud client auth chain in `Gcs` mode, which supports ambient
+credentials such as workload identity. `GcsWithCredentialFile` loads credentials from the configured
+JSON file instead.

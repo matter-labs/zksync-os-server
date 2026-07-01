@@ -110,15 +110,7 @@ async fn main() -> anyhow::Result<()> {
                 let reader = FileSystemReplayArchiveReader::new(archive_root);
                 download_all_replay_archive_objects(&reader, &output_root).await?
             } else if let Some(gcs_bucket_base_url) = gcs_bucket_base_url {
-                let auth_mode = if let Some(path) = gcs_credential_file_path {
-                    GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path)
-                } else {
-                    anyhow::ensure!(
-                        gcs_anonymous,
-                        "--gcs-credential-file-path is required unless --gcs-anonymous is set"
-                    );
-                    GcsReplayArchiveAuthMode::Anonymous
-                };
+                let auth_mode = gcs_download_auth_mode(gcs_credential_file_path, gcs_anonymous);
                 let reader = GcsReplayArchiveReader::new(GcsReplayArchiveConfig {
                     bucket_base_url: gcs_bucket_base_url,
                     auth_mode,
@@ -175,4 +167,29 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn gcs_download_auth_mode(
+    gcs_credential_file_path: Option<PathBuf>,
+    gcs_anonymous: bool,
+) -> GcsReplayArchiveAuthMode {
+    if let Some(path) = gcs_credential_file_path {
+        GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path)
+    } else if gcs_anonymous {
+        GcsReplayArchiveAuthMode::Anonymous
+    } else {
+        GcsReplayArchiveAuthMode::Authenticated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gcs_download_auth_mode_defaults_to_ambient_auth() {
+        let auth_mode = gcs_download_auth_mode(None, false);
+
+        assert!(matches!(auth_mode, GcsReplayArchiveAuthMode::Authenticated));
+    }
 }
