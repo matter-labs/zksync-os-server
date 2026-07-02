@@ -97,7 +97,7 @@ alloy::sol! {
 
         function getChainTree(uint256 chainId) public view returns (Bytes32PushTree);
 
-        event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot);
+        event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot, uint256 l1Timestamp);
         function getMerklePathForChain(uint256 _chainId) external view returns (bytes32[] memory);
         mapping(uint256 chainId => uint256 chainIndex) public chainIndex;
     }

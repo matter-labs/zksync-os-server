@@ -276,12 +276,19 @@ pub async fn batch_tree_proof(
         })
         .ok_or_else(|| anyhow::anyhow!("Batch number {} not found in logs", batch_number))?;
     let absolute_batch_idx = tree._nextLeafIndex.to::<usize>() + batch_idx;
+
+    // `AppendedChainBatchRoot` data is `abi.encode(chainBatchRoot, l1Timestamp)` (two 32-byte words).
+    // The l1 timestamp is bound into the batch leaf (see MessageHashing.batchLeafHash) so the inclusion
+    // proof also proves it. Capture the proven batch's timestamp; it becomes the first proof word.
+    let proven_l1_timestamp = B256::from_slice(&logs[batch_idx].inner.data.data[32..64]);
     let new_hashes: Vec<B256> = logs
         .into_iter()
         .map(|log| {
-            let batch_root = B256::from_slice(&log.inner.data.data);
+            let batch_root = B256::from_slice(&log.inner.data.data[0..32]);
             let batch_number = log.inner.topics()[2];
-            let preimage = [batch_leaf_padding.0, batch_root.0, batch_number.0].concat();
+            let l1_timestamp = B256::from_slice(&log.inner.data.data[32..64]);
+            let preimage =
+                [batch_leaf_padding.0, batch_root.0, batch_number.0, l1_timestamp.0].concat();
             keccak256(preimage)
         })
         .collect();
@@ -289,7 +296,12 @@ pub async fn batch_tree_proof(
     let batch_proof = calculate_batch_tree_proof(tree, new_hashes, batch_idx);
     let batch_proof_len = batch_proof.len() as u8;
 
-    let mut proof = vec![B256::from(U256::from(absolute_batch_idx).to_be_bytes())];
+    // Layout the contract's `_getProofData` reads after the log-leaf proof:
+    // [l1Timestamp][batchLeafProofMask][batchProof...].
+    let mut proof = vec![
+        proven_l1_timestamp,
+        B256::from(U256::from(absolute_batch_idx).to_be_bytes()),
+    ];
     proof.extend(batch_proof);
 
     Ok((proof, batch_proof_len))
