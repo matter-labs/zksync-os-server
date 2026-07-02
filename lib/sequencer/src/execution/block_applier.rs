@@ -64,14 +64,79 @@ where
             Duration,
             tokio::task::JoinHandle<RepositoryResult<BlockOutputWithReads>>,
         )> = std::collections::VecDeque::with_capacity(window);
+        // Outcome of waiting for work while populates are in flight: either the next block
+        // arrives, or the oldest in-flight populate completes while the input is quiet.
+        enum Next<P, R> {
+            Payload(Option<P>),
+            OldestPopulated(R),
+        }
         loop {
             state_reporter.enter_state(BlockApplierState::Idle);
+            let next = if in_flight.is_empty() {
+                Next::Payload(input.recv_and_record_picked(&state_reporter).await)
+            } else {
+                // While populates are in flight, race the input against the oldest one: when
+                // production goes quiet (e.g. the parallel producer parks on empty lanes at the
+                // end of a load), the window drains instead of stranding up to `window - 1`
+                // blocks — their receipts would otherwise never surface and receipt waiters
+                // time out. `biased` + input-first keeps the sustained-load behaviour identical
+                // (a ready block always wins; the full-window await below stays the
+                // backpressure point). Racing `recv` is safe: tokio mpsc `recv` is cancel-safe.
+                let oldest = &mut in_flight
+                    .front_mut()
+                    .expect("in_flight checked non-empty")
+                    .4;
+                tokio::select! {
+                    biased;
+                    payload = input.recv_and_record_picked(&state_reporter) => Next::Payload(payload),
+                    res = &mut *oldest => Next::OldestPopulated(res),
+                }
+            };
+            let maybe_payload = match next {
+                Next::OldestPopulated(res) => {
+                    let (bn, rec, add_state_elapsed, populate_spawn_elapsed, _handle) =
+                        in_flight.pop_front().expect("in_flight checked non-empty");
+                    let out = res.context("populate task panicked")??;
+                    self.applied_block_number_sender.send_replace(Some(bn));
+                    let t_output_send = Instant::now();
+                    output.send_and_record(
+                        AppliedBlock {
+                            output: out,
+                            record: rec,
+                        },
+                        &state_reporter,
+                    )?;
+                    let output_send_elapsed = t_output_send.elapsed();
+                    if parallel_producer_profile_enabled() {
+                        tracing::error!(
+                            block_number = bn,
+                            in_flight_window = window,
+                            ?add_state_elapsed,
+                            ?populate_spawn_elapsed,
+                            populate_wait_elapsed = ?Duration::ZERO,
+                            ?output_send_elapsed,
+                            "block_applier block profile"
+                        );
+                    } else if self.config.parallel_blocks > 1 {
+                        tracing::info!(
+                            block_number = bn,
+                            ?add_state_elapsed,
+                            ?populate_spawn_elapsed,
+                            populate_wait_elapsed = ?Duration::ZERO,
+                            ?output_send_elapsed,
+                            "block_applier block done"
+                        );
+                    }
+                    continue;
+                }
+                Next::Payload(p) => p,
+            };
             let Some(BlockPayload {
                 output: block_output_with_reads,
                 record: executed_replay,
                 command_type: cmd_type,
                 failed_transactions,
-            }) = input.recv_and_record_picked(&state_reporter).await
+            }) = maybe_payload
             else {
                 // Channel closed: drain the in-flight window in order, then stop.
                 while let Some((bn, rec, _, _, handle)) = in_flight.pop_front() {
