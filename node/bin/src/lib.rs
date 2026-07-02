@@ -31,7 +31,7 @@ use crate::config::{
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
-use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
+use crate::init_tx_forwarder::build_static_tx_forwarder;
 use crate::l1_revert::revert_l1_on_startup;
 use crate::main_node_client::MainNodeClient;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -96,10 +96,6 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_provider::NodeProvider;
-use zksync_os_raft::{
-    BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
-    loopback_consensus,
-};
 use zksync_os_replay_archive::{
     ReplayArchiveGateComponent, ReplayArchiver, ReplayArchivingWriteReplay, init_replay_archive,
 };
@@ -107,7 +103,10 @@ use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{EthCallHandler, RpcStorage};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
-use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
+use zksync_os_sequencer::execution::{
+    BlockApplier, BlockCanonization, BlockCanonizer, BlockExecutor, FeeProvider, LeadershipSignal,
+    NoopCanonization,
+};
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
@@ -119,7 +118,6 @@ use zksync_os_storage_api::{
 use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
-const RAFT_DB_NAME: &str = "raft";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
@@ -318,7 +316,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         }
     }
 
-    prepare_raft_storage(&config).expect("failed to prepare raft storage");
+    warn_on_leftover_raft_storage(&config);
 
     tracing::info!("Initializing BlockReplayStorage");
 
@@ -463,37 +461,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (outgoing_verify_results, _) =
         tokio::sync::broadcast::channel::<PeerVerifyBatchResult>(128);
 
-    let ConsensusRuntimeParts {
-        canonization_engine,
-        leadership,
-        raft,
-    } = if config.consensus_config.enabled {
-        init_consensus(
-            runtime,
-            config
-                .consensus_config
-                .clone()
-                .into_raft_consensus_config(
-                    &config.network_config,
-                    config.general_config.rocks_db_path.join(RAFT_DB_NAME),
-                )
-                .expect("failed to build raft consensus config"),
-            Box::new(block_replay_storage.clone()),
-        )
-        .await
-        .expect("failed to initialize consensus engine")
-    } else {
-        tracing::info!("openraft consensus is disabled - assuming perpetual leader role");
-        loopback_consensus()
-    };
-    let (raft_protocol_handler, raft_bootstrapper, raft_status_rx) = match raft {
-        Some(raft) => (
-            Some(raft.protocol_handler),
-            raft.bootstrapper,
-            Some(raft.status_rx),
-        ),
-        None => (None, None, None),
-    };
+    // Single-sequencer mode: this node is always the leader and every block it produces
+    // is immediately canonical. BFT consensus will plug into these two seams
+    // (`BlockCanonization` + `LeadershipSignal`) when it lands.
+    let canonization_engine = NoopCanonization::new();
+    let leadership = LeadershipSignal::AlwaysLeader;
     if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
@@ -510,7 +482,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
-                raft_protocol_handler,
             )
             .await
         } else {
@@ -543,18 +514,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
-                raft_protocol_handler,
             )
             .await
         }
         .expect("failed to create network service");
         network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
-        if let Some(bootstrapper) = raft_bootstrapper {
-            bootstrapper
-                .bootstrap_if_needed()
-                .await
-                .expect("failed to run raft bootstrap process");
-        }
     } else if node_role.is_main() {
         tracing::info!(
             "p2p networking is disabled; to enable set `network.enabled=true` and populate `network.secret_key`"
@@ -586,8 +550,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l1_state.sl_block_number,
             node_startup_state.l1_state.l1_chain_id,
             // Only nodes that actually submit commit txs locally should arm the
-            // `UnexpectedCommit` guard — otherwise consensus followers configured with
-            // `batcher_config.enabled = false` panic the moment the leader's commit lands on L1.
+            // `UnexpectedCommit` guard — a main node running with
+            // `batcher_config.enabled = false` must not panic when a commit submitted
+            // by another node lands on L1.
             (node_role.is_main() && config.batcher_config.enabled).then_some(commit_submitted_rx),
         )
         .await
@@ -696,11 +661,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let tx_forwarder = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
         Some(build_static_tx_forwarder(url).await)
-    } else if config.consensus_config.enabled {
-        let status_rx = raft_status_rx
-            .clone()
-            .expect("consensus status receiver must be present when consensus is enabled");
-        Some(build_consensus_tx_forwarder(&config, status_rx).await)
     } else {
         None
     };
@@ -950,7 +910,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
             |shutdown| async move {
-                run_status_server(addr, shutdown, raft_status_rx)
+                run_status_server(addr, shutdown)
                     .await
                     .expect("failed to run status server");
             },
@@ -1044,7 +1004,7 @@ async fn fetch_l1_state_with_startup_revert(
 ) -> anyhow::Result<L1State> {
     // The batcher node must wait for any pending L1 commit/prove/execute transactions (from a
     // prior run) to be mined before starting, so it doesn't conflict with itself. Non-batcher
-    // consensus nodes never submit L1 transactions, so they don't need this wait: calling
+    // nodes never submit L1 transactions, so they don't need this wait: calling
     // fetch_finalized on them would spuriously fail when a concurrently running batcher node keeps
     // submitting new batch transactions.
     let use_finalized = node_role.is_main() && config.batcher_config.enabled;
@@ -1109,7 +1069,7 @@ async fn run_main_node_pipeline(
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
     committed_batch_provider: CommittedBatchProvider,
-    canonization_engine: BlockCanonizationEngine,
+    canonization_engine: impl BlockCanonization,
     leadership: LeadershipSignal,
     stop_receiver: watch::Receiver<bool>,
     commit_submitted_tx: watch::Sender<u64>,
@@ -1809,51 +1769,25 @@ async fn find_last_matching_main_node_block(
     Ok(left)
 }
 
-fn prepare_raft_storage(config: &Config) -> anyhow::Result<()> {
-    let raft_storage_path = config.general_config.rocks_db_path.join(RAFT_DB_NAME);
-    if config.consensus_config.force_clear_raft_history
-        && raft_storage_path_exists(&raft_storage_path)?
-    {
-        tracing::warn!(
+/// The raft-based consensus prototype was removed in favor of the upcoming BFT consensus.
+/// Nodes that ran it may still have its RocksDB directory on disk; it is no longer read or
+/// written. We deliberately do not delete data on startup — this warning tells the operator
+/// it is safe to remove by hand.
+fn warn_on_leftover_raft_storage(config: &Config) {
+    let raft_storage_path = config.general_config.rocks_db_path.join("raft");
+    match raft_storage_path.try_exists() {
+        Ok(true) => tracing::warn!(
             path = %raft_storage_path.display(),
-            "force-clearing persisted raft history before startup"
-        );
-        // Use DB::destroy rather than remove_dir_all so that only files RocksDB
-        // tracks are removed; an arbitrary path misconfiguration cannot wipe more.
-        zksync_os_rocksdb::rocksdb::DB::destroy(
-            &zksync_os_rocksdb::rocksdb::Options::default(),
-            &raft_storage_path,
-        )
-        .with_context(|| {
-            format!(
-                "failed to destroy raft storage at {}",
-                raft_storage_path.display()
-            )
-        })?;
-        // DB::destroy leaves behind an empty directory; remove it so the next
-        // open starts completely clean (RocksDB recreates the dir on open).
-        let _ = std::fs::remove_dir(&raft_storage_path);
+            "found leftover storage of the removed raft consensus prototype; \
+             it is unused and can be deleted"
+        ),
+        Ok(false) => {}
+        Err(err) => tracing::warn!(
+            path = %raft_storage_path.display(),
+            %err,
+            "failed to check for leftover raft consensus storage"
+        ),
     }
-
-    if !config.consensus_config.enabled && raft_storage_path_exists(&raft_storage_path)? {
-        anyhow::bail!(
-            "consensus is disabled but persisted raft history exists at {}; \
-             either re-enable consensus or set `consensus.force_clear_raft_history=true` \
-             to delete stale raft state before startup",
-            raft_storage_path.display()
-        );
-    }
-
-    Ok(())
-}
-
-fn raft_storage_path_exists(path: &Path) -> anyhow::Result<bool> {
-    path.try_exists().with_context(|| {
-        format!(
-            "failed to check whether raft storage exists at {}",
-            path.display()
-        )
-    })
 }
 
 #[cfg(test)]

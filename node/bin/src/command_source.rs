@@ -5,8 +5,8 @@ use tokio::sync::mpsc;
 use zksync_os_backpressure::PipelineAdmissionReceiver;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
-use zksync_os_raft::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
+use zksync_os_sequencer::execution::{ConsensusRole, LeadershipSignal};
 use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 

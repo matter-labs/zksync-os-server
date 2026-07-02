@@ -1,7 +1,6 @@
 pub mod config;
 pub(crate) mod metrics;
 pub mod protocol;
-pub mod raft;
 pub mod service;
 pub mod session;
 pub mod version;

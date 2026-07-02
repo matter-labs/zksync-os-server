@@ -3,7 +3,6 @@ use crate::protocol::{
     ConnectionRegistry, ExternalNodeProtocolConfig, HandlerSharedState, MainNodeProtocolConfig,
     ProtocolEvent, ZksProtocolConfig, ZksProtocolHandler,
 };
-use crate::raft::protocol::RaftProtocolHandler;
 use crate::session::PeerSessionStore;
 use crate::version::{ZksProtocolV1, ZksProtocolV2, ZksProtocolV3, ZksProtocolV4};
 use crate::wire::message::ZksMessage;
@@ -175,7 +174,6 @@ impl NetworkService {
         protocol_config: ZksProtocolConfig,
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
-        raft_handler: Option<RaftProtocolHandler>,
     ) -> Result<Self, NetworkError> {
         // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
         // are captured. This must happen before `NetworkManager::builder()` because that is where
@@ -245,9 +243,9 @@ impl NetworkService {
                 PeersConfig::default()
                     // Sets peer ban duration to 1 second, effectively disabling it
                     .with_ban_duration(Duration::from_secs(1))
-                    // Keep backoff durations short so that consensus nodes reconnect quickly
-                    // after a peer restart or a transient network glitch. Long backoffs would
-                    // stall raft leader election and block transaction processing.
+                    // Keep backoff durations short so that peers reconnect quickly after a
+                    // restart or a transient network glitch. Long backoffs would stall EN
+                    // replay syncing and transaction forwarding.
                     // (low = transient failure, medium = persistent failure, high = bad peer,
                     // max = cumulative cap)
                     .with_backoff_durations(PeerBackoffDurations {
@@ -272,7 +270,7 @@ impl NetworkService {
             // Use genesis as chain head
             .set_head(genesis);
         let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
-        let mut cfg_builder = match protocol_config {
+        let cfg_builder = match protocol_config {
             ZksProtocolConfig::MainNode(protocol) => Self::register_main_node_rlpx_sub_protocols(
                 cfg_builder,
                 protocol,
@@ -290,9 +288,6 @@ impl NetworkService {
                 )
             }
         };
-        if let Some(raft_handler) = raft_handler {
-            cfg_builder = cfg_builder.add_rlpx_sub_protocol(raft_handler);
-        }
         let net_cfg = cfg_builder.build(client);
         tracing::debug!(?net_cfg, "starting p2p network service");
         // Create network manager. We are not interested in `txpool` because transaction gossip is

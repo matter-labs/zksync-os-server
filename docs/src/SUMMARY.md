@@ -8,7 +8,6 @@
   - [Prerequisites](setup/prerequisites.md)
   - [Local Run](setup/local_run.md)
   - [Docker Setup](setup/docker.md)
-  - [Multi-Node Consensus](setup/multi_node_consensus.md)
   - [Batch verification (2FA)](setup/batch_verification.md)
   - [Otterscan (Local Explorer)](setup/local_explorer.md)
   - [Exposed Ports](setup/exposed_ports.md)
