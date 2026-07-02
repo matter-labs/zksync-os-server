@@ -1380,6 +1380,10 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let mut receipts = JoinSet::new();
     let mut last_round_hashes: Vec<B256> = Vec::new();
     let mut last_round_sent_at = start;
+    // Fully-accepted nonce rounds; used by the failure diagnostics below to tell a stalled
+    // wallet (on-chain nonce < rounds submitted => a tx was accepted but never executed) from an
+    // executed-but-receipt-invisible tx.
+    let mut rounds_submitted: u64 = 0;
     'rounds: while Instant::now() < deadline {
         // One tx from every wallet — all at the current nonce (readers advance in lockstep).
         let mut round: Vec<Vec<u8>> = Vec::with_capacity(num_wallets);
@@ -1446,6 +1450,9 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
         }
         submitted.fetch_add(hashes.len() as u64, Ordering::Relaxed);
         submit_latency_micros.fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+        if hashes.len() == num_wallets {
+            rounds_submitted += 1;
+        }
 
         if wait_for_receipts {
             for hash in hashes {
@@ -1457,7 +1464,8 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
                     let receipt = PendingTransactionBuilder::new(root, hash)
                         .with_timeout(Some(RECEIPT_TIMEOUT))
                         .get_receipt()
-                        .await?;
+                        .await
+                        .map_err(|e| anyhow::anyhow!("receipt wait for tx {hash}: {e}"))?;
                     drop(permit);
                     anyhow::ensure!(
                         receipt.status(),
@@ -1495,8 +1503,45 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
             );
         }
     }
+    // Drain receipt waiters, collecting failures instead of aborting on the first: a single lost
+    // tx breaks its wallet's whole nonce chain, and the aggregate + per-wallet audit below is far
+    // more diagnostic than one opaque timeout.
+    let mut receipt_failed = 0u64;
+    let mut receipt_errors: Vec<String> = Vec::new();
     while let Some(res) = receipts.join_next().await {
-        res??;
+        if let Err(e) = res? {
+            receipt_failed += 1;
+            if receipt_errors.len() < 8 {
+                receipt_errors.push(e.to_string());
+            }
+        }
+    }
+    if receipt_failed > 0 {
+        // Tell apart "accepted but never executed" (sequencer-side loss: the wallet's on-chain
+        // nonce stalls below the rounds submitted) from "executed but receipt not visible"
+        // (API-side: nonces all advanced). A stalled wallet's first missing nonce is its current
+        // on-chain nonce; the node-side purge WARN log identifies the VM error for that tx.
+        let mut stalled = 0usize;
+        for (i, signer) in signers.iter().enumerate() {
+            let nonce = receipt_provider
+                .get_transaction_count(signer.address())
+                .await?;
+            if nonce < rounds_submitted {
+                stalled += 1;
+                if stalled <= 16 {
+                    tracing::error!(
+                        wallet = i,
+                        address = %signer.address(),
+                        on_chain_nonce = nonce,
+                        rounds_submitted,
+                        "wallet nonce chain stalled: its tx at nonce `on_chain_nonce` was accepted but never executed"
+                    );
+                }
+            }
+        }
+        anyhow::bail!(
+            "{receipt_failed} receipt waits failed; {stalled} of {num_wallets} wallets have stalled nonce chains (rounds_submitted={rounds_submitted}); first errors: {receipt_errors:#?}"
+        );
     }
 
     // Render the flamegraph (if profiling was enabled) before computing the summary.

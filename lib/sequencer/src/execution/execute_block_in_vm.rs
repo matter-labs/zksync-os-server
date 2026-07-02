@@ -264,12 +264,16 @@ pub async fn execute_block_in_vm<V: ViewState>(
                 Err(e) => {
                     if let ZkTxType::L2(_) = tx.tx_type() {
                         // Direct injection feeds valid L2 transfers; treat any rejection as a purge.
+                        // WARN: purges are always anomalies on this path (the feed pre-validates),
+                        // and a purged tx gets NO receipt (the in-memory repo drops failed txs),
+                        // so this line is the only trace of a lost tx / broken nonce chain.
                         purged_txs.push((*tx.hash(), e.clone()));
-                        tracing::info!(
+                        tracing::warn!(
                             block_number = ctx.block_number,
-                            "Invalid L2 tx {} purged in direct-injection block {}: error={e:?}, nonce={:?}",
+                            "Invalid L2 tx {} purged in direct-injection block {}: error={e:?}, signer={:?}, nonce={:?}",
                             tx.hash(),
                             ctx.block_number,
+                            tx.inner.signer(),
                             tx.nonce(),
                         );
                     } else {
