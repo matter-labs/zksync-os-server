@@ -590,8 +590,13 @@ async fn direct_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()> 
     let submitted = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
     // Stream pre-built ERC20 txs from disk instead of constructing them in the hot loop.
-    let pusher =
-        spawn_corpus_pusher(path, signer, sender.clone(), submitted.clone(), stop.clone());
+    let pusher = spawn_corpus_pusher(
+        path,
+        signer,
+        sender.clone(),
+        submitted.clone(),
+        stop.clone(),
+    );
 
     // Warm up so the channel fills and the pipeline reaches steady state, then measure the
     // steady-state consumption rate.
@@ -1055,6 +1060,8 @@ async fn parallel_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()
     config.sequencer_config.max_transactions_in_block = max_tx;
     config.sequencer_config.block_gas_limit = 1_000_000_000_000;
     config.sequencer_config.parallel_blocks = k;
+    config.sequencer_config.parallel_block_linger =
+        Duration::from_millis(env_or("PARALLEL_BLOCK_LINGER_MS", 5));
     // In-memory base state: the RocksDB read path (an iterator seek per storage read) collapses
     // under K-way concurrent VM execution and dominates exec time.
     config.general_config.state_backend = StateBackendConfig::InMemory;
@@ -1270,7 +1277,8 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     for url in &rpc_urls {
         clients.push(ClientBuilder::default().connect(url.as_str()).await?);
     }
-    let receipt_provider = DynProvider::new(ProviderBuilder::new().connect_client(clients[0].clone()));
+    let receipt_provider =
+        DynProvider::new(ProviderBuilder::new().connect_client(clients[0].clone()));
     let root = receipt_provider.root().clone();
 
     // Each wallet's real-signed corpus (one-time; real ECDSA signing is expensive). A distinct
@@ -1457,7 +1465,8 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
                         receipt.transaction_hash()
                     );
                     confirmed.fetch_add(1, Ordering::Relaxed);
-                    latency_micros.fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+                    latency_micros
+                        .fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
                     anyhow::Ok(())
                 });
             }
@@ -1480,8 +1489,10 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
                 receipt.transaction_hash()
             );
             final_receipts_confirmed.fetch_add(1, Ordering::Relaxed);
-            final_receipt_latency_micros
-                .fetch_add(last_round_sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
+            final_receipt_latency_micros.fetch_add(
+                last_round_sent_at.elapsed().as_micros() as u64,
+                Ordering::Relaxed,
+            );
         }
     }
     while let Some(res) = receipts.join_next().await {
