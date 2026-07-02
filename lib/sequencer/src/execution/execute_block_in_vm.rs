@@ -78,6 +78,8 @@ pub async fn execute_block_in_vm<V: ViewState>(
     // per-block summary log when the block seals.
     let mut total_execute_tx_time = Duration::ZERO;
     let mut total_tx_stream_time = Duration::ZERO;
+    // Direct-injection loop only: wall time spent inside `submit_tx` (the feeder→VM hand-off).
+    let mut total_submit_time = Duration::ZERO;
 
     let mut all_processed_txs = Vec::new();
 
@@ -130,6 +132,16 @@ pub async fn execute_block_in_vm<V: ViewState>(
         };
         let mut pending: VecDeque<ZkTransaction> = VecDeque::new();
         let mut pending_seal: Option<SealReason> = None;
+        // The seal deadline is an idle linger, not an absolute cap: parallel lane blocks pull
+        // LIVE from their lane channel, so filling up to the tx-count limit takes a
+        // feed-rate-dependent stretch of time; an absolute deadline would seal them half-full
+        // and double the per-block overhead. The block keeps accumulating while the feed keeps
+        // up and seals `deadline_dur` after it goes quiet (or earlier, on the tx-count limit).
+        // Implemented lazily: per tx we only stamp `last_tx_at` — the sleep is re-armed to
+        // `last_tx_at + dur` when it fires, ONE timer op per linger period. Re-arming per tx
+        // (`Sleep::reset`) hammers the tokio timer lock at the aggregate tx rate and convoys
+        // the feed loop on high-CCD-count machines.
+        let mut last_tx_at = tokio::time::Instant::now();
         loop {
             // Feed up to the pipeline depth, unless we've decided to seal or would exceed the
             // tx-count limit. `submit_tx` backpressures on the (depth-sized) channel, but the
@@ -147,8 +159,21 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         },
                         if deadline.is_some()
                     => {
-                        pending_seal = Some(SealReason::Timeout);
-                        None
+                        let dur = deadline_dur.expect("armed deadline implies a duration");
+                        let idle_deadline = last_tx_at + dur;
+                        if tokio::time::Instant::now() >= idle_deadline {
+                            pending_seal = Some(SealReason::Timeout);
+                            None
+                        } else {
+                            // Txs kept flowing since the sleep was armed: push it out to
+                            // `last_tx_at + dur` and keep feeding.
+                            deadline
+                                .as_mut()
+                                .expect("deadline branch requires an armed sleep")
+                                .as_mut()
+                                .reset(idle_deadline);
+                            continue;
+                        }
                     }
                     maybe_tx = command.tx_source.stream.next() => {
                         total_tx_stream_time += tx_wait_start.elapsed();
@@ -162,20 +187,14 @@ pub async fn execute_block_in_vm<V: ViewState>(
                     pending_seal = Some(SealReason::TxStreamExhausted);
                     break;
                 };
-                // (Re-)arm the seal deadline on every tx: an idle linger, not an absolute cap.
-                // Parallel lane blocks pull LIVE from their lane channel, so filling up to the
-                // tx-count limit takes a feed-rate-dependent stretch of time; an absolute
-                // deadline would seal them half-full and double the per-block overhead. The
-                // block keeps accumulating while the feed keeps up and seals `deadline_dur`
-                // after the feed goes quiet (or earlier, on the tx-count limit).
-                if let Some(dur) = deadline_dur {
-                    let when = tokio::time::Instant::now() + dur;
-                    match deadline.as_mut() {
-                        Some(sleep) => sleep.as_mut().reset(when),
-                        None => deadline = Some(Box::pin(tokio::time::sleep_until(when))),
-                    }
+                last_tx_at = tokio::time::Instant::now();
+                if deadline.is_none()
+                    && let Some(dur) = deadline_dur
+                {
+                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
                 }
                 all_processed_txs.push(tx.clone());
+                let submit_start = Instant::now();
                 runner
                     .submit_tx(tx.clone().encode())
                     .await
@@ -184,6 +203,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         txs: all_processed_txs.clone(),
                         error: e.to_string(),
                     })?;
+                total_submit_time += submit_start.elapsed();
                 pending.push_back(tx);
             }
             if pending_seal.is_none() && executed_txs.len() + pending.len() >= tx_limit {
@@ -614,6 +634,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
             block_elapsed = ?block_started_at.elapsed(),
             ?vm_init_elapsed,
             tx_stream_time = ?total_tx_stream_time,
+            submit_time = ?total_submit_time,
             execute_tx_time = ?total_execute_tx_time,
             vm_idle_time = ?vm_idle_time,
             read_time = ?total_read_time,
