@@ -80,6 +80,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
     let mut total_tx_stream_time = Duration::ZERO;
     // Direct-injection loop only: wall time spent inside `submit_tx` (the feeder→VM hand-off).
     let mut total_submit_time = Duration::ZERO;
+    // Direct-injection loop only: wall time spent processing collected results (bookkeeping
+    // between `next_result` awaits).
+    let mut total_result_time = Duration::ZERO;
 
     let mut all_processed_txs = Vec::new();
 
@@ -142,7 +145,15 @@ pub async fn execute_block_in_vm<V: ViewState>(
         // (`Sleep::reset`) hammers the tokio timer lock at the aggregate tx rate and convoys
         // the feed loop on high-CCD-count machines.
         let mut last_tx_at = tokio::time::Instant::now();
-        loop {
+        // Per-tx metric updates are batched into these locals and flushed once per block after
+        // the loop: K concurrent feeders doing ~6 atomic RMWs per tx on the same shared metric
+        // cachelines collapse on many-CCD machines (~150µs/tx of cacheline ping-pong observed on
+        // a 96-core 7995WX — it capped the whole bench while the VM sat idle). The per-tx
+        // histograms (gas/native/pubdata per tx) are skipped here; the per-block histograms
+        // flushed at seal still cover the bench path.
+        let mut status_success_txs = 0u64;
+        let mut status_failure_txs = 0u64;
+        let seal = loop {
             // Feed up to the pipeline depth, unless we've decided to seal or would exceed the
             // tx-count limit. `submit_tx` backpressures on the (depth-sized) channel, but the
             // `pending.len() < vm_pipeline_depth` guard keeps it from ever blocking here.
@@ -227,21 +238,15 @@ pub async fn execute_block_in_vm<V: ViewState>(
                 error: e.to_string(),
             })?;
             total_execute_tx_time += exec_start.elapsed();
+            let result_start = Instant::now();
             match exec_result {
                 Ok(res) => {
-                    EXECUTION_METRICS.executed_transactions.inc();
-                    EXECUTION_METRICS.transaction_gas_used.observe(res.gas_used);
-                    EXECUTION_METRICS
-                        .transaction_native_used
-                        .observe(res.native_used);
-                    EXECUTION_METRICS
-                        .transaction_computation_native_used
-                        .observe(res.computational_native_used);
-                    EXECUTION_METRICS
-                        .transaction_pubdata_used
-                        .observe(res.pubdata_used);
-                    let status_str = if res.status { "success" } else { "failure" };
-                    EXECUTION_METRICS.transaction_status[&status_str].inc();
+                    // Batched — see `status_success_txs` above.
+                    if res.status {
+                        status_success_txs += 1;
+                    } else {
+                        status_failure_txs += 1;
+                    }
                     cumulative_gas_used += res.gas_used;
                     executed_txs.push(tx);
                 }
@@ -269,7 +274,14 @@ pub async fn execute_block_in_vm<V: ViewState>(
                     }
                 }
             }
-        }
+            total_result_time += result_start.elapsed();
+        };
+        EXECUTION_METRICS
+            .executed_transactions
+            .inc_by(status_success_txs + status_failure_txs);
+        EXECUTION_METRICS.transaction_status[&"success"].inc_by(status_success_txs);
+        EXECUTION_METRICS.transaction_status[&"failure"].inc_by(status_failure_txs);
+        seal
     } else {
         loop {
             latency_tracker.enter_state(SequencerState::WaitingForTx);
@@ -636,6 +648,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
             tx_stream_time = ?total_tx_stream_time,
             submit_time = ?total_submit_time,
             execute_tx_time = ?total_execute_tx_time,
+            result_time = ?total_result_time,
             vm_idle_time = ?vm_idle_time,
             read_time = ?total_read_time,
             read_count,
