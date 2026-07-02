@@ -116,7 +116,7 @@ use zksync_os_storage_api::{
     FinalityStatus, ReadFinality, ReadReplay, ReadRepository, ReadStateHistory, ReplayRecord,
     WriteReplay, WriteRepository, WriteState,
 };
-use zksync_os_types::{ExecutionVersion, FeeParams, NodeRole, PubdataMode, TransactionAcceptanceState};
+use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";

@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, EthereumHardforks};
 use reth_evm_ethereum::EthEvmConfig;
-use reth_primitives::Block as EthBlock;
+use reth_ethereum_primitives::Block as EthBlock;
 use reth_primitives_traits::SealedBlock;
 use reth_storage_api::{AccountInfoReader, StateProviderFactory};
 use reth_transaction_pool::error::InvalidPoolTransactionError;
@@ -120,17 +120,14 @@ where
     ///
     /// Runs custom checks first (using the latest fee params cached on `self`), then
     /// delegates to the inner [`EthTransactionValidator::validate_stateless`].
-    #[allow(clippy::result_large_err)]
     fn validate_stateless(
         &self,
         origin: TransactionOrigin,
-        transaction: Tx,
-    ) -> Result<Tx, TransactionValidationOutcome<Tx>> {
+        transaction: &Tx,
+    ) -> Result<(), InvalidPoolTransactionError> {
         let execution_version = *self.execution_version.read().expect("lock poisoned");
-        if execution_version >= ExecutionVersion::V6
-            && let Err(err) = self.validate_intrinsic_native_resources(&transaction)
-        {
-            return Err(TransactionValidationOutcome::Invalid(transaction, err));
+        if execution_version >= ExecutionVersion::V6 {
+            self.validate_intrinsic_native_resources(transaction)?;
         }
         self.inner.validate_stateless(origin, transaction)
     }
@@ -145,27 +142,23 @@ where
         transaction: Tx,
         maybe_state: &mut Option<Box<dyn AccountInfoReader + Send>>,
     ) -> TransactionValidationOutcome<Tx> {
-        match self.validate_stateless(origin, transaction) {
-            Ok(transaction) => {
-                if maybe_state.is_none() {
-                    match self.inner.client().latest() {
-                        Ok(new_state) => {
-                            *maybe_state = Some(Box::new(new_state));
-                        }
-                        Err(err) => {
-                            return TransactionValidationOutcome::Error(
-                                *transaction.hash(),
-                                Box::new(err),
-                            );
-                        }
-                    }
-                }
-
-                let state = maybe_state.as_deref().expect("provider is set");
-                self.inner.validate_stateful(origin, transaction, state)
-            }
-            Err(invalid_outcome) => invalid_outcome,
+        if let Err(err) = self.validate_stateless(origin, &transaction) {
+            return TransactionValidationOutcome::Invalid(transaction, err);
         }
+
+        if maybe_state.is_none() {
+            match self.inner.client().latest() {
+                Ok(new_state) => {
+                    *maybe_state = Some(Box::new(new_state));
+                }
+                Err(err) => {
+                    return TransactionValidationOutcome::Error(*transaction.hash(), Box::new(err));
+                }
+            }
+        }
+
+        let state = maybe_state.as_deref().expect("provider is set");
+        self.inner.validate_stateful(origin, transaction, state)
     }
 
     pub(crate) fn validate_one(
