@@ -65,6 +65,14 @@ where
         // window is full, preserving downstream block order. `parallel_blocks == 1` (production)
         // awaits each populate immediately -> unchanged one-at-a-time behaviour.
         let window = self.config.parallel_blocks.max(1);
+        // (block_number, output, record, populate join handle), oldest at the front.
+        let mut in_flight: std::collections::VecDeque<(
+            u64,
+            ReplayRecord,
+            Duration,
+            Duration,
+            tokio::task::JoinHandle<RepositoryResult<BlockOutputWithReads>>,
+        )> = std::collections::VecDeque::with_capacity(window);
         loop {
             state_reporter.enter_state(BlockApplierState::Idle);
             let Some(BlockPayload {
@@ -74,6 +82,18 @@ where
                 failed_transactions,
             }) = input.recv_and_record_picked(&state_reporter).await
             else {
+                // Channel closed: drain the in-flight window in order, then stop.
+                while let Some((bn, rec, _, _, handle)) = in_flight.pop_front() {
+                    let out = handle.await.context("populate task panicked")??;
+                    self.applied_block_number_sender.send_replace(Some(bn));
+                    output.send_and_record(
+                        AppliedBlock {
+                            output: out,
+                            record: rec,
+                        },
+                        &state_reporter,
+                    )?;
+                }
                 tracing::info!("inbound channel closed");
                 return Ok(());
             };
@@ -120,46 +140,66 @@ where
 
             // Spawn the expensive repository population (independent across disjoint blocks); do not
             // await it yet, so it overlaps with the next blocks' ingestion.
-            let t_populate = Instant::now();
+            let t_populate_spawn = Instant::now();
             let repositories = self.repositories.clone();
             let transactions = executed_replay.transactions.clone();
-            repositories
-                .populate(
-                    block_output_with_reads.as_ref(),
-                    transactions,
-                    failed_transactions,
-                )
-                .await?;
-            let populate_elapsed = t_populate.elapsed();
+            let handle = tokio::spawn(async move {
+                repositories
+                    .populate(
+                        block_output_with_reads.as_ref(),
+                        transactions,
+                        failed_transactions,
+                    )
+                    .await?;
+                Ok(block_output_with_reads)
+            });
+            let populate_spawn_elapsed = t_populate_spawn.elapsed();
+            in_flight.push_back((
+                block_number,
+                executed_replay,
+                add_state_elapsed,
+                populate_spawn_elapsed,
+                handle,
+            ));
 
-            self.applied_block_number_sender
-                .send_replace(Some(block_number));
-            let t_output_send = Instant::now();
-            output.send_and_record(
-                AppliedBlock {
-                    output: block_output_with_reads,
-                    record: executed_replay,
-                },
-                &state_reporter,
-            )?;
-            let output_send_elapsed = t_output_send.elapsed();
-            if parallel_producer_profile_enabled() {
-                tracing::error!(
-                    block_number,
-                    in_flight_window = window,
-                    ?add_state_elapsed,
-                    ?populate_elapsed,
-                    ?output_send_elapsed,
-                    "block_applier block profile"
-                );
-            } else if self.config.parallel_blocks > 1 {
-                tracing::info!(
-                    block_number,
-                    ?add_state_elapsed,
-                    ?populate_elapsed,
-                    ?output_send_elapsed,
-                    "block_applier block done"
-                );
+            // Once `window` populates are in flight, await + forward the oldest (keeps order).
+            if in_flight.len() >= window {
+                state_reporter.enter_state(BlockApplierState::PopulatingRepos);
+                let (bn, rec, add_state_elapsed, populate_spawn_elapsed, handle) =
+                    in_flight.pop_front().unwrap();
+                let t_populate_wait = Instant::now();
+                let out = handle.await.context("populate task panicked")??;
+                let populate_wait_elapsed = t_populate_wait.elapsed();
+                self.applied_block_number_sender.send_replace(Some(bn));
+                let t_output_send = Instant::now();
+                output.send_and_record(
+                    AppliedBlock {
+                        output: out,
+                        record: rec,
+                    },
+                    &state_reporter,
+                )?;
+                let output_send_elapsed = t_output_send.elapsed();
+                if parallel_producer_profile_enabled() {
+                    tracing::error!(
+                        block_number = bn,
+                        in_flight_window = window,
+                        ?add_state_elapsed,
+                        ?populate_spawn_elapsed,
+                        ?populate_wait_elapsed,
+                        ?output_send_elapsed,
+                        "block_applier block profile"
+                    );
+                } else if self.config.parallel_blocks > 1 {
+                    tracing::info!(
+                        block_number = bn,
+                        ?add_state_elapsed,
+                        ?populate_spawn_elapsed,
+                        ?populate_wait_elapsed,
+                        ?output_send_elapsed,
+                        "block_applier block done"
+                    );
+                }
             }
         }
     }
