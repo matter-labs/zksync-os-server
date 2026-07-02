@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, EthereumHardforks};
-use reth_evm_ethereum::EthEvmConfig;
 use reth_ethereum_primitives::Block as EthBlock;
+use reth_evm_ethereum::EthEvmConfig;
 use reth_primitives_traits::SealedBlock;
 use reth_storage_api::{AccountInfoReader, StateProviderFactory};
 use reth_transaction_pool::error::InvalidPoolTransactionError;
@@ -11,7 +11,7 @@ use reth_transaction_pool::{
 };
 use std::sync::RwLock;
 use zk_os_api::helpers::validate_l2_tx_intrinsic_native_resources;
-use zksync_os_types::{ExecutionVersion, FeeParams};
+use zksync_os_types::{FeeParams, ProtocolSemanticVersion};
 
 /// A wrapper around [`EthTransactionValidator`] that adds ZKSync OS specific
 /// stateless validation on top of the standard Ethereum checks.
@@ -33,15 +33,15 @@ use zksync_os_types::{ExecutionVersion, FeeParams};
 pub(crate) struct ZkTransactionValidator<Client, Tx> {
     inner: EthTransactionValidator<Client, Tx, EthEvmConfig>,
     fee_params: RwLock<FeeParams>,
-    /// Execution version expected for the next produced block. Drives version-gated
-    /// stateless checks (e.g. intrinsic native resources, available from V6).
-    execution_version: RwLock<ExecutionVersion>,
+    /// Protocol version expected for the next produced block. Drives version-gated
+    /// stateless checks (e.g. intrinsic native resources, available from v31 / execution V6).
+    protocol_version: RwLock<ProtocolSemanticVersion>,
 }
 
 impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
     pub(crate) fn new(
         inner: EthTransactionValidator<Client, Tx, EthEvmConfig>,
-        execution_version: ExecutionVersion,
+        protocol_version: ProtocolSemanticVersion,
     ) -> Self {
         // Before the first `update_fee_params` call, treat the chain as a 0 gas price chain with
         // unlimited native resource: basefee/pubdata are 0, native_price is 1 (not 0) so that any
@@ -54,7 +54,7 @@ impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
         Self {
             inner,
             fee_params: RwLock::new(fee_params),
-            execution_version: RwLock::new(execution_version),
+            protocol_version: RwLock::new(protocol_version),
         }
     }
 
@@ -62,8 +62,8 @@ impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
         *self.fee_params.write().expect("lock poisoned") = fee_params;
     }
 
-    pub(crate) fn update_execution_version(&self, execution_version: ExecutionVersion) {
-        *self.execution_version.write().expect("lock poisoned") = execution_version;
+    pub(crate) fn update_protocol_version(&self, protocol_version: ProtocolSemanticVersion) {
+        *self.protocol_version.write().expect("lock poisoned") = protocol_version;
     }
 }
 
@@ -125,8 +125,12 @@ where
         origin: TransactionOrigin,
         transaction: &Tx,
     ) -> Result<(), InvalidPoolTransactionError> {
-        let execution_version = *self.execution_version.read().expect("lock poisoned");
-        if execution_version >= ExecutionVersion::V6 {
+        if self
+            .protocol_version
+            .read()
+            .expect("lock poisoned")
+            .is_post_v31()
+        {
             self.validate_intrinsic_native_resources(transaction)?;
         }
         self.inner.validate_stateless(origin, transaction)

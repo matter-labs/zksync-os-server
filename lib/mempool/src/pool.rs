@@ -28,8 +28,8 @@ use zksync_os_l1_watcher::{
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    ExecutionVersion, FeeParams, L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo, UpgradeMetadata,
-    ZkEnvelope, ZkTransaction,
+    FeeParams, L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo,
+    UpgradeMetadata, ZkEnvelope, ZkTransaction,
 };
 
 /// General pool that provides unified access to all transaction sources in the system.
@@ -445,12 +445,10 @@ impl<T: L2Subpool> Pool<T> {
             });
 
         // Propagate the just-finalized protocol version to the L2 validator so that
-        // version-gated stateless checks (e.g. intrinsic native resources, V6+) use the
+        // version-gated stateless checks (e.g. intrinsic native resources, v31+) use the
         // correct version for incoming txs.
-        if let Ok(execution_version) = ExecutionVersion::try_from(&replay_record.protocol_version) {
-            self.l2_subpool
-                .update_pending_execution_version(execution_version);
-        }
+        self.l2_subpool
+            .update_pending_protocol_version(replay_record.protocol_version.clone());
 
         StateChangeOutcome {
             last_interop_log_id,

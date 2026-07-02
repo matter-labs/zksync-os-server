@@ -17,8 +17,8 @@ use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    BlockOutput, BlockStartCursors, ExecutionVersion, FeeParams, SystemTxEnvelope, SystemTxType, ZkEnvelope,
-    ZkTransaction,
+    BlockOutput, BlockStartCursors, ExecutionVersion, FeeParams, SystemTxEnvelope, SystemTxType,
+    ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -117,8 +117,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .take()
             .expect("tried to produce a block without replaying at least one record");
         let fee_params = self.fee_provider.produce_fee_params().await?;
-        self.pool
-            .update_pending_block_fees(fee_params, None);
+        self.pool.update_pending_block_fees(fee_params, None);
         let block_number = previous_record.block_context.block_number + 1;
         // Create stream:
         // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).

@@ -665,7 +665,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         zk_provider_factory.clone(),
         config.mempool_config.clone().into(),
         config.tx_validator_config.clone().into(),
-        exec_version,
+        current_protocol_version.clone(),
     );
 
     if config
