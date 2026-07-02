@@ -11,6 +11,17 @@ use zksync_os_interface::traits::ReadStorage;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_types::{BlockOutput, ZkTransaction};
 
+/// Bench-only: `true` when `PARALLEL_PRODUCER_PROFILE` is set — gates the per-round / per-block
+/// profile logs (emitted at ERROR level so they survive `RUST_LOG=warn` bench runs).
+pub(crate) fn parallel_producer_profile_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("PARALLEL_PRODUCER_PROFILE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
+
 /// Storage reads recorded during a single block's execution.
 #[derive(Debug)]
 pub(super) struct ReadRecording {

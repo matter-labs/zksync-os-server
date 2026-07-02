@@ -2,7 +2,7 @@ use crate::config::SequencerConfig;
 use crate::execution::block_context_provider::BlockContextProvider;
 use crate::execution::execute_block_in_vm::execute_block_in_vm;
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
-use crate::execution::utils::{BlockDump, save_dump};
+use crate::execution::utils::{BlockDump, parallel_producer_profile_enabled, save_dump};
 use crate::model::blocks::{
     BlockCommand, BlockCommandType, BlockOutputWithReads, BlockPayload,
 };
@@ -11,7 +11,6 @@ use anyhow::Context;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -118,15 +117,6 @@ async fn finish_parallel_round<Subpool: L2Subpool>(
         txs,
         exec_elapsed,
         downstream_elapsed: t_downstream.elapsed(),
-    })
-}
-
-fn parallel_producer_profile_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("PARALLEL_PRODUCER_PROFILE")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-            .unwrap_or(false)
     })
 }
 

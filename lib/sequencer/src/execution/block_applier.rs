@@ -5,7 +5,7 @@ use alloy::consensus::Sealed;
 use alloy::primitives::BlockNumber;
 use anyhow::Context as _;
 use async_trait::async_trait;
-use std::sync::OnceLock;
+use crate::execution::utils::parallel_producer_profile_enabled;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
@@ -14,15 +14,6 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{
     ReplayRecord, RepositoryResult, WriteReplay, WriteRepository, WriteState,
 };
-
-fn parallel_producer_profile_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("PARALLEL_PRODUCER_PROFILE")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-            .unwrap_or(false)
-    })
-}
 
 /// Persists blocks in various local storages.
 /// Used to be part of the Sequencer - was split into `BlockExecutor` and `BlockApplier`.

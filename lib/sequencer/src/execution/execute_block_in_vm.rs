@@ -1,5 +1,5 @@
 use crate::execution::metrics::{EXECUTION_METRICS, SequencerState};
-use crate::execution::utils::{BlockDump, hash_block_output};
+use crate::execution::utils::{BlockDump, hash_block_output, parallel_producer_profile_enabled};
 use crate::execution::vm_wrapper::VmWrapper;
 use crate::model::blocks::{
     BlockOutputWithReads, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
@@ -46,6 +46,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
 > {
     tracing::info!(command = ?command, block_number=command.block_context.block_number, "Executing command");
     latency_tracker.enter_state(SequencerState::InitializingVm);
+    let block_started_at = Instant::now();
     let ctx = command.block_context;
 
     /* ---------- VM & state ----------------------------------------- */
@@ -67,6 +68,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         validator,
         vm_idle_micros.clone(),
     );
+    let vm_init_elapsed = block_started_at.elapsed();
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
     let mut cumulative_gas_used = 0u64;
@@ -532,11 +534,13 @@ pub async fn execute_block_in_vm<V: ViewState>(
     }
 
     /* ---------- seal & return ------------------------------------- */
+    let seal_started_at = Instant::now();
     let mut output_with_reads = runner.seal_block().await.map_err(|e| BlockDump {
         ctx,
         txs: all_processed_txs.clone(),
         error: e.context("seal_block()").to_string(),
     })?;
+    let seal_elapsed = seal_started_at.elapsed();
     let unique_reads_count = output_with_reads.read_keys().len();
     let total_read_time = output_with_reads.total_read_time();
     let read_count = output_with_reads.read_count();
@@ -595,6 +599,29 @@ pub async fn execute_block_in_vm<V: ViewState>(
         preimages_count = output.published_preimages.len(),
         pubdata_len = output.pubdata.len(),
     );
+
+    // Bench-only per-block VM profile (ERROR level so it survives `RUST_LOG=warn` runs): splits
+    // the executor's per-round `exec_elapsed` into feed wait vs VM work. Reading it:
+    // `tx_stream_time` dominating (with high `vm_idle_time`) → the block is starved by its lane
+    // feed; `execute_tx_time` dominating (with low `vm_idle_time`) → genuinely VM-bound;
+    // `read_time` → the share of VM time blocked on server-side state reads.
+    if parallel_producer_profile_enabled() {
+        tracing::error!(
+            block_number = output.header.number,
+            label = command.metrics_label,
+            txs = executed_txs.len(),
+            ?seal_reason,
+            block_elapsed = ?block_started_at.elapsed(),
+            ?vm_init_elapsed,
+            tx_stream_time = ?total_tx_stream_time,
+            execute_tx_time = ?total_execute_tx_time,
+            vm_idle_time = ?vm_idle_time,
+            read_time = ?total_read_time,
+            read_count,
+            ?seal_elapsed,
+            "block vm profile"
+        );
+    }
 
     tracing::debug!(
         output = ?BlockOutputDebug(output),
