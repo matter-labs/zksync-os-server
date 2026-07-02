@@ -16,6 +16,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use zksync_os_integration_tests::assert_traits::{ReceiptAssert, ReceiptsAssert};
+use zksync_os_integration_tests::contracts::TestERC20;
 use zksync_os_integration_tests::{NEXT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_interface::traits::EncodedTx;
 use zksync_os_sequencer::execution::vm_wrapper::VmWrapper;
@@ -493,6 +494,159 @@ async fn direct_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The ERC20 counterpart of [`direct_injection_tps`]: single-lane direct injection of dummy-signed
+/// `TestERC20.transfer` calls, isolating the sequencer + execution cost of an ERC20 transfer from RPC
+/// / mempool / signing. Same channel-backpressured steady-state measurement — once the pipeline is
+/// warm the submit rate equals the sequencer's execution rate.
+///
+/// A `transfer` runs the full EVM interpreter and rewrites `balances[from]` / `balances[to]` (mapping
+/// slots keyed by `keccak`) plus the sender nonce — roughly 5x the per-tx cost of a native transfer —
+/// so blocks are capped at `ERC20_MAX_TX`, well below the (much lower than native) ERC20 NativeCycles
+/// seal, so a count/cycle seal never consumes-without-executing a tx and opens a permanent nonce gap
+/// (the direct channel, unlike the mempool, can't re-serve a dropped tx).
+///
+/// Set `LOAD_TEST_FLAMEGRAPH=<path>` to profile only the steady-state ERC20 window (in-process pprof) —
+/// the cleanest way to get a flamegraph of pure ERC20 execution (no startup / warmup / deploy noise).
+///
+/// Tunables: `ERC20_MAX_TX` (default 1000), `LOAD_TEST_DURATION_SECS` (60), `LOAD_TEST_WARMUP_SECS` (5).
+#[test_multisetup([NEXT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn direct_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    let max_tx: usize = env_or("ERC20_MAX_TX", 1000);
+    let mut config = env.default_config().await?;
+    config.prover_input_generator_config.enable_input_generation = false;
+    config.fee_config = FeeConfig {
+        base_fee_override: Some(U128::from(0)),
+        pubdata_price_override: Some(U128::from(0)),
+        ..Default::default()
+    };
+    config.mempool_config.minimal_protocol_basefee = 0;
+    config.sequencer_config.revm_consistency_checker_enabled = false;
+    config.batcher_config.enabled = false;
+    config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
+    // ERC20 transfers cost far more NativeCycles than native transfers, so cap the block well below
+    // the NativeCycles seal (tune via `ERC20_MAX_TX`) to avoid early-seal drops -> nonce gaps.
+    config.sequencer_config.max_transactions_in_block = max_tx;
+    config.sequencer_config.block_gas_limit = 1_000_000_000_000;
+    let tester = env.launch(config).await?;
+
+    let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
+    let warmup = Duration::from_secs(env_or("LOAD_TEST_WARMUP_SECS", 5));
+
+    let sender = tester.direct_tx_sender();
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+
+    // Deploy the token + mint the single sender (bench_addr(1)) its whole corpus worth of balance
+    // (amount 1/tx). Set gas + gas price EXPLICITLY: under `in-memory-storage` the RPC can't estimate
+    // gas (no historical block/state to run `eth_estimateGas` against — it returns "block not found").
+    let deploy_receipt = TestERC20::deploy_builder(
+        tester.l2_provider.clone(),
+        U256::ZERO,
+        "Load".to_string(),
+        "LOAD".to_string(),
+    )
+    .gas(6_000_000)
+    .gas_price(0)
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+    let token_addr = deploy_receipt
+        .contract_address()
+        .expect("deploy receipt missing contract address");
+    let token = TestERC20::new(token_addr, tester.l2_provider.clone());
+    token
+        .mint(bench_addr(1), U256::from(txs_per_file()))
+        .gas(300_000)
+        .gas_price(0)
+        .send()
+        .await?
+        .expect_successful_receipt()
+        .await?;
+    tracing::info!(%token_addr, "deployed TestERC20 + minted sender balance");
+
+    // Signer 0 of the shared ERC20 corpus: bench_addr(1) -> token.transfer(bench_addr(2), 1). Built
+    // once (the token address is folded into the fingerprint), reused across runs and shared with
+    // `parallel_injection_erc20_tps`'s lane 0 (same signer / recipient / token).
+    let signer = bench_addr(1);
+    let path = ensure_erc20_corpus(chain_id, 0, token_addr, txs_per_file())?;
+
+    // Switch block production over to the direct channel, then send one native tx through the normal
+    // RPC path to flush the producer parked on the (now empty) mempool; from the next block on,
+    // production pulls exclusively from the direct channel (fed by the corpus reader below).
+    tester.activate_direct_injection();
+    let kick = TransactionRequest::default()
+        .with_to(Address::repeat_byte(0x42))
+        .with_value(U256::ZERO)
+        .with_gas_price(0)
+        .with_gas_limit(LOAD_GAS_LIMIT);
+    tester
+        .l2_provider
+        .send_transaction(kick)
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    let submitted = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    // Stream pre-built ERC20 txs from disk instead of constructing them in the hot loop.
+    let pusher =
+        spawn_corpus_pusher(path, signer, sender.clone(), submitted.clone(), stop.clone());
+
+    // Warm up so the channel fills and the pipeline reaches steady state, then measure the
+    // steady-state consumption rate.
+    tokio::time::sleep(warmup).await;
+
+    // Optional CPU profiling of the steady-state window only (excludes startup/warmup/deploy), when
+    // `LOAD_TEST_FLAMEGRAPH=<path>` is set. With RPC + mempool bypassed, this isolates the sequencer +
+    // execution pipeline for a pure ERC20 transfer.
+    let flamegraph_path = std::env::var("LOAD_TEST_FLAMEGRAPH").ok();
+    let profiler_guard = flamegraph_path.as_ref().map(|_| {
+        pprof::ProfilerGuardBuilder::default()
+            .frequency(499)
+            .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+            .build()
+            .expect("failed to start profiler")
+    });
+
+    let submitted_before = submitted.load(Ordering::Relaxed);
+    let block_before = tester.l2_provider.get_block_number().await?;
+    let measure_start = Instant::now();
+
+    tokio::time::sleep(duration).await;
+
+    let measured = measure_start.elapsed();
+    let executed = submitted.load(Ordering::Relaxed) - submitted_before;
+    let block_after = tester.l2_provider.get_block_number().await?;
+    stop.store(true, Ordering::Relaxed);
+    let _ = pusher.await;
+
+    if let (Some(guard), Some(path)) = (profiler_guard, flamegraph_path.as_ref()) {
+        match guard.report().build() {
+            Ok(report) => {
+                let file = std::fs::File::create(path)?;
+                report.flamegraph(file)?;
+                tracing::info!(path, "wrote flamegraph");
+            }
+            Err(err) => tracing::warn!(%err, "failed to build profiler report"),
+        }
+    }
+
+    let tps = executed as f64 / measured.as_secs_f64();
+    let blocks_produced = block_after - block_before;
+    tracing::error!(
+        max_tx,
+        executed,
+        ?measured,
+        direct_injection_erc20_tps = tps,
+        blocks_produced,
+        blocks_per_sec = blocks_produced as f64 / measured.as_secs_f64(),
+        "direct-injection-erc20 load test complete"
+    );
+
+    Ok(())
+}
+
 /// Build a `ZkTransaction` directly with a known signer and a dummy signature (no ECDSA), as cheaply
 /// as possible — used to feed the sequencer's direct tx channel without RPC / mempool / signing.
 fn build_direct_tx(
@@ -517,6 +671,74 @@ fn build_direct_tx(
         .into_signed(signature),
     );
     ZkTransaction::from(Recovered::new_unchecked(envelope, signer))
+}
+
+/// Corpus family for the dummy-signed ERC20 parallel-injection test.
+const ERC20_FAMILY: &str = "erc20";
+
+/// Calldata for `transfer(address,uint256)` (selector `0xa9059cbb`): ABI-encoded recipient + amount.
+fn erc20_transfer_calldata(recipient: Address, amount: u64) -> Vec<u8> {
+    let mut data = Vec::with_capacity(4 + 64);
+    data.extend_from_slice(&[0xa9, 0x05, 0x9c, 0xbb]);
+    data.extend_from_slice(&[0u8; 12]);
+    data.extend_from_slice(recipient.as_slice());
+    data.extend_from_slice(&U256::from(amount).to_be_bytes::<32>());
+    data
+}
+
+/// Like [`build_direct_tx`] but an ERC20 `transfer(recipient, amount)` call to `token` (dummy-signed).
+fn build_erc20_tx(
+    chain_id: u64,
+    nonce: u64,
+    token: Address,
+    recipient: Address,
+    amount: u64,
+    signer: Address,
+    signature: Signature,
+) -> ZkTransaction {
+    let envelope = L2Envelope::from(
+        TxEip1559 {
+            chain_id,
+            nonce,
+            gas_limit: LOAD_GAS_LIMIT,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            to: TxKind::Call(token),
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: erc20_transfer_calldata(recipient, amount).into(),
+        }
+        .into_signed(signature),
+    );
+    ZkTransaction::from(Recovered::new_unchecked(envelope, signer))
+}
+
+/// Ensure the dummy-signed ERC20 corpus for signer index `i` exists — signer `bench_addr(2i+1)` calls
+/// `token.transfer(bench_addr(2i+2), 1)`, nonces `0..count`. The token address is folded into the
+/// fingerprint so a redeploy regenerates. Returns the file path.
+fn ensure_erc20_corpus(
+    chain_id: u64,
+    signer_index: usize,
+    token: Address,
+    count: u64,
+) -> anyhow::Result<std::path::PathBuf> {
+    let signer = bench_addr(2 * signer_index as u64 + 1);
+    let recipient = bench_addr(2 * signer_index as u64 + 2);
+    let sig = dummy_signature();
+    let token_lo = u64::from_be_bytes(token.as_slice()[12..20].try_into().unwrap());
+    let fp = corpus::fingerprint(&[
+        chain_id,
+        2 * signer_index as u64 + 1,
+        2 * signer_index as u64 + 2,
+        token_lo,
+    ]);
+    let path = corpus::signer_file(ERC20_FAMILY, signer_index);
+    corpus::ensure_corpus(&path, count, fp, move |n| {
+        build_erc20_tx(chain_id, n, token, recipient, 1, signer, sig)
+            .inner
+            .encoded_2718()
+    })?;
+    Ok(path)
 }
 
 /// Deterministic, distinct bench address from an index. The `0xBE` prefix keeps these clear of system
@@ -796,6 +1018,149 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
         blocks_produced,
         blocks_per_sec = blocks_produced as f64 / measured.as_secs_f64(),
         "parallel-injection load test complete"
+    );
+
+    Ok(())
+}
+
+/// ERC20 counterpart to [`parallel_injection_tps`]: same parallel direct-injection pipeline, but every
+/// tx is an ERC20 `transfer(bench_addr(2i+2), 1)` to a shared `TestERC20` (deployed + minted here).
+/// The K parallel blocks stay conflict-free because per-lane disjoint addresses give disjoint
+/// `balances[from]`/`balances[to]` slots + disjoint nonces; the token contract is a shared READ. This
+/// measures the parallel pipeline's throughput under real EVM execution (vs the near-free native
+/// transfers of `parallel_injection_tps`).
+///
+/// `ERC20_MAX_TX` (default 2000) caps the block size: an ERC20 transfer burns far more NativeCycles
+/// than a native one, so a block seals on NativeCycles at far fewer txs — keep it below that seal, or
+/// `produce_parallel` packs a group past it, the block seals early, and the overflow drops into a
+/// permanent nonce gap. Other tunables mirror `parallel_injection_tps`.
+#[test_multisetup([NEXT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn parallel_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    let k: usize = env_or("PARALLEL_BLOCKS", 2);
+    let max_tx: usize = env_or("ERC20_MAX_TX", 2000);
+    let mut config = env.default_config().await?;
+    config.prover_input_generator_config.enable_input_generation = false;
+    config.fee_config = FeeConfig {
+        base_fee_override: Some(U128::from(0)),
+        pubdata_price_override: Some(U128::from(0)),
+        ..Default::default()
+    };
+    config.mempool_config.minimal_protocol_basefee = 0;
+    config.sequencer_config.revm_consistency_checker_enabled = false;
+    config.batcher_config.enabled = false;
+    config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
+    // ERC20 transfers cost far more NativeCycles than native transfers, so cap the block well below
+    // the NativeCycles seal (tune via `ERC20_MAX_TX`) to avoid early-seal drops -> nonce gaps.
+    config.sequencer_config.max_transactions_in_block = max_tx;
+    config.sequencer_config.block_gas_limit = 1_000_000_000_000;
+    config.sequencer_config.parallel_blocks = k;
+    let tester = env.launch(config).await?;
+
+    let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
+    let warmup = Duration::from_secs(env_or("LOAD_TEST_WARMUP_SECS", 5));
+
+    let senders = tester.direct_tx_lane_senders(k);
+    let chain_id = tester.l2_provider.get_chain_id().await?;
+
+    // Deploy the token + mint each lane's sender its whole corpus worth of balance (amount 1/tx). Set
+    // gas + gas price EXPLICITLY: under `in-memory-storage` the RPC can't estimate gas (there's no
+    // historical block/state to run `eth_estimateGas` against — it returns "block not found").
+    let deploy_receipt = TestERC20::deploy_builder(
+        tester.l2_provider.clone(),
+        U256::ZERO,
+        "Load".to_string(),
+        "LOAD".to_string(),
+    )
+    .gas(6_000_000)
+    .gas_price(0)
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+    let token_addr = deploy_receipt
+        .contract_address()
+        .expect("deploy receipt missing contract address");
+    let token = TestERC20::new(token_addr, tester.l2_provider.clone());
+    let mint_amount = U256::from(txs_per_file());
+    let mut mint_txs = Vec::with_capacity(k);
+    for i in 0..k {
+        mint_txs.push(
+            token
+                .mint(bench_addr(2 * i as u64 + 1), mint_amount)
+                .gas(300_000)
+                .gas_price(0)
+                .send()
+                .await?,
+        );
+    }
+    mint_txs.expect_successful_receipts().await?;
+    tracing::info!(k, %token_addr, "deployed TestERC20 + minted sender balances");
+
+    // Ensure the K ERC20 corpora (built once), before activating direct injection.
+    let paths: Vec<std::path::PathBuf> = (0..k)
+        .map(|i| ensure_erc20_corpus(chain_id, i, token_addr, txs_per_file()))
+        .collect::<anyhow::Result<_>>()?;
+
+    // Activate parallel direct injection (same kick dance as `parallel_injection_tps`).
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    tester.activate_direct_injection();
+    let kick = TransactionRequest::default()
+        .with_to(Address::repeat_byte(0x42))
+        .with_value(U256::ZERO)
+        .with_gas_price(0)
+        .with_gas_limit(LOAD_GAS_LIMIT);
+    tester
+        .l2_provider
+        .send_transaction(kick)
+        .await?
+        .expect_successful_receipt()
+        .await?;
+
+    let submitted = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let pushers: Vec<_> = paths
+        .into_iter()
+        .enumerate()
+        .map(|(i, path)| {
+            let signer = bench_addr(2 * i as u64 + 1);
+            spawn_corpus_pusher(
+                path,
+                signer,
+                senders[i].clone(),
+                submitted.clone(),
+                stop.clone(),
+            )
+        })
+        .collect();
+
+    tokio::time::sleep(warmup).await;
+
+    let submitted_before = submitted.load(Ordering::Relaxed);
+    let block_before = tester.l2_provider.get_block_number().await?;
+    let measure_start = Instant::now();
+
+    tokio::time::sleep(duration).await;
+
+    let measured = measure_start.elapsed();
+    let executed = submitted.load(Ordering::Relaxed) - submitted_before;
+    let block_after = tester.l2_provider.get_block_number().await?;
+    stop.store(true, Ordering::Relaxed);
+    for pusher in pushers {
+        let _ = pusher.await;
+    }
+
+    let tps = executed as f64 / measured.as_secs_f64();
+    let blocks_produced = block_after - block_before;
+    tracing::error!(
+        k,
+        max_tx,
+        executed,
+        ?measured,
+        parallel_injection_erc20_tps = tps,
+        blocks_produced,
+        blocks_per_sec = blocks_produced as f64 / measured.as_secs_f64(),
+        "parallel-injection-erc20 load test complete"
     );
 
     Ok(())
