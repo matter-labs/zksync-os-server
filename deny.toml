@@ -17,6 +17,15 @@ ignore = [
     # which is a significant effort (alloy 1.x → 2.x migration).
     "RUSTSEC-2026-0118",
     "RUSTSEC-2026-0119",
+    # quick-xml < 0.41 DoS advisories. Pulled in transitively via `inferno`
+    # (flamegraph generation, from the zksync-airbender git dependency) and
+    # `plist` -> `os_info` -> `sentry-contexts` (local OS metadata for Sentry
+    # error context). Neither path parses untrusted/remote XML. No released
+    # version of `inferno` or `plist` depends on quick-xml >=0.41 yet (latest
+    # `inferno` 0.12.6 and `plist` 1.9.0 both still require `^0.39`), so a
+    # `cargo update` cannot resolve this. Revisit once upstream bumps land.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 [bans]
