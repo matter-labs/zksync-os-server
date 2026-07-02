@@ -1285,22 +1285,37 @@ async fn run_main_node_pipeline(
                     )
                 }),
         )
-        .pipe(TreeManager { tree: tree.clone() });
+        ;
 
     if !config.batcher_config.enabled {
         tracing::warn!(
             "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
         );
-        let pipeline = pipeline.pipe(NoOpSink::new());
-        let components = pipeline.components();
-        pipeline.spawn();
         runtime.spawn_critical_task(
             "clear failing block config",
             clear_failing_block_config_task(finality, internal_config_manager),
         );
+        // Bench-only (`parallel_blocks > 1`): elide the Merkle tree entirely. With the batcher off
+        // nothing consumes its output, yet at bench throughput its Blake2s hashing + RocksDB writes
+        // saturate several cores that would otherwise run VM threads.
+        let components = if config.sequencer_config.parallel_blocks > 1 {
+            tracing::warn!("parallel-blocks bench mode — skipping Merkle tree manager");
+            let pipeline = pipeline.pipe(NoOpSink::new());
+            let components = pipeline.components();
+            pipeline.spawn();
+            components
+        } else {
+            let pipeline = pipeline
+                .pipe(TreeManager { tree: tree.clone() })
+                .pipe(NoOpSink::new());
+            let components = pipeline.components();
+            pipeline.spawn();
+            components
+        };
         let snapshot_rx = PipelineTracker::spawn(runtime, components);
         return monitor.spawn(runtime, snapshot_rx);
     }
+    let pipeline = pipeline.pipe(TreeManager { tree: tree.clone() });
 
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())

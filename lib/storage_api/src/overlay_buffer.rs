@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
 use alloy::primitives::{B256, BlockNumber};
@@ -10,9 +11,68 @@ use crate::{OverriddenStateView, ReadStateHistory, ViewState};
 
 pub(crate) type BlockOverlay = OwnedOverrides;
 
+/// Cheap hasher for keys that are already uniformly distributed (flat storage keys and preimage
+/// hashes are outputs of cryptographic hashes): fold the raw bytes into a u64 instead of SipHash.
+/// Not DoS-resistant — only for maps keyed by internally-derived hashes.
+#[derive(Default)]
+pub(crate) struct FoldHasher(u64);
+
+impl Hasher for FoldHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut buf = [0u8; 8];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            self.0 = self.0.rotate_left(29) ^ u64::from_le_bytes(buf);
+        }
+    }
+}
+
+pub(crate) type BuildFoldHasher = BuildHasherDefault<FoldHasher>;
+
+/// Flattened view of every overlay write since the last compaction, each tagged with the block that
+/// produced it. Reads probe ONCE and honor the entry only if its block is still unpersisted
+/// (`block > base_latest`) — semantically identical to walking the per-block overlays newest-first,
+/// but O(1) in the number of pending blocks. Entries of persisted blocks go stale in place (the tag
+/// check masks them; the base state holds the authoritative value) and are reclaimed by compaction.
+#[derive(Debug, Default, Clone)]
+pub struct MergedOverlay {
+    /// Persisted-block watermark as of the last `sync_with_base_and_build_view_for_block`.
+    base_latest: BlockNumber,
+    storage: HashMap<B256, (B256, BlockNumber), BuildFoldHasher>,
+    preimages: HashMap<B256, (Vec<u8>, BlockNumber), BuildFoldHasher>,
+}
+
+impl OverrideProvider for Arc<MergedOverlay> {
+    fn get_storage_override(&self, key: &B256) -> Option<B256> {
+        match self.storage.get(key) {
+            Some(&(value, block)) if block > self.base_latest => Some(value),
+            _ => None,
+        }
+    }
+
+    fn get_preimage_override(&self, hash: &B256) -> Option<Vec<u8>> {
+        match self.preimages.get(hash) {
+            Some((bytes, block)) if *block > self.base_latest => Some(bytes.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// Compact `merged` once the stale entries outnumber the live ones by this factor (and the map is
+/// big enough for the rebuild to be worth it).
+const COMPACT_MIN_LEN: usize = 65_536;
+const COMPACT_STALE_FACTOR: usize = 4;
+
 #[derive(Debug, Default, Clone)]
 pub struct OverlayBuffer {
+    /// Per-block writes, kept for contiguity checks and merged-map compaction.
     overlays: Arc<BTreeMap<BlockNumber, BlockOverlay>>,
+    /// Flattened overlay served to views; superset of `overlays` plus masked stale entries.
+    merged: Arc<MergedOverlay>,
 }
 
 impl OverlayBuffer {
@@ -27,9 +87,7 @@ impl OverlayBuffer {
         &'a mut self,
         base: &'a S,
         block_number_to_execute: BlockNumber,
-    ) -> anyhow::Result<
-        OverriddenStateView<impl ViewState + 'a, Arc<BTreeMap<BlockNumber, BlockOverlay>>>,
-    >
+    ) -> anyhow::Result<OverriddenStateView<impl ViewState + 'a, Arc<MergedOverlay>>>
     where
         S: ReadStateHistory + 'a,
     {
@@ -46,10 +104,10 @@ impl OverlayBuffer {
             let base_view = base
                 .state_view_at(block_number_to_execute - 1)
                 .map_err(|e| anyhow::anyhow!(e))?;
-            // Return with empty overlays (cheap - Arc to empty BTreeMap)
+            // All overlays are persisted; the watermark set above masks any stale merged entries.
             return Ok(OverriddenStateView::new(
                 base_view,
-                Arc::clone(&self.overlays),
+                Arc::clone(&self.merged),
             ));
         }
 
@@ -71,7 +129,7 @@ impl OverlayBuffer {
         }
         Ok(OverriddenStateView::new(
             base_view,
-            Arc::clone(&self.overlays),
+            Arc::clone(&self.merged),
         ))
     }
 
@@ -98,7 +156,7 @@ impl OverlayBuffer {
 
         let preimage_map: HashMap<B256, Vec<u8>> = preimages.into_iter().collect();
 
-        // INVARIANT: The Arc refcount must be 1 here (no outstanding views holding the Arc).
+        // INVARIANT: The Arc refcounts must be 1 here (no outstanding views holding the Arcs).
         // This is guaranteed by the code structure: views are consumed by execute_block_in_vm
         // and dropped before add_block is called. If this assertion fails, we have a logic bug.
         // We are not using references instead because the ` ReadStorage ` trait in VM requires `'static`
@@ -107,6 +165,20 @@ impl OverlayBuffer {
             1,
             "Arc refcount > 1 during mutation - this would cause expensive clone!"
         );
+        assert_eq!(
+            Arc::strong_count(&self.merged),
+            1,
+            "Arc refcount > 1 during mutation - this would cause expensive clone!"
+        );
+        let merged = Arc::make_mut(&mut self.merged);
+        for (key, value) in &storage_map {
+            merged.storage.insert(*key, (*value, block_number));
+        }
+        for (hash, bytes) in &preimage_map {
+            merged
+                .preimages
+                .insert(*hash, (bytes.clone(), block_number));
+        }
         Arc::make_mut(&mut self.overlays)
             .insert(block_number, BlockOverlay::new(storage_map, preimage_map));
         Ok(())
@@ -129,7 +201,36 @@ impl OverlayBuffer {
             1,
             "Arc refcount > 1 during mutation - this would cause expensive clone!"
         );
+        assert_eq!(
+            Arc::strong_count(&self.merged),
+            1,
+            "Arc refcount > 1 during mutation - this would cause expensive clone!"
+        );
         Arc::make_mut(&mut self.overlays).retain(|block, _| *block > base_latest);
+
+        // Advance the watermark that masks stale merged entries; physically reclaim them only when
+        // they dominate the map (stale entries are correctness-neutral, this is purely for memory).
+        let merged = Arc::make_mut(&mut self.merged);
+        merged.base_latest = base_latest;
+        let live: usize = self
+            .overlays
+            .values()
+            .map(|overlay| overlay.storage_len())
+            .sum();
+        if merged.storage.len() >= COMPACT_MIN_LEN
+            && merged.storage.len() >= COMPACT_STALE_FACTOR * live.max(1)
+        {
+            merged.storage.clear();
+            merged.preimages.clear();
+            for (&block, overlay) in self.overlays.iter() {
+                for (key, value) in overlay.storage_iter() {
+                    merged.storage.insert(*key, (*value, block));
+                }
+                for (hash, bytes) in overlay.preimages_iter() {
+                    merged.preimages.insert(*hash, (bytes.clone(), block));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -208,29 +309,32 @@ mod tests {
             )
             .unwrap();
 
-        let provider = Arc::clone(&buffer.overlays);
+        for provider in [
+            Box::new(Arc::clone(&buffer.overlays)) as Box<dyn OverrideProvider>,
+            Box::new(Arc::clone(&buffer.merged)) as Box<dyn OverrideProvider>,
+        ] {
+            // Most recent value for key1 should be new_value (from block 2), not old_value (from block 1)
+            assert_eq!(
+                provider.get_storage_override(&key1),
+                Some(new_value),
+                "Overlay should return most recent value for key1"
+            );
 
-        // Most recent value for key1 should be new_value (from block 2), not old_value (from block 1)
-        assert_eq!(
-            provider.get_storage_override(&key1),
-            Some(new_value),
-            "Overlay should return most recent value for key1"
-        );
+            // key2 should return another_value
+            assert_eq!(
+                provider.get_storage_override(&key2),
+                Some(another_value),
+                "Overlay should return value for key2"
+            );
 
-        // key2 should return another_value
-        assert_eq!(
-            provider.get_storage_override(&key2),
-            Some(another_value),
-            "Overlay should return value for key2"
-        );
-
-        // Non-existent key should return None
-        let non_existent_key = B256::from([99u8; 32]);
-        assert_eq!(
-            provider.get_storage_override(&non_existent_key),
-            None,
-            "Non-existent key should return None"
-        );
+            // Non-existent key should return None
+            let non_existent_key = B256::from([99u8; 32]);
+            assert_eq!(
+                provider.get_storage_override(&non_existent_key),
+                None,
+                "Non-existent key should return None"
+            );
+        }
     }
 
     #[test]
@@ -255,13 +359,16 @@ mod tests {
                 .unwrap();
         }
 
-        let provider = Arc::clone(&buffer.overlays);
-
         // Should return value from block 5 (most recent)
         assert_eq!(
-            provider.get_storage_override(&key),
+            Arc::clone(&buffer.overlays).get_storage_override(&key),
             Some(B256::from([5u8; 32])),
             "Should return value from most recent block"
+        );
+        assert_eq!(
+            Arc::clone(&buffer.merged).get_storage_override(&key),
+            Some(B256::from([5u8; 32])),
+            "Merged overlay should return value from most recent block"
         );
     }
 
@@ -289,13 +396,16 @@ mod tests {
             )
             .unwrap();
 
-        let provider = Arc::clone(&buffer.overlays);
-
         // Should return new_preimage for hash1, not old_preimage
         assert_eq!(
-            provider.get_preimage_override(&hash1),
-            Some(new_preimage),
+            Arc::clone(&buffer.overlays).get_preimage_override(&hash1),
+            Some(new_preimage.clone()),
             "Should return most recent preimage for hash1"
+        );
+        assert_eq!(
+            Arc::clone(&buffer.merged).get_preimage_override(&hash1),
+            Some(new_preimage),
+            "Merged overlay should return most recent preimage for hash1"
         );
     }
 
@@ -318,5 +428,44 @@ mod tests {
         assert!(buffer.overlays.contains_key(&4));
         assert!(buffer.overlays.contains_key(&5));
         assert!(!buffer.overlays.contains_key(&3));
+    }
+
+    #[test]
+    fn merged_overlay_masks_persisted_blocks() {
+        let mut buffer = OverlayBuffer::default();
+
+        for block_num in 1..=5u64 {
+            buffer
+                .add_block(
+                    block_num,
+                    vec![StorageWrite {
+                        key: B256::from([block_num as u8; 32]),
+                        value: B256::from([block_num as u8; 32]),
+                        account: Address::ZERO,
+                        account_key: B256::ZERO,
+                    }],
+                    vec![],
+                )
+                .unwrap();
+        }
+
+        // Persist blocks <= 3: their merged entries must stop answering (the base state is
+        // authoritative for them now), while blocks 4 and 5 still override.
+        buffer.purge_already_persisted_blocks(3).unwrap();
+        let provider = Arc::clone(&buffer.merged);
+        for block_num in 1..=3u8 {
+            assert_eq!(
+                provider.get_storage_override(&B256::from([block_num; 32])),
+                None,
+                "persisted block's write must be masked"
+            );
+        }
+        for block_num in 4..=5u8 {
+            assert_eq!(
+                provider.get_storage_override(&B256::from([block_num; 32])),
+                Some(B256::from([block_num; 32])),
+                "unpersisted block's write must override"
+            );
+        }
     }
 }

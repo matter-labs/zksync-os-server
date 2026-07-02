@@ -721,10 +721,13 @@ impl ConsensusConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StateBackendConfig {
     FullDiffs,
     Compacted,
+    /// Bench-only: `FullDiffs` semantics backed by in-memory maps instead of RocksDB. No
+    /// persistence — the node replays from genesis on every start.
+    InMemory,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]

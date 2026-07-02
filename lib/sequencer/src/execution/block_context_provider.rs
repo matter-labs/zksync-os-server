@@ -22,8 +22,8 @@ use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    BlockOutput, BlockStartCursors, ExecutionVersion, SystemTxEnvelope, SystemTxType, ZkEnvelope,
-    ZkTransaction,
+    BlockOutput, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion, SystemTxEnvelope,
+    SystemTxType, ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -55,7 +55,10 @@ pub struct BlockContextProvider<Subpool> {
     direct_buffers: std::collections::HashMap<Address, std::collections::VecDeque<ZkTransaction>>,
     /// Test/bench-only: per-lane overflow for parallel direct injection. This avoids re-bucketing a
     /// shared channel by signer every round when the benchmark already knows each signer's lane.
-    direct_lane_buffers: Vec<std::collections::VecDeque<ZkTransaction>>,
+    /// Plain `Vec`s (not deques): `drain_lane` caps each buffer at `max_transactions_in_block`, so a
+    /// round always consumes a buffer wholesale (`mem::take`) — no front-drains needed — and
+    /// `poll_recv_many` can append into it directly without an intermediate copy.
+    direct_lane_buffers: Vec<Vec<ZkTransaction>>,
 }
 
 /// Test/bench-only handle that feeds transactions straight into block production, bypassing the
@@ -88,8 +91,12 @@ pub struct Config {
     pub parallel_block_linger: Duration,
 }
 
+/// Slimmed-down tail of the last processed block. Deliberately does NOT hold the `ReplayRecord`:
+/// only these fields are ever read back, and cloning a full record (with its per-block transaction
+/// `Vec`) once per block dominated the serial section of the parallel bench path.
 struct LastBlock {
-    record: ReplayRecord,
+    block_context: BlockContext,
+    protocol_version: ProtocolSemanticVersion,
     hash: BlockHash,
     next_cursors: BlockStartCursors,
 }
@@ -97,17 +104,19 @@ struct LastBlock {
 /// Bench-only: non-blocking drain of a direct-injection lane channel into its overflow buffer, up to
 /// `max_tx`. Never awaits — the `std::sync::Mutex` guard is released before returning, so this must
 /// not be called across an `.await` point.
-fn drain_lane(
-    rx: &Mutex<mpsc::Receiver<ZkTransaction>>,
-    queue: &mut std::collections::VecDeque<ZkTransaction>,
-    max_tx: usize,
-) {
+fn drain_lane(rx: &Mutex<mpsc::Receiver<ZkTransaction>>, queue: &mut Vec<ZkTransaction>, max_tx: usize) {
     let mut guard = rx.lock().unwrap();
+    // Batched receive straight into the lane buffer: one atomic hand-off per chunk and one move per
+    // tx, instead of one `try_recv` (and several copies) per tx. The noop waker is fine here — if
+    // the channel is momentarily empty we take what's buffered so far, and the park-until-first-tx
+    // poll in `produce_parallel` re-registers a real waker afterwards.
+    let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+    queue.reserve(max_tx.saturating_sub(queue.len()));
     while queue.len() < max_tx {
-        match guard.try_recv() {
-            Ok(tx) => queue.push_back(tx),
-            // Channel momentarily empty (reader behind) — take what's buffered so far.
-            Err(_) => break,
+        match guard.poll_recv_many(&mut cx, queue, max_tx - queue.len()) {
+            // Channel momentarily empty (reader behind) or closed — take what we got.
+            std::task::Poll::Ready(0) | std::task::Poll::Pending => break,
+            std::task::Poll::Ready(_) => {}
         }
     }
 }
@@ -148,7 +157,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     pub fn last_block_number(&self) -> Option<u64> {
         self.last_block
             .as_ref()
-            .map(|b| b.record.block_context.block_number)
+            .map(|b| b.block_context.block_number)
     }
 
     pub async fn prepare_command(
@@ -164,7 +173,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
     async fn produce(&mut self) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
         let LastBlock {
-            record: previous_record,
+            block_context: previous_block_context,
+            protocol_version: previous_protocol_version,
             hash: previous_block_hash,
             next_cursors,
         } = self
@@ -174,7 +184,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         let fee_params = self.fee_provider.produce_fee_params().await?;
         self.pool
             .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
-        let block_number = previous_record.block_context.block_number + 1;
+        let block_number = previous_block_context.block_number + 1;
         // Create stream:
         // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
         // - L1 transactions first, then L2 transactions.
@@ -205,7 +215,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         // It is possible that we peek an upgrade with version <= self.protocol_version
         // since we do not consume patch upgrades when replaying/rebuilding blocks. Such upgrade can be safely skipped.
         let (protocol_version, force_preimages) = if let Some(upgrade_metadata) = upgrade_metadata
-            && upgrade_metadata.protocol_version > previous_record.protocol_version
+            && upgrade_metadata.protocol_version > previous_protocol_version
         {
             tracing::info!(
                 block_number,
@@ -227,7 +237,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 upgrade_metadata.force_preimages.clone(),
             )
         } else {
-            (previous_record.protocol_version.clone(), Vec::new())
+            (previous_protocol_version.clone(), Vec::new())
         };
 
         let execution_version: ExecutionVersion = (&protocol_version)
@@ -238,8 +248,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         // version is v31 (either via upgrade from v30, or on the first block of a
         // fresh v31 chain). After it fires once, the condition can never trigger again.
         let expect_sl_chain_id_tx_after_upgrade = protocol_version.minor == 31
-            && (previous_record.protocol_version.minor < 31
-                || previous_record.block_context.block_number == 0);
+            && (previous_protocol_version.minor < 31 || previous_block_context.block_number == 0);
         // `u64::MAX` is a placeholder, since this is not an actual migration.
         let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(self.current_sl_chain_id, u64::MAX);
 
@@ -287,10 +296,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             timestamp,
             chain_id: self.config.l2_chain_id,
             coinbase: self.config.fee_collector_address,
-            block_hashes: previous_record
-                .block_context
-                .block_hashes
-                .push(previous_block_hash),
+            block_hashes: previous_block_context.block_hashes.push(previous_block_hash),
             gas_limit: self.config.gas_limit,
             pubdata_limit: self.config.pubdata_limit,
             // todo: initialize as source of randomness, i.e. the value of prevRandao
@@ -315,7 +321,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             metrics_label: "produce",
             protocol_version,
             expected_block_output_hash: None,
-            previous_block_timestamp: previous_record.block_context.timestamp,
+            previous_block_timestamp: previous_block_context.timestamp,
             force_preimages,
             expect_sl_chain_id_tx_after_upgrade,
             starting_cursors: next_cursors.clone(),
@@ -335,23 +341,109 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .is_some_and(|d| d.active.load(Ordering::Relaxed))
     }
 
-    /// Bench-only: build up to `k` slot-disjoint blocks for one parallel round.
+    /// Bench-only: `true` when direct injection exposes at least `k` per-signer lanes — the
+    /// precondition for the pipelined parallel path in `BlockExecutor`.
+    pub fn has_parallel_lanes(&self, k: usize) -> bool {
+        self.direct_tx.as_ref().is_some_and(|d| d.lanes.len() >= k)
+    }
+
+    /// Bench-only: drain the K direct lanes into their overflow buffers. When `park` is set and
+    /// the whole round would otherwise be empty, waits until the first transaction arrives on ANY
+    /// lane. The pipelined caller passes `park: false` while a round is still in flight — parking
+    /// there would deadlock feeds that wait on the in-flight round's receipts before sending more
+    /// (e.g. the load tests' activation kick). Independent of `last_block`, so the caller can
+    /// overlap it with an in-flight round's VM execution.
+    /// Returns `false` once every lane channel is closed and the buffers are empty.
     ///
-    /// Drains a batch (`k * max_transactions_in_block`) of direct-injection transactions and buckets
-    /// them **by sender** into disjoint groups; each group becomes one block (numbered `N..N+K-1`),
-    /// sealed on stream exhaustion. All blocks share the previous block's base hash ring (no
-    /// inter-block hash chaining - the bench disregards chain validity, and native transfers don't
-    /// read `BLOCKHASH`), so the contexts are built up front and the blocks can execute in parallel
-    /// against the same base state at `N-1`. `last_block` is taken here and re-established by the
-    /// caller via `on_canonical_state_change` for each produced block, in order.
-    ///
-    /// Requires direct injection to be active. Ignores `max_blocks_to_produce` (bench).
-    pub async fn produce_parallel(
+    /// Accumulate this round's transactions before sealing. Under an RPC feed the producer
+    /// outruns ingestion and would otherwise seal near-empty lanes every loop, burying the
+    /// per-block Merkle tree in tiny blocks (the effective-path bottleneck). We (1) drain
+    /// whatever each lane already has, (2) if the whole round is empty, park until the first tx
+    /// lands on ANY lane, then (3) linger once so bursty arrivals batch into large blocks — all
+    /// K lane channels keep filling concurrently during the single sleep (RPC admission shards
+    /// into them in the background), so the added latency per round is one `linger`, not `k`.
+    /// `linger == 0` (default / injection bench / production) never sleeps, preserving the old
+    /// immediate-seal behaviour.
+    pub async fn drain_direct_lanes(&mut self, k: usize, park: bool) -> bool {
+        let direct_lanes = self
+            .direct_tx
+            .as_ref()
+            .expect("drain_direct_lanes requires direct injection")
+            .lanes
+            .clone();
+        debug_assert!(direct_lanes.len() >= k, "drain_direct_lanes requires k lanes");
+        if self.direct_lane_buffers.len() < direct_lanes.len() {
+            self.direct_lane_buffers
+                .resize_with(direct_lanes.len(), Default::default);
+        }
+        let max_tx = self.config.max_transactions_in_block;
+        let linger = self.config.parallel_block_linger;
+        let lanes: Vec<_> = direct_lanes.into_iter().take(k).collect();
+
+        for (lane_index, rx) in lanes.iter().enumerate() {
+            drain_lane(rx, &mut self.direct_lane_buffers[lane_index], max_tx);
+        }
+
+        // If no lane has work yet, park until the first tx arrives on ANY lane. Polling every
+        // receiver (not just lane 0) is essential: parking on one specific lane would let a busy
+        // lane's transactions sit unbuilt behind an idle lane, and their receipts would time out.
+        if park && (0..k).all(|i| self.direct_lane_buffers[i].is_empty()) {
+            let first = std::future::poll_fn(|cx| {
+                let mut all_closed = true;
+                for (i, rx) in lanes.iter().enumerate() {
+                    match rx.lock().unwrap().poll_recv(cx) {
+                        std::task::Poll::Ready(Some(tx)) => {
+                            return std::task::Poll::Ready(Some((i, tx)));
+                        }
+                        // This lane closed; keep checking the others.
+                        std::task::Poll::Ready(None) => {}
+                        std::task::Poll::Pending => all_closed = false,
+                    }
+                }
+                if all_closed {
+                    std::task::Poll::Ready(None)
+                } else {
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
+            match first {
+                Some((i, tx)) => self.direct_lane_buffers[i].push(tx),
+                None => return false, // all lane channels closed
+            }
+        }
+
+        // Linger once (skip only if every lane is already full — nothing to gain), then re-drain
+        // what accumulated across all lanes during the wait.
+        if linger > Duration::ZERO && !(0..k).all(|i| self.direct_lane_buffers[i].len() >= max_tx)
+        {
+            tokio::time::sleep(linger).await;
+            for (lane_index, rx) in lanes.iter().enumerate() {
+                drain_lane(rx, &mut self.direct_lane_buffers[lane_index], max_tx);
+            }
+        }
+        true
+    }
+
+    /// Bench-only: turn the drained lane buffers into up to `k` block commands (one block per
+    /// non-empty lane, numbered contiguously after `last_block`). Cheap — no channel I/O; the
+    /// expensive draining lives in `drain_direct_lanes` so it can overlap VM execution.
+    /// `last_block` is taken here and re-established by the caller via
+    /// `on_canonical_state_change_direct` for each produced block, in order.
+    pub async fn build_parallel_lane_commands(
         &mut self,
         k: usize,
     ) -> anyhow::Result<Vec<PreparedBlockCommand<'static>>> {
+        // A non-parking drain can come back empty-handed; bail before consuming `last_block`
+        // (nothing re-establishes it when no block gets built).
+        if (0..k.min(self.direct_lane_buffers.len()))
+            .all(|i| self.direct_lane_buffers[i].is_empty())
+        {
+            return Ok(Vec::new());
+        }
         let LastBlock {
-            record: previous_record,
+            block_context: previous_block_context,
+            protocol_version,
             hash: previous_block_hash,
             next_cursors,
         } = self
@@ -361,16 +453,114 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         let fee_params = self.fee_provider.produce_fee_params().await?;
         self.pool
             .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
-        let base_block_number = previous_record.block_context.block_number + 1;
+        let base_block_number = previous_block_context.block_number + 1;
         let base_timestamp = (millis_since_epoch() / 1000) as u64;
-        let protocol_version = previous_record.protocol_version.clone();
         let execution_version: ExecutionVersion = (&protocol_version)
             .try_into()
             .context("Cannot instantiate a block for unsupported execution version")?;
-        let base_ring = previous_record
-            .block_context
-            .block_hashes
-            .push(previous_block_hash);
+        let base_ring = previous_block_context.block_hashes.push(previous_block_hash);
+        let max_tx = self.config.max_transactions_in_block;
+        let FeeParams {
+            eip1559_basefee,
+            native_price,
+            pubdata_price,
+        } = fee_params;
+
+        // Emit one block per non-empty lane, numbered contiguously from the base.
+        let mut commands = Vec::with_capacity(k);
+        for lane_index in 0..k.min(self.direct_lane_buffers.len()) {
+            let queue = &mut self.direct_lane_buffers[lane_index];
+            if queue.is_empty() {
+                continue;
+            }
+            // `drain_lane` caps the buffer at `max_tx`, so the whole buffer is one block: hand
+            // it off wholesale instead of copying tx-by-tx.
+            debug_assert!(queue.len() <= max_tx);
+            let txs: Vec<ZkTransaction> = std::mem::take(queue);
+            let i = commands.len();
+            let block_context = BlockContext {
+                eip1559_basefee,
+                native_price,
+                pubdata_price,
+                block_number: base_block_number + i as u64,
+                timestamp: base_timestamp + i as u64,
+                chain_id: self.config.l2_chain_id,
+                coinbase: self.config.fee_collector_address,
+                // Same base ring for every block in the round - no inter-block chaining (bench).
+                block_hashes: base_ring,
+                gas_limit: self.config.gas_limit,
+                pubdata_limit: self.config.pubdata_limit,
+                mix_hash: Default::default(),
+                execution_version: execution_version as u32,
+                blob_fee: U256::ONE,
+            };
+            commands.push(PreparedBlockCommand {
+                block_context,
+                tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
+                // Group is <= max_tx (< the NativeCycles seal), so the stream exhausts before
+                // the VM seals: no tx is dropped. `allowed_to_finish_early` accepts exhaustion.
+                seal_policy: SealPolicy::UntilExhausted {
+                    allowed_to_finish_early: true,
+                },
+                invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
+                    mark_in_source: false,
+                },
+                metrics_label: "produce_parallel",
+                protocol_version: protocol_version.clone(),
+                expected_block_output_hash: None,
+                previous_block_timestamp: previous_block_context.timestamp,
+                force_preimages: Vec::new(),
+                expect_sl_chain_id_tx_after_upgrade: false,
+                starting_cursors: next_cursors.clone(),
+                interop_roots_per_block: self.config.interop_roots_per_block,
+                strict_subpool_cleanup: false,
+                direct_injection: true,
+            });
+        }
+        Ok(commands)
+    }
+
+    /// Bench-only: build up to `k` slot-disjoint blocks for one parallel round.
+    ///
+    /// With per-signer lanes this is drain + build (see `drain_direct_lanes` /
+    /// `build_parallel_lane_commands`, which the pipelined executor path calls separately).
+    /// Otherwise it drains a batch (`k * max_transactions_in_block`) of direct-injection
+    /// transactions from the shared channel and buckets them **by sender** into disjoint groups;
+    /// each group becomes one block (numbered `N..N+K-1`), sealed on stream exhaustion. All blocks
+    /// share the previous block's base hash ring (no inter-block hash chaining - the bench
+    /// disregards chain validity), so the contexts are built up front and the blocks can execute
+    /// in parallel against the same base state at `N-1`.
+    ///
+    /// Requires direct injection to be active. Ignores `max_blocks_to_produce` (bench).
+    pub async fn produce_parallel(
+        &mut self,
+        k: usize,
+    ) -> anyhow::Result<Vec<PreparedBlockCommand<'static>>> {
+        if self.has_parallel_lanes(k) {
+            if !self.drain_direct_lanes(k, true).await {
+                return Ok(Vec::new());
+            }
+            return self.build_parallel_lane_commands(k).await;
+        }
+
+        let LastBlock {
+            block_context: previous_block_context,
+            protocol_version,
+            hash: previous_block_hash,
+            next_cursors,
+        } = self
+            .last_block
+            .take()
+            .expect("tried to produce a block without replaying at least one record");
+        let fee_params = self.fee_provider.produce_fee_params().await?;
+        self.pool
+            .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
+        let base_block_number = previous_block_context.block_number + 1;
+        let base_timestamp = (millis_since_epoch() / 1000) as u64;
+        let execution_version: ExecutionVersion = (&protocol_version)
+            .try_into()
+            .context("Cannot instantiate a block for unsupported execution version")?;
+        let base_ring = previous_block_context.block_hashes.push(previous_block_hash);
 
         let max_tx = self.config.max_transactions_in_block;
         let FeeParams {
@@ -378,126 +568,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             native_price,
             pubdata_price,
         } = fee_params;
-        let direct_lanes = self
-            .direct_tx
-            .as_ref()
-            .expect("produce_parallel requires direct injection")
-            .lanes
-            .clone();
-        if direct_lanes.len() >= k {
-            if self.direct_lane_buffers.len() < direct_lanes.len() {
-                self.direct_lane_buffers
-                    .resize_with(direct_lanes.len(), Default::default);
-            }
-
-            let lanes: Vec<_> = direct_lanes.into_iter().take(k).collect();
-
-            // Accumulate this round's transactions before sealing. Under an RPC feed the producer
-            // outruns ingestion and would otherwise seal near-empty lanes every loop, burying the
-            // per-block Merkle tree in tiny blocks (the effective-path bottleneck). We (1) drain
-            // whatever each lane already has, (2) if the whole round is empty, park until the first tx
-            // lands on ANY lane, then (3) linger once so bursty arrivals batch into large blocks — all
-            // K lane channels keep filling concurrently during the single sleep (RPC admission shards
-            // into them in the background), so the added latency per round is one `linger`, not `k`.
-            // `linger == 0` (default / injection bench / production) never sleeps, preserving the old
-            // immediate-seal behaviour.
-            let linger = self.config.parallel_block_linger;
-
-            for (lane_index, rx) in lanes.iter().enumerate() {
-                drain_lane(rx, &mut self.direct_lane_buffers[lane_index], max_tx);
-            }
-
-            // If no lane has work yet, park until the first tx arrives on ANY lane. Polling every
-            // receiver (not just lane 0) is essential: parking on one specific lane would let a busy
-            // lane's transactions sit unbuilt behind an idle lane, and their receipts would time out.
-            if (0..k).all(|i| self.direct_lane_buffers[i].is_empty()) {
-                let first = std::future::poll_fn(|cx| {
-                    let mut all_closed = true;
-                    for (i, rx) in lanes.iter().enumerate() {
-                        match rx.lock().unwrap().poll_recv(cx) {
-                            std::task::Poll::Ready(Some(tx)) => {
-                                return std::task::Poll::Ready(Some((i, tx)));
-                            }
-                            // This lane closed; keep checking the others.
-                            std::task::Poll::Ready(None) => {}
-                            std::task::Poll::Pending => all_closed = false,
-                        }
-                    }
-                    if all_closed {
-                        std::task::Poll::Ready(None)
-                    } else {
-                        std::task::Poll::Pending
-                    }
-                })
-                .await;
-                match first {
-                    Some((i, tx)) => self.direct_lane_buffers[i].push_back(tx),
-                    None => return Ok(Vec::new()), // all lane channels closed
-                }
-            }
-
-            // Linger once (skip only if every lane is already full — nothing to gain), then re-drain
-            // what accumulated across all lanes during the wait.
-            if linger > Duration::ZERO
-                && !(0..k).all(|i| self.direct_lane_buffers[i].len() >= max_tx)
-            {
-                tokio::time::sleep(linger).await;
-                for (lane_index, rx) in lanes.iter().enumerate() {
-                    drain_lane(rx, &mut self.direct_lane_buffers[lane_index], max_tx);
-                }
-            }
-
-            // Emit one block per non-empty lane, numbered contiguously from the base.
-            let mut commands = Vec::with_capacity(k);
-            for lane_index in 0..lanes.len() {
-                let queue = &mut self.direct_lane_buffers[lane_index];
-                if queue.is_empty() {
-                    continue;
-                }
-                let take = queue.len().min(max_tx);
-                let txs: Vec<ZkTransaction> = queue.drain(..take).collect();
-                let i = commands.len();
-                let block_context = BlockContext {
-                    eip1559_basefee,
-                    native_price,
-                    pubdata_price,
-                    block_number: base_block_number + i as u64,
-                    timestamp: base_timestamp + i as u64,
-                    chain_id: self.config.l2_chain_id,
-                    coinbase: self.config.fee_collector_address,
-                    // Same base ring for every block in the round - no inter-block chaining (bench).
-                    block_hashes: base_ring,
-                    gas_limit: self.config.gas_limit,
-                    pubdata_limit: self.config.pubdata_limit,
-                    mix_hash: Default::default(),
-                    execution_version: execution_version as u32,
-                    blob_fee: U256::ONE,
-                };
-                commands.push(PreparedBlockCommand {
-                    block_context,
-                    tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
-                    // Group is <= max_tx (< the NativeCycles seal), so the stream exhausts before
-                    // the VM seals: no tx is dropped. `allowed_to_finish_early` accepts exhaustion.
-                    seal_policy: SealPolicy::UntilExhausted {
-                        allowed_to_finish_early: true,
-                    },
-                    invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
-                        mark_in_source: false,
-                    },
-                    metrics_label: "produce_parallel",
-                    protocol_version: protocol_version.clone(),
-                    expected_block_output_hash: None,
-                    previous_block_timestamp: previous_record.block_context.timestamp,
-                    force_preimages: Vec::new(),
-                    expect_sl_chain_id_tx_after_upgrade: false,
-                    starting_cursors: next_cursors.clone(),
-                    interop_roots_per_block: self.config.interop_roots_per_block,
-                    strict_subpool_cleanup: false,
-                    direct_injection: true,
-                });
-            }
-            return Ok(commands);
-        }
 
         // Refill the per-signer buffers from the direct channel. Carry-over from the previous round is
         // kept, so an uneven feed never forces a block past `max_tx` (which would seal early on
@@ -590,7 +660,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 metrics_label: "produce_parallel",
                 protocol_version: protocol_version.clone(),
                 expected_block_output_hash: None,
-                previous_block_timestamp: previous_record.block_context.timestamp,
+                previous_block_timestamp: previous_block_context.timestamp,
                 force_preimages: Vec::new(),
                 expect_sl_chain_id_tx_after_upgrade: false,
                 starting_cursors: next_cursors.clone(),
@@ -615,7 +685,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
         if record.block_context.block_number == 0 {
             self.last_block = Some(LastBlock {
-                record: *record,
+                block_context: record.block_context,
+                protocol_version: record.protocol_version.clone(),
                 hash: genesis_header().hash(),
                 next_cursors: Default::default(),
             });
@@ -623,28 +694,28 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         }
 
         if let Some(LastBlock {
-            record: last_record,
+            block_context: last_block_context,
             ..
         }) = &self.last_block
         {
             anyhow::ensure!(
-                last_record.block_context.block_number + 1 == record.block_context.block_number,
+                last_block_context.block_number + 1 == record.block_context.block_number,
                 "blocks received our of order: last block was {}, but received {}",
-                last_record.block_context.block_number,
+                last_block_context.block_number,
                 record.block_context.block_number
             );
             anyhow::ensure!(
-                last_record.block_context.timestamp == record.previous_block_timestamp,
+                last_block_context.timestamp == record.previous_block_timestamp,
                 "inconsistent previous block timestamp: last block was {}, but received {}",
-                last_record.block_context.timestamp,
+                last_block_context.timestamp,
                 record.previous_block_timestamp
             );
             anyhow::ensure!(
-                last_record.block_context.block_hashes.0[1..]
+                last_block_context.block_hashes.0[1..]
                     == record.block_context.block_hashes.0[..255],
                 "inconsistent previous block hashes: last block's (#{}) was {:?}, but received new block's {:?}",
-                last_record.block_context.block_number,
-                last_record.block_context.block_hashes,
+                last_block_context.block_number,
+                last_block_context.block_hashes,
                 record.block_context.block_hashes
             );
         }
@@ -695,13 +766,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 // We can't just use `rebuild`'s fields as the last block might have changed if we
                 // are rebuilding a range of blocks
                 (
-                    last_block.record.block_context.timestamp,
+                    last_block.block_context.timestamp,
                     last_block.next_cursors.clone(),
-                    last_block
-                        .record
-                        .block_context
-                        .block_hashes
-                        .push(last_block.hash),
+                    last_block.block_context.block_hashes.push(last_block.hash),
                 )
             } else {
                 (
@@ -816,6 +883,30 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         self.pool.purge_transactions(tx_hashes);
     }
 
+    /// Bench-only fast path for direct-injection blocks. These transactions bypass the mempool via
+    /// the direct lanes and are always plain L2 txs, so the per-block subpool cleanup (which
+    /// iterates every tx and account diff) is dead work and every cursor passes through unchanged.
+    pub fn on_canonical_state_change_direct(
+        &mut self,
+        block_output: &BlockOutput,
+        replay_record: &ReplayRecord,
+    ) {
+        debug_assert!(
+            replay_record
+                .transactions
+                .iter()
+                .all(|tx| matches!(tx.envelope(), ZkEnvelope::L2(_))),
+            "direct-injection block carries non-L2 txs; the pool-skip fast path is invalid"
+        );
+        self.fee_provider.on_canonical_state_change(replay_record);
+        self.last_block = Some(LastBlock {
+            block_context: replay_record.block_context,
+            protocol_version: replay_record.protocol_version.clone(),
+            hash: block_output.header.hash(),
+            next_cursors: replay_record.starting_cursors.clone(),
+        })
+    }
+
     pub async fn on_canonical_state_change(
         &mut self,
         block_output: &BlockOutput,
@@ -866,7 +957,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
         self.fee_provider.on_canonical_state_change(replay_record);
         self.last_block = Some(LastBlock {
-            record: replay_record.clone(),
+            block_context: replay_record.block_context,
+            protocol_version: replay_record.protocol_version.clone(),
             hash: block_output.header.hash(),
             next_cursors,
         })

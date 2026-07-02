@@ -184,7 +184,10 @@ pub async fn main() {
     let prometheus_port = prometheus_config.port;
 
     match config.general_config.state_backend {
-        StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config, None, None).await,
+        // `InMemory` shares the FullDiffs type; `StateInitializer` swaps the backend by config.
+        StateBackendConfig::FullDiffs | StateBackendConfig::InMemory => {
+            run::<FullDiffsState>(&runtime, config, None, None).await
+        }
         StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config, None, None).await,
     };
 

@@ -20,6 +20,7 @@ zk_ee.workspace = true
 
 alloy = { workspace = true, default-features = false }
 anyhow.workspace = true
+dashmap.workspace = true
 ruint.workspace = true
 tracing.workspace = true
 vise.workspace = true

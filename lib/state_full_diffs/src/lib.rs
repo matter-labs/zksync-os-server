@@ -25,8 +25,23 @@ impl FullDiffsState {
     pub async fn new(base_path: PathBuf, genesis: &Genesis) -> anyhow::Result<Self> {
         let storage = FullDiffsStorage::new(&base_path.join(STATE_STORAGE_DB_NAME))?;
         let preimages = FullDiffsPreimages::new(&base_path.join(PREIMAGES_STORAGE_DB_NAME))?;
+        Self::init_genesis(Self { storage, preimages }, genesis).await
+    }
 
-        let this = Self { storage, preimages };
+    /// Bench-only: same semantics as [`Self::new`] but backed by in-memory maps — no RocksDB on
+    /// the storage-read path and no persistence (every start replays from genesis).
+    pub async fn new_in_memory(genesis: &Genesis) -> anyhow::Result<Self> {
+        Self::init_genesis(
+            Self {
+                storage: FullDiffsStorage::new_in_memory(),
+                preimages: FullDiffsPreimages::new_in_memory(),
+            },
+            genesis,
+        )
+        .await
+    }
+
+    async fn init_genesis(this: Self, genesis: &Genesis) -> anyhow::Result<Self> {
         if this.storage.latest_block() == 0 {
             let storage_logs = genesis
                 .state()

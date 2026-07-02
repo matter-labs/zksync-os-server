@@ -39,6 +39,18 @@ impl OwnedOverrides {
         self.storage.extend(changes.storage);
         self.preimages.extend(changes.preimages);
     }
+
+    pub fn storage_len(&self) -> usize {
+        self.storage.len()
+    }
+
+    pub fn storage_iter(&self) -> impl Iterator<Item = (&B256, &B256)> {
+        self.storage.iter()
+    }
+
+    pub fn preimages_iter(&self) -> impl Iterator<Item = (&B256, &Vec<u8>)> {
+        self.preimages.iter()
+    }
 }
 
 impl OverrideProvider for OwnedOverrides {

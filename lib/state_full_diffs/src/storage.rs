@@ -1,5 +1,7 @@
 use alloy::primitives::B256;
+use dashmap::DashMap;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,9 +33,45 @@ impl StorageCF {
     }
 }
 
+/// Cheap hasher for keys that are already uniformly distributed (flat storage keys and preimage
+/// hashes are outputs of cryptographic hashes): fold the raw bytes into a u64 instead of SipHash.
+/// Not DoS-resistant — only for maps keyed by internally-derived hashes.
+#[derive(Default)]
+pub(crate) struct FoldHasher(u64);
+
+impl Hasher for FoldHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut buf = [0u8; 8];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            self.0 = self.0.rotate_left(29) ^ u64::from_le_bytes(buf);
+        }
+    }
+}
+
+pub(crate) type BuildFoldHasher = BuildHasherDefault<FoldHasher>;
+
+/// Per-key write history, ascending by block number. Reads scan from the back, so the common case
+/// (reading a recently-written slot) touches one or two entries.
+type VersionedValue = Vec<(u64, B256)>;
+
+#[derive(Debug, Clone)]
+enum Backend {
+    Rocks(RocksDB<StorageCF>),
+    /// Bench-only (`state_backend = "InMemory"`): the same versioned layout as the RocksDB
+    /// `key || block_be` encoding, kept in a concurrent map. Reads filter versions by
+    /// `block <= view_block`, so a concurrently-applied newer block never bleeds into an older
+    /// view — the property the RocksDB reverse seek provides. No persistence.
+    InMemory(Arc<DashMap<B256, VersionedValue, BuildFoldHasher>>),
+}
+
 #[derive(Debug, Clone)]
 pub struct FullDiffsStorage {
-    rocks: RocksDB<StorageCF>,
+    backend: Backend,
     latest_block: Arc<AtomicU64>,
 }
 
@@ -53,9 +91,17 @@ impl FullDiffsStorage {
             .unwrap_or(0);
         tracing::info!(latest_block, "initialized full diffs storage");
         Ok(Self {
-            rocks,
+            backend: Backend::Rocks(rocks),
             latest_block: Arc::new(AtomicU64::new(latest_block)),
         })
+    }
+
+    pub fn new_in_memory() -> Self {
+        tracing::info!("initialized IN-MEMORY full diffs storage (bench-only, no persistence)");
+        Self {
+            backend: Backend::InMemory(Arc::new(DashMap::default())),
+            latest_block: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     pub fn latest_block(&self) -> u64 {
@@ -75,15 +121,25 @@ impl FullDiffsStorage {
                 "Persisting block {block_number}. Latest block in storage: {latest_block} \
                 Rolling back state for block range {block_number}..={latest_block}",
             );
-            let mut batch = self.rocks.new_write_batch();
-            // Iterate through all keys and delete those with block_number >= the given block_number
-            for (k, _v) in self.rocks.prefix_iterator_cf(StorageCF::Data, &[]) {
-                let key_block_number = u64::from_be_bytes(k[32..40].try_into()?);
-                if key_block_number >= block_number {
-                    batch.delete_cf(StorageCF::Data, &k);
+            match &self.backend {
+                Backend::Rocks(rocks) => {
+                    let mut batch = rocks.new_write_batch();
+                    // Iterate through all keys and delete those with block_number >= the given block_number
+                    for (k, _v) in rocks.prefix_iterator_cf(StorageCF::Data, &[]) {
+                        let key_block_number = u64::from_be_bytes(k[32..40].try_into()?);
+                        if key_block_number >= block_number {
+                            batch.delete_cf(StorageCF::Data, &k);
+                        }
+                    }
+                    rocks.write(batch)?;
+                }
+                Backend::InMemory(map) => {
+                    map.alter_all(|_, mut versions| {
+                        versions.retain(|(b, _)| *b < block_number);
+                        versions
+                    });
                 }
             }
-            self.rocks.write(batch)?;
             latest_block = block_number.saturating_sub(1);
         }
         // We cannot do validation for genesis block because there is currently no way to distinguish between
@@ -113,17 +169,26 @@ impl FullDiffsStorage {
 
         let per_key: HashMap<B256, B256> = writes.into_iter().map(|w| (w.key, w.value)).collect();
 
-        let mut batch = self.rocks.new_write_batch();
-        for (k, v) in per_key.into_iter() {
-            let key = Self::key_for_storage_write(&block_number, k);
-            batch.put_cf(StorageCF::Data, &key, v.as_slice());
+        match &self.backend {
+            Backend::Rocks(rocks) => {
+                let mut batch = rocks.new_write_batch();
+                for (k, v) in per_key.into_iter() {
+                    let key = Self::key_for_storage_write(&block_number, k);
+                    batch.put_cf(StorageCF::Data, &key, v.as_slice());
+                }
+                batch.put_cf(
+                    StorageCF::Meta,
+                    StorageCF::latest_block_key(),
+                    block_number.to_be_bytes().as_ref(),
+                );
+                rocks.write(batch)?;
+            }
+            Backend::InMemory(map) => {
+                for (k, v) in per_key.into_iter() {
+                    map.entry(k).or_default().push((block_number, v));
+                }
+            }
         }
-        batch.put_cf(
-            StorageCF::Meta,
-            StorageCF::latest_block_key(),
-            block_number.to_be_bytes().as_ref(),
-        );
-        self.rocks.write(batch)?;
         self.latest_block.store(block_number, Ordering::Relaxed);
         Ok(())
     }
@@ -132,28 +197,38 @@ impl FullDiffsStorage {
         if block_number > self.latest_block() {
             return None;
         }
-        let end = Self::key_for_storage_write(&block_number, key);
+        match &self.backend {
+            Backend::Rocks(rocks) => {
+                let end = Self::key_for_storage_write(&block_number, key);
 
-        let mut iter = self
-            .rocks
-            .to_iterator_cf(StorageCF::Data, ..=end.as_slice());
+                let mut iter = rocks.to_iterator_cf(StorageCF::Data, ..=end.as_slice());
 
-        if let Some((k, v)) = iter.next() {
-            assert_eq!(
-                k.len(),
-                40,
-                "FullDiffsStorage: unexpected key length in Data CF; expected 40 bytes"
-            );
-            // If the very first item has a different prefix,
-            // it means there are no writes for this key <= block and we
-            // can return None immediately.
-            if &k[..32] != key.as_slice() {
-                return None;
+                if let Some((k, v)) = iter.next() {
+                    assert_eq!(
+                        k.len(),
+                        40,
+                        "FullDiffsStorage: unexpected key length in Data CF; expected 40 bytes"
+                    );
+                    // If the very first item has a different prefix,
+                    // it means there are no writes for this key <= block and we
+                    // can return None immediately.
+                    if &k[..32] != key.as_slice() {
+                        return None;
+                    }
+                    let arr: [u8; 32] = v.as_ref().try_into().ok()?;
+                    return Some(B256::from(arr));
+                }
+                None
             }
-            let arr: [u8; 32] = v.as_ref().try_into().ok()?;
-            return Some(B256::from(arr));
+            Backend::InMemory(map) => {
+                let versions = map.get(&key)?;
+                versions
+                    .iter()
+                    .rev()
+                    .find(|(b, _)| *b <= block_number)
+                    .map(|(_, v)| *v)
+            }
         }
-        None
     }
 
     fn key_for_storage_write(block_number: &u64, k: B256) -> Vec<u8> {

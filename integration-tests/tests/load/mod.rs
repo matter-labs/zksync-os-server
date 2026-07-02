@@ -20,7 +20,7 @@ use zksync_os_integration_tests::contracts::TestERC20;
 use zksync_os_integration_tests::{NEXT_TO_L1, TestEnvironment, test_multisetup};
 use zksync_os_interface::traits::EncodedTx;
 use zksync_os_sequencer::execution::vm_wrapper::VmWrapper;
-use zksync_os_server::config::FeeConfig;
+use zksync_os_server::config::{FeeConfig, StateBackendConfig};
 use zksync_os_storage_api::{BlockContext, BlockHashes, ReadStateHistory};
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::{L2Envelope, ZkEnvelope, ZkTransaction, ZksyncOsEncode};
@@ -1055,6 +1055,9 @@ async fn parallel_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()
     config.sequencer_config.max_transactions_in_block = max_tx;
     config.sequencer_config.block_gas_limit = 1_000_000_000_000;
     config.sequencer_config.parallel_blocks = k;
+    // In-memory base state: the RocksDB read path (an iterator seek per storage read) collapses
+    // under K-way concurrent VM execution and dominates exec time.
+    config.general_config.state_backend = StateBackendConfig::InMemory;
     let tester = env.launch(config).await?;
 
     let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));

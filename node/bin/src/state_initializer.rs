@@ -1,4 +1,4 @@
-use crate::config::GeneralConfig;
+use crate::config::{GeneralConfig, StateBackendConfig};
 use async_trait::async_trait;
 use std::future;
 use zksync_os_genesis::Genesis;
@@ -34,8 +34,16 @@ impl StateInitializer for StateHandle {
 #[async_trait]
 impl StateInitializer for FullDiffsState {
     async fn new(config: &GeneralConfig, genesis: &Genesis) -> Self {
-        FullDiffsState::new(config.rocks_db_path.clone(), genesis)
-            .await
-            .expect("Failed to initialize full diffs state")
+        // `InMemory` (bench-only) shares the FullDiffs type; the backend swap happens here so no
+        // caller has to change its `run::<FullDiffsState>` instantiation.
+        if config.state_backend == StateBackendConfig::InMemory {
+            FullDiffsState::new_in_memory(genesis)
+                .await
+                .expect("Failed to initialize in-memory full diffs state")
+        } else {
+            FullDiffsState::new(config.rocks_db_path.clone(), genesis)
+                .await
+                .expect("Failed to initialize full diffs state")
+        }
     }
 }
