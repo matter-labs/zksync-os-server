@@ -287,8 +287,13 @@ pub async fn batch_tree_proof(
             let batch_root = B256::from_slice(&log.inner.data.data[0..32]);
             let batch_number = log.inner.topics()[2];
             let l1_timestamp = B256::from_slice(&log.inner.data.data[32..64]);
-            let preimage =
-                [batch_leaf_padding.0, batch_root.0, batch_number.0, l1_timestamp.0].concat();
+            let preimage = [
+                batch_leaf_padding.0,
+                batch_root.0,
+                batch_number.0,
+                l1_timestamp.0,
+            ]
+            .concat();
             keccak256(preimage)
         })
         .collect();
