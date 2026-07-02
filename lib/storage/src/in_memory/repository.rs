@@ -7,6 +7,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
+use tokio::time::Instant;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::types::ExecutionResult;
@@ -110,12 +111,14 @@ impl RepositoryInMemory {
         transactions: Vec<ZkTransaction>,
     ) -> (Arc<RepositoryBlock>, Vec<Arc<StoredTxData>>) {
         let total_latency_observer = REPOSITORIES_METRICS.insert_block[&"total"].start();
+        let t_tx_hashes = Instant::now();
         let block_number = block_output.header.number;
         let tx_count = transactions.len();
         let tx_hashes = transactions
             .iter()
             .map(|tx| TxHash::from(tx.hash().0))
             .collect();
+        let tx_hashes_elapsed = t_tx_hashes.elapsed();
 
         // Drop rejected transactions from the block output
         // block_output.tx_results.retain(|result| result.is_ok());
@@ -128,37 +131,37 @@ impl RepositoryInMemory {
         // pass so each tx's receipt+meta can be built in parallel: `transaction_to_api_data` is pure
         // given these offsets. `tx_results` was retained to successful results above, so it aligns
         // 1:1 (by index) with `transactions`.
-        let mut log_prefix = Vec::with_capacity(transactions.len());
-        let mut gas_prefix = Vec::with_capacity(transactions.len());
-        let mut log_index = 0u64;
-        let mut cumulative_gas_used = 0u64;
-        for tx_output in sealed_block_output.tx_results.iter() {
-            if !tx_output.is_ok() {
-                continue;
-            }
-            log_prefix.push(log_index);
-            gas_prefix.push(cumulative_gas_used);
-            let tx_output = tx_output.as_ref().ok().unwrap();
-            log_index += tx_output.logs.len() as u64;
-            cumulative_gas_used += tx_output.gas_used;
-        }
+        // let mut log_prefix = Vec::with_capacity(transactions.len());
+        // let mut gas_prefix = Vec::with_capacity(transactions.len());
+        // let mut log_index = 0u64;
+        // let mut cumulative_gas_used = 0u64;
+        // for tx_output in sealed_block_output.tx_results.iter() {
+        //     if !tx_output.is_ok() {
+        //         continue;
+        //     }
+        //     log_prefix.push(log_index);
+        //     gas_prefix.push(cumulative_gas_used);
+        //     let tx_output = tx_output.as_ref().ok().unwrap();
+        //     log_index += tx_output.logs.len() as u64;
+        //     cumulative_gas_used += tx_output.gas_used;
+        // }
 
+        let t_stored_vec = Instant::now();
         // Build receipts/meta in parallel (this is the bulk of `populate`'s cost).
-        let stored_vec: Vec<Arc<StoredTxData>> = transactions
-            .into_par_iter()
-            .enumerate()
-            .map(|(tx_index, tx)| {
-                let stored_tx = Arc::new(transaction_to_api_data(
-                    &sealed_block_output,
-                    tx_index,
-                    log_prefix[tx_index],
-                    gas_prefix[tx_index],
-                    tx,
-                ));
-                stored_tx
-            })
-            .collect();
+        let mut stored_vec: Vec<Arc<StoredTxData>> = Vec::with_capacity(transactions.len());
+        for (tx_index, tx) in transactions.into_iter().enumerate() {
+            let stored_tx = Arc::new(transaction_to_api_data(
+                &sealed_block_output,
+                tx_index,
+                0,
+                0,
+                tx,
+            ));
+            stored_vec.push(stored_tx);
+        }
+        let stored_vec_elapsed = t_stored_vec.elapsed();
 
+        let t_block = Instant::now();
         // Fold the per-tx blooms and index by hash (cheap relative to receipt construction). Bloom
         // accrual is commutative, so the parallel collection order is irrelevant.
         let block_bloom = Bloom::default();
@@ -184,6 +187,7 @@ impl RepositoryInMemory {
             },
             hash,
         ));
+        let block_elapsed = t_block.elapsed();
 
         // Add data to repositories.
         let transaction_receipts_latency_observer =
@@ -233,6 +237,9 @@ impl RepositoryInMemory {
             ?total_latency,
             ?transaction_receipts_latency,
             ?block_receipt_latency,
+            ?tx_hashes_elapsed,
+            ?stored_vec_elapsed,
+            ?block_elapsed,
             "stored block in memory",
         );
 
