@@ -85,7 +85,7 @@ pub trait ReadRepository: LogIndex {
 pub trait WriteRepository: ReadRepository {
     fn populate(
         &self,
-        block_output: BlockOutput,
+        block_output: &BlockOutput,
         transactions: Vec<ZkTransaction>,
         failed_transactions: Vec<(TxHash, InvalidTransaction)>,
     ) -> impl Future<Output = RepositoryResult<()>> + Send;

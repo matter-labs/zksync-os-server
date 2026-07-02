@@ -68,11 +68,10 @@ where
         // (block_number, output, record, populate join handle), oldest at the front.
         let mut in_flight: std::collections::VecDeque<(
             u64,
-            BlockOutputWithReads,
             ReplayRecord,
             Duration,
             Duration,
-            tokio::task::JoinHandle<RepositoryResult<()>>,
+            tokio::task::JoinHandle<RepositoryResult<BlockOutputWithReads>>,
         )> = std::collections::VecDeque::with_capacity(window);
         loop {
             state_reporter.enter_state(BlockApplierState::Idle);
@@ -84,8 +83,8 @@ where
             }) = input.recv_and_record_picked(&state_reporter).await
             else {
                 // Channel closed: drain the in-flight window in order, then stop.
-                while let Some((bn, out, rec, _, _, handle)) = in_flight.pop_front() {
-                    handle.await.context("populate task panicked")??;
+                while let Some((bn, rec, _, _, handle)) = in_flight.pop_front() {
+                    let out = handle.await.context("populate task panicked")??;
                     self.applied_block_number_sender.send_replace(Some(bn));
                     output.send_and_record(
                         AppliedBlock {
@@ -143,17 +142,20 @@ where
             // await it yet, so it overlaps with the next blocks' ingestion.
             let t_populate_spawn = Instant::now();
             let repositories = self.repositories.clone();
-            let block_output_owned = block_output.clone();
             let transactions = executed_replay.transactions.clone();
             let handle = tokio::spawn(async move {
                 repositories
-                    .populate(block_output_owned, transactions, failed_transactions)
-                    .await
+                    .populate(
+                        block_output_with_reads.as_ref(),
+                        transactions,
+                        failed_transactions,
+                    )
+                    .await?;
+                Ok(block_output_with_reads)
             });
             let populate_spawn_elapsed = t_populate_spawn.elapsed();
             in_flight.push_back((
                 block_number,
-                block_output_with_reads,
                 executed_replay,
                 add_state_elapsed,
                 populate_spawn_elapsed,
@@ -163,10 +165,10 @@ where
             // Once `window` populates are in flight, await + forward the oldest (keeps order).
             if in_flight.len() >= window {
                 state_reporter.enter_state(BlockApplierState::PopulatingRepos);
-                let (bn, out, rec, add_state_elapsed, populate_spawn_elapsed, handle) =
+                let (bn, rec, add_state_elapsed, populate_spawn_elapsed, handle) =
                     in_flight.pop_front().unwrap();
                 let t_populate_wait = Instant::now();
-                handle.await.context("populate task panicked")??;
+                let out = handle.await.context("populate task panicked")??;
                 let populate_wait_elapsed = t_populate_wait.elapsed();
                 self.applied_block_number_sender.send_replace(Some(bn));
                 let t_output_send = Instant::now();

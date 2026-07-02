@@ -106,9 +106,9 @@ impl RepositoryInMemory {
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
     pub fn populate_in_memory(
         &self,
-        mut block_output: BlockOutput,
+        mut block_output: &BlockOutput,
         transactions: Vec<ZkTransaction>,
-    ) -> (Arc<RepositoryBlock>, HashMap<TxHash, Arc<StoredTxData>>) {
+    ) -> (Arc<RepositoryBlock>, Vec<Arc<StoredTxData>>) {
         let total_latency_observer = REPOSITORIES_METRICS.insert_block[&"total"].start();
         let block_number = block_output.header.number;
         let tx_count = transactions.len();
@@ -118,7 +118,7 @@ impl RepositoryInMemory {
             .collect();
 
         // Drop rejected transactions from the block output
-        block_output.tx_results.retain(|result| result.is_ok());
+        // block_output.tx_results.retain(|result| result.is_ok());
 
         // Add transaction receipts to the transaction receipt repository.
         let hash = BlockHash::from(block_output.header.hash());
@@ -133,6 +133,9 @@ impl RepositoryInMemory {
         let mut log_index = 0u64;
         let mut cumulative_gas_used = 0u64;
         for tx_output in sealed_block_output.tx_results.iter() {
+            if !tx_output.is_ok() {
+                continue;
+            }
             log_prefix.push(log_index);
             gas_prefix.push(cumulative_gas_used);
             let tx_output = tx_output.as_ref().ok().unwrap();
@@ -141,11 +144,10 @@ impl RepositoryInMemory {
         }
 
         // Build receipts/meta in parallel (this is the bulk of `populate`'s cost).
-        let stored_vec: Vec<(TxHash, Arc<StoredTxData>)> = transactions
+        let stored_vec: Vec<Arc<StoredTxData>> = transactions
             .into_par_iter()
             .enumerate()
             .map(|(tx_index, tx)| {
-                let tx_hash = *tx.hash();
                 let stored_tx = Arc::new(transaction_to_api_data(
                     &sealed_block_output,
                     tx_index,
@@ -153,47 +155,23 @@ impl RepositoryInMemory {
                     gas_prefix[tx_index],
                     tx,
                 ));
-                (tx_hash, stored_tx)
+                stored_tx
             })
             .collect();
 
         // Fold the per-tx blooms and index by hash (cheap relative to receipt construction). Bloom
         // accrual is commutative, so the parallel collection order is irrelevant.
-        let mut block_bloom = Bloom::default();
-        let mut stored_txs = HashMap::with_capacity(stored_vec.len());
-        for (tx_hash, stored_tx) in stored_vec {
-            block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
-            stored_txs.insert(tx_hash, stored_tx);
-        }
+        let block_bloom = Bloom::default();
+        // let mut stored_txs = HashMap::with_capacity(stored_vec.len());
+        // for (tx_hash, stored_tx) in stored_vec {
+        //     // block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
+        //     stored_txs.insert(tx_hash, stored_tx);
+        // }
         let (block_output, hash) = sealed_block_output.into_parts();
         let header = {
-            let mut legacy_header = block_output.header.unseal();
-            legacy_header.logs_bloom = block_bloom;
-            alloy::consensus::Header {
-                parent_hash: legacy_header.parent_hash,
-                ommers_hash: legacy_header.ommers_hash,
-                beneficiary: legacy_header.beneficiary,
-                state_root: legacy_header.state_root,
-                transactions_root: legacy_header.transactions_root,
-                receipts_root: legacy_header.receipts_root,
-                logs_bloom: legacy_header.logs_bloom,
-                difficulty: legacy_header.difficulty,
-                number: legacy_header.number,
-                gas_limit: legacy_header.gas_limit,
-                gas_used: legacy_header.gas_used,
-                timestamp: legacy_header.timestamp,
-                extra_data: legacy_header.extra_data,
-                mix_hash: legacy_header.mix_hash,
-                nonce: legacy_header.nonce,
-                base_fee_per_gas: legacy_header.base_fee_per_gas,
-                withdrawals_root: legacy_header.withdrawals_root,
-                blob_gas_used: legacy_header.blob_gas_used,
-                excess_blob_gas: legacy_header.excess_blob_gas,
-                parent_beacon_block_root: legacy_header.parent_beacon_block_root,
-                requests_hash: legacy_header.requests_hash,
-                block_access_list_hash: None,
-                slot_number: None,
-            }
+            let mut h = block_output.header.clone().unseal();
+            h.logs_bloom = block_bloom;
+            h
         };
         let block = Arc::new(Sealed::new_unchecked(
             alloy::consensus::Block {
@@ -211,7 +189,7 @@ impl RepositoryInMemory {
         let transaction_receipts_latency_observer =
             REPOSITORIES_METRICS.insert_block[&"transaction_receipts"].start();
         self.transaction_receipt_repository
-            .insert(stored_txs.iter());
+            .insert(stored_vec.iter());
         let transaction_receipts_latency = transaction_receipts_latency_observer.observe();
 
         let block_receipt_latency_observer =
@@ -258,7 +236,7 @@ impl RepositoryInMemory {
             "stored block in memory",
         );
 
-        (block, stored_txs)
+        (block, stored_vec)
     }
 
     pub fn get_block_and_transactions_by_number(
@@ -339,7 +317,7 @@ impl ReadRepository for RepositoryInMemory {
 impl WriteRepository for RepositoryInMemory {
     async fn populate(
         &self,
-        block_output: BlockOutput,
+        block_output: &BlockOutput,
         transactions: Vec<ZkTransaction>,
         failed_transactions: Vec<(TxHash, InvalidTransaction)>,
     ) -> RepositoryResult<()> {
@@ -442,15 +420,13 @@ impl TransactionReceiptRepository {
 
     /// Inserts data for multiple txs. If a data for the same hash
     /// already exists, it will be overwritten.
-    pub fn insert<'a>(
-        &'a self,
-        txs: impl IntoIterator<Item = (&'a TxHash, &'a Arc<StoredTxData>)>,
-    ) {
-        for (tx_hash, data) in txs {
-            let sender = data.tx.signer();
-            let nonce = data.tx.nonce();
-            self.tx_data.insert(*tx_hash, data.clone());
-            self.sender_nonce_index.insert((sender, nonce), *tx_hash);
+    pub fn insert<'a>(&'a self, txs: impl IntoIterator<Item = &'a Arc<StoredTxData>>) {
+        for data in txs {
+            // let sender = data.tx.signer();
+            // let nonce = data.tx.nonce();
+            self.tx_data.insert(*data.tx.hash(), data.clone());
+            // self.sender_nonce_index
+            //     .insert((sender, nonce), *data.tx.hash());
         }
     }
 
@@ -522,7 +498,7 @@ impl Default for TransactionReceiptRepository {
 }
 
 fn transaction_to_api_data(
-    block_output: &Sealed<BlockOutput>,
+    block_output: &Sealed<&BlockOutput>,
     index: usize,
     number_of_logs_before_this_tx: u64,
     cumulative_gas_used_before_this_tx: u64,
@@ -530,25 +506,25 @@ fn transaction_to_api_data(
 ) -> StoredTxData {
     let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
 
-    let l2_to_l1_logs = tx_output
-        .l2_to_l1_logs
-        .iter()
-        .map(|l2_to_l1_log| L2ToL1Log {
-            l2_shard_id: l2_to_l1_log.log.l2_shard_id,
-            is_service: l2_to_l1_log.log.is_service,
-            tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
-            sender: l2_to_l1_log.log.sender,
-            key: l2_to_l1_log.log.key,
-            value: l2_to_l1_log.log.value,
-        })
-        .collect();
+    // let l2_to_l1_logs = tx_output
+    //     .l2_to_l1_logs
+    //     .iter()
+    //     .map(|l2_to_l1_log| L2ToL1Log {
+    //         l2_shard_id: l2_to_l1_log.log.l2_shard_id,
+    //         is_service: l2_to_l1_log.log.is_service,
+    //         tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
+    //         sender: l2_to_l1_log.log.sender,
+    //         key: l2_to_l1_log.log.key,
+    //         value: l2_to_l1_log.log.value,
+    //     })
+    //     .collect();
     let receipt = ZkReceiptEnvelope::from_typed(
         tx.tx_type(),
         ZkReceipt {
             status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
             cumulative_gas_used: cumulative_gas_used_before_this_tx + tx_output.gas_used,
-            logs: tx_output.logs.clone(),
-            l2_to_l1_logs,
+            logs: vec![],
+            l2_to_l1_logs: vec![],
         },
     );
     let meta = TxMeta {
