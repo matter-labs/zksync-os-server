@@ -145,6 +145,8 @@ pub async fn execute_block_in_vm<V: ViewState>(
         // (`Sleep::reset`) hammers the tokio timer lock at the aggregate tx rate and convoys
         // the feed loop on high-CCD-count machines.
         let mut last_tx_at = tokio::time::Instant::now();
+        // Set when the first tx arrives; bounds the block's age when `direct_block_age_cap` is on.
+        let mut first_tx_at = last_tx_at;
         // Per-tx metric updates are batched into these locals and flushed once per block after
         // the loop: K concurrent feeders doing ~6 atomic RMWs per tx on the same shared metric
         // cachelines collapse on many-CCD machines (~150µs/tx of cacheline ping-pong observed on
@@ -171,18 +173,23 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         if deadline.is_some()
                     => {
                         let dur = deadline_dur.expect("armed deadline implies a duration");
-                        let idle_deadline = last_tx_at + dur;
-                        if tokio::time::Instant::now() >= idle_deadline {
+                        // Seal at whichever comes first: an idle gap of `dur` since the last tx,
+                        // or (when capped) the block reaching `direct_block_age_cap` of age.
+                        let mut seal_at = last_tx_at + dur;
+                        if let Some(cap) = command.direct_block_age_cap {
+                            seal_at = seal_at.min(first_tx_at + cap);
+                        }
+                        if tokio::time::Instant::now() >= seal_at {
                             pending_seal = Some(SealReason::Timeout);
                             None
                         } else {
-                            // Txs kept flowing since the sleep was armed: push it out to
-                            // `last_tx_at + dur` and keep feeding.
+                            // Txs kept flowing since the sleep was armed: push it out and keep
+                            // feeding.
                             deadline
                                 .as_mut()
                                 .expect("deadline branch requires an armed sleep")
                                 .as_mut()
-                                .reset(idle_deadline);
+                                .reset(seal_at);
                             continue;
                         }
                     }
@@ -202,7 +209,11 @@ pub async fn execute_block_in_vm<V: ViewState>(
                 if deadline.is_none()
                     && let Some(dur) = deadline_dur
                 {
-                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
+                    first_tx_at = last_tx_at;
+                    let first_deadline = command
+                        .direct_block_age_cap
+                        .map_or(dur, |cap| dur.min(cap));
+                    deadline = Some(Box::pin(tokio::time::sleep(first_deadline)));
                 }
                 all_processed_txs.push(tx.clone());
                 let submit_start = Instant::now();

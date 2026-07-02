@@ -209,6 +209,12 @@ pub struct PreparedBlockCommand<'a> {
     /// the one-at-a-time hand-off, so the VM worker isn't starved. Only ever `true` for
     /// direct-injection load tests (no upgrade/SL-chain-id/system txs, huge gas/pubdata limits).
     pub direct_injection: bool,
+    /// Bench-only, direct-injection loop: absolute cap on a block's age (measured from its first
+    /// tx). The `Decide` duration is an IDLE linger there — under a steady feed whose inter-arrival
+    /// stays below it, a block would otherwise grow until the tx-count limit, delaying receipts
+    /// unboundedly (an RPC feed that throttles on receipts then degrades into stop-and-go
+    /// mega-batches). The cap restores a bounded seal cadence; `None` = idle linger only.
+    pub direct_block_age_cap: Option<Duration>,
 }
 
 /// Behaviour when VM returns an InvalidTransaction error.

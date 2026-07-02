@@ -325,6 +325,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             // one-off SetSLChainId system tx must seal specially, which the pipelined loop doesn't
             // handle, so fall back to the serial loop there.
             direct_injection: use_direct && !expect_sl_chain_id_tx_after_upgrade,
+            // With cap == the `Decide` duration, the direct loop seals at `first_tx + block_time`
+            // exactly like the serial loop's absolute deadline.
+            direct_block_age_cap: Some(self.config.block_time),
         }))
     }
 
@@ -492,6 +495,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 interop_roots_per_block: self.config.interop_roots_per_block,
                 strict_subpool_cleanup: false,
                 direct_injection: true,
+                // Bound each block's age so a steady sub-linger feed (e.g. RPC-routed lanes)
+                // still gets a continuous seal cadence and receipts don't back up.
+                direct_block_age_cap: Some(self.config.block_time),
             });
         }
         Ok(commands)
@@ -640,6 +646,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 interop_roots_per_block: self.config.interop_roots_per_block,
                 strict_subpool_cleanup: false,
                 direct_injection: true,
+                // Finite pre-drained group: seals on stream exhaustion, no age cap needed.
+                direct_block_age_cap: None,
             });
         }
         // Drop now-empty buffers so the map doesn't accumulate idle signers.
@@ -722,6 +730,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             interop_roots_per_block: self.config.interop_roots_per_block,
             strict_subpool_cleanup: false,
             direct_injection: false,
+            direct_block_age_cap: None,
         }))
     }
 
@@ -849,6 +858,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             interop_roots_per_block: self.config.interop_roots_per_block,
             strict_subpool_cleanup: false,
             direct_injection: false,
+            direct_block_age_cap: None,
         }))
     }
 
