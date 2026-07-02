@@ -84,7 +84,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
         SealPolicy::Decide(d, _) => Some(d),
         SealPolicy::UntilExhausted { .. } => None,
     };
-    let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx attempt
+    // Armed on the 1st tx. The serial loop arms it once (absolute block deadline); the
+    // direct-injection loop re-arms it per tx (idle linger — see there).
+    let mut deadline: Option<Pin<Box<Sleep>>> = None;
     let mut interop_roots_count = 0;
     let expect_sl_chain_id_tx_after_upgrade = command.expect_sl_chain_id_tx_after_upgrade;
 
@@ -158,11 +160,18 @@ pub async fn execute_block_in_vm<V: ViewState>(
                     pending_seal = Some(SealReason::TxStreamExhausted);
                     break;
                 };
-                // Arm the deadline on the first tx attempt (see the serial path for rationale).
-                if deadline.is_none()
-                    && let Some(dur) = deadline_dur
-                {
-                    deadline = Some(Box::pin(tokio::time::sleep(dur)));
+                // (Re-)arm the seal deadline on every tx: an idle linger, not an absolute cap.
+                // Parallel lane blocks pull LIVE from their lane channel, so filling up to the
+                // tx-count limit takes a feed-rate-dependent stretch of time; an absolute
+                // deadline would seal them half-full and double the per-block overhead. The
+                // block keeps accumulating while the feed keeps up and seals `deadline_dur`
+                // after the feed goes quiet (or earlier, on the tx-count limit).
+                if let Some(dur) = deadline_dur {
+                    let when = tokio::time::Instant::now() + dur;
+                    match deadline.as_mut() {
+                        Some(sleep) => sleep.as_mut().reset(when),
+                        None => deadline = Some(Box::pin(tokio::time::sleep_until(when))),
+                    }
                 }
                 all_processed_txs.push(tx.clone());
                 runner

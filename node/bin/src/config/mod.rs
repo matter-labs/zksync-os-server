@@ -938,11 +938,10 @@ pub struct SequencerConfig {
     #[config(default_t = 1)]
     pub parallel_blocks: usize,
 
-    /// Bench-only: how long `produce_parallel` lingers per round to batch bursty direct-injection
-    /// arrivals into larger blocks. Under an RPC feed the producer outruns ingestion and would
-    /// otherwise seal near-empty lanes every loop, burying the per-block tree in tiny blocks;
-    /// lingering trades a little latency for far fewer, larger blocks. `0` (default) seals
-    /// immediately — unchanged for the injection bench and all production.
+    /// Bench-only: per-block idle linger for the parallel lane path — how long a block keeps
+    /// waiting for the next transaction before sealing. Blocks pull live from their lane channels
+    /// and fill up to `max_transactions_in_block` while the feed keeps up; the linger only seals
+    /// blocks whose feed went quiet. `0` (default) falls back to `block_time`.
     #[config(default_t = Duration::ZERO)]
     pub parallel_block_linger: Duration,
 

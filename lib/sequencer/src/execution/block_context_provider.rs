@@ -53,12 +53,6 @@ pub struct BlockContextProvider<Subpool> {
     /// direct-injection feed never packs a block beyond `max_transactions_in_block` (which the VM
     /// would seal early on NativeCycles, dropping the excess and opening a nonce gap).
     direct_buffers: std::collections::HashMap<Address, std::collections::VecDeque<ZkTransaction>>,
-    /// Test/bench-only: per-lane overflow for parallel direct injection. This avoids re-bucketing a
-    /// shared channel by signer every round when the benchmark already knows each signer's lane.
-    /// Plain `Vec`s (not deques): `drain_lane` caps each buffer at `max_transactions_in_block`, so a
-    /// round always consumes a buffer wholesale (`mem::take`) — no front-drains needed — and
-    /// `poll_recv_many` can append into it directly without an intermediate copy.
-    direct_lane_buffers: Vec<Vec<ZkTransaction>>,
 }
 
 /// Test/bench-only handle that feeds transactions straight into block production, bypassing the
@@ -85,9 +79,9 @@ pub struct Config {
     pub service_block_delay: Duration,
     pub max_transactions_in_block: usize,
     pub interop_roots_per_block: u64,
-    /// Bench-only: per-round linger for `produce_parallel`'s lane fast-path — batches bursty
-    /// direct-injection arrivals into larger blocks. `ZERO` = seal immediately (default / injection
-    /// bench / production).
+    /// Bench-only: per-block idle linger for the parallel lane fast-path — how long a block keeps
+    /// waiting for the next transaction before sealing (blocks fill to
+    /// `max_transactions_in_block` while the feed keeps up). `ZERO` falls back to `block_time`.
     pub parallel_block_linger: Duration,
 }
 
@@ -101,24 +95,25 @@ struct LastBlock {
     next_cursors: BlockStartCursors,
 }
 
-/// Bench-only: non-blocking drain of a direct-injection lane channel into its overflow buffer, up to
-/// `max_tx`. Never awaits — the `std::sync::Mutex` guard is released before returning, so this must
-/// not be called across an `.await` point.
-fn drain_lane(rx: &Mutex<mpsc::Receiver<ZkTransaction>>, queue: &mut Vec<ZkTransaction>, max_tx: usize) {
-    let mut guard = rx.lock().unwrap();
-    // Batched receive straight into the lane buffer: one atomic hand-off per chunk and one move per
-    // tx, instead of one `try_recv` (and several copies) per tx. The noop waker is fine here — if
-    // the channel is momentarily empty we take what's buffered so far, and the park-until-first-tx
-    // poll in `produce_parallel` re-registers a real waker afterwards.
-    let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
-    queue.reserve(max_tx.saturating_sub(queue.len()));
-    while queue.len() < max_tx {
-        match guard.poll_recv_many(&mut cx, queue, max_tx - queue.len()) {
-            // Channel momentarily empty (reader behind) or closed — take what we got.
-            std::task::Poll::Ready(0) | std::task::Poll::Pending => break,
-            std::task::Poll::Ready(_) => {}
+/// Bench-only: live stream over a direct-injection lane channel, optionally preceded by a tx the
+/// caller already pulled while parking. Owns an `Arc` clone of the receiver (no borrow of `self`),
+/// so it survives across blocks: whatever a block doesn't consume stays in the channel for the next
+/// round's block on the same lane.
+fn lane_stream(
+    rx: Arc<Mutex<mpsc::Receiver<ZkTransaction>>>,
+    first: Option<ZkTransaction>,
+) -> impl futures::Stream<Item = ZkTransaction> + Send + 'static {
+    let live = futures::stream::poll_fn(move |cx| {
+        match rx.lock().unwrap().poll_recv(cx) {
+            // Channel closed (pusher dropped its sender): pend forever. The block's `Decide`
+            // deadline — armed on its first tx, which `build_parallel_lane_commands` guarantees is
+            // present — seals it; yielding `None` here would trip the
+            // TxStreamExhausted-under-Decide BlockDump in `execute_block_in_vm`.
+            std::task::Poll::Ready(None) => std::task::Poll::Pending,
+            other => other,
         }
-    }
+    });
+    futures::stream::iter(first).chain(live)
 }
 
 impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
@@ -144,7 +139,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             last_constructed_block_ctx_sender,
             direct_tx,
             direct_buffers: std::collections::HashMap::new(),
-            direct_lane_buffers: Vec::new(),
         }
     }
 
@@ -347,47 +341,49 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         self.direct_tx.as_ref().is_some_and(|d| d.lanes.len() >= k)
     }
 
-    /// Bench-only: drain the K direct lanes into their overflow buffers. When `park` is set and
-    /// the whole round would otherwise be empty, waits until the first transaction arrives on ANY
-    /// lane. The pipelined caller passes `park: false` while a round is still in flight — parking
-    /// there would deadlock feeds that wait on the in-flight round's receipts before sending more
-    /// (e.g. the load tests' activation kick). Independent of `last_block`, so the caller can
-    /// overlap it with an in-flight round's VM execution.
-    /// Returns `false` once every lane channel is closed and the buffers are empty.
+    /// Bench-only: build up to `k` block commands for one parallel round — one block per lane that
+    /// has at least one transaction queued, numbered contiguously after `last_block`. Each block's
+    /// `tx_source` is a LIVE stream over its lane channel (no intermediate buffering): the block
+    /// pulls straight from the channel and seals on `Decide(deadline, max_transactions_in_block)`.
+    /// Whatever it doesn't pull stays in the channel for the next round's block on the same lane,
+    /// so no tx is ever dropped and each signer's nonces stay contiguous by construction.
     ///
-    /// Accumulate this round's transactions before sealing. Under an RPC feed the producer
-    /// outruns ingestion and would otherwise seal near-empty lanes every loop, burying the
-    /// per-block Merkle tree in tiny blocks (the effective-path bottleneck). We (1) drain
-    /// whatever each lane already has, (2) if the whole round is empty, park until the first tx
-    /// lands on ANY lane, then (3) linger once so bursty arrivals batch into large blocks — all
-    /// K lane channels keep filling concurrently during the single sleep (RPC admission shards
-    /// into them in the background), so the added latency per round is one `linger`, not `k`.
-    /// `linger == 0` (default / injection bench / production) never sleeps, preserving the old
-    /// immediate-seal behaviour.
-    pub async fn drain_direct_lanes(&mut self, k: usize, park: bool) -> bool {
+    /// Only building blocks for provably non-empty lanes is load-bearing: the VM's `Decide`
+    /// deadline arms on a block's first tx, so a block on a starved lane would never seal and
+    /// would stall the round join. A lane observed non-empty here is guaranteed to yield that tx
+    /// to the block's first `next()` — this provider is the lane's only consumer and no stream
+    /// from a prior round is alive (the caller fully joins a round before building the next).
+    ///
+    /// When every lane is empty, parks until the first tx arrives on ANY lane (the executor's
+    /// Produce commands arrive in a tight loop, so returning empty would busy-spin). Parking is
+    /// safe because no round is in flight — its receipts are already downstream, so feeds that
+    /// wait on them keep feeding. Returns an empty `Vec` once every lane channel is closed.
+    ///
+    /// `last_block` is taken here and re-established by the caller via
+    /// `on_canonical_state_change_direct` for each produced block, in order.
+    pub async fn build_parallel_lane_commands(
+        &mut self,
+        k: usize,
+    ) -> anyhow::Result<Vec<PreparedBlockCommand<'static>>> {
         let direct_lanes = self
             .direct_tx
             .as_ref()
-            .expect("drain_direct_lanes requires direct injection")
+            .expect("build_parallel_lane_commands requires direct injection")
             .lanes
             .clone();
-        debug_assert!(direct_lanes.len() >= k, "drain_direct_lanes requires k lanes");
-        if self.direct_lane_buffers.len() < direct_lanes.len() {
-            self.direct_lane_buffers
-                .resize_with(direct_lanes.len(), Default::default);
-        }
-        let max_tx = self.config.max_transactions_in_block;
-        let linger = self.config.parallel_block_linger;
+        debug_assert!(direct_lanes.len() >= k, "requires k lanes");
         let lanes: Vec<_> = direct_lanes.into_iter().take(k).collect();
 
-        for (lane_index, rx) in lanes.iter().enumerate() {
-            drain_lane(rx, &mut self.direct_lane_buffers[lane_index], max_tx);
-        }
+        let mut first_txs: Vec<Option<ZkTransaction>> = (0..k).map(|_| None).collect();
+        let mut nonempty: Vec<bool> = lanes
+            .iter()
+            .map(|rx| !rx.lock().unwrap().is_empty())
+            .collect();
 
         // If no lane has work yet, park until the first tx arrives on ANY lane. Polling every
         // receiver (not just lane 0) is essential: parking on one specific lane would let a busy
         // lane's transactions sit unbuilt behind an idle lane, and their receipts would time out.
-        if park && (0..k).all(|i| self.direct_lane_buffers[i].is_empty()) {
+        if !nonempty.contains(&true) {
             let first = std::future::poll_fn(|cx| {
                 let mut all_closed = true;
                 for (i, rx) in lanes.iter().enumerate() {
@@ -408,39 +404,19 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             })
             .await;
             match first {
-                Some((i, tx)) => self.direct_lane_buffers[i].push(tx),
-                None => return false, // all lane channels closed
+                Some((i, tx)) => {
+                    first_txs[i] = Some(tx);
+                    // Other lanes may have filled while we were parked.
+                    for (i, rx) in lanes.iter().enumerate() {
+                        nonempty[i] = !rx.lock().unwrap().is_empty();
+                    }
+                }
+                // All lane channels closed; bail before consuming `last_block` (nothing
+                // re-establishes it when no block gets built).
+                None => return Ok(Vec::new()),
             }
         }
 
-        // Linger once (skip only if every lane is already full — nothing to gain), then re-drain
-        // what accumulated across all lanes during the wait.
-        if linger > Duration::ZERO && !(0..k).all(|i| self.direct_lane_buffers[i].len() >= max_tx)
-        {
-            tokio::time::sleep(linger).await;
-            for (lane_index, rx) in lanes.iter().enumerate() {
-                drain_lane(rx, &mut self.direct_lane_buffers[lane_index], max_tx);
-            }
-        }
-        true
-    }
-
-    /// Bench-only: turn the drained lane buffers into up to `k` block commands (one block per
-    /// non-empty lane, numbered contiguously after `last_block`). Cheap — no channel I/O; the
-    /// expensive draining lives in `drain_direct_lanes` so it can overlap VM execution.
-    /// `last_block` is taken here and re-established by the caller via
-    /// `on_canonical_state_change_direct` for each produced block, in order.
-    pub async fn build_parallel_lane_commands(
-        &mut self,
-        k: usize,
-    ) -> anyhow::Result<Vec<PreparedBlockCommand<'static>>> {
-        // A non-parking drain can come back empty-handed; bail before consuming `last_block`
-        // (nothing re-establishes it when no block gets built).
-        if (0..k.min(self.direct_lane_buffers.len()))
-            .all(|i| self.direct_lane_buffers[i].is_empty())
-        {
-            return Ok(Vec::new());
-        }
         let LastBlock {
             block_context: previous_block_context,
             protocol_version,
@@ -459,7 +435,13 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .try_into()
             .context("Cannot instantiate a block for unsupported execution version")?;
         let base_ring = previous_block_context.block_hashes.push(previous_block_hash);
-        let max_tx = self.config.max_transactions_in_block;
+        // Idle linger: how long a block keeps waiting for the NEXT transaction before sealing
+        // (the direct-injection VM loop re-arms the deadline per tx).
+        let deadline = if self.config.parallel_block_linger.is_zero() {
+            self.config.block_time
+        } else {
+            self.config.parallel_block_linger
+        };
         let FeeParams {
             eip1559_basefee,
             native_price,
@@ -468,15 +450,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
         // Emit one block per non-empty lane, numbered contiguously from the base.
         let mut commands = Vec::with_capacity(k);
-        for lane_index in 0..k.min(self.direct_lane_buffers.len()) {
-            let queue = &mut self.direct_lane_buffers[lane_index];
-            if queue.is_empty() {
+        for (lane_index, rx) in lanes.iter().enumerate() {
+            let first_tx = first_txs[lane_index].take();
+            if !nonempty[lane_index] && first_tx.is_none() {
                 continue;
             }
-            // `drain_lane` caps the buffer at `max_tx`, so the whole buffer is one block: hand
-            // it off wholesale instead of copying tx-by-tx.
-            debug_assert!(queue.len() <= max_tx);
-            let txs: Vec<ZkTransaction> = std::mem::take(queue);
             let i = commands.len();
             let block_context = BlockContext {
                 eip1559_basefee,
@@ -496,12 +474,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             };
             commands.push(PreparedBlockCommand {
                 block_context,
-                tx_source: MarkingTxStream::unmarkable(futures::stream::iter(txs)),
-                // Group is <= max_tx (< the NativeCycles seal), so the stream exhausts before
-                // the VM seals: no tx is dropped. `allowed_to_finish_early` accepts exhaustion.
-                seal_policy: SealPolicy::UntilExhausted {
-                    allowed_to_finish_early: true,
-                },
+                tx_source: MarkingTxStream::unmarkable(lane_stream(rx.clone(), first_tx)),
+                // The first tx is guaranteed (non-empty check above), so the deadline always
+                // arms and the block always seals: on the tx-count limit at steady state, on
+                // the deadline at the tail. Unpulled txs stay in the channel — never dropped.
+                seal_policy: SealPolicy::Decide(deadline, self.config.max_transactions_in_block),
                 invalid_tx_policy: InvalidTxPolicy::RejectAndContinue {
                     mark_in_source: false,
                 },
@@ -522,9 +499,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
 
     /// Bench-only: build up to `k` slot-disjoint blocks for one parallel round.
     ///
-    /// With per-signer lanes this is drain + build (see `drain_direct_lanes` /
-    /// `build_parallel_lane_commands`, which the pipelined executor path calls separately).
-    /// Otherwise it drains a batch (`k * max_transactions_in_block`) of direct-injection
+    /// With per-signer lanes this delegates to `build_parallel_lane_commands` (live per-lane
+    /// streams). Otherwise it drains a batch (`k * max_transactions_in_block`) of direct-injection
     /// transactions from the shared channel and buckets them **by sender** into disjoint groups;
     /// each group becomes one block (numbered `N..N+K-1`), sealed on stream exhaustion. All blocks
     /// share the previous block's base hash ring (no inter-block hash chaining - the bench
@@ -537,9 +513,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         k: usize,
     ) -> anyhow::Result<Vec<PreparedBlockCommand<'static>>> {
         if self.has_parallel_lanes(k) {
-            if !self.drain_direct_lanes(k, true).await {
-                return Ok(Vec::new());
-            }
             return self.build_parallel_lane_commands(k).await;
         }
 

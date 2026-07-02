@@ -35,8 +35,7 @@ type VmExecResult = Result<
     BlockDump,
 >;
 
-/// Bench-only: a spawned-but-not-joined parallel round. Held across loop iterations so the next
-/// round's lane draining overlaps this round's VM execution.
+/// Bench-only: one spawned parallel round, bundled for `finish_parallel_round`.
 struct PendingParallelRound {
     handles: Vec<tokio::task::JoinHandle<VmExecResult>>,
     cmd_type: BlockCommandType,
@@ -47,7 +46,8 @@ struct FinishedRoundStats {
     base_block_number: u64,
     blocks: usize,
     txs: usize,
-    /// Spawn-to-join wall time; with pipelining this approximates the whole round period.
+    /// Spawn-to-join wall time. Blocks pull their txs live from the lane channels, so this
+    /// includes in-block waits on the tx stream (bounded by the per-block seal deadline).
     exec_elapsed: Duration,
     downstream_elapsed: Duration,
 }
@@ -181,25 +181,11 @@ where
         // `BlockExecutor` doesn't persist/update state after block execution.
         // Instead, we keep the diff in memory - and apply it on top of the last persisted block
         let mut state_overlay_buffer = OverlayBuffer::default();
-        // Bench-only: the parallel path's in-flight round (see `PendingParallelRound`).
-        let mut pending_round: Option<PendingParallelRound> = None;
         loop {
             state_reporter.enter_state(SequencerState::WaitingForCommand);
 
             let Some(cmd) = input.recv().await else {
                 tracing::info!("inbound channel closed");
-                // Land the in-flight parallel round before shutting down.
-                if let Some(round) = pending_round.take() {
-                    finish_parallel_round(
-                        round,
-                        &mut self.block_context_provider,
-                        &mut state_overlay_buffer,
-                        self.config.block_dump_path.clone(),
-                        &output,
-                        &state_reporter,
-                    )
-                    .await?;
-                }
                 return Ok(());
             };
             tracing::info!("Command {cmd} received by BlockExecutor");
@@ -230,10 +216,11 @@ where
             state_reporter.enter_state(SequencerState::WaitingForTransaction);
 
             // Bench-only parallel path: execute K slot-disjoint blocks concurrently against a
-            // shared base state. With per-signer lanes the rounds are PIPELINED: this iteration
-            // drains the next round's transactions while the previous round's VM tasks are still
-            // running, and only then joins them — so the expensive lane draining never blocks VM
-            // progress. Gated on direct injection, so the production (serial) path stays untouched.
+            // shared base state, one block per non-empty lane. Each block's tx_source is a LIVE
+            // stream over its lane channel, so there is no drain step (and nothing to pipeline):
+            // the channels buffer arrivals while a round executes, and the next round's blocks
+            // pull them directly. Gated on direct injection, so the production (serial) path
+            // stays untouched.
             if matches!(cmd, BlockCommand::Produce(_))
                 && self.config.parallel_blocks > 1
                 && self.block_context_provider.is_direct_active()
@@ -242,124 +229,49 @@ where
                     .has_parallel_lanes(self.config.parallel_blocks)
             {
                 let k = self.config.parallel_blocks;
-                // Drain first: the expensive half of producing a round, overlapped with the
-                // in-flight round's execution. Only park on empty lanes when NO round is in
-                // flight — feeds may wait on the in-flight round's receipts before sending more
-                // (the load tests' activation kick does), so parking here would deadlock.
-                let t_drain = Instant::now();
-                let lanes_open = self
+                // Parks internally while every lane is empty (safe: no round is in flight, so
+                // receipt-waiting feeds are never blocked by the park). Empty result means every
+                // lane channel is closed.
+                let t_build = Instant::now();
+                let commands = self
                     .block_context_provider
-                    .drain_direct_lanes(k, pending_round.is_none())
-                    .await;
-                let drain_elapsed = t_drain.elapsed();
-
-                // Land the in-flight round; this advances `last_block` and the overlay buffer,
-                // both of which the next round's commands and base view are built from. Joining
-                // ALL tasks also drops every cloned base view (overlay Arc refcount back to 1)
-                // before the buffer is mutated.
-                let finished = if let Some(round) = pending_round.take() {
-                    let stats = finish_parallel_round(
-                        round,
-                        &mut self.block_context_provider,
-                        &mut state_overlay_buffer,
-                        self.config.block_dump_path.clone(),
-                        &output,
-                        &state_reporter,
-                    )
+                    .build_parallel_lane_commands(k)
                     .await?;
-                    last_processed_block_at = Some(Instant::now());
-                    Some(stats)
-                } else {
-                    None
-                };
-
-                let mut build_elapsed = Duration::ZERO;
-                let mut base_view_elapsed = Duration::ZERO;
-                let mut spawned_blocks = 0usize;
-                if lanes_open {
-                    let t_build = Instant::now();
-                    let commands = self
-                        .block_context_provider
-                        .build_parallel_lane_commands(k)
-                        .await?;
-                    build_elapsed = t_build.elapsed();
-                    if !commands.is_empty() {
-                        // All K disjoint blocks read the same base state at
-                        // `base_block_number - 1`; build one overlay-aware view and hand a clone
-                        // to each block.
-                        let base_block_number = commands[0].block_context.block_number;
-                        let t_base_view = Instant::now();
-                        let base_view = state_overlay_buffer
-                            .sync_with_base_and_build_view_for_block(&self.state, base_block_number)?;
-                        base_view_elapsed = t_base_view.elapsed();
-                        state_reporter.enter_state(SequencerState::InitializingVm);
-                        spawned_blocks = commands.len();
-                        let mut handles = Vec::with_capacity(commands.len());
-                        for command in commands {
-                            let view = base_view.clone();
-                            let reporter = state_reporter.clone();
-                            // Direct injection only runs on the main node, so `is_produce` is
-                            // always true here.
-                            let (tracer, validator) = make_deployment_filter(
-                                true,
-                                &self.config.tx_validator.deployment_filter,
-                            );
-                            handles.push(tokio::spawn(async move {
-                                execute_block_in_vm(command, view, &reporter, tracer, validator)
-                                    .await
-                            }));
-                        }
-                        // The K view clones live inside the spawned tasks; the local borrow is
-                        // released here so the next iteration's join can mutate the overlay.
-                        drop(base_view);
-                        pending_round = Some(PendingParallelRound {
-                            handles,
-                            cmd_type,
-                            spawned_at: Instant::now(),
-                        });
-                    }
+                let build_elapsed = t_build.elapsed();
+                if commands.is_empty() {
+                    continue;
                 }
 
-                if let Some(stats) = finished {
-                    if parallel_producer_profile_enabled() {
-                        tracing::error!(
-                            k,
-                            base_block_number = stats.base_block_number,
-                            blocks = stats.blocks,
-                            downstream_txs = stats.txs,
-                            spawned_blocks,
-                            ?drain_elapsed,
-                            ?build_elapsed,
-                            ?base_view_elapsed,
-                            exec_elapsed = ?stats.exec_elapsed,
-                            downstream_elapsed = ?stats.downstream_elapsed,
-                            "block_executor parallel round profile"
-                        );
-                    } else {
-                        tracing::info!(
-                            k,
-                            base_block_number = stats.base_block_number,
-                            blocks = stats.blocks,
-                            downstream_txs = stats.txs,
-                            spawned_blocks,
-                            ?drain_elapsed,
-                            ?build_elapsed,
-                            ?base_view_elapsed,
-                            exec_elapsed = ?stats.exec_elapsed,
-                            downstream_elapsed = ?stats.downstream_elapsed,
-                            "block_executor parallel round done"
-                        );
-                    }
+                // All K disjoint blocks read the same base state at `base_block_number - 1`;
+                // build one overlay-aware view and hand a clone to each block.
+                let base_block_number = commands[0].block_context.block_number;
+                let t_base_view = Instant::now();
+                let base_view = state_overlay_buffer
+                    .sync_with_base_and_build_view_for_block(&self.state, base_block_number)?;
+                let base_view_elapsed = t_base_view.elapsed();
+                state_reporter.enter_state(SequencerState::InitializingVm);
+                let mut handles = Vec::with_capacity(commands.len());
+                for command in commands {
+                    let view = base_view.clone();
+                    let reporter = state_reporter.clone();
+                    // Direct injection only runs on the main node, so `is_produce` is
+                    // always true here.
+                    let (tracer, validator) =
+                        make_deployment_filter(true, &self.config.tx_validator.deployment_filter);
+                    handles.push(tokio::spawn(async move {
+                        execute_block_in_vm(command, view, &reporter, tracer, validator).await
+                    }));
                 }
-                continue;
-            }
+                // The K view clones live inside the spawned tasks; the local borrow is released
+                // here so the join below can mutate the overlay (refcount back to 1).
+                drop(base_view);
 
-            // Any other command consumes `last_block` / mutates the overlay — land the in-flight
-            // parallel round first. (Lane availability never changes at runtime, so this is a
-            // no-op outside the pipelined regime.)
-            if let Some(round) = pending_round.take() {
-                finish_parallel_round(
-                    round,
+                let stats = finish_parallel_round(
+                    PendingParallelRound {
+                        handles,
+                        cmd_type,
+                        spawned_at: Instant::now(),
+                    },
                     &mut self.block_context_provider,
                     &mut state_overlay_buffer,
                     self.config.block_dump_path.clone(),
@@ -368,6 +280,33 @@ where
                 )
                 .await?;
                 last_processed_block_at = Some(Instant::now());
+
+                if parallel_producer_profile_enabled() {
+                    tracing::error!(
+                        k,
+                        base_block_number = stats.base_block_number,
+                        blocks = stats.blocks,
+                        downstream_txs = stats.txs,
+                        ?build_elapsed,
+                        ?base_view_elapsed,
+                        exec_elapsed = ?stats.exec_elapsed,
+                        downstream_elapsed = ?stats.downstream_elapsed,
+                        "block_executor parallel round profile"
+                    );
+                } else {
+                    tracing::info!(
+                        k,
+                        base_block_number = stats.base_block_number,
+                        blocks = stats.blocks,
+                        downstream_txs = stats.txs,
+                        ?build_elapsed,
+                        ?base_view_elapsed,
+                        exec_elapsed = ?stats.exec_elapsed,
+                        downstream_elapsed = ?stats.downstream_elapsed,
+                        "block_executor parallel round done"
+                    );
+                }
+                continue;
             }
 
             // Bench-only non-pipelined parallel fallback (shared direct channel without per-signer
