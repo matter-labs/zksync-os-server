@@ -33,7 +33,7 @@ use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
 use zksync_os_provider::NodeProvider;
-use zksync_os_server::BoundPorts;
+use zksync_os_server::ServerPorts;
 use zksync_os_server::config::{Config, ProviderConfig};
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::{
@@ -285,7 +285,7 @@ pub struct Tester {
     runtime: Runtime,
     task_manager_handle: Option<JoinHandle<Result<(), PanickedTaskError>>>,
     config: Config,
-    bound_ports: BoundPorts,
+    bound_ports: ServerPorts,
 
     #[allow(dead_code)]
     tempdir: Arc<tempfile::TempDir>,
@@ -309,7 +309,7 @@ pub struct Tester {
 pub struct StoppedTester {
     l1: AnvilL1,
     config: Config,
-    previous_bound_ports: BoundPorts,
+    previous_bound_ports: ServerPorts,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
@@ -321,7 +321,7 @@ pub struct SupportingNode {
     runtime: Runtime,
     pub prover_tester: ProverTester,
     #[cfg(feature = "prover-tests")]
-    bound_ports: BoundPorts,
+    bound_ports: ServerPorts,
     _tempdir: Arc<TempDir>,
 }
 
@@ -818,7 +818,7 @@ impl StoppedTester {
 
 fn preserve_http_ports_on_restart(
     config: &mut Config,
-    previous_bound_ports: BoundPorts,
+    previous_bound_ports: ServerPorts,
 ) -> anyhow::Result<()> {
     config.rpc_config.address =
         socket_address_with_port(&config.rpc_config.address, previous_bound_ports.rpc)?;

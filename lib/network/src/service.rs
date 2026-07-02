@@ -261,6 +261,7 @@ impl NetworkService {
             .await;
         }
 
+        // Retries the reserve -> drop -> reth-bind sequence, unlike the inner reservation retry.
         let mut last_error = None;
         for attempt in 1..=EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS {
             let reservation =

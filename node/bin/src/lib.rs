@@ -119,8 +119,8 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
-pub use ports::BoundPorts;
-use ports::PreboundPorts;
+use ports::BoundListeners;
+pub use ports::ServerPorts;
 
 const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const RAFT_DB_NAME: &str = "raft";
@@ -133,12 +133,12 @@ pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
     config: Config,
-) -> BoundPorts {
-    let PreboundPorts {
+) -> ServerPorts {
+    let BoundListeners {
         rpc: rpc_listener,
         status: prebound_status_listener,
         prover_api: prebound_prover_api_listener,
-    } = PreboundPorts::bind_from_config(&config)
+    } = BoundListeners::bind_from_config(&config)
         .await
         .expect("failed to prebind node ports");
     report_static_config_metrics(&config);
@@ -1021,7 +1021,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
 
-    BoundPorts {
+    ServerPorts {
         rpc: rpc_port,
         status: status_port,
         prover_api: prover_api_port,

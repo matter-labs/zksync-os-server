@@ -7,7 +7,7 @@ use zksync_os_network::NetworkPorts;
 /// Actual ports bound by each service after `run()` starts.
 /// Fields are `None` when the corresponding service is disabled in config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BoundPorts {
+pub struct ServerPorts {
     pub rpc: u16,
     pub status: Option<u16>,
     pub prover_api: Option<u16>,
@@ -16,13 +16,31 @@ pub struct BoundPorts {
 
 /// Sockets bound before node startup and then handed to their servers.
 #[derive(Debug)]
-pub(crate) struct PreboundPorts {
+pub(crate) struct BoundListeners {
     pub(crate) rpc: TcpListener,
     pub(crate) status: Option<TcpListener>,
     pub(crate) prover_api: Option<TcpListener>,
 }
 
-impl PreboundPorts {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Service {
+    Rpc,
+    Status,
+    ProverApi,
+}
+
+impl std::fmt::Display for Service {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Service::Rpc => "RPC",
+            Service::Status => "status",
+            Service::ProverApi => "prover API",
+        };
+        write!(f, "{label}")
+    }
+}
+
+impl BoundListeners {
     pub(crate) async fn bind_from_config(config: &Config) -> anyhow::Result<Self> {
         let status_address = config
             .status_server_config
@@ -46,13 +64,13 @@ impl PreboundPorts {
         status_address: Option<&str>,
         prover_api_address: Option<&str>,
     ) -> anyhow::Result<Self> {
-        let rpc = bind_tcp_listener(rpc_address, "RPC").await?;
+        let rpc = bind_tcp_listener(rpc_address, Service::Rpc).await?;
         let status = match status_address {
-            Some(address) => Some(bind_tcp_listener(address, "status").await?),
+            Some(address) => Some(bind_tcp_listener(address, Service::Status).await?),
             None => None,
         };
         let prover_api = match prover_api_address {
-            Some(address) => Some(bind_tcp_listener(address, "prover API").await?),
+            Some(address) => Some(bind_tcp_listener(address, Service::ProverApi).await?),
             None => None,
         };
 
@@ -64,11 +82,11 @@ impl PreboundPorts {
     }
 }
 
-async fn bind_tcp_listener(address: &str, service_name: &str) -> anyhow::Result<TcpListener> {
+async fn bind_tcp_listener(address: &str, service: Service) -> anyhow::Result<TcpListener> {
     let addr: SocketAddr = address
         .parse()
-        .with_context(|| format!("malformed {service_name} bind address {address:?}"))?;
+        .with_context(|| format!("malformed {service} bind address {address:?}"))?;
     TcpListener::bind(addr)
         .await
-        .with_context(|| format!("failed to prebind {service_name} listener at {address}"))
+        .with_context(|| format!("failed to prebind {service} listener at {address}"))
 }
