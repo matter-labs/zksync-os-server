@@ -36,7 +36,11 @@ jobs:
           # 'RUSTSEC-2025-0055' todo: waiting for ark-relations to release a patch https://github.com/arkworks-rs/snark/issues/413
           # 'RUSTSEC-2026-0118', 'RUSTSEC-2026-0119': hickory-proto 0.25.2 via reth-dns-discovery; DNS discovery
           # is disabled in our network config so neither path is reachable. Fix requires reth v2.2.0+ (alloy 1.x→2.x).
-          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0118,RUSTSEC-2026-0119'
+          # 'RUSTSEC-2026-0194', 'RUSTSEC-2026-0195': quick-xml < 0.41 DoS advisories, pulled in transitively via
+          # `inferno` (flamegraph generation) and `plist` -> `os_info` -> `sentry-contexts` (local OS metadata for
+          # Sentry). Neither path parses untrusted/remote XML. No released version of `inferno` or `plist` depends
+          # on quick-xml >=0.41 yet, so this cannot be resolved by updating. Revisit once upstream bumps land.
+          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0118,RUSTSEC-2026-0119,RUSTSEC-2026-0194,RUSTSEC-2026-0195'
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
