@@ -497,9 +497,16 @@ mod tests {
 
         println!("=== V8 simplest-batch prover input ===");
         println!("protocol_version: v32.1  proving_version: V8  pubdata_mode: Calldata");
-        println!("prover_input words: {}  ({} bytes)", words.len(), bytes.len());
+        println!(
+            "prover_input words: {}  ({} bytes)",
+            words.len(),
+            bytes.len()
+        );
         println!("first words: {:?}", &words[..words.len().min(8)]);
-        println!("new_state_commitment: {:?}", native_batch_run.new_state_commitment);
+        println!(
+            "new_state_commitment: {:?}",
+            native_batch_run.new_state_commitment
+        );
         println!("da_commitment:        {:?}", native_batch_run.da_commitment);
         println!("wrote hex : {hex_path}");
         println!("wrote bin : {bin_path}");
