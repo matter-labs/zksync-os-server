@@ -1259,7 +1259,17 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let submit_pipeline: usize = env_or("LOAD_TEST_SUBMIT_PIPELINE", 1);
     let wait_for_receipts = env_or("LOAD_TEST_WAIT_FOR_RECEIPTS", true);
     let wait_for_final_receipts = !wait_for_receipts && env_or("LOAD_TEST_FINAL_RECEIPTS", false);
-    let rpc_urls = tester.l2_rpc_ws_urls();
+    let mut rpc_urls = tester.l2_rpc_ws_urls();
+    // Real JSON-RPC batch frames only exist over HTTP: the alloy ws transport flattens
+    // `new_batch()` into individual messages, so over ws every tx pays its own frame decode +
+    // parse + spawn + response frame, and the server-side batch fan-out never runs. Over HTTP a
+    // chunk is ONE array frame (jsonrpsee serves both protocols on the same port), parsed once
+    // and fanned out across the runtime by the Monitoring middleware.
+    if env_or("LOAD_TEST_HTTP", false) {
+        for url in &mut rpc_urls {
+            *url = url.replace("ws://", "http://");
+        }
+    }
     assert!(
         num_wallets >= k,
         "LOAD_TEST_WALLETS must be >= PARALLEL_BLOCKS (and ideally well above it)"
