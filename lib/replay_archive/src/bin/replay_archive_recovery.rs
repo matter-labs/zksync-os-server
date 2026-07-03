@@ -97,6 +97,10 @@ enum Command {
         /// when absent.
         #[arg(long, requires = "kms_key_version")]
         kms_credential_file_path: Option<PathBuf>,
+        /// Number of replay records decoded concurrently. With KMS decryption every record takes
+        /// one KMS call, so this bounds in-flight KMS requests.
+        #[arg(long, default_value_t = zksync_os_replay_archive::DEFAULT_DECRYPT_CONCURRENCY)]
+        decrypt_concurrency: usize,
     },
 }
 
@@ -159,6 +163,7 @@ async fn main() -> anyhow::Result<()> {
             age_secret_key,
             kms_key_version,
             kms_credential_file_path,
+            decrypt_concurrency,
         } => {
             let identity = if let Some(key_version) = kms_key_version {
                 let auth_mode = match kms_credential_file_path {
@@ -188,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
                 anchor_block_number,
                 anchor_block_hash,
                 identity,
+                decrypt_concurrency,
             )
             .await?;
             println!("Recovered {recovered} replay records to RocksDB");

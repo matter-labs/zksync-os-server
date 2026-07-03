@@ -236,8 +236,9 @@ pub struct GcpKmsIdentity {
 }
 
 impl GcpKmsIdentity {
-    /// Must be called inside a multi-threaded tokio runtime: unwrapping a stanza issues a
-    /// blocking KMS call via `block_in_place`.
+    /// Must be called inside a tokio runtime. Unwrapping a stanza blocks on the KMS call, so
+    /// decryption must run on a blocking thread (e.g. via `spawn_blocking`), never directly on
+    /// an async worker thread.
     pub fn new(client: GcpKmsClient) -> Self {
         Self {
             client,
@@ -255,10 +256,9 @@ impl age::Identity for GcpKmsIdentity {
         if stanza.tag != GCP_KMS_STANZA_TAG || stanza.args != [self.client.key_version()] {
             return None;
         }
-        let plaintext = tokio::task::block_in_place(|| {
-            self.runtime
-                .block_on(self.client.asymmetric_decrypt(&stanza.body))
-        });
+        let plaintext = self
+            .runtime
+            .block_on(self.client.asymmetric_decrypt(&stanza.body));
         let plaintext = match plaintext {
             Ok(plaintext) => plaintext,
             Err(err) => {
