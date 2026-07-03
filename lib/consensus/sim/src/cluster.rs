@@ -1,20 +1,22 @@
 //! A simulated validator cluster: N full consensus stacks over an in-memory network,
 //! inside the deterministic runtime.
 //!
-//! Everything a test needs in one handle: start a cluster, shape the network, crash and
-//! restart validators, and assert on what was committed. Time is virtual (a minute of
-//! consensus takes milliseconds of wall clock) and every run is reproducible from the
-//! runtime seed.
+//! Everything a test needs in one handle: start a cluster, shape the network (partitions,
+//! degraded links), crash and restart validators, plant byzantine ones, and assert on
+//! what was committed. Time is virtual (a minute of consensus takes milliseconds of wall
+//! clock) and every run is reproducible from the runtime seed.
 
 use crate::activity::ActivityLog;
 use crate::block::SimBlock;
 use crate::execution::MockExecution;
+use commonware_consensus::simplex::mocks::{conflicter, nuller};
 use commonware_consensus::simplex::scheme::bls12381_multisig;
+use commonware_cryptography::Sha256;
 use commonware_cryptography::bls12381::primitives::variant::MinPk;
 use commonware_cryptography::certificate::mocks::Fixture;
 use commonware_cryptography::ed25519::PublicKey;
 use commonware_p2p::simulated::{Config as NetworkConfig, Link, Network, Oracle};
-use commonware_runtime::{Clock, Metrics, Quota, deterministic};
+use commonware_runtime::{Clock, Handle, Metrics, Quota, deterministic};
 use commonware_utils::NZUsize;
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -31,6 +33,25 @@ const CERTIFICATE_BACKFILL: u64 = 2;
 const BLOCK_BROADCAST: u64 = 3;
 const BLOCK_BACKFILL: u64 = 4;
 
+/// How a validator behaves in the scenario.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Behavior {
+    /// Runs the real consensus stack.
+    Honest,
+    /// Byzantine: signs two conflicting notarize/finalize votes per view — the classic
+    /// equivocation attack that BFT consensus must detect and tolerate.
+    Conflicter,
+    /// Byzantine: votes both to accept (notarize/finalize) and to skip (nullify) the
+    /// same view.
+    Nuller,
+}
+
+/// What is currently running for a validator.
+enum Running {
+    Full(ValidatorStack<SimBlock>),
+    Byzantine(Handle<()>),
+}
+
 pub struct SimCluster {
     context: deterministic::Context,
     pub oracle: Oracle<PublicKey, deterministic::Context>,
@@ -39,11 +60,13 @@ pub struct SimCluster {
 
 pub struct SimValidator {
     pub identity: PublicKey,
+    pub behavior: Behavior,
     /// This validator's view of the chain; survives crash/restart like a node's disk.
+    /// Stays empty for byzantine validators (they run no execution).
     pub env: MockExecution,
     /// Records fault evidence this validator observed.
     pub activity: ActivityLog,
-    stack: Option<ValidatorStack<SimBlock>>,
+    running: Option<Running>,
     scheme: Scheme,
     partition_prefix: String,
     /// How many times this validator has been started. Only used to give each
@@ -54,17 +77,25 @@ pub struct SimValidator {
 }
 
 impl SimCluster {
-    /// Starts `num_validators` fully-linked validators with the given link quality.
-    pub async fn start(
+    /// Starts `num_validators` honest, fully-linked validators.
+    pub async fn start(context: deterministic::Context, num_validators: u32, link: Link) -> Self {
+        let behaviors = vec![Behavior::Honest; num_validators as usize];
+        Self::start_with_behaviors(context, &behaviors, link).await
+    }
+
+    /// Starts one validator per entry in `behaviors`, fully linked. Byzantine validators
+    /// join the network with valid credentials — they are real committee members whose
+    /// key happens to sign contradictory votes.
+    pub async fn start_with_behaviors(
         mut context: deterministic::Context,
-        num_validators: u32,
+        behaviors: &[Behavior],
         link: Link,
     ) -> Self {
         let Fixture {
             participants,
             schemes,
             ..
-        } = bls12381_multisig::fixture::<MinPk, _>(&mut context, NAMESPACE, num_validators);
+        } = bls12381_multisig::fixture::<MinPk, _>(&mut context, NAMESPACE, behaviors.len() as u32);
 
         let (network, oracle) = Network::new_with_peers(
             context.with_label("network"),
@@ -78,44 +109,35 @@ impl SimCluster {
         .await;
         network.start();
 
-        // Symmetric full mesh; tests reshape links through `oracle` afterwards.
-        let oracle = oracle;
-        for a in &participants {
-            for b in &participants {
-                if a != b {
-                    oracle
-                        .add_link(a.clone(), b.clone(), link.clone())
-                        .await
-                        .expect("linking validators failed");
-                }
-            }
-        }
-
         let mut cluster = Self {
             context,
             oracle,
             validators: Vec::new(),
         };
+        cluster.link_full_mesh_between(&participants, link).await;
+
         for (index, identity) in participants.iter().enumerate() {
             let mut validator = SimValidator {
                 identity: identity.clone(),
+                behavior: behaviors[index],
                 env: MockExecution::new(),
                 activity: ActivityLog::new(),
-                stack: None,
+                running: None,
                 scheme: schemes[index].clone(),
                 // Stable across restarts: a restarted validator must find its own vote
                 // journal (double-sign protection) and archives under the same prefix.
                 partition_prefix: format!("validator-{index}"),
                 incarnation: 0,
             };
-            Self::spawn_stack(&cluster.context, &mut cluster.oracle, index, &mut validator).await;
+            Self::spawn(&cluster.context, &mut cluster.oracle, index, &mut validator).await;
             cluster.validators.push(validator);
         }
         cluster
     }
 
-    /// Registers the five p2p channels and starts the full stack for one validator.
-    async fn spawn_stack(
+    /// Registers the five p2p channels and starts whatever this validator's behavior
+    /// calls for: the full stack, or a byzantine engine speaking raw consensus wire.
+    async fn spawn(
         context: &deterministic::Context,
         oracle: &mut Oracle<PublicKey, deterministic::Context>,
         index: usize,
@@ -145,26 +167,65 @@ impl SimCluster {
 
         validator.incarnation += 1;
         let incarnation = validator.incarnation;
-        let stack = start_validator(
-            context.with_label(&format!("validator_{index}_run_{incarnation}")),
-            StackConfig::new(validator.partition_prefix.clone()),
-            validator.identity.clone(),
-            validator.scheme.clone(),
-            validator.env.clone(),
-            oracle.control(validator.identity.clone()),
-            oracle.manager(),
-            channels,
-            (),
-            validator.activity.clone(),
-        )
-        .await;
-        validator.stack = Some(stack);
+        let label = format!("validator_{index}_run_{incarnation}");
+        let running = match validator.behavior {
+            Behavior::Honest => {
+                let stack = start_validator(
+                    context.with_label(&label),
+                    StackConfig::new(validator.partition_prefix.clone()),
+                    validator.identity.clone(),
+                    validator.scheme.clone(),
+                    validator.env.clone(),
+                    oracle.control(validator.identity.clone()),
+                    oracle.manager(),
+                    channels,
+                    (),
+                    validator.activity.clone(),
+                )
+                .await;
+                Running::Full(stack)
+            }
+            // The byzantine engines only speak the vote channel; the other channels sit
+            // idle. They react to observed traffic with contradictory signed votes.
+            Behavior::Conflicter => {
+                let engine = conflicter::Conflicter::<_, Scheme, Sha256>::new(
+                    context.with_label(&label),
+                    conflicter::Config {
+                        scheme: validator.scheme.clone(),
+                    },
+                );
+                Running::Byzantine(engine.start(channels.votes))
+            }
+            Behavior::Nuller => {
+                let engine = nuller::Nuller::<_, Scheme, Sha256>::new(
+                    context.with_label(&label),
+                    nuller::Config {
+                        scheme: validator.scheme.clone(),
+                    },
+                );
+                Running::Byzantine(engine.start(channels.votes))
+            }
+        };
+        validator.running = Some(running);
+    }
+
+    /// Indices of the honest validators (assertions about committed chains and health
+    /// only ever apply to these).
+    pub fn honest_indices(&self) -> Vec<usize> {
+        self.validators
+            .iter()
+            .enumerate()
+            .filter(|(_, validator)| validator.behavior == Behavior::Honest)
+            .map(|(index, _)| index)
+            .collect()
     }
 
     /// Stops a validator (abrupt, like a crash — no clean shutdown).
     pub fn crash(&mut self, index: usize) {
-        if let Some(stack) = self.validators[index].stack.take() {
-            stack.abort();
+        match self.validators[index].running.take() {
+            Some(Running::Full(stack)) => stack.abort(),
+            Some(Running::Byzantine(handle)) => handle.abort(),
+            None => {}
         }
     }
 
@@ -172,16 +233,81 @@ impl SimCluster {
     /// replays (so it cannot double-sign) and it catches up via gossip and backfill.
     pub async fn restart(&mut self, index: usize) {
         assert!(
-            self.validators[index].stack.is_none(),
+            self.validators[index].running.is_none(),
             "validator {index} is already running"
         );
-        Self::spawn_stack(
+        Self::spawn(
             &self.context,
             &mut self.oracle,
             index,
             &mut self.validators[index],
         )
         .await;
+    }
+
+    /// Links every pair of validators symmetrically with the given quality.
+    async fn link_full_mesh_between(&mut self, identities: &[PublicKey], link: Link) {
+        for a in identities {
+            for b in identities {
+                if a != b {
+                    self.oracle
+                        .add_link(a.clone(), b.clone(), link.clone())
+                        .await
+                        .expect("linking validators failed");
+                }
+            }
+        }
+    }
+
+    /// Cuts the network into isolated groups: links *between* groups are removed, links
+    /// within each group stay. Groups must cover all validators you care about; indices
+    /// not listed anywhere keep their existing links untouched.
+    pub async fn partition(&mut self, groups: &[&[usize]]) {
+        for (group_position, group) in groups.iter().enumerate() {
+            for other_group in groups.iter().skip(group_position + 1) {
+                for &a in group.iter() {
+                    for &b in other_group.iter() {
+                        let a = self.validators[a].identity.clone();
+                        let b = self.validators[b].identity.clone();
+                        self.oracle
+                            .remove_link(a.clone(), b.clone())
+                            .await
+                            .expect("removing link");
+                        self.oracle.remove_link(b, a).await.expect("removing link");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Restores a symmetric full mesh with the given link quality (heals any partition
+    /// and overrides any per-link degradation).
+    pub async fn heal(&mut self, link: Link) {
+        let identities: Vec<PublicKey> = self
+            .validators
+            .iter()
+            .map(|validator| validator.identity.clone())
+            .collect();
+        for a in &identities {
+            for b in &identities {
+                if a != b {
+                    // A link may or may not currently exist depending on what the
+                    // scenario did before; reset it unconditionally.
+                    let _ = self.oracle.remove_link(a.clone(), b.clone()).await;
+                    self.oracle
+                        .add_link(a.clone(), b.clone(), link.clone())
+                        .await
+                        .expect("re-linking validators failed");
+                }
+            }
+        }
+    }
+
+    /// Lets in-flight deliveries drain (virtual time). Use after reshaping the network
+    /// and before asserting stillness: finality certificates assembled just before a
+    /// partition may legitimately reach a validator just after it.
+    pub async fn settle(&self, duration: Duration) {
+        self.context.sleep(duration).await;
     }
 
     /// Waits (in virtual time) until every listed validator committed at least `height`.
@@ -200,33 +326,52 @@ impl SimCluster {
         }
     }
 
-    /// Waits until *all* validators committed at least `height`.
+    /// Waits until all *honest* validators committed at least `height`.
     pub async fn wait_for_committed_height_all(&self, height: u64) {
-        let all: Vec<usize> = (0..self.validators.len()).collect();
-        self.wait_for_committed_height(&all, height).await;
+        self.wait_for_committed_height(&self.honest_indices(), height)
+            .await;
     }
 
-    /// The agreement property: every validator's committed chain is a prefix of the
-    /// longest one (identical blocks at every common height), and everyone reached at
-    /// least `minimum_height`.
-    pub fn assert_committed_chains_agree(&self, minimum_height: u64) {
-        let chains: Vec<Vec<SimBlock>> = self
-            .validators
+    /// Asserts that no listed validator commits anything new for `duration` of virtual
+    /// time. This is how partition tests check safety: with no quorum, the chain must
+    /// stand still rather than fork.
+    pub async fn assert_no_progress_for(&self, indices: &[usize], duration: Duration) {
+        let tips_before: Vec<Option<u64>> = indices
             .iter()
-            .map(|validator| validator.env.committed_chain())
+            .map(|&index| self.validators[index].env.committed_tip())
             .collect();
-        for (index, chain) in chains.iter().enumerate() {
+        self.context.sleep(duration).await;
+        for (position, &index) in indices.iter().enumerate() {
+            let tip_after = self.validators[index].env.committed_tip();
+            assert_eq!(
+                tips_before[position], tip_after,
+                "validator {index} made progress during a period that must be quiet",
+            );
+        }
+    }
+
+    /// The agreement property: every honest validator's committed chain is a prefix of
+    /// the longest one (identical blocks at every common height), and every honest
+    /// validator reached at least `minimum_height`.
+    pub fn assert_committed_chains_agree(&self, minimum_height: u64) {
+        let honest = self.honest_indices();
+        let chains: Vec<(usize, Vec<SimBlock>)> = honest
+            .iter()
+            .map(|&index| (index, self.validators[index].env.committed_chain()))
+            .collect();
+        for (index, chain) in &chains {
             assert!(
                 chain.len() as u64 >= minimum_height,
                 "validator {index} committed only {} blocks, expected at least {minimum_height}",
                 chain.len(),
             );
         }
-        let longest = chains
+        let longest = &chains
             .iter()
-            .max_by_key(|chain| chain.len())
-            .expect("at least one validator");
-        for (index, chain) in chains.iter().enumerate() {
+            .max_by_key(|(_, chain)| chain.len())
+            .expect("at least one honest validator")
+            .1;
+        for (index, chain) in &chains {
             for (height_index, block) in chain.iter().enumerate() {
                 assert_eq!(
                     block,
@@ -238,13 +383,31 @@ impl SimCluster {
         }
     }
 
-    /// No honest validator may ever observe Byzantine fault evidence in these tests.
+    /// No honest validator observed any Byzantine fault evidence.
     pub fn assert_no_faults(&self) {
-        for (index, validator) in self.validators.iter().enumerate() {
+        for &index in &self.honest_indices() {
             assert_eq!(
-                validator.activity.faults(),
+                self.validators[index].activity.faults(),
                 0,
                 "validator {index} observed fault evidence"
+            );
+        }
+    }
+
+    /// Every honest validator observed fault evidence, and all of it points at exactly
+    /// the given committee positions — nobody else got incriminated.
+    pub fn assert_faults_point_exactly_at(&self, culprit_indices: &[usize]) {
+        let expected: std::collections::BTreeSet<u32> =
+            culprit_indices.iter().map(|&index| index as u32).collect();
+        for &index in &self.honest_indices() {
+            let culprits = self.validators[index].activity.fault_culprits();
+            assert!(
+                self.validators[index].activity.faults() > 0,
+                "validator {index} observed no fault evidence at all",
+            );
+            assert_eq!(
+                culprits, expected,
+                "validator {index} recorded fault evidence for an unexpected set of validators",
             );
         }
     }
@@ -254,5 +417,26 @@ impl SimCluster {
     pub async fn assert_no_blocked_peers(&mut self) {
         let blocked = self.oracle.blocked().await.expect("oracle blocked query");
         assert!(blocked.is_empty(), "peers were blocked: {blocked:?}");
+    }
+
+    /// Honest validators must have blocked the given byzantine validator — and no honest
+    /// validator may have been blocked by anyone.
+    pub async fn assert_blocked_only(&mut self, byzantine_index: usize) {
+        let byzantine = self.validators[byzantine_index].identity.clone();
+        let blocked = self.oracle.blocked().await.expect("oracle blocked query");
+        assert!(
+            !blocked.is_empty(),
+            "expected the byzantine validator to get blocked by honest peers",
+        );
+        for (blocker, blocked_peer) in blocked {
+            assert_ne!(
+                blocker, byzantine,
+                "the byzantine validator should not be the one doing the blocking",
+            );
+            assert_eq!(
+                blocked_peer, byzantine,
+                "an honest validator was blocked; only the byzantine one may be",
+            );
+        }
     }
 }
