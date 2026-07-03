@@ -1,0 +1,28 @@
+[package]
+name = "zksync_os_consensus_sim"
+description = "Deterministic simulation harness for the BFT consensus stack"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_consensus_core.workspace = true
+
+# The `mocks` feature provides scheme fixtures (test keys/committees) and, later,
+# byzantine engine mocks. This crate is itself test infrastructure, so mocks belong
+# in its regular dependencies.
+commonware-codec.workspace = true
+commonware-consensus = { workspace = true, features = ["mocks"] }
+commonware-cryptography.workspace = true
+commonware-p2p.workspace = true
+commonware-runtime.workspace = true
+commonware-utils.workspace = true
+
+bytes.workspace = true
+futures.workspace = true
+tracing.workspace = true

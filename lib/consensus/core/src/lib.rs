@@ -1,17 +1,37 @@
-//! BFT consensus core for zksync-os-server, built on [commonware](https://commonware.xyz)
+//! BFT consensus for zksync-os-server, built on [commonware](https://commonware.xyz)
 //! simplex.
 //!
-//! This crate will contain the consensus subsystem: the application actor implementing
-//! commonware's `Automaton`/`Relay`/`Reporter` traits, per-epoch engine management, marshal
-//! wiring for ordered finalized-block delivery, and validator networking.
+//! # What this crate is
 //!
-//! Design rule: this crate depends only on commonware and the execution-seam traits — never
-//! on the node's sequencer/state/storage crates. That is what lets the entire consensus
-//! stack run under commonware's deterministic runtime in tests.
+//! The consensus subsystem that lets a set of mutually-distrusting validators agree on
+//! the sequence of blocks: leader rotation, voting, finality certificates, block
+//! dissemination, backfill, and crash-safe restart. It is deliberately ignorant of what
+//! a block *contains* — everything content-related happens behind the [`ExecutionEnv`]
+//! trait, implemented by the node (and by mock/in-memory environments in tests).
 //!
-//! Plan and architecture: `consensus_planning/` in the workspace root (see
-//! `01-target-architecture.md` and `02-testing-strategy.md`).
+//! The one non-negotiable design rule: **this crate never depends on the node's
+//! sequencer, state, or storage crates.** Consensus sees the node only through
+//! [`ExecutionEnv`]. This is what allows the entire stack — engine, marshal, gossip,
+//! backfill, storage — to run unmodified inside commonware's deterministic runtime,
+//! where multi-validator scenarios (crashes, partitions, byzantine peers) replay
+//! bit-exactly from a seed.
 //!
-//! Current contents: the spike S3 smoke test (`tests/simplex_smoke.rs`) proving the pinned
-//! commonware version runs a multi-validator simplex cluster deterministically inside this
-//! workspace. The real modules land with Phase 1.
+//! # Layout
+//!
+//! - [`execution`]: the [`ExecutionEnv`] boundary trait.
+//! - [`types`]: the concrete cryptography choices (BLS multisig over ed25519 identities,
+//!   round-robin leaders, static single-epoch committee).
+//! - [`application`] / [`committer`]: adapters between consensus and [`ExecutionEnv`].
+//! - [`storage`]: the archives persisting finalized blocks and certificates.
+//! - [`stack`]: assembles one validator's full stack (see its module docs for the
+//!   component diagram).
+
+pub mod application;
+pub mod committer;
+pub mod execution;
+pub mod stack;
+pub mod storage;
+pub mod types;
+
+pub use execution::{BuildContext, ExecutionEnv};
+pub use stack::{Channels, StackConfig, ValidatorStack, start_validator};

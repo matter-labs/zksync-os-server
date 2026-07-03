@@ -1,4 +1,5 @@
-//! Spike S3 — "hello world" for commonware simplex in this workspace.
+//! "Hello world" for the raw commonware simplex engine, below our own integration
+//! layers (no marshal, no block dissemination — digests only).
 //!
 //! What this proves (and is kept as a permanent regression test for):
 //! 1. The pinned commonware version compiles and runs inside this workspace.
@@ -12,8 +13,8 @@
 //!
 //! The "chain" here is trivial on purpose: payloads are just hashes derived from the
 //! consensus round, `verify` accepts everything, and nothing is executed or stored.
-//! Real payloads, verification, and dissemination arrive with the application actor
-//! and marshal wiring (see consensus_planning/01-target-architecture.md).
+//! The real integration (full blocks, verification, dissemination, ordered delivery)
+//! lives in the crate itself and is exercised by the simulation crate's cluster tests.
 
 use commonware_consensus::simplex::scheme::bls12381_multisig;
 use commonware_consensus::simplex::types::{Activity, Context};
@@ -38,9 +39,9 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Our D3 decision: BLS multisig certificates over ed25519 identities, MinPk variant
-/// (same choice as summit). See consensus_planning/00-context-and-decisions.md.
-type MultisigScheme = bls12381_multisig::Scheme<PublicKey, MinPk>;
+/// The same certificate scheme the production stack uses; the rationale lives on
+/// [`zksync_os_consensus_core::types::Scheme`].
+type MultisigScheme = zksync_os_consensus_core::types::Scheme;
 
 const NUM_VALIDATORS: u32 = 5;
 /// Views every validator must finalize before the test passes.

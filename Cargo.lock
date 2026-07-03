@@ -3691,9 +3691,9 @@ dependencies = [
 
 [[package]]
 name = "commonware-codec"
-version = "2026.5.0"
+version = "2026.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a771439216c7b5813e743937cb9b8dd700bce435c47fc73cd9aae1492f8696ce"
+checksum = "f06e32817f35fb517ceb6102d984f9a85fde85666c96f053638e323b8597f2f7"
 dependencies = [
  "bytes",
  "cfg-if",
@@ -16086,12 +16086,34 @@ dependencies = [
 name = "zksync_os_consensus_core"
 version = "0.20.8"
 dependencies = [
+ "commonware-broadcast",
+ "commonware-codec",
  "commonware-consensus",
  "commonware-cryptography",
  "commonware-p2p",
  "commonware-parallel",
  "commonware-runtime",
+ "commonware-storage",
  "commonware-utils",
+ "futures",
+ "rand 0.8.5",
+ "tracing",
+]
+
+[[package]]
+name = "zksync_os_consensus_sim"
+version = "0.20.8"
+dependencies = [
+ "bytes",
+ "commonware-codec",
+ "commonware-consensus",
+ "commonware-cryptography",
+ "commonware-p2p",
+ "commonware-runtime",
+ "commonware-utils",
+ "futures",
+ "tracing",
+ "zksync_os_consensus_core",
 ]
 
 [[package]]
