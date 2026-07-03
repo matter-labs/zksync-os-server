@@ -338,6 +338,13 @@ zksync_os_server = { version = "=0.20.8", path = "node/bin" }
 #zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
 
+# zksync-os draft-0.4.0 pins airbender-platform at rev 80c0541f6 (pre-v0.2.3); override to
+# v0.2.3 (rev db2767d) for the host bigint delegation fix (#76) until the upstream pin moves.
+# Cargo forbids same-source [patch] entries, so the v0.2.3 commit is reached through the bot
+# fork (same object network on GitHub).
+[patch."https://github.com/matter-labs/airbender-platform"]
+airbender-crypto = { git = "https://github.com/antoniolocascio-bot/airbender-platform", rev = "db2767d9ba871bb556ad8a2c8b4d39717f36cd47" }
+
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
 overflow-checks = true

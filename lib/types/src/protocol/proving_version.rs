@@ -71,11 +71,9 @@ impl ProvingVersion {
     const V7_VK_HASH: &'static str =
         "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
 
-    /// TODO: replace with the actual V8 VK hash for the zksync-os v0.4.0 native batch prover.
-    /// Placeholder sentinel: must stay distinct from every real VK hash so `try_from_vk_hash`
-    /// can round-trip V8 and the match arm stays reachable.
+    /// verification key hash generated from zksync-os v0.4.0, zksync-airbender 73d69b5 and zkos-wrapper a9eec62
     const V8_VK_HASH: &'static str =
-        "0x0000000000000000000000000000000000000000000000000000000000000008";
+        "0x87293b7f26e6c40111d512e13d8d06fe868b3ef764bc7d3a42058efc0f73bd9e";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {

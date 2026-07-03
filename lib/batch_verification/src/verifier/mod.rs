@@ -450,6 +450,61 @@ mod tests {
         assert_eq!(*validated.signer(), expected_signer);
     }
 
+    /// Utility (not a real test): runs the V8 native batch PIG for the simplest possible batch
+    /// (a single empty block at protocol v32.1) and dumps the resulting prover input in the
+    /// formats the `zksync-airbender` CLI understands, so it can be proven/verified on CPU
+    /// elsewhere (e.g. `cli prove --bin multiblock_batch.bin --input-file <hex> --backend cpu`).
+    ///
+    /// Run with:
+    ///   V8_PROVER_INPUT_OUT=/home/claude/v8-prover-input \
+    ///   cargo test -p zksync_os_batch_verification dump_v8_simplest_batch_prover_input \
+    ///     -- --ignored --nocapture
+    #[test]
+    #[ignore = "utility: dumps the V8 simplest-batch prover input to files"]
+    fn dump_v8_simplest_batch_prover_input() {
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let genesis_state = build_genesis_state_for_test(&protocol_version);
+        let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let tree = genesis_tree(&genesis_state, temp_dir.path());
+        let tree_block = empty_tree_block(&tree, protocol_version.clone());
+
+        let native_batch_run = generate_batch_run(
+            ProvingVersion::V8,
+            std::slice::from_ref(&tree_block.record),
+            &read_state,
+            tree.clone(),
+            PubdataMode::Calldata,
+        )
+        .expect("V8 native batch run failed");
+
+        let words = native_batch_run.prover_input;
+
+        let out_dir = std::env::var("V8_PROVER_INPUT_OUT")
+            .unwrap_or_else(|_| "/home/claude/v8-prover-input".to_string());
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        // `--input-type hex` (the CLI default): each u32 word as 8 lowercase hex chars, concatenated.
+        let hex: String = words.iter().map(|w| format!("{w:08x}")).collect();
+        let hex_path = format!("{out_dir}/v8_simplest_prover_input.hex");
+        std::fs::write(&hex_path, &hex).unwrap();
+
+        // Raw little-endian words (useful for other tooling / re-encoding as base64 prover-input-json).
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let bin_path = format!("{out_dir}/v8_simplest_prover_input.le.bin");
+        std::fs::write(&bin_path, &bytes).unwrap();
+
+        println!("=== V8 simplest-batch prover input ===");
+        println!("protocol_version: v32.1  proving_version: V8  pubdata_mode: Calldata");
+        println!("prover_input words: {}  ({} bytes)", words.len(), bytes.len());
+        println!("first words: {:?}", &words[..words.len().min(8)]);
+        println!("new_state_commitment: {:?}", native_batch_run.new_state_commitment);
+        println!("da_commitment:        {:?}", native_batch_run.da_commitment);
+        println!("wrote hex : {hex_path}");
+        println!("wrote bin : {bin_path}");
+    }
+
     fn v8_batch_for_signing<ReadState: ReadStateHistory>(
         tree_block: &TreeBlock,
         prev_batch_info: StoredBatchInfo,
