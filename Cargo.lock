@@ -16101,6 +16101,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_consensus_execution"
+version = "0.20.8"
+dependencies = [
+ "alloy",
+ "alloy-rlp",
+ "anyhow",
+ "bytes",
+ "commonware-codec",
+ "commonware-consensus",
+ "commonware-cryptography",
+ "commonware-runtime",
+ "futures",
+ "semver 1.0.26",
+ "tokio",
+ "tracing",
+ "zksync_os_consensus_core",
+ "zksync_os_consensus_sim",
+ "zksync_os_genesis",
+ "zksync_os_interface",
+ "zksync_os_mempool",
+ "zksync_os_multivm",
+ "zksync_os_network",
+ "zksync_os_observability",
+ "zksync_os_sequencer",
+ "zksync_os_storage_api",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zksync_os_consensus_sim"
 version = "0.20.8"
 dependencies = [

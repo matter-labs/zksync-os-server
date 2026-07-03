@@ -10,6 +10,16 @@ mod wire;
 //       entirely internal
 pub use service::{PeerVerifyBatch, PeerVerifyBatchResult};
 pub use wire::replays::RecordOverride;
+
+/// Versioned wire encodings of replay records. Every version file is immutable once
+/// released (new shapes get new version files), which makes these the only encodings of
+/// a replay record that are safe to put on a network or hash into an identity.
+///
+/// Consumers today: the external-node replay sync protocol (in this crate) and the
+/// consensus block encoding. The encodings do not depend on the networking machinery;
+/// extracting them into a standalone crate is a known cleanup, at which point this
+/// export disappears.
+pub use wire::replays;
 pub use wire::verification::{VerifyBatch, VerifyBatchOutcome, VerifyBatchResult};
 
 // Re-export relevant Reth types

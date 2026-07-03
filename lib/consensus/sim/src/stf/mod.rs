@@ -20,4 +20,5 @@ mod execution;
 mod genesis;
 
 pub use block::StfBlock;
-pub use execution::{RealStfExecution, TEST_RECIPIENT, test_sender_address};
+pub use execution::{RealStfExecution, TEST_RECIPIENT, make_test_transfer, test_sender_address};
+pub use genesis::{SharedGenesis, shared_genesis};

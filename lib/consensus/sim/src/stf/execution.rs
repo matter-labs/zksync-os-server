@@ -437,6 +437,28 @@ impl RealStfExecution {
     }
 }
 
+/// Builds a signed transfer from the funded test sender. Public so that other test
+/// suites can produce executable transactions against the shared genesis.
+pub fn make_test_transfer(chain_id: u64, nonce: u64, value: U256) -> L2Transaction {
+    let sender = PrivateKeySigner::from_str(SENDER_KEY).expect("valid dev key");
+    let tx = TxEip1559 {
+        chain_id,
+        nonce,
+        gas_limit: 1_000_000,
+        max_fee_per_gas: 1_000_000_000,
+        max_priority_fee_per_gas: 0,
+        to: TxKind::Call(TEST_RECIPIENT),
+        value,
+        access_list: Default::default(),
+        input: Default::default(),
+    };
+    let signature = sender
+        .sign_hash_sync(&tx.signature_hash())
+        .expect("signing cannot fail");
+    let envelope: L2Envelope = tx.into_signed(signature).into();
+    Recovered::new_unchecked(envelope, sender.address())
+}
+
 fn make_transfer(
     sender: &PrivateKeySigner,
     chain_id: u64,

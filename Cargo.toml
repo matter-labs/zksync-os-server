@@ -46,6 +46,7 @@ members = [
     "lib/alloy_ext",
     "lib/provider",
     "lib/consensus/core",
+    "lib/consensus/execution",
     "lib/consensus/sim",
 ]
 resolver = "3"
@@ -338,6 +339,7 @@ zksync_os_base_token_adjuster = { version = "=0.20.8", path = "lib/base_token_ad
 zksync_os_reth_compat = { version = "=0.20.8", path = "lib/reth_compat" }
 zksync_os_operator_signer = { version = "=0.20.8", path = "lib/operator_signer" }
 zksync_os_consensus_core = { version = "=0.20.8", path = "lib/consensus/core" }
+zksync_os_consensus_execution = { version = "=0.20.8", path = "lib/consensus/execution" }
 zksync_os_consensus_sim = { version = "=0.20.8", path = "lib/consensus/sim" }
 zksync_os_integration_tests_macros = { version = "=0.20.8", path = "integration-tests-macros" }
 zksync_os_tx_validators = { version = "=0.20.8", path = "lib/tx_validators" }

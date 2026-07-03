@@ -1,0 +1,43 @@
+[package]
+name = "zksync_os_consensus_execution"
+description = "The node-side execution environment for BFT consensus: speculative state over the sequencer's state backend, block verification by re-execution, and ordered commit into the persistence pipeline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_consensus_core.workspace = true
+
+zksync_os_genesis.workspace = true
+zksync_os_mempool.workspace = true
+zksync_os_network.workspace = true
+zksync_os_observability.workspace = true
+zksync_os_sequencer.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_types.workspace = true
+zksync_os_interface.workspace = true
+
+commonware-codec.workspace = true
+commonware-consensus.workspace = true
+commonware-cryptography.workspace = true
+
+alloy = { workspace = true, features = ["consensus", "rlp", "std", "kzg"] }
+alloy-rlp.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+semver.workspace = true
+zksync_os_multivm.workspace = true
+# Test fixtures: the simulation crate provides the in-memory production genesis and
+# helpers for signing test transactions.
+zksync_os_consensus_sim.workspace = true
+commonware-runtime.workspace = true
