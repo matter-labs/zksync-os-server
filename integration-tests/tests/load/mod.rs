@@ -1241,10 +1241,8 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // sub-second window — receipt waiters that lag it find nothing, ever. Floor the retention so
     // receipts survive the full confirmation path; an explicit
     // `general_blocks_to_retain_in_memory` env still raises it further.
-    config.general_config.blocks_to_retain_in_memory = config
-        .general_config
-        .blocks_to_retain_in_memory
-        .max(100_000);
+    config.general_config.blocks_to_retain_in_memory =
+        config.general_config.blocks_to_retain_in_memory.max(1_000);
     // Backpressure stays ENABLED (default limits). Even with lingering the tree is the slowest
     // consumer; when it falls behind the node gracefully stops accepting txs. Disabling backpressure
     // instead lets the applier->tree channel overflow and panic ("consumer is catastrophically
@@ -1452,8 +1450,7 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
         while !readers.is_empty() {
             let mut group: Vec<corpus::CorpusReader> =
                 readers.drain(..group_size.min(readers.len())).collect();
-            let (part_tx, part_rx) =
-                tokio::sync::mpsc::channel::<Vec<Vec<Vec<u8>>>>(4);
+            let (part_tx, part_rx) = tokio::sync::mpsc::channel::<Vec<Vec<Vec<u8>>>>(4);
             std::thread::spawn(move || {
                 loop {
                     match read_round(&mut group, submit_pipeline) {
