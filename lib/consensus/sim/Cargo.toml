@@ -13,6 +13,21 @@ categories.workspace = true
 [dependencies]
 zksync_os_consensus_core.workspace = true
 
+# Real-STF execution backend: the production VM entry, genesis derivation, and the
+# transaction/state types, so simulated blocks can carry actually-executed transactions.
+zksync_os_genesis.workspace = true
+zksync_os_interface.workspace = true
+zksync_os_multivm.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_types.workspace = true
+zk_ee.workspace = true
+zk_os_api.workspace = true
+zk_os_basic_system.workspace = true
+# kzg: zksync_os_batch_types (via zksync_os_storage_api) calls SidecarBuilder::build,
+# which alloy only provides with the kzg feature; the node graph gets it from l1_sender.
+alloy = { workspace = true, features = ["consensus", "signer-local", "k256", "rlp", "std", "kzg"] }
+anyhow.workspace = true
+
 # The `mocks` feature provides scheme fixtures (test keys/committees) and, later,
 # byzantine engine mocks. This crate is itself test infrastructure, so mocks belong
 # in its regular dependencies.

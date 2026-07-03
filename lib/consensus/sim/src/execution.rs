@@ -11,6 +11,19 @@ use commonware_cryptography::Digestible;
 use std::sync::{Arc, Mutex};
 use zksync_os_consensus_core::{BuildContext, ExecutionEnv};
 
+/// An [`ExecutionEnv`] that the simulated cluster can observe: what has this validator
+/// durably committed? Any execution backend (mock or real) implements this so the same
+/// cluster harness and assertions work over both.
+pub trait SimEnv: ExecutionEnv {
+    /// Height of the last committed block, if any.
+    fn committed_tip(&self) -> Option<u64>;
+
+    /// Digests of the committed chain, in height order. Digests (rather than blocks)
+    /// are what agreement assertions compare — two validators committed "the same
+    /// chain" exactly when their digest sequences match.
+    fn committed_chain_digests(&self) -> Vec<<Self::Block as Digestible>::Digest>;
+}
+
 /// Shared-state mock execution: clones observe and mutate the same chain, exactly like
 /// clones of a real execution handle would.
 #[derive(Clone, Default)]
@@ -41,6 +54,19 @@ impl MockExecution {
             use commonware_consensus::Heightable;
             block.height().get()
         })
+    }
+}
+
+impl SimEnv for MockExecution {
+    fn committed_tip(&self) -> Option<u64> {
+        MockExecution::committed_tip(self)
+    }
+
+    fn committed_chain_digests(&self) -> Vec<commonware_cryptography::sha256::Digest> {
+        self.committed_chain()
+            .iter()
+            .map(|block| block.digest())
+            .collect()
     }
 }
 

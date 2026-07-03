@@ -22,9 +22,10 @@ pub mod cluster;
 pub mod execution;
 pub mod links;
 pub mod scenario;
+pub mod stf;
 
 pub use activity::ActivityLog;
 pub use block::SimBlock;
 pub use cluster::{Behavior, SimCluster, SimValidator};
-pub use execution::MockExecution;
+pub use execution::{MockExecution, SimEnv};
 pub use scenario::run_scenario;

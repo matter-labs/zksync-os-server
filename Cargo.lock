@@ -16104,6 +16104,9 @@ dependencies = [
 name = "zksync_os_consensus_sim"
 version = "0.20.8"
 dependencies = [
+ "alloy",
+ "anyhow",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "bytes",
  "commonware-codec",
  "commonware-consensus",
@@ -16113,7 +16116,14 @@ dependencies = [
  "commonware-utils",
  "futures",
  "tracing",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
+ "zksync_os_api",
  "zksync_os_consensus_core",
+ "zksync_os_genesis",
+ "zksync_os_interface",
+ "zksync_os_multivm",
+ "zksync_os_storage_api",
+ "zksync_os_types",
 ]
 
 [[package]]

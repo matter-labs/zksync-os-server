@@ -5,16 +5,22 @@
 //! degraded links), crash and restart validators, plant byzantine ones, and assert on
 //! what was committed. Time is virtual (a minute of consensus takes milliseconds of wall
 //! clock) and every run is reproducible from the runtime seed.
+//!
+//! The cluster is generic over the execution backend: the same harness drives the
+//! in-memory [`MockExecution`] (fast, content-free blocks) and the real-STF environment
+//! (actual transactions executed by the production VM). `SimCluster` defaults to the
+//! mock so most scenarios stay short.
 
 use crate::activity::ActivityLog;
-use crate::block::SimBlock;
-use crate::execution::MockExecution;
+use crate::execution::{MockExecution, SimEnv};
+use commonware_codec::Read;
 use commonware_consensus::simplex::mocks::{conflicter, nuller};
 use commonware_consensus::simplex::scheme::bls12381_multisig;
-use commonware_cryptography::Sha256;
 use commonware_cryptography::bls12381::primitives::variant::MinPk;
 use commonware_cryptography::certificate::mocks::Fixture;
 use commonware_cryptography::ed25519::PublicKey;
+use commonware_cryptography::sha256::Digest as Sha256Digest;
+use commonware_cryptography::{Digestible, Sha256};
 use commonware_p2p::simulated::{Config as NetworkConfig, Link, Network, Oracle};
 use commonware_runtime::{Clock, Handle, Metrics, Quota, deterministic};
 use commonware_utils::NZUsize;
@@ -47,26 +53,26 @@ pub enum Behavior {
 }
 
 /// What is currently running for a validator.
-enum Running {
-    Full(ValidatorStack<SimBlock>),
+enum Running<B: commonware_consensus::Block> {
+    Full(ValidatorStack<B>),
     Byzantine(Handle<()>),
 }
 
-pub struct SimCluster {
+pub struct SimCluster<X: SimEnv = MockExecution> {
     context: deterministic::Context,
     pub oracle: Oracle<PublicKey, deterministic::Context>,
-    pub validators: Vec<SimValidator>,
+    pub validators: Vec<SimValidator<X>>,
 }
 
-pub struct SimValidator {
+pub struct SimValidator<X: SimEnv> {
     pub identity: PublicKey,
     pub behavior: Behavior,
     /// This validator's view of the chain; survives crash/restart like a node's disk.
     /// Stays empty for byzantine validators (they run no execution).
-    pub env: MockExecution,
+    pub env: X,
     /// Records fault evidence this validator observed.
     pub activity: ActivityLog,
-    running: Option<Running>,
+    running: Option<Running<X::Block>>,
     scheme: Scheme,
     partition_prefix: String,
     /// How many times this validator has been started. Only used to give each
@@ -76,20 +82,38 @@ pub struct SimValidator {
     incarnation: usize,
 }
 
-impl SimCluster {
-    /// Starts `num_validators` honest, fully-linked validators.
+impl SimCluster<MockExecution> {
+    /// Starts `num_validators` honest, fully-linked validators over mock execution.
     pub async fn start(context: deterministic::Context, num_validators: u32, link: Link) -> Self {
         let behaviors = vec![Behavior::Honest; num_validators as usize];
         Self::start_with_behaviors(context, &behaviors, link).await
     }
 
-    /// Starts one validator per entry in `behaviors`, fully linked. Byzantine validators
-    /// join the network with valid credentials — they are real committee members whose
-    /// key happens to sign contradictory votes.
+    /// Starts one validator per entry in `behaviors` over mock execution.
     pub async fn start_with_behaviors(
+        context: deterministic::Context,
+        behaviors: &[Behavior],
+        link: Link,
+    ) -> Self {
+        Self::start_with_env(context, behaviors, link, |_index| MockExecution::new()).await
+    }
+}
+
+impl<X> SimCluster<X>
+where
+    X: SimEnv,
+    X::Block: Digestible<Digest = Sha256Digest>,
+    <X::Block as Read>::Cfg: Default + Clone + Send + Sync + 'static,
+{
+    /// Starts one validator per entry in `behaviors`, fully linked, each with the
+    /// execution environment `env_factory` builds for it. Byzantine validators join the
+    /// network with valid credentials — they are real committee members whose key
+    /// happens to sign contradictory votes.
+    pub async fn start_with_env(
         mut context: deterministic::Context,
         behaviors: &[Behavior],
         link: Link,
+        env_factory: impl Fn(usize) -> X,
     ) -> Self {
         let Fixture {
             participants,
@@ -120,7 +144,7 @@ impl SimCluster {
             let mut validator = SimValidator {
                 identity: identity.clone(),
                 behavior: behaviors[index],
-                env: MockExecution::new(),
+                env: env_factory(index),
                 activity: ActivityLog::new(),
                 running: None,
                 scheme: schemes[index].clone(),
@@ -141,7 +165,7 @@ impl SimCluster {
         context: &deterministic::Context,
         oracle: &mut Oracle<PublicKey, deterministic::Context>,
         index: usize,
-        validator: &mut SimValidator,
+        validator: &mut SimValidator<X>,
     ) {
         let quota = Quota::per_second(NonZeroU32::MAX);
         let control = oracle.control(validator.identity.clone());
@@ -179,7 +203,7 @@ impl SimCluster {
                     oracle.control(validator.identity.clone()),
                     oracle.manager(),
                     channels,
-                    (),
+                    Default::default(),
                     validator.activity.clone(),
                 )
                 .await;
@@ -350,14 +374,14 @@ impl SimCluster {
         }
     }
 
-    /// The agreement property: every honest validator's committed chain is a prefix of
-    /// the longest one (identical blocks at every common height), and every honest
-    /// validator reached at least `minimum_height`.
+    /// The agreement property: every honest validator's committed chain (as a digest
+    /// sequence) is a prefix of the longest one, and every honest validator reached at
+    /// least `minimum_height`.
     pub fn assert_committed_chains_agree(&self, minimum_height: u64) {
         let honest = self.honest_indices();
-        let chains: Vec<(usize, Vec<SimBlock>)> = honest
+        let chains: Vec<(usize, Vec<Sha256Digest>)> = honest
             .iter()
-            .map(|&index| (index, self.validators[index].env.committed_chain()))
+            .map(|&index| (index, self.validators[index].env.committed_chain_digests()))
             .collect();
         for (index, chain) in &chains {
             assert!(
@@ -372,9 +396,9 @@ impl SimCluster {
             .expect("at least one honest validator")
             .1;
         for (index, chain) in &chains {
-            for (height_index, block) in chain.iter().enumerate() {
+            for (height_index, digest) in chain.iter().enumerate() {
                 assert_eq!(
-                    block,
+                    digest,
                     &longest[height_index],
                     "validator {index} committed a different block at height {}",
                     height_index + 1,
