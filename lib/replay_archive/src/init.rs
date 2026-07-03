@@ -6,10 +6,10 @@ use anyhow::Context as _;
 use reth_tasks::Runtime;
 
 use crate::{
-    AgeEncryptedReplayArchiver, FileSystemReplayArchiveStorage, GcsReplayArchiveConfig,
-    GcsReplayArchiveStorage, ReplayArchiveComponent, ReplayArchiveSender, ReplayArchiveSession,
-    ReplayArchiveStorage, ReplayArchiver, ReplayRecordArchiver, S3ReplayArchiveConfig,
-    S3ReplayArchiveStorage,
+    AgeEncryptedReplayArchiver, ArchiveRecipient, FileSystemReplayArchiveStorage, GcpKmsClient,
+    GcpKmsConfig, GcpKmsRecipient, GcsReplayArchiveConfig, GcsReplayArchiveStorage,
+    ReplayArchiveComponent, ReplayArchiveSender, ReplayArchiveSession, ReplayArchiveStorage,
+    ReplayArchiver, ReplayRecordArchiver, S3ReplayArchiveConfig, S3ReplayArchiveStorage,
 };
 
 #[derive(Debug, Clone)]
@@ -33,6 +33,7 @@ pub enum ReplayArchiveConfig {
 pub enum ReplayArchiveEncryptionConfig {
     Noop,
     AgeX25519 { recipient: String },
+    GcpKms { config: GcpKmsConfig },
 }
 
 pub type InitializedReplayArchive = (ReplayArchiveSender, Arc<dyn ReplayArchiver>);
@@ -59,21 +60,21 @@ pub async fn init_replay_archive(
                 .await
                 .with_context(|| format!("failed to create replay archive session {session}"))
                 .expect("failed to initialize replay archive");
-            archive_for_storage(storage, encryption)
+            archive_for_storage(storage, encryption).await
         }
         ReplayArchiveConfig::S3 { config, encryption } => {
             let storage = S3ReplayArchiveStorage::init(config.clone(), session.clone())
                 .await
                 .with_context(|| format!("failed to create replay archive S3 session {session}"))
                 .expect("failed to initialize S3 replay archive");
-            archive_for_storage(storage, encryption)
+            archive_for_storage(storage, encryption).await
         }
         ReplayArchiveConfig::Gcs { config, encryption } => {
             let storage = GcsReplayArchiveStorage::init(config.clone(), session.clone())
                 .await
                 .with_context(|| format!("failed to create replay archive GCS session {session}"))
                 .expect("failed to initialize GCS replay archive");
-            archive_for_storage(storage, encryption)
+            archive_for_storage(storage, encryption).await
         }
     };
     let (sender, component) = ReplayArchiveComponent::new(archive.clone());
@@ -87,7 +88,7 @@ pub async fn init_replay_archive(
     Some((sender, archive))
 }
 
-fn archive_for_storage<Storage>(
+async fn archive_for_storage<Storage>(
     storage: Storage,
     encryption: &ReplayArchiveEncryptionConfig,
 ) -> Arc<dyn ReplayArchiver>
@@ -100,6 +101,18 @@ where
             AgeEncryptedReplayArchiver::from_recipient_str(storage, recipient)
                 .expect("failed to initialize age X25519 replay archive encryption"),
         ),
+        ReplayArchiveEncryptionConfig::GcpKms { config } => {
+            let client = GcpKmsClient::new(config)
+                .await
+                .expect("failed to initialize GCP KMS client for replay archive encryption");
+            let recipient = GcpKmsRecipient::fetch(&client)
+                .await
+                .expect("failed to fetch GCP KMS public key for replay archive encryption");
+            Arc::new(AgeEncryptedReplayArchiver::new(
+                storage,
+                ArchiveRecipient::GcpKms(recipient),
+            ))
+        }
     }
 }
 

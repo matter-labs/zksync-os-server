@@ -1,4 +1,6 @@
+use crate::kms::GcpKmsIdentity;
 use crate::{ReplayArchiveKey, ReplayArchiveStorageReader, format_block_hash};
+use age_core::format::{FileKey, Stanza};
 use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context as _;
 use futures::StreamExt as _;
@@ -74,7 +76,7 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
     replay_db_path: &Path,
     anchor_block_number: BlockNumber,
     anchor_block_hash: BlockHash,
-    identity: Option<age::x25519::Identity>,
+    identity: Option<ArchiveIdentity>,
 ) -> anyhow::Result<usize> {
     tracing::info!(
         input_root = %input_root.display(),
@@ -83,11 +85,17 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
         %anchor_block_hash,
         "Starting replay archive RocksDB recovery"
     );
-    if let Some(identity) = &identity {
-        tracing::info!(
+    match &identity {
+        Some(ArchiveIdentity::X25519(identity)) => tracing::info!(
             "Replay archive RocksDB recovery will decrypt objects in memory, public key: {}",
             identity.to_public(),
-        );
+        ),
+        Some(ArchiveIdentity::GcpKms(identity)) => tracing::info!(
+            "Replay archive RocksDB recovery will decrypt objects in memory \
+             via GCP KMS key version {}",
+            identity.key_version(),
+        ),
+        None => {}
     }
     let decoder = ReplayRecordDecoder { identity };
 
@@ -293,8 +301,23 @@ async fn read_verified_replay_record(
     canonical_record.context("replay archive record count was non-zero but no record was loaded")
 }
 
+/// age identity used for replay archive record decryption.
+pub enum ArchiveIdentity {
+    X25519(age::x25519::Identity),
+    GcpKms(GcpKmsIdentity),
+}
+
+impl age::Identity for ArchiveIdentity {
+    fn unwrap_stanza(&self, stanza: &Stanza) -> Option<Result<FileKey, age::DecryptError>> {
+        match self {
+            Self::X25519(identity) => identity.unwrap_stanza(stanza),
+            Self::GcpKms(identity) => identity.unwrap_stanza(stanza),
+        }
+    }
+}
+
 struct ReplayRecordDecoder {
-    identity: Option<age::x25519::Identity>,
+    identity: Option<ArchiveIdentity>,
 }
 
 impl ReplayRecordDecoder {
@@ -518,7 +541,7 @@ mod tests {
             replay_db.path(),
             1,
             block_hash,
-            Some(identity),
+            Some(ArchiveIdentity::X25519(identity)),
         )
         .await
         .unwrap();

@@ -62,7 +62,8 @@ Current archive implementations:
 - `S3ReplayArchiveStorage`: append-only object storage in S3 or an S3-compatible service.
 - `GcsReplayArchiveStorage`: append-only object storage in Google Cloud Storage.
 - `AgeEncryptedReplayArchiver`: wrapper that JSON-encodes replay records and encrypts them with
-  age X25519 before storing them in any `ReplayArchiveStorage`.
+  age before storing them in any `ReplayArchiveStorage`. Supports X25519 recipients and GCP KMS
+  asymmetric keys.
 
 Current reader implementation:
 
@@ -77,9 +78,9 @@ Other storage backends should implement:
 
 ## Encryption
 
-Encrypted archives use age X25519.
+Encrypted archives use the age format with one of two recipient types.
 
-The node needs only the public recipient key:
+With age X25519, the node needs only the public recipient key:
 
 ```text
 age1...
@@ -90,6 +91,21 @@ The private identity should be stored separately and used only during recovery:
 ```text
 AGE-SECRET-KEY-...
 ```
+
+With GCP KMS, the node is configured with the resource name of an `ASYMMETRIC_DECRYPT` key version
+using an `RSA_DECRYPT_OAEP_*_SHA256` algorithm:
+
+```text
+projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
+```
+
+The node fetches the public key once at startup (requiring only
+`cloudkms.cryptoKeyVersions.viewPublicKey`) and wraps the per-record age file key locally with
+RSA-OAEP; no private key material exists outside KMS. During recovery, unwrapping the file key of
+every record takes one KMS `AsymmetricDecrypt` call (requiring
+`cloudkms.cryptoKeyVersions.useToDecrypt`), so key access can be revoked and audited per record.
+Note that KMS-encrypted objects use a custom age stanza and can only be decrypted by the recovery
+tool, not by the stock `age` CLI.
 
 Encryption is randomized, so archive presence checks verify object existence only. They do not
 re-encrypt a replay record and compare bytes.
@@ -111,7 +127,9 @@ anchor = (latest_block_number, latest_block_hash)
 ```
 
 If the archive was encrypted, recovery decrypts downloaded objects in memory when an age identity
-file is provided. Decrypted replay records are not written to disk.
+file (`--identity-file` / `--age-secret-key`) or a GCP KMS key version (`--kms-key-version`, with
+optional `--kms-credential-file-path`) is provided. Decrypted replay records are not written to
+disk.
 
 The recovery logic starts from the anchor, reads the replay record for that block, extracts the
 previous block hash from the replay record, and walks backward until block `0`. It then writes the

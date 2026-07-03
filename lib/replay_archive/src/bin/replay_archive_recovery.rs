@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use zksync_os_replay_archive::{
-    FileSystemReplayArchiveReader, GcsReplayArchiveAuthMode, GcsReplayArchiveConfig,
-    GcsReplayArchiveReader, S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader,
+    ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity,
+    GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
+    S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader,
     download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
     recover_replay_records_to_rocksdb_with_optional_decryption,
 };
@@ -76,16 +77,26 @@ enum Command {
         #[arg(long)]
         anchor_block_hash: alloy::primitives::BlockHash,
         /// age identity file containing AGE-SECRET-KEY. If provided, records are decrypted in memory.
-        #[arg(long, conflicts_with = "age_secret_key")]
+        #[arg(long, conflicts_with_all = ["age_secret_key", "kms_key_version"])]
         identity_file: Option<PathBuf>,
         /// age AGE-SECRET-KEY value. If provided, records are decrypted in memory.
         #[arg(
             long,
             env = "REPLAY_ARCHIVE_AGE_SECRET_KEY",
             hide_env_values = true,
-            conflicts_with = "identity_file"
+            conflicts_with_all = ["identity_file", "kms_key_version"]
         )]
         age_secret_key: Option<String>,
+        /// GCP KMS key version resource name
+        /// (`projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..`).
+        /// If provided, records are decrypted in memory, unwrapping the encryption key of every
+        /// record with one KMS asymmetric decrypt call.
+        #[arg(long, conflicts_with_all = ["identity_file", "age_secret_key"])]
+        kms_key_version: Option<String>,
+        /// Path to the GCP credentials file for KMS access. Ambient authentication is used
+        /// when absent.
+        #[arg(long, requires = "kms_key_version")]
+        kms_credential_file_path: Option<PathBuf>,
     },
 }
 
@@ -146,11 +157,24 @@ async fn main() -> anyhow::Result<()> {
             anchor_block_hash,
             identity_file,
             age_secret_key,
+            kms_key_version,
+            kms_credential_file_path,
         } => {
-            let identity = if let Some(age_secret_key) = age_secret_key {
-                Some(parse_age_x25519_identity(&age_secret_key)?)
+            let identity = if let Some(key_version) = kms_key_version {
+                let client = GcpKmsClient::new(&GcpKmsConfig {
+                    key_version,
+                    credentials_file: kms_credential_file_path,
+                })
+                .await?;
+                Some(ArchiveIdentity::GcpKms(GcpKmsIdentity::new(client)))
+            } else if let Some(age_secret_key) = age_secret_key {
+                Some(ArchiveIdentity::X25519(parse_age_x25519_identity(
+                    &age_secret_key,
+                )?))
             } else if let Some(identity_file) = identity_file {
-                Some(read_age_x25519_identity(&identity_file).await?)
+                Some(ArchiveIdentity::X25519(
+                    read_age_x25519_identity(&identity_file).await?,
+                ))
             } else {
                 None
             };
