@@ -1400,24 +1400,45 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // wallet (on-chain nonce < rounds submitted => a tx was accepted but never executed) from an
     // executed-but-receipt-invisible tx.
     let mut rounds_submitted: u64 = 0;
-    'rounds: while Instant::now() < deadline {
-        // One tx from every wallet — all at the current nonce (readers advance in lockstep).
-        let mut round: Vec<Vec<u8>> = Vec::with_capacity(num_wallets);
-        for reader in &mut readers {
+    // Reads one nonce round (one tx per wallet, wallet order preserved), pre-chunked for the
+    // batch tasks so the hot round loop never re-copies raw txs — the chunks are MOVED into
+    // their tasks. Returns `None` once any wallet's corpus is exhausted.
+    fn read_round(
+        readers: &mut [corpus::CorpusReader],
+        chunk_size: usize,
+    ) -> anyhow::Result<Option<Vec<Vec<Vec<u8>>>>> {
+        let mut chunks = Vec::with_capacity(readers.len().div_ceil(chunk_size));
+        let mut current: Vec<Vec<u8>> = Vec::with_capacity(chunk_size);
+        for reader in readers.iter_mut() {
             match reader.next_record()? {
-                Some(raw) => round.push(raw),
-                None => break 'rounds, // a wallet's corpus is exhausted
+                Some(raw) => current.push(raw),
+                None => return Ok(None),
+            }
+            if current.len() == chunk_size {
+                chunks.push(std::mem::replace(
+                    &mut current,
+                    Vec::with_capacity(chunk_size),
+                ));
             }
         }
+        if !current.is_empty() {
+            chunks.push(current);
+        }
+        Ok(Some(chunks))
+    }
+    let mut next_round = read_round(&mut readers, submit_pipeline)?;
+    while Instant::now() < deadline {
+        let Some(round_chunks) = next_round.take() else {
+            break; // a wallet's corpus is exhausted
+        };
+        let round_len: usize = round_chunks.iter().map(|chunk| chunk.len()).sum();
 
-        // Send this nonce's txs as chunked JSON-RPC batches, concurrently across the client pool.
-        // Throttling ("not currently accepting transactions") is a global gate, so a batch is rejected
-        // atomically; resend it after a short backoff. Any other RPC error is a real failure.
+        // Send this nonce's txs as chunked JSON-RPC batches, concurrently across the client
+        // pool. Any RPC error other than admission throttling is a real failure.
         let sent_at = Instant::now();
         let mut batch_tasks = JoinSet::new();
-        for (idx, chunk) in round.chunks(submit_pipeline).enumerate() {
+        for (idx, chunk) in round_chunks.into_iter().enumerate() {
             let client = clients[idx % clients.len()].clone();
-            let chunk: Vec<Vec<u8>> = chunk.to_vec();
             batch_tasks.spawn(async move {
                 // Batch entries are admitted CONCURRENTLY server-side, so the throttle gate
                 // ("not accepting") can flip mid-batch and admit only part of a chunk. Resend
@@ -1457,8 +1478,11 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
             });
         }
 
+        // Overlap the next round's corpus reads/allocations with the in-flight batches.
+        next_round = read_round(&mut readers, submit_pipeline)?;
+
         // Barrier: every batch of this nonce must be accepted before we advance to the next nonce.
-        let mut hashes = Vec::with_capacity(round.len());
+        let mut hashes = Vec::with_capacity(round_len);
         while let Some(res) = batch_tasks.join_next().await {
             hashes.extend(res??);
         }
