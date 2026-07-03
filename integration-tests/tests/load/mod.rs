@@ -1350,6 +1350,9 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     let submit_latency_micros = Arc::new(AtomicU64::new(0));
     let latency_micros = Arc::new(AtomicU64::new(0));
     let final_receipt_latency_micros = Arc::new(AtomicU64::new(0));
+    // Receipts whose heartbeat watcher missed the inclusion (fell back to direct polling); a
+    // large value means the ws newHeads subscription is dropping heads under the block rate.
+    let watcher_missed = Arc::new(AtomicU64::new(0));
 
     // Optional CPU profiling: `LOAD_TEST_FLAMEGRAPH=<path>` samples the whole (in-process node +
     // client) for the run and writes a flamegraph SVG, to attribute where CPU actually goes on the
@@ -1459,13 +1462,42 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
                 let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
                 let confirmed = confirmed.clone();
                 let latency_micros = latency_micros.clone();
+                let watcher_missed = watcher_missed.clone();
                 let root = root.clone();
                 receipts.spawn(async move {
-                    let receipt = PendingTransactionBuilder::new(root, hash)
-                        .with_timeout(Some(RECEIPT_TIMEOUT))
+                    // Fast path: the provider's heartbeat watcher. At bench block rates
+                    // (1000s of newHeads/s over one ws subscription) the heartbeat drops
+                    // heads, and a watcher whose block was skipped hangs forever — so give
+                    // it a short slice and fall back to authoritative direct receipt
+                    // polling. Only the missed fraction ever polls.
+                    const WATCH_SLICE: Duration = Duration::from_secs(10);
+                    let watched = PendingTransactionBuilder::new(root.clone(), hash)
+                        .with_timeout(Some(WATCH_SLICE))
                         .get_receipt()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("receipt wait for tx {hash}: {e}"))?;
+                        .await;
+                    let receipt = match watched {
+                        Ok(receipt) => receipt,
+                        Err(_) => {
+                            watcher_missed.fetch_add(1, Ordering::Relaxed);
+                            loop {
+                                let polled = root
+                                    .get_transaction_receipt(hash)
+                                    .await
+                                    .map_err(|e| {
+                                        anyhow::anyhow!("getTransactionReceipt {hash}: {e}")
+                                    })?;
+                                match polled {
+                                    Some(receipt) => break receipt,
+                                    None if sent_at.elapsed() > RECEIPT_TIMEOUT => {
+                                        anyhow::bail!(
+                                            "receipt for tx {hash} not found within timeout (direct poll)"
+                                        );
+                                    }
+                                    None => tokio::time::sleep(Duration::from_millis(500)).await,
+                                }
+                            }
+                        }
+                    };
                     drop(permit);
                     anyhow::ensure!(
                         receipt.status(),
@@ -1591,6 +1623,7 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
         submitted,
         confirmed,
         final_receipts_confirmed,
+        watcher_missed = watcher_missed.load(Ordering::Relaxed),
         ?elapsed,
         submitted_parallel_tps = submitted_tps,
         submitted_window_tps,
