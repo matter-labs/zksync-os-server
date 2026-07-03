@@ -1,0 +1,22 @@
+[package]
+name = "zksync_os_consensus_core"
+description = "BFT consensus core: commonware simplex integration (application actor, epoch management, marshal wiring)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+# The `mocks` feature exposes commonware's scheme fixtures and byzantine engine mocks.
+commonware-consensus = { workspace = true, features = ["mocks"] }
+commonware-cryptography.workspace = true
+commonware-p2p.workspace = true
+commonware-parallel.workspace = true
+commonware-runtime.workspace = true
+commonware-utils.workspace = true

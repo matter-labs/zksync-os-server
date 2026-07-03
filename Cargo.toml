@@ -45,6 +45,7 @@ members = [
     "lib/backpressure",
     "lib/alloy_ext",
     "lib/provider",
+    "lib/consensus/core",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -213,6 +214,20 @@ num_cpus = "1.17.0"
 rocksdb = "0.24.0"
 thread_local = "1.1.9"
 pin-project = "1.1.10"
+# Commonware — the BFT consensus stack (simplex, deterministic runtime, simulated p2p).
+# Pin EXACTLY: commonware ships monthly CalVer releases with breaking changes; upgrades
+# are a deliberate chore, never accidental. See consensus_planning/00-context-and-decisions.md (D2).
+commonware-broadcast = "=2026.4.0"
+commonware-codec = "=2026.4.0"
+commonware-consensus = "=2026.4.0"
+commonware-cryptography = "=2026.4.0"
+commonware-macros = "=2026.4.0"
+commonware-p2p = "=2026.4.0"
+commonware-parallel = "=2026.4.0"
+commonware-resolver = "=2026.4.0"
+commonware-runtime = "=2026.4.0"
+commonware-storage = "=2026.4.0"
+commonware-utils = "=2026.4.0"
 assert_matches = "1.5"
 serde_yaml = "0.9"
 secrecy = "0.10.3"
@@ -317,6 +332,7 @@ zksync_os_external_price_api = { version = "=0.20.8", path = "lib/external_price
 zksync_os_base_token_adjuster = { version = "=0.20.8", path = "lib/base_token_adjuster" }
 zksync_os_reth_compat = { version = "=0.20.8", path = "lib/reth_compat" }
 zksync_os_operator_signer = { version = "=0.20.8", path = "lib/operator_signer" }
+zksync_os_consensus_core = { version = "=0.20.8", path = "lib/consensus/core" }
 zksync_os_integration_tests_macros = { version = "=0.20.8", path = "integration-tests-macros" }
 zksync_os_tx_validators = { version = "=0.20.8", path = "lib/tx_validators" }
 zksync_os_alloy_ext = { version = "=0.20.8", path = "lib/alloy_ext" }
