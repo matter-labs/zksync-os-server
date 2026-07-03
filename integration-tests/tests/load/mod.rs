@@ -1232,6 +1232,10 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // the block rate the tree must sustain. Tunable via `PARALLEL_BLOCK_LINGER_MS` (default 5).
     config.sequencer_config.parallel_block_linger =
         Duration::from_millis(env_or("PARALLEL_BLOCK_LINGER_MS", 5));
+    // In-memory state backend, like the injection benches: the RocksDB FullDiffs backend does an
+    // iterator seek per server-side state read, which collapses under 128-way concurrent blocks
+    // (300-400µs/read observed on a 7995WX — ~25ms of VM-thread time per block).
+    config.general_config.state_backend = StateBackendConfig::InMemory;
     // Receipt visibility: the in-memory repository prunes receipts `blocks_to_retain_in_memory`
     // blocks after inclusion (default 512). At bench block rates (1000s of blocks/s) that is a
     // sub-second window — receipt waiters that lag it find nothing, ever. Floor the retention so
