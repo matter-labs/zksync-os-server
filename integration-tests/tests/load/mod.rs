@@ -1419,39 +1419,40 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
             let client = clients[idx % clients.len()].clone();
             let chunk: Vec<Vec<u8>> = chunk.to_vec();
             batch_tasks.spawn(async move {
+                // Batch entries are admitted CONCURRENTLY server-side, so the throttle gate
+                // ("not accepting") can flip mid-batch and admit only part of a chunk. Resend
+                // only the rejected entries: the accepted ones are already in their lanes, and
+                // per-wallet nonce order holds because a wallet's tx either lands this round or
+                // is retried before the round barrier releases.
+                let mut remaining = chunk;
+                let mut accepted = Vec::with_capacity(remaining.len());
                 loop {
                     let mut batch = client.new_batch();
-                    let mut waiters = Vec::with_capacity(chunk.len());
-                    for raw in &chunk {
+                    let mut waiters = Vec::with_capacity(remaining.len());
+                    for raw in &remaining {
                         waiters.push(batch.add_call::<_, B256>(
                             "eth_sendRawTransaction",
                             &(Bytes::copy_from_slice(raw),),
                         )?);
                     }
                     batch.send().await?;
-                    let mut hs = Vec::with_capacity(chunk.len());
-                    let mut throttled = 0usize;
-                    for w in waiters {
+                    let mut rejected = Vec::with_capacity(remaining.len());
+                    for (raw, w) in remaining.iter().zip(waiters) {
                         match w.await {
-                            Ok(h) => hs.push(h),
-                            Err(e) if e.to_string().contains("accepting") => throttled += 1,
+                            Ok(h) => accepted.push(h),
+                            Err(e) if e.to_string().contains("accepting") => {
+                                rejected.push(raw.clone());
+                            }
                             Err(e) => return Err(anyhow::Error::from(e)),
                         }
                     }
-                    if throttled > 0 {
-                        anyhow::ensure!(
-                            hs.is_empty(),
-                            "partial batch admission: {} of {} accepted",
-                            hs.len(),
-                            chunk.len()
-                        );
-                        if Instant::now() >= deadline {
-                            return anyhow::Ok(Vec::new());
-                        }
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                        continue; // resend the whole chunk
+                    // Give up on still-rejected txs only at the deadline — their wallets simply
+                    // never get a later nonce (the round loop exits), so no gap forms.
+                    if rejected.is_empty() || Instant::now() >= deadline {
+                        return anyhow::Ok(accepted);
                     }
-                    return anyhow::Ok(hs);
+                    remaining = rejected;
+                    tokio::time::sleep(Duration::from_millis(5)).await;
                 }
             });
         }
