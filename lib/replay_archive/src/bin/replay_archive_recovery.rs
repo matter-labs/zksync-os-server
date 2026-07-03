@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use zksync_os_replay_archive::{
-    ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity,
-    GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
+    ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig,
+    GcpKmsIdentity, GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
     S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader,
     download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
     recover_replay_records_to_rocksdb_with_optional_decryption,
@@ -161,9 +161,13 @@ async fn main() -> anyhow::Result<()> {
             kms_credential_file_path,
         } => {
             let identity = if let Some(key_version) = kms_key_version {
+                let auth_mode = match kms_credential_file_path {
+                    Some(path) => GcpKmsAuthMode::AuthenticatedWithCredentialFile(path),
+                    None => GcpKmsAuthMode::Authenticated,
+                };
                 let client = GcpKmsClient::new(&GcpKmsConfig {
                     key_version,
-                    credentials_file: kms_credential_file_path,
+                    auth_mode,
                 })
                 .await?;
                 Some(ArchiveIdentity::GcpKms(GcpKmsIdentity::new(client)))

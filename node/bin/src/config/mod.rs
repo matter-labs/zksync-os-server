@@ -1669,6 +1669,8 @@ pub enum ReplayArchiveEncryptionConfig {
         /// age X25519 recipient public key. The node only needs this public key.
         recipient: String,
     },
+    /// GCP KMS encryption using ambient authentication (workload identity). This is the
+    /// recommended mode when the node runs on GCP.
     GcpKms {
         /// GCP KMS key version resource name
         /// (`projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..`).
@@ -1676,9 +1678,14 @@ pub enum ReplayArchiveEncryptionConfig {
         /// algorithm. The node only fetches the public key and encrypts locally; it does not
         /// need decrypt permissions.
         kms_key_version: String,
-        /// Path to the GCP credentials file for KMS access. Ambient authentication (e.g.
-        /// workload identity) is used when absent.
-        kms_credential_file_path: Option<PathBuf>,
+    },
+    /// GCP KMS encryption authenticating via a credentials file, for deployments not running
+    /// on GCP.
+    GcpKmsWithCredentialFile {
+        /// GCP KMS key version resource name; see `GcpKms`.
+        kms_key_version: String,
+        /// Path to the GCP credentials file.
+        kms_credential_file_path: PathBuf,
     },
 }
 
@@ -1750,13 +1757,24 @@ impl From<ReplayArchiveEncryptionConfig>
             ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
             }
-            ReplayArchiveEncryptionConfig::GcpKms {
+            ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
+                    config: zksync_os_replay_archive::GcpKmsConfig {
+                        key_version: kms_key_version,
+                        auth_mode: zksync_os_replay_archive::GcpKmsAuthMode::Authenticated,
+                    },
+                }
+            }
+            ReplayArchiveEncryptionConfig::GcpKmsWithCredentialFile {
                 kms_key_version,
                 kms_credential_file_path,
             } => zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
                 config: zksync_os_replay_archive::GcpKmsConfig {
                     key_version: kms_key_version,
-                    credentials_file: kms_credential_file_path,
+                    auth_mode:
+                        zksync_os_replay_archive::GcpKmsAuthMode::AuthenticatedWithCredentialFile(
+                            kms_credential_file_path,
+                        ),
                 },
             },
         }
@@ -2641,15 +2659,11 @@ mod tests {
 
         match config {
             ReplayArchiveConfig::FileSystem { encryption, .. } => match encryption {
-                ReplayArchiveEncryptionConfig::GcpKms {
-                    kms_key_version,
-                    kms_credential_file_path,
-                } => {
+                ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
                     assert_eq!(
                         kms_key_version,
                         "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"
                     );
-                    assert_eq!(kms_credential_file_path, None);
                 }
                 _ => panic!("expected GCP KMS replay archive encryption"),
             },

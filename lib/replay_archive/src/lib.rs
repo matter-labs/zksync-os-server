@@ -34,7 +34,7 @@ pub use init::{
     InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
     init_replay_archive,
 };
-pub use kms::{GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
+pub use kms::{GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
 pub use reader::{ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveStorageReader};
 pub use recovery::{
     ArchiveIdentity, download_all_replay_archive_objects, parse_age_x25519_identity,

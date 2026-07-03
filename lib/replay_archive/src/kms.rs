@@ -29,6 +29,17 @@ const KMS_ENDPOINT: &str = "https://cloudkms.googleapis.com/v1";
 /// age header stanza tag for file keys wrapped with a GCP KMS RSA-OAEP key.
 const GCP_KMS_STANZA_TAG: &str = "gcp-kms-rsa-oaep";
 
+/// Authentication mode for GCP KMS access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GcpKmsAuthMode {
+    /// Ambient authentication (works if the binary runs on Google Cloud, e.g. via workload
+    /// identity). This is the primary mode this backend is built for.
+    Authenticated,
+    /// Authentication via a credentials file at the specified path.
+    AuthenticatedWithCredentialFile(PathBuf),
+}
+
 /// GCP KMS key configuration for replay archive encryption.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcpKmsConfig {
@@ -37,9 +48,7 @@ pub struct GcpKmsConfig {
     /// The key must have purpose `ASYMMETRIC_DECRYPT` and an `RSA_DECRYPT_OAEP_*_SHA256`
     /// algorithm.
     pub key_version: String,
-    /// Path to a GCP credentials file. Ambient authentication (e.g. workload identity) is used
-    /// when absent.
-    pub credentials_file: Option<PathBuf>,
+    pub auth_mode: GcpKmsAuthMode,
 }
 
 /// Minimal GCP KMS REST client covering the two methods the replay archive needs.
@@ -69,8 +78,8 @@ impl GcpKmsClient {
             scopes: Some(&[KMS_SCOPE]),
             sub: None,
         };
-        let provider = match &config.credentials_file {
-            Some(path) => {
+        let provider = match &config.auth_mode {
+            GcpKmsAuthMode::AuthenticatedWithCredentialFile(path) => {
                 let path = path
                     .to_str()
                     .with_context(|| {
@@ -83,7 +92,7 @@ impl GcpKmsClient {
                 DefaultTokenSourceProvider::new_with_credentials(auth_config, Box::new(credentials))
                     .await
             }
-            None => DefaultTokenSourceProvider::new(auth_config).await,
+            GcpKmsAuthMode::Authenticated => DefaultTokenSourceProvider::new(auth_config).await,
         }
         .context("failed to initialize GCP KMS token source")?;
         Ok(Self {
