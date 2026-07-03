@@ -1232,6 +1232,13 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // the block rate the tree must sustain. Tunable via `PARALLEL_BLOCK_LINGER_MS` (default 5).
     config.sequencer_config.parallel_block_linger =
         Duration::from_millis(env_or("PARALLEL_BLOCK_LINGER_MS", 5));
+    // Receipt visibility: the in-memory repository prunes receipts `blocks_to_retain_in_memory`
+    // blocks after inclusion (default 512). At bench block rates (1000s of blocks/s) that is a
+    // sub-second window — receipt waiters that lag it find nothing, ever. Floor the retention so
+    // receipts survive the full confirmation path; an explicit
+    // `general_blocks_to_retain_in_memory` env still raises it further.
+    config.general_config.blocks_to_retain_in_memory =
+        config.general_config.blocks_to_retain_in_memory.max(100_000);
     // Backpressure stays ENABLED (default limits). Even with lingering the tree is the slowest
     // consumer; when it falls behind the node gracefully stops accepting txs. Disabling backpressure
     // instead lets the applier->tree channel overflow and panic ("consumer is catastrophically

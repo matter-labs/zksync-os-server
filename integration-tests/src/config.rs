@@ -1,4 +1,4 @@
-use smart_config::{ConfigRepository, ConfigSources};
+use smart_config::{ConfigRepository, ConfigSources, Environment};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use zksync_os_server::config::{Config, build_external_config, load_config_file_sources};
@@ -119,6 +119,12 @@ async fn load_config_from_paths(config_paths: &[PathBuf]) -> Config {
     let config_schema = Config::schema();
     let mut config_sources = ConfigSources::default();
     load_config_file_sources(&mut config_sources, config_paths);
+    // Mirror the node binary (see `node/bin/src/main.rs`): environment variables override file
+    // config. Without this layer, node knobs passed to bench commands (e.g.
+    // `general_blocks_to_retain_in_memory=...`) were silently ignored in integration tests.
+    let mut env = Environment::prefixed("");
+    env.coerce_json().expect("failed to coerce JSON envvar values");
+    config_sources.push(env);
 
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
     build_external_config(config_repo).await
