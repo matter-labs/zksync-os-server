@@ -9,7 +9,7 @@ mod wire;
 
 // todo: temporary re-export while we have record overrides, otherwise `wire` module should be
 //       entirely internal
-pub use service::{PeerVerifyBatch, PeerVerifyBatchResult};
+pub use service::{NetworkPorts, PeerVerifyBatch, PeerVerifyBatchResult};
 pub use wire::replays::RecordOverride;
 pub use wire::verification::{VerifyBatch, VerifyBatchOutcome, VerifyBatchResult};
 

@@ -17,6 +17,20 @@ enum BlockBoundary {
 type ResolveStartFn<S, P> =
     Box<dyn FnOnce(S) -> BoxFuture<'static, anyhow::Result<(BlockNumber, P)>> + Send + Sync>;
 
+/// Resolves the confirmation depth for a confirmed-boundary watcher: the configured depth when the
+/// watcher tails L1, or zero on the Gateway.
+async fn resolve_confirmations(
+    provider: &NodeProvider,
+    l1_chain_id: u64,
+    config: &L1WatcherConfig,
+) -> anyhow::Result<BlockNumber> {
+    Ok(if provider.get_chain_id().await? != l1_chain_id {
+        0
+    } else {
+        config.confirmations
+    })
+}
+
 /// Deferred constructor for an [`L1Watcher`]: holds the watcher's static dependencies and turns
 /// a starting point `S` into a ready-to-run watcher once that starting point is finally known.
 ///
@@ -48,12 +62,7 @@ impl<S, P: ProcessRawEvents> StartResolver<S, P> {
     where
         Fut: Future<Output = anyhow::Result<(BlockNumber, P)>> + Send + 'static,
     {
-        let confirmations = if provider.get_chain_id().await? != l1_chain_id {
-            // Gateway case, zero out confirmations.
-            0
-        } else {
-            config.confirmations
-        };
+        let confirmations = resolve_confirmations(&provider, l1_chain_id, &config).await?;
 
         Ok(Self {
             provider,
@@ -162,6 +171,30 @@ impl<P: ProcessRawEvents> L1Watcher<P> {
             block_boundary: BlockBoundary::Finalized,
             processor,
         }
+    }
+
+    /// Builds a watcher for a single pre-resolved segment, tailing the confirmed boundary
+    /// (`latest - confirmations`). Unlike [`new_finalized`](Self::new_finalized), it reacts to an
+    /// event within `confirmations` blocks instead of waiting out finality.
+    pub(crate) async fn new_confirmed(
+        config: L1WatcherConfig,
+        provider: NodeProvider,
+        address: ValueOrArray<Address>,
+        next_block: BlockNumber,
+        end_block: Option<BlockNumber>,
+        l1_chain_id: u64,
+        processor: P,
+    ) -> anyhow::Result<Self> {
+        let confirmations = resolve_confirmations(&provider, l1_chain_id, &config).await?;
+        Ok(Self {
+            provider,
+            address,
+            next_block,
+            end_block,
+            max_blocks_to_process: config.max_blocks_to_process,
+            block_boundary: BlockBoundary::Confirmed { confirmations },
+            processor,
+        })
     }
 
     /// Polls for new events.

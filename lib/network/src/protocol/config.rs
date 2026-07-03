@@ -38,6 +38,7 @@ pub struct ExternalNodeVerifierConfig {
 }
 
 /// Role-specific protocol configuration for the `zks` subprotocol.
+#[derive(Debug, Clone)]
 pub enum ZksProtocolConfig {
     MainNode(MainNodeProtocolConfig),
     ExternalNode(ExternalNodeProtocolConfig),

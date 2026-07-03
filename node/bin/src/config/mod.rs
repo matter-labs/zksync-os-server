@@ -600,6 +600,7 @@ pub struct NetworkConfig {
     #[config(default_t = None)]
     pub interface: Option<String>,
     /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    /// Set to 0 to let startup pick a concrete TCP+UDP port before initializing networking.
     #[config(default_t = 3060)]
     pub port: u16,
     /// All boot nodes to start network discovery with. Expected format is

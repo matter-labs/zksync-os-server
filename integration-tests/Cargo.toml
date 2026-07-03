@@ -26,6 +26,7 @@ zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_network.workspace = true
 zksync_os_replay_archive.workspace = true
+zksync_os_rocksdb.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_integration_tests_macros.workspace = true
 zksync_os_verify_storage_proof = { path = "../tools/verify-storage-proof" }
@@ -35,7 +36,6 @@ reth-tasks.workspace = true
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 flate2.workspace = true
-fs2.workspace = true
 reqwest.workspace = true
 tar.workspace = true
 tokio.workspace = true
