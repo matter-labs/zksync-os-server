@@ -5,7 +5,6 @@ use crate::health::health;
 use crate::status::status;
 use axum::{Router, routing::get};
 use reth_tasks::shutdown::GracefulShutdown;
-use std::net::SocketAddr;
 use tokio::{net::TcpListener, sync::watch};
 use zksync_os_raft::RaftConsensusStatus;
 
@@ -17,10 +16,11 @@ struct AppState {
 }
 
 // todo: handle graceful shutdown in a meaningful manner:
-//       we should start a timer for RPC server's lifetime, report healthy=false and only shutdown
+//       we should start a timer for status server's lifetime, report healthy=false and only shutdown
 //       after timer is expired
+/// Runs the status HTTP server on a pre-bound listener.
 pub async fn run_status_server(
-    addr: SocketAddr,
+    listener: TcpListener,
     shutdown: GracefulShutdown,
     consensus_raft_status_rx: Option<watch::Receiver<Option<RaftConsensusStatus>>>,
 ) -> anyhow::Result<()> {
@@ -30,8 +30,6 @@ pub async fn run_status_server(
         .with_state(AppState {
             consensus_raft_status_rx,
         });
-
-    let listener = TcpListener::bind(addr).await?;
 
     let addr = listener.local_addr()?;
     tracing::info!(%addr, "status server running");
