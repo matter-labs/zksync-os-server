@@ -1436,11 +1436,50 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
         }
         Ok(Some(chunks))
     }
-    let mut next_round = read_round(&mut readers, submit_pipeline)?;
-    while Instant::now() < deadline {
-        let Some(round_chunks) = next_round.take() else {
-            break; // a wallet's corpus is exhausted
-        };
+    // Shard the corpus readers across threads: one thread reading every wallet's record per
+    // round caps the whole feed at ~1/record-read-time (~1M tx/s) — it became the global
+    // ceiling once everything downstream was parallelized. Each thread owns a contiguous,
+    // chunk-aligned wallet range (so concatenating group parts in order preserves wallet order)
+    // and streams its rounds' pre-built chunks through a small channel, staying a few rounds
+    // ahead of the submit barrier.
+    let reader_threads: usize = env_or("LOAD_TEST_READER_THREADS", 8);
+    let chunks_total = num_wallets.div_ceil(submit_pipeline);
+    let chunks_per_group = chunks_total.div_ceil(reader_threads).max(1);
+    let group_size = chunks_per_group * submit_pipeline;
+    let mut round_parts = Vec::new();
+    {
+        let mut readers = readers;
+        while !readers.is_empty() {
+            let mut group: Vec<corpus::CorpusReader> =
+                readers.drain(..group_size.min(readers.len())).collect();
+            let (part_tx, part_rx) =
+                tokio::sync::mpsc::channel::<Vec<Vec<Vec<u8>>>>(4);
+            std::thread::spawn(move || {
+                loop {
+                    match read_round(&mut group, submit_pipeline) {
+                        Ok(Some(chunks)) => {
+                            if part_tx.blocking_send(chunks).is_err() {
+                                return; // main loop finished
+                            }
+                        }
+                        // Corpus exhausted (or read error): drop the sender; the main loop
+                        // sees the closed channel and stops cleanly.
+                        Ok(None) | Err(_) => return,
+                    }
+                }
+            });
+            round_parts.push(part_rx);
+        }
+    }
+    'rounds: while Instant::now() < deadline {
+        // Assemble the round from the group parts, in wallet order.
+        let mut round_chunks: Vec<Vec<Vec<u8>>> = Vec::with_capacity(chunks_total);
+        for part_rx in &mut round_parts {
+            let Some(part) = part_rx.recv().await else {
+                break 'rounds; // a wallet's corpus is exhausted
+            };
+            round_chunks.extend(part);
+        }
         let round_len: usize = round_chunks.iter().map(|chunk| chunk.len()).sum();
 
         // Send this nonce's txs as chunked JSON-RPC batches, concurrently across the client
@@ -1487,9 +1526,6 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
                 }
             });
         }
-
-        // Overlap the next round's corpus reads/allocations with the in-flight batches.
-        next_round = read_round(&mut readers, submit_pipeline)?;
 
         // Barrier: every batch of this nonce must be accepted before we advance to the next nonce.
         let mut hashes = Vec::with_capacity(round_len);
