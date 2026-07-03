@@ -13,6 +13,7 @@ pub struct NetworkConfig {
     /// Port 0 is resolved to a concrete TCP+UDP port by `NetworkService::new`.
     pub port: u16,
     /// All boot nodes to start network discovery with. Expected format is
-    /// `enode://<node ID>@<IP address-or-DNS host>:<port>`.
+    /// `enode://<node ID>@<IP address-or-DNS host>:<port>`. Boot nodes are also treated as trusted
+    /// peers: always kept connected and admitted to the zks subprotocol regardless of the cap.
     pub boot_nodes: Vec<TrustedPeer>,
 }
