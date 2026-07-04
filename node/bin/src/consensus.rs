@@ -18,7 +18,7 @@ use commonware_cryptography::bls12381::primitives::variant::{MinPk, Variant};
 use commonware_cryptography::ed25519;
 use commonware_p2p::authenticated::lookup;
 use commonware_p2p::{Address, AddressableManager as _, Ingress};
-use commonware_runtime::{Metrics as _, Quota, Runner as _};
+use commonware_runtime::{Metrics as _, Quota, Runner as _, Spawner as _};
 use commonware_utils::TryCollect as _;
 use commonware_utils::ordered::{BiMap, Map};
 use commonware_utils::union_unique;
@@ -157,9 +157,14 @@ impl ConsensusSetup {
 
 /// Spawns the consensus world. Returns the thread handle and a receiver that fires when
 /// consensus dies — the node must treat that as fatal.
+///
+/// `shutdown` asks consensus to stop gracefully (releasing its p2p listener and
+/// journals); the *sender being dropped* counts as that request too, so holding the
+/// sender inside a node-runtime task makes node shutdown stop consensus automatically.
 pub fn spawn<S>(
     setup: ConsensusSetup,
     env: NodeExecutionEnv<S>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> (
     std::thread::JoinHandle<anyhow::Result<()>>,
     tokio::sync::oneshot::Receiver<()>,
@@ -171,9 +176,9 @@ where
     let handle = std::thread::Builder::new()
         .name("consensus".to_string())
         .spawn(move || {
-            let result = run(setup, env);
+            let result = run(setup, env, shutdown);
             // Fire unconditionally: the node must learn about consensus death whether
-            // it was an error or an impossible clean exit.
+            // it was an error or a clean shutdown (the watchdog is already gone then).
             let _ = dead_sender.send(());
             result
         })
@@ -181,17 +186,43 @@ where
     (handle, dead_receiver)
 }
 
-fn run<S>(setup: ConsensusSetup, env: NodeExecutionEnv<S>) -> anyhow::Result<()>
+fn run<S>(
+    setup: ConsensusSetup,
+    env: NodeExecutionEnv<S>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<()>
 where
     S: ReadStateHistory + WriteState + Clone + Send + Sync + 'static,
 {
+    // One consensus instance per storage directory, ever. A restarting node must not
+    // open the journals while the previous instance is still flushing them, and two
+    // live instances sharing them would corrupt the vote journal (double-sign risk).
+    // The advisory lock is per file handle: held for this thread's lifetime, released
+    // by the OS even on a crash.
+    std::fs::create_dir_all(&setup.storage_directory)
+        .context("failed to create the consensus storage directory")?;
+    let storage_lock = std::fs::File::create(setup.storage_directory.join(".instance-lock"))
+        .context("failed to open the consensus storage lock")?;
+    if fs2::FileExt::try_lock_exclusive(&storage_lock).is_err() {
+        tracing::info!(
+            "waiting for a previous consensus instance to release its storage before starting"
+        );
+        fs2::FileExt::lock_exclusive(&storage_lock)
+            .context("failed to lock the consensus storage")?;
+    }
+
     let runtime_config = commonware_runtime::tokio::Config::default()
         .with_tcp_nodelay(Some(true))
         .with_worker_threads(3)
         .with_storage_directory(setup.storage_directory.clone())
         .with_catch_panics(false);
     let runner = commonware_runtime::tokio::Runner::new(runtime_config);
-    runner.start(|context| async move {
+    // Held across the runtime's lifetime and dropped on this plain thread afterwards:
+    // the environment (via the block builder's mempool) embeds the node's task-runtime
+    // handle, and the last handle must not be dropped inside an async worker (dropping
+    // a runtime in async context panics). This clone outlives every in-task clone.
+    let env_anchor = env.clone();
+    let result = runner.start(|context| async move {
         let quota = Quota::per_second(NonZeroU32::new(128).expect("nonzero"));
         // Block traffic is bulkier and rarer than votes; keep its rate low so backfill
         // cannot starve the vote channels.
@@ -280,11 +311,28 @@ where
         .await;
 
         // Any component exiting is fatal: these tasks run for the life of the node.
+        // The shutdown arm (fired explicitly or by the node runtime dropping the
+        // sender) is the one non-fatal exit: signal every consensus task to stop and
+        // wait for them to wind down, which releases the p2p listener and journals.
         tokio::select! {
+            _ = shutdown => {
+                tracing::info!("node is shutting down; stopping consensus");
+                context
+                    .clone()
+                    .stop(0, Some(std::time::Duration::from_secs(10)))
+                    .await
+                    .context("consensus tasks did not stop in time")?;
+                Ok(())
+            }
             _ = network_handle => anyhow::bail!("consensus networking exited unexpectedly"),
             _ = stack.engine => anyhow::bail!("consensus engine exited unexpectedly"),
             _ = stack.marshal => anyhow::bail!("consensus marshal exited unexpectedly"),
             _ = stack.broadcast => anyhow::bail!("consensus broadcast exited unexpectedly"),
         }
-    })
+    });
+    drop(env_anchor);
+    // Only now — with every consensus task gone and the runtime torn down — may the
+    // next instance open this storage.
+    drop(storage_lock);
+    result
 }

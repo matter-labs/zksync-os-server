@@ -7,7 +7,7 @@
 
 use crate::test_config::{build_node_config, disable_prover_input_generation};
 use crate::utils::LockedPort;
-use crate::{ChainLayout, PROTOCOL_VERSION, Tester};
+use crate::{ChainLayout, PROTOCOL_VERSION, StoppedTester, Tester};
 use anyhow::Context as _;
 use commonware_codec::{DecodeExt as _, Encode as _};
 use commonware_cryptography::Signer as _;
@@ -43,8 +43,19 @@ fn generate_validator_keys() -> ValidatorKeys {
     }
 }
 
+/// One validator slot: a running node, a stopped one (restartable on the same state
+/// and keys), or the momentary in-between while a transition is in flight.
+enum Validator {
+    Running(Tester),
+    Stopped(StoppedTester),
+    Transitioning,
+}
+
 pub struct MultiNodeTester {
-    nodes: Vec<Tester>,
+    validators: Vec<Validator>,
+    /// Reservations for the consensus listen ports, held for the cluster's lifetime so
+    /// a stopped validator can rebind the same address when it restarts.
+    consensus_ports: Vec<LockedPort>,
 }
 
 impl MultiNodeTester {
@@ -108,22 +119,92 @@ impl MultiNodeTester {
                     }
                 });
         let nodes = try_join_all(launches).await?;
-        Ok(Self { nodes })
+        Ok(Self {
+            validators: nodes.into_iter().map(Validator::Running).collect(),
+            consensus_ports,
+        })
     }
 
+    /// The running node at `index`. Panics if that validator is currently stopped —
+    /// tests interact only with validators they know to be up.
     pub fn node(&self, index: usize) -> &Tester {
-        &self.nodes[index]
+        match &self.validators[index] {
+            Validator::Running(node) => node,
+            _ => panic!("validator {index} is not running"),
+        }
+    }
+
+    fn running(&self) -> impl Iterator<Item = (usize, &Tester)> {
+        self.validators
+            .iter()
+            .enumerate()
+            .filter_map(|(index, validator)| match validator {
+                Validator::Running(node) => Some((index, node)),
+                _ => None,
+            })
     }
 
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        self.validators.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
+        self.validators.is_empty()
     }
 
-    /// Waits until every validator's RPC reports at least `height`.
+    /// Gracefully stops one validator; its state, keys, and port reservation stay
+    /// around for [`Self::start_validator`].
+    pub async fn stop_validator(&mut self, index: usize) -> anyhow::Result<()> {
+        let validator = std::mem::replace(&mut self.validators[index], Validator::Transitioning);
+        let Validator::Running(node) = validator else {
+            anyhow::bail!("validator {index} is not running");
+        };
+        self.validators[index] = Validator::Stopped(node.stop().await?);
+        Ok(())
+    }
+
+    /// Restarts a stopped validator on its original state and keys. It rejoins the
+    /// committee, backfills what it missed, and participates again.
+    pub async fn start_validator(&mut self, index: usize) -> anyhow::Result<()> {
+        let validator = std::mem::replace(&mut self.validators[index], Validator::Transitioning);
+        let Validator::Stopped(stopped) = validator else {
+            anyhow::bail!("validator {index} is not stopped");
+        };
+        // The consensus listener of the stopped node can take a moment to disappear;
+        // wait until the port is bindable so the restart cannot lose the race to its
+        // own ghost. (The lockfile reservation keeps other tests away meanwhile.)
+        let port = self.consensus_ports[index].port;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                Ok(probe) => {
+                    drop(probe);
+                    break;
+                }
+                Err(error) => {
+                    anyhow::ensure!(
+                        tokio::time::Instant::now() < deadline,
+                        "consensus port {port} still bound long after shutdown: {error}",
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+        }
+        self.validators[index] = Validator::Running(stopped.start().await?);
+        Ok(())
+    }
+
+    /// The highest block height any running validator currently reports.
+    pub async fn max_height(&self) -> anyhow::Result<u64> {
+        use alloy::providers::Provider as _;
+        let mut max = 0;
+        for (_, node) in self.running() {
+            max = max.max(node.l2_provider.get_block_number().await?);
+        }
+        Ok(max)
+    }
+
+    /// Waits until every *running* validator's RPC reports at least `height`.
     pub async fn wait_for_block_on_all(
         &self,
         height: u64,
@@ -132,29 +213,37 @@ impl MultiNodeTester {
         use alloy::providers::Provider as _;
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
-            let mut heights = Vec::with_capacity(self.nodes.len());
-            for node in &self.nodes {
-                heights.push(node.l2_provider.get_block_number().await.unwrap_or(0));
+            let mut heights = Vec::with_capacity(self.validators.len());
+            let mut all_reached = true;
+            for validator in &self.validators {
+                match validator {
+                    Validator::Running(node) => {
+                        let number = node.l2_provider.get_block_number().await.unwrap_or(0);
+                        all_reached &= number >= height;
+                        heights.push(number.to_string());
+                    }
+                    _ => heights.push("stopped".to_string()),
+                }
             }
-            if heights.iter().all(|&number| number >= height) {
+            if all_reached {
                 return Ok(());
             }
             anyhow::ensure!(
                 tokio::time::Instant::now() < deadline,
-                "validators did not all reach block {height} within {timeout:?} \
+                "running validators did not all reach block {height} within {timeout:?} \
                  (per-validator heights: {heights:?})",
             );
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
     }
 
-    /// Asserts every validator serves the identical block hash at `height` — the
-    /// RPC-visible form of "all validators committed the same chain".
+    /// Asserts every *running* validator serves the identical block hash at `height` —
+    /// the RPC-visible form of "all validators committed the same chain".
     pub async fn assert_block_hashes_agree(&self, height: u64) -> anyhow::Result<()> {
         use alloy::eips::BlockId;
         use alloy::providers::Provider as _;
         let mut reference = None;
-        for (index, node) in self.nodes.iter().enumerate() {
+        for (index, node) in self.running() {
             let block = node
                 .l2_provider
                 .get_block(BlockId::number(height))
@@ -176,7 +265,14 @@ impl MultiNodeTester {
     /// Shuts all validators down (concurrently, since a sequential shutdown would make
     /// the remaining quorum-less validators hang on in-flight work).
     pub async fn shutdown_all(self) -> anyhow::Result<()> {
-        try_join_all(self.nodes.into_iter().map(|node| node.shutdown())).await?;
+        try_join_all(self.validators.into_iter().map(|validator| async move {
+            match validator {
+                Validator::Running(node) => node.shutdown().await,
+                Validator::Stopped(stopped) => stopped.shutdown().await,
+                Validator::Transitioning => Ok(()),
+            }
+        }))
+        .await?;
         Ok(())
     }
 }

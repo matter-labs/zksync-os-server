@@ -133,6 +133,10 @@ struct Shared {
     /// building directly on it. `None` after a restart until the node wiring supplies
     /// it (or the first commit sets it); building waits, verification does not care.
     committed_el_hash: Option<alloy::primitives::B256>,
+    /// The persistence pipeline has gone away — the node is shutting down. Commits
+    /// become no-ops from that point (nothing durable can happen anymore, and after a
+    /// restart consensus re-delivers from the durable height anyway).
+    pipeline_closed: bool,
 }
 
 impl<S> NodeExecutionEnv<S>
@@ -171,6 +175,7 @@ where
                 pending: PendingState::new(committed),
                 outputs: HashMap::new(),
                 committed_el_hash,
+                pipeline_closed: false,
             })),
             committed_sink,
             applied,
@@ -529,6 +534,16 @@ where
         }
     }
 
+    async fn has_state(&mut self, block: &ConsensusBlock) -> bool {
+        // Exactly the state question children ask: can a branch be resolved on it?
+        self.shared
+            .lock()
+            .unwrap()
+            .pending
+            .branch_for_parent(block.height_u64(), block.digest())
+            .is_some()
+    }
+
     async fn committed_height(&mut self) -> Option<Height> {
         let height = self.shared.lock().unwrap().pending.committed().height;
         (height > 0).then(|| Height::new(height))
@@ -546,7 +561,14 @@ where
 
     async fn commit(&mut self, block: ConsensusBlock) {
         let height = block.height_u64();
-        let committed = { self.shared.lock().unwrap().pending.committed() };
+        let committed = {
+            let shared = self.shared.lock().unwrap();
+            if shared.pipeline_closed {
+                warn!(height, "node is shutting down; dropping commit");
+                return;
+            }
+            shared.pending.committed()
+        };
 
         if height <= committed.height {
             // At-least-once delivery: consensus may re-deliver the tip after an
@@ -617,7 +639,13 @@ where
         // Hand the block to the persistence pipeline and wait until it is durable
         // (in the write-ahead log). Consensus acknowledges — and allows more blocks
         // through — only after this returns: the node is the pacer.
-        self.committed_sink
+        //
+        // The pipeline disappearing means the node is shutting down (its own guards
+        // make a mid-flight pipeline death fatal to the process). Returning without
+        // the durability wait is safe here: nothing below persists an acknowledgement,
+        // and after a restart consensus re-delivers from the durable height anyway.
+        let sent = self
+            .committed_sink
             .send(BlockPayload {
                 output,
                 record,
@@ -626,13 +654,22 @@ where
                 command_type: BlockCommandType::Replay,
                 failed_transactions: Vec::new(),
             })
-            .await
-            .expect("persistence pipeline closed");
+            .await;
+        if sent.is_err() {
+            warn!(height, "persistence pipeline closed; dropping commit");
+            self.shared.lock().unwrap().pipeline_closed = true;
+            return;
+        }
         let mut applied = self.applied.clone();
-        applied
+        if applied
             .wait_for(|number| number.is_some_and(|n| n >= height))
             .await
-            .expect("applier watch closed");
+            .is_err()
+        {
+            warn!(height, "applier watch closed; dropping commit");
+            self.shared.lock().unwrap().pipeline_closed = true;
+            return;
+        }
 
         let mut shared = self.shared.lock().unwrap();
         shared.pending.advance_committed(height, block.digest());

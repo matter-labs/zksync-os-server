@@ -16909,6 +16909,7 @@ dependencies = [
  "flate2",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
+ "fs2",
  "full_statement_verifier",
  "futures",
  "http 1.3.1",

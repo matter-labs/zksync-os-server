@@ -73,23 +73,61 @@ where
     X: ExecutionEnv,
 {
     /// Follower path, called before this validator votes for the block. The ancestry
-    /// stream yields the block under verification first, then its parent. Structural
-    /// linkage (parent digest, height contiguity) is already checked by the caller;
-    /// the execution environment judges content validity.
+    /// stream yields the block under verification first, then its parent, then deeper
+    /// ancestors on demand. Structural linkage (parent digest, height contiguity) is
+    /// already checked by the caller; the execution environment judges content
+    /// validity.
+    ///
+    /// Verification may need more than the direct parent: after a restart this
+    /// validator has its durable chain but none of the speculative state for blocks
+    /// its peers verified while it was away (e.g. a notarized-but-unfinalized block
+    /// everyone now builds on). Walk the ancestry down to the first block whose state
+    /// this environment holds, then verify forward — each step re-executes one
+    /// ancestor and rebuilds its speculative state.
     async fn verify<P: BlockProvider<Block = Self::Block>>(
         &mut self,
         (_runtime, _context): (R, Self::Context),
         mut ancestry: AncestorStream<P, Self::Block>,
     ) -> bool {
-        let (Some(block), Some(parent)) = (ancestry.next().await, ancestry.next().await) else {
-            // The caller seeds the stream with the block and its parent already fetched,
-            // so these two pulls cannot come up empty today. If that ever changes, `false`
-            // here only withholds this validator's vote for this round — it does not stop
-            // the network from finalizing the block, and this node would then still apply
-            // it through the finalization path.
-            warn!("ancestry unavailable while verifying; withholding vote");
+        // Deeper than any healthy unfinalized window; a walk this long means state is
+        // unrecoverable through ancestry and the vote should be withheld.
+        const MAX_WALK: usize = 256;
+
+        let Some(block) = ancestry.next().await else {
+            warn!("block unavailable while verifying; withholding vote");
             return false;
         };
-        self.env.verify(parent, block).await
+        let mut chain = vec![block];
+        loop {
+            let Some(ancestor) = ancestry.next().await else {
+                // The stream ends when the view is torn down or history is missing.
+                // Withholding is safe: this only skips this validator's vote for this
+                // round, and a finalized block still arrives via the commit path.
+                warn!("ancestry unavailable while verifying; withholding vote");
+                return false;
+            };
+            let anchored = self.env.has_state(&ancestor).await;
+            chain.push(ancestor);
+            if anchored {
+                break;
+            }
+            if chain.len() > MAX_WALK {
+                warn!(
+                    depth = chain.len(),
+                    "no known state within the verification walk; withholding vote"
+                );
+                return false;
+            }
+        }
+
+        // `chain` is [block, parent, ..., anchor] — verify from the anchor upward.
+        while chain.len() >= 2 {
+            let parent = chain.pop().expect("checked length");
+            let child = chain.last().cloned().expect("checked length");
+            if !self.env.verify(parent, child).await {
+                return false;
+            }
+        }
+        true
     }
 }

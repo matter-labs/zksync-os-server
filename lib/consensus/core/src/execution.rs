@@ -67,6 +67,16 @@ pub trait ExecutionEnv: Clone + Send + 'static {
         block: Self::Block,
     ) -> impl Future<Output = bool> + Send;
 
+    /// Whether this environment can already execute children of `block` — i.e. it holds
+    /// the block's resulting state (committed, or speculatively from an earlier
+    /// build/verify). When a proposal's parent has no state yet (typically: a restart
+    /// discarded speculative state that peers still build on), the caller walks the
+    /// ancestry down to a block that has, and verifies forward from there. The default
+    /// says "always" — for environments that never lose speculative state.
+    fn has_state(&mut self, _block: &Self::Block) -> impl Future<Output = bool> + Send {
+        async { true }
+    }
+
     /// The highest block height this environment has durably committed, or `None` for a
     /// fresh chain. Used on startup so consensus does not re-deliver history the node
     /// already has.
