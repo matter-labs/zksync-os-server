@@ -95,7 +95,10 @@ impl SimCluster<MockExecution> {
         behaviors: &[Behavior],
         link: Link,
     ) -> Self {
-        Self::start_with_env(context, behaviors, link, |_index| MockExecution::new()).await
+        Self::start_with_env(context, behaviors, link, |_index, _context| {
+            MockExecution::new()
+        })
+        .await
     }
 }
 
@@ -113,7 +116,7 @@ where
         mut context: deterministic::Context,
         behaviors: &[Behavior],
         link: Link,
-        env_factory: impl Fn(usize) -> X,
+        env_factory: impl Fn(usize, deterministic::Context) -> X,
     ) -> Self {
         let Fixture {
             participants,
@@ -144,7 +147,7 @@ where
             let mut validator = SimValidator {
                 identity: identity.clone(),
                 behavior: behaviors[index],
-                env: env_factory(index),
+                env: env_factory(index, cluster.context.with_label("env")),
                 activity: ActivityLog::new(),
                 running: None,
                 scheme: schemes[index].clone(),

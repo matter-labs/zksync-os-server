@@ -63,7 +63,7 @@ fn real_blocks_execute_and_commit_identically() {
                 context,
                 &honest_behaviors(),
                 links::healthy(),
-                |_index| RealStfExecution::new(),
+                |_index, _context| RealStfExecution::new(),
             )
             .await;
             cluster.wait_for_committed_height_all(8).await;
@@ -85,7 +85,7 @@ fn real_stf_validator_rejoins_after_crash() {
                 context,
                 &honest_behaviors(),
                 links::healthy(),
-                |_index| RealStfExecution::new(),
+                |_index, _context| RealStfExecution::new(),
             )
             .await;
             cluster.wait_for_committed_height_all(4).await;
@@ -186,7 +186,7 @@ fn lying_proposer_is_rejected_by_reexecution_without_fault_evidence() {
                 // Validator 0 lies about every block it builds; the rest are truthful.
                 // Note its consensus *behavior* is honest — the attack lives entirely
                 // in the block content.
-                |index| LyingStfExecution {
+                |index, _context| LyingStfExecution {
                     inner: RealStfExecution::new(),
                     lies: index == 0,
                 },
@@ -236,7 +236,7 @@ fn real_stf_partition_heals_with_identical_state() {
                 context,
                 &honest_behaviors(),
                 links::healthy(),
-                |_index| RealStfExecution::new(),
+                |_index, _context| RealStfExecution::new(),
             )
             .await;
             cluster.wait_for_committed_height_all(4).await;

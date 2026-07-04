@@ -8,7 +8,9 @@
 use crate::block::SimBlock;
 use commonware_consensus::types::Height;
 use commonware_cryptography::Digestible;
+use commonware_runtime::{Clock as _, deterministic};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use zksync_os_consensus_core::{BuildContext, ExecutionEnv};
 
 /// An [`ExecutionEnv`] that the simulated cluster can observe: what has this validator
@@ -118,5 +120,84 @@ impl ExecutionEnv for MockExecution {
             "commit out of order: got height {height}, expected {next_height}",
         );
         inner.committed.push(block);
+    }
+}
+
+/// Wraps an execution environment, delaying chosen operations by virtual time — the
+/// deterministic stand-in for a validator whose execution is slow (long `verify`) or
+/// whose persistence lags (long `commit`). Everything else delegates unchanged.
+#[derive(Clone)]
+pub struct DelayedEnv<X> {
+    inner: X,
+    context: deterministic::Context,
+    verify_delay: Duration,
+    commit_delay: Duration,
+}
+
+impl<X: SimEnv> DelayedEnv<X> {
+    pub fn slow_verify(inner: X, context: deterministic::Context, delay: Duration) -> Self {
+        Self {
+            inner,
+            context,
+            verify_delay: delay,
+            commit_delay: Duration::ZERO,
+        }
+    }
+
+    pub fn slow_commit(inner: X, context: deterministic::Context, delay: Duration) -> Self {
+        Self {
+            inner,
+            context,
+            verify_delay: Duration::ZERO,
+            commit_delay: delay,
+        }
+    }
+}
+
+impl<X: SimEnv> ExecutionEnv for DelayedEnv<X> {
+    type Block = X::Block;
+
+    async fn genesis_block(&mut self) -> Self::Block {
+        self.inner.genesis_block().await
+    }
+
+    async fn build(&mut self, parent: Self::Block, context: BuildContext) -> Option<Self::Block> {
+        self.inner.build(parent, context).await
+    }
+
+    async fn verify(&mut self, parent: Self::Block, block: Self::Block) -> bool {
+        if !self.verify_delay.is_zero() {
+            self.context.sleep(self.verify_delay).await;
+        }
+        self.inner.verify(parent, block).await
+    }
+
+    async fn has_state(&mut self, block: &Self::Block) -> bool {
+        self.inner.has_state(block).await
+    }
+
+    async fn committed_height(&mut self) -> Option<Height> {
+        self.inner.committed_height().await
+    }
+
+    async fn adopt_committed_block(&mut self, block: &Self::Block) {
+        self.inner.adopt_committed_block(block).await
+    }
+
+    async fn commit(&mut self, block: Self::Block) {
+        if !self.commit_delay.is_zero() {
+            self.context.sleep(self.commit_delay).await;
+        }
+        self.inner.commit(block).await
+    }
+}
+
+impl<X: SimEnv> SimEnv for DelayedEnv<X> {
+    fn committed_tip(&self) -> Option<u64> {
+        self.inner.committed_tip()
+    }
+
+    fn committed_chain_digests(&self) -> Vec<<Self::Block as Digestible>::Digest> {
+        self.inner.committed_chain_digests()
     }
 }

@@ -136,6 +136,9 @@ struct Rig {
     base: TestStateHistory,
     genesis: Arc<SharedGenesis>,
     genesis_block: ConsensusBlock,
+    /// Gate on the fake applier: `false` parks payloads unapplied — a stalled
+    /// persistence pipeline. Open (`true`) by default.
+    applier_gate: watch::Sender<bool>,
 }
 
 impl Rig {
@@ -144,11 +147,16 @@ impl Rig {
         let base = TestStateHistory::new(genesis.clone());
         let (sink, mut payloads) = mpsc::channel::<CommittedPayload>(8);
         let (applied_sender, applied) = watch::channel(None);
+        let (applier_gate, mut gate) = watch::channel(true);
 
         // Fake applier: fold each payload into the backend, then report it durable.
+        // Holds payloads while the gate is closed, like a stalled pipeline would.
         let applier_base = base.clone();
         tokio::spawn(async move {
             while let Some(payload) = payloads.recv().await {
+                if gate.wait_for(|open| *open).await.is_err() {
+                    return;
+                }
                 let number = payload.record.block_context.block_number;
                 applier_base.apply(&payload);
                 let _ = applied_sender.send(Some(number));
@@ -172,6 +180,7 @@ impl Rig {
             base,
             genesis,
             genesis_block,
+            applier_gate,
         }
     }
 
@@ -545,4 +554,86 @@ async fn validity_rules_run_before_re_execution() {
         !rig.env.verify(rig.genesis_block.clone(), block).await,
         "a timestamp beyond the allowed skew must be rejected"
     );
+}
+
+/// A stalled persistence pipeline must not stop this validator from verifying (and
+/// voting) — but the speculative state it accumulates meanwhile must stay bounded,
+/// and the backlog must drain cleanly once the pipeline recovers.
+#[tokio::test]
+async fn a_stalled_pipeline_bounds_speculation_and_drains_cleanly() {
+    let mut rig = Rig::new().await;
+    rig.env = rig.env.clone().with_pending_cap(3);
+
+    // A chain of five empty blocks; diffs accumulate so each next block is produced
+    // against its full ancestor state.
+    let mut records = Vec::new();
+    let mut parent: Option<(ReplayRecord, B256)> = None;
+    let mut merged: Diff = (HashMap::new(), HashMap::new());
+    for i in 1..=5u64 {
+        let (parent_record, parent_el) = match &parent {
+            Some((record, el)) => (Some(record), *el),
+            None => (None, rig.genesis.header_hash),
+        };
+        let has_ancestors = !merged.0.is_empty() || !merged.1.is_empty();
+        let (record, el, diff) = rig
+            .produce_record(
+                parent_record,
+                parent_el,
+                has_ancestors.then_some(&merged),
+                rig.genesis.context.timestamp + i,
+                Vec::new(),
+            )
+            .await;
+        merged.0.extend(diff.0.iter().map(|(k, v)| (*k, *v)));
+        merged.1.extend(diff.1.iter().map(|(k, v)| (*k, v.clone())));
+        records.push(record.clone());
+        parent = Some((record, el));
+    }
+    let mut blocks = Vec::new();
+    let mut parent_block = rig.genesis_block.clone();
+    for record in records {
+        let block = ConsensusBlock::from_record(&parent_block, record);
+        blocks.push(block.clone());
+        parent_block = block;
+    }
+
+    // Stall the pipeline, then keep verifying: consensus participation must not
+    // depend on the applier making progress.
+    rig.applier_gate.send(false).expect("applier alive");
+    let mut committing = rig.env.clone();
+    let first = blocks[0].clone();
+    let stalled_commit = tokio::spawn(async move { committing.commit(first).await });
+
+    assert!(
+        rig.env
+            .verify(rig.genesis_block.clone(), blocks[0].clone())
+            .await
+    );
+    assert!(rig.env.verify(blocks[0].clone(), blocks[1].clone()).await);
+    assert!(rig.env.verify(blocks[1].clone(), blocks[2].clone()).await);
+
+    // Three speculative blocks held, cap reached: new blocks are not vouched for...
+    assert!(
+        !rig.env.verify(blocks[2].clone(), blocks[3].clone()).await,
+        "the speculative-state cap must withhold beyond capacity",
+    );
+    // ...but re-verifying an already-held block adds nothing and stays allowed.
+    assert!(rig.env.verify(blocks[1].clone(), blocks[2].clone()).await);
+
+    // The pipeline recovers: the parked commit drains, pruning its block from the
+    // speculative set, and verification of new blocks resumes.
+    rig.applier_gate.send(true).expect("applier alive");
+    stalled_commit.await.expect("commit task");
+    assert!(rig.env.verify(blocks[2].clone(), blocks[3].clone()).await);
+
+    // The rest of the chain commits and the durable head converges.
+    for block in &blocks[1..=3] {
+        rig.env.commit(block.clone()).await;
+    }
+    assert_eq!(
+        rig.env.committed_height().await.map(|h| h.get()),
+        Some(4),
+        "the backlog must drain to the durable chain",
+    );
+    assert!(rig.env.verify(blocks[3].clone(), blocks[4].clone()).await);
 }

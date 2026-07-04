@@ -115,7 +115,18 @@ where
     /// `None` = verification is structural checks + re-execution only (a test-only
     /// configuration; production wiring always attaches this).
     validity: Option<ProposalValidation>,
+    /// Upper bound on uncommitted speculative blocks held in memory. When the node's
+    /// persistence pipeline stalls, consensus keeps verifying and voting (by design —
+    /// a slow disk must not silence a validator), so speculative state accumulates;
+    /// this bound turns unbounded growth into withheld votes once reached, and the
+    /// backlog self-heals as commits drain.
+    pending_cap: usize,
 }
+
+/// Default for [`NodeExecutionEnv`]'s speculative-block bound: far above any healthy
+/// unfinalized window (a handful of blocks), small enough that a stalled node stops
+/// accumulating long before memory pressure.
+const DEFAULT_PENDING_CAP: usize = 128;
 
 /// The inputs proposal-validity checking needs (see [`crate::rules`]).
 #[derive(Clone)]
@@ -183,7 +194,15 @@ where
             interop_roots_per_block,
             builder: None,
             validity: None,
+            pending_cap: DEFAULT_PENDING_CAP,
         }
+    }
+
+    /// Overrides the speculative-block bound (tests exercise the bound with small
+    /// values; production keeps the default).
+    pub fn with_pending_cap(mut self, cap: usize) -> Self {
+        self.pending_cap = cap;
+        self
     }
 
     /// Attaches the block builder — required on validators that should propose.
@@ -407,6 +426,13 @@ where
         };
         let (branch, committed_height) = {
             let shared = self.shared.lock().unwrap();
+            if shared.pending.len() >= self.pending_cap {
+                warn!(
+                    pending = shared.pending.len(),
+                    "speculative state at capacity (commits lagging?); passing this leader turn"
+                );
+                return None;
+            }
             let branch = shared
                 .pending
                 .branch_for_parent(parent.height_u64(), parent_info.digest);
@@ -492,6 +518,18 @@ where
         }
         let branch = {
             let shared = self.shared.lock().unwrap();
+            // Bound speculative memory: beyond the cap, stop vouching for new blocks
+            // (a round-scoped withhold) until commits drain the backlog. Re-verifying
+            // an already-held block stays allowed — it adds nothing.
+            if shared.pending.len() >= self.pending_cap && !shared.pending.contains(&block.digest())
+            {
+                warn!(
+                    height = block.height_u64(),
+                    pending = shared.pending.len(),
+                    "speculative state at capacity (commits lagging?); withholding vote"
+                );
+                return false;
+            }
             shared
                 .pending
                 .branch_for_parent(parent.height_u64(), parent.digest())
