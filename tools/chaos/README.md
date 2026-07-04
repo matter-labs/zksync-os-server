@@ -2,9 +2,10 @@
 
 Runs a containerized BFT validator committee and injects faults on a seeded random
 schedule — kill, graceful stop, freeze (container pause), network partition — for as
-long as you leave it running. The goal is to surface the bugs that only sustained,
-randomized wall-clock time finds: torn state after dirty crashes, teardown races,
-drift interactions, slow leaks.
+long as you leave it running, while a built-in watcher continuously checks that the
+consensus algorithm's properties hold. The goal is to surface the bugs that only
+sustained, randomized wall-clock time finds: torn state after dirty crashes,
+teardown races, drift interactions, slow leaks.
 
 Ground rules:
 
@@ -46,18 +47,44 @@ The driver heals everything (restarts, unpauses, reconnects) on exit; `docker co
 down -v` resets the world, and volumes persist state across restarts otherwise — a
 restarted validator rejoins on its own history, which is the point.
 
+## The watcher
+
+`chaos drive` runs a watcher alongside the fault schedule. Every couple of seconds
+it polls each validator (container state, `/status`, one `eth_getBlockByNumber`,
+the consensus metrics, new log lines) and checks, cross-referenced against what the
+driver injected:
+
+- **agreement** — every reachable validator serves the identical block hash at the
+  probed height;
+- **monotone finality** — no validator's finalized view or applied height ever goes
+  backwards;
+- **no progress without quorum** — while the driver holds the healthy set below
+  quorum, the finalized tip must freeze (after `--settle-margin`, default 5s, for
+  certificates already in flight);
+- **no protocol fault evidence** — the `conflicting_*`/`nullify_finalize` activity
+  counters must stay zero on an honest committee;
+- **no unexpected deaths** — a container the driver did not touch must be running;
+- **clean logs** — no panics or ERROR lines beyond an explicit allowlist of known
+  teardown noise;
+- **liveness** — when the committee is expected live for a whole `--liveness-window`
+  (default 60s, deliberately generous), the finalized view must advance within it.
+
+On the first finding the experiment freezes: injection stops, nothing is healed, the
+findings plus the offending poll plus every container's recent logs land in
+`<workdir>/artifacts/`, and the driver exits nonzero. The cluster stays up exactly
+as it failed — attach, inspect, then `docker compose down -v` when done.
+
 ## Notes and known gaps
 
 - **anvil image**: the compose file pins `ghcr.io/foundry-rs/foundry:v1.5.1` (newer
-  anvil cannot load the checked-in L1 state). If the image tag or its entrypoint
-  differs on your host, adjust the `anvil` service — the command just gunzips the
-  chain's `l1-state.json.gz` and runs anvil the same way `run_local.sh` does.
+  anvil cannot load the checked-in L1 state). The service gunzips the chain's
+  `l1-state.json.gz` and runs anvil the same way `run_local.sh` does.
+- **Static validator IPs**: the node parses committee addresses as socket addresses
+  (numeric, no DNS), so `setup` pins each validator's IP on the compose network and
+  a partition heal reconnects with `--ip` to restore exactly the address the rest of
+  the committee dials.
 - **Load generation** is not wired yet: the chain runs on empty-block cadence, which
   exercises every consensus/restart/liveness invariant but no transaction flow. To
   add load, fund an L2 account (a deposit through the bridgehub) and run `loadbase`
   against any validator's RPC port. Wiring a funded spammer into the rig is a
   follow-up.
-- **The invariant monitor** (cross-node hash agreement, liveness-when-expected,
-  rejoin deadlines, log scanning, artifact capture, alerting) is the rig's second
-  half and lives in a follow-up; until then the journal plus `/status` polling and
-  grafana are the eyes.

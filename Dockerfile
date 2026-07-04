@@ -19,13 +19,19 @@ RUN apt-get update && \
 ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib
 ENV LD_LIBRARY_PATH=${LIBCLANG_PATH}:${LD_LIBRARY_PATH}
 
+# Parallel rustc jobs; defaults to all cores. Set lower (e.g. 4) on builders whose
+# memory cannot feed one release-mode rustc per core.
+ARG CARGO_BUILD_JOBS=""
+
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies (this is the caching Docker layer)
-RUN cargo chef cook --bin zksync-os-server --release --recipe-path recipe.json
+RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
+    cargo chef cook --bin zksync-os-server --release --recipe-path recipe.json
 
 # Build application
 COPY . .
-RUN cargo build --release --bin zksync-os-server
+RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
+    cargo build --release --bin zksync-os-server
 
 #################################
 # -------- Runtime -------------#

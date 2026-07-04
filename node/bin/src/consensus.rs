@@ -241,15 +241,23 @@ where
     // handle, and the last handle must not be dropped inside an async worker (dropping
     // a runtime in async context panics). This clone outlives every in-task clone.
     let env_anchor = env.clone();
+    // The consensus runtime's executor must take its last breath on this plain
+    // thread: every `Context` clone holds a reference to it, and whichever thread
+    // drops the last one tears the runtime down — doing that inside an async worker
+    // panics ("cannot drop a runtime where blocking is not allowed"). The channel
+    // smuggles one context out to this thread, which then outlives every in-task and
+    // node-side holder and performs the teardown safely.
+    let (context_anchor_sender, context_anchor) = std::sync::mpsc::channel();
+    let metrics_encoder = observability.metrics_encoder;
+    let metrics_encoder_in_runtime = metrics_encoder.clone();
     let result = runner.start(|context| async move {
+        let _ = context_anchor_sender.send(context.clone());
         // From here on the consensus runtime's own registry (engine, marshal, p2p) is
         // live; hand the node a way to scrape it.
-        let _ = observability
-            .metrics_encoder
-            .send(Some(std::sync::Arc::new({
-                let context = context.clone();
-                move || context.encode()
-            })));
+        let _ = metrics_encoder_in_runtime.send(Some(std::sync::Arc::new({
+            let context = context.clone();
+            move || context.encode()
+        })));
 
         let quota = Quota::per_second(NonZeroU32::new(128).expect("nonzero"));
         // Block traffic is bulkier and rarer than votes; keep its rate low so backfill
@@ -370,6 +378,13 @@ where
         }
     });
     drop(env_anchor);
+    // Withdraw the metrics encoder: it captures a runtime context, and leaving it in
+    // the node's status watch would keep this dead runtime alive across a consensus
+    // restart — and drop it inside an async context eventually. The replaced value
+    // drops right here, on this plain thread.
+    let _ = metrics_encoder.send(None);
+    // The teardown itself: the last context reference goes, on this thread.
+    drop(context_anchor);
     // Only now — with every consensus task gone and the runtime torn down — may the
     // next instance open this storage.
     drop(storage_lock);

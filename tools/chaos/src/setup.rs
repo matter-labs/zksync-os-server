@@ -34,6 +34,18 @@ const CONTAINER_CONSENSUS: u16 = 3054;
 /// checked-in L1 state).
 const FOUNDRY_IMAGE: &str = "ghcr.io/foundry-rs/foundry:v1.5.1";
 
+/// The compose network's subnet. Validators get static IPs because the node parses
+/// committee addresses as `SocketAddr` (numeric only, no DNS), and because a
+/// partition heal must restore the exact address the committee knows
+/// (`docker network connect` without `--ip` would draw a fresh dynamic one).
+const SUBNET: &str = "172.28.0.0/24";
+
+/// Validator `index`'s static IP on [`SUBNET`]. Offset 10 keeps clear of the
+/// gateway (.1) and anvil's dynamic address.
+fn validator_ip(index: usize) -> String {
+    format!("172.28.0.{}", 10 + index)
+}
+
 #[derive(Args)]
 pub struct SetupArgs {
     /// Number of validators. Committees of n tolerate (n-1)/3 faults: 4 is the
@@ -71,6 +83,9 @@ pub struct Manifest {
 pub struct ValidatorEntry {
     /// Compose service and container name.
     pub name: String,
+    /// Static IP on the compose network; a partition heal reconnects with exactly
+    /// this address, since it is what the rest of the committee dials.
+    pub ip: String,
     pub host_rpc_port: u16,
     pub host_status_port: u16,
     pub host_metrics_port: u16,
@@ -80,6 +95,10 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
     anyhow::ensure!(
         args.validators >= 2,
         "a committee needs at least 2 validators"
+    );
+    anyhow::ensure!(
+        args.validators <= 200,
+        "the static-IP scheme fits at most 200 validators in {SUBNET}"
     );
     let repo = args.repo.canonicalize().map_err(|error| {
         anyhow::anyhow!("cannot resolve --repo {}: {error}", args.repo.display())
@@ -109,9 +128,10 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
             ed25519::PrivateKey::decode(seed.as_slice()).expect("32 random bytes are a valid key");
         let (bls, bls_public) = ops::keypair::<_, MinPk>(&mut rng);
         committee.push(format!(
-            "{}:{}@validator-{index}:{CONTAINER_CONSENSUS}",
+            "{}:{}@{}:{CONTAINER_CONSENSUS}",
             alloy::hex::encode(network.public_key().encode()),
             alloy::hex::encode(bls_public.encode()),
+            validator_ip(index),
         ));
         network_keys.push(network);
         bls_keys.push(bls);
@@ -140,6 +160,7 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
         std::fs::write(dir.join("validator.yaml"), overlay)?;
         manifest.validators.push(ValidatorEntry {
             name: format!("validator-{index}"),
+            ip: validator_ip(index),
             host_rpc_port: args.base_port + 10 * index as u16,
             host_status_port: args.base_port + 10 * index as u16 + 1,
             host_metrics_port: args.base_port + 10 * index as u16 + 2,
@@ -186,7 +207,7 @@ fn validator_overlay(
     let _ = writeln!(out, "  rocks_db_path: /db");
     let _ = writeln!(out, "  node_role: main");
     let _ = writeln!(out, "l1_provider:");
-    let _ = writeln!(out, "  rpc_url: ws://anvil:8545");
+    let _ = writeln!(out, "  rpc_url: http://anvil:8545");
     let _ = writeln!(out, "rpc:");
     let _ = writeln!(out, "  address: 0.0.0.0:{CONTAINER_RPC}");
     let _ = writeln!(out, "status_server:");
@@ -196,9 +217,15 @@ fn validator_overlay(
     let _ = writeln!(out, "    port: {CONTAINER_PROMETHEUS}");
     let _ = writeln!(out, "sequencer:");
     let _ = writeln!(out, "  fee_collector_address: '{fee_collector}'");
+    // The two config defaults under `./db` must move to the writable volume — the
+    // image's working directory is read-only for the runtime user.
+    let _ = writeln!(out, "  block_dump_path: /db/block_dumps");
     let _ = writeln!(out, "batcher:");
     // Exactly one batcher, like production; the rest are sequencing-only.
     let _ = writeln!(out, "  enabled: {}", index == 0);
+    let _ = writeln!(out, "prover_api:");
+    let _ = writeln!(out, "  proof_storage:");
+    let _ = writeln!(out, "    path: /db/fri_proofs");
     let _ = writeln!(out, "prover_input_generator:");
     let _ = writeln!(out, "  enable_input_generation: false");
     let _ = writeln!(out, "consensus:");
@@ -268,12 +295,17 @@ fn compose_file(args: &SetupArgs, repo: &std::path::Path, manifest: &Manifest) -
             "      - \"{}:{CONTAINER_PROMETHEUS}\"",
             entry.host_metrics_port
         );
-        let _ = writeln!(out, "    networks: [{}]", manifest.network);
+        let _ = writeln!(out, "    networks:");
+        let _ = writeln!(out, "      {}:", manifest.network);
+        let _ = writeln!(out, "        ipv4_address: {}", entry.ip);
         let _ = writeln!(out, "    restart: \"no\"");
     }
     let _ = writeln!(out, "networks:");
     let _ = writeln!(out, "  {}:", manifest.network);
     let _ = writeln!(out, "    name: {}", manifest.network);
+    let _ = writeln!(out, "    ipam:");
+    let _ = writeln!(out, "      config:");
+    let _ = writeln!(out, "        - subnet: {SUBNET}");
     let _ = writeln!(out, "volumes:");
     for index in 0..manifest.validators.len() {
         let _ = writeln!(out, "  chaos-db-{index}:");

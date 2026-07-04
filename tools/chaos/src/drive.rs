@@ -2,8 +2,10 @@
 //! to the cluster, under one invariant — **the driver always knows whether the
 //! committee should be live**. It never reduces the healthy set below quorum except
 //! through a deliberate, bounded outage window, and every action lands in a JSONL
-//! journal alongside the expected cluster health, so an external monitor can tell
-//! "the driver took quorum away" from "the chain stalled and nobody knows why".
+//! journal alongside the expected cluster health — and is published to the in-process
+//! watcher (see [`crate::watch`]) — so "the driver took quorum away" is always
+//! distinguishable from "the chain stalled and nobody knows why". On the watcher's
+//! first finding the driver freezes the experiment instead of healing it.
 //!
 //! Determinism honesty: the seed fully determines the *schedule* (what, whom, when in
 //! elapsed terms); the system's response runs on real time and real machines, so a
@@ -14,12 +16,13 @@
 //! around it shells out to `docker`.
 
 use crate::setup::Manifest;
+use crate::watch;
 use clap::Args;
 use rand08::rngs::StdRng;
 use rand08::{Rng, SeedableRng};
 use serde::Serialize;
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Args)]
@@ -40,6 +43,14 @@ pub struct DriveArgs {
     /// work directory.
     #[arg(long)]
     pub journal: Option<PathBuf>,
+    /// How long in-flight finalizations may still land after quorum is taken away
+    /// before any further progress counts as a safety violation.
+    #[arg(long, default_value = "5s")]
+    pub settle_margin: humantime::Duration,
+    /// How long the committee may go without a new finalization while the driver
+    /// expects it to be live. Generous on purpose: a false alarm costs minutes.
+    #[arg(long, default_value = "60s")]
+    pub liveness_window: humantime::Duration,
 }
 
 /// One validator's condition as the driver believes it to be.
@@ -91,6 +102,10 @@ impl Schedule {
             pending_heals: Vec::new(),
             step: 0,
         }
+    }
+
+    pub fn conditions(&self) -> Vec<Condition> {
+        self.conditions.clone()
     }
 
     pub fn healthy_count(&self) -> usize {
@@ -240,7 +255,17 @@ impl ClusterOps for DockerOps {
                 self.docker(&["network", "disconnect", &network, &self.container(index)])
             }
             Action::Reconnect(index) => {
-                self.docker(&["network", "connect", &network, &self.container(index)])
+                // Reattach at the pinned address: the committee dials this exact IP,
+                // and a bare `connect` would draw a fresh dynamic one.
+                let ip = self.manifest.validators[index].ip.clone();
+                self.docker(&[
+                    "network",
+                    "connect",
+                    "--ip",
+                    &ip,
+                    &network,
+                    &self.container(index),
+                ])
             }
         }
     }
@@ -274,9 +299,29 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         .open(&journal_path)?;
 
     let mut schedule = Schedule::new(args.seed, validators, quorum);
+    let probes = watch::NodeProbe::from_manifest(&manifest);
     let mut ops = DockerOps { manifest };
     let started = std::time::Instant::now();
     let deadline = args.duration.map(|duration| started + *duration);
+
+    // The watcher learns the driver's beliefs through a watch channel and reports
+    // the first finding back once; the driver then freezes the experiment.
+    let (expectations_sender, expectations_receiver) =
+        tokio::sync::watch::channel(watch::Expectations {
+            conditions: schedule.conditions(),
+            expect_liveness: schedule.expect_liveness(),
+            since: started,
+        });
+    let (findings_sender, mut findings_receiver) = tokio::sync::mpsc::channel(1);
+    let watcher = tokio::spawn(watch::watch(
+        probes,
+        expectations_receiver,
+        findings_sender,
+        *args.settle_margin,
+        *args.liveness_window,
+    ));
+    let mut previous_liveness = schedule.expect_liveness();
+    let mut liveness_since = started;
 
     println!(
         "driving {validators} validators (quorum {quorum}) with seed {}; journal at {}",
@@ -291,6 +336,9 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         tokio::select! {
             _ = tokio::time::sleep(gap) => {}
             _ = tokio::signal::ctrl_c() => break,
+            received = findings_receiver.recv() => {
+                return freeze(&args.workdir, &journal_path, &ops, received);
+            }
         }
         if let Some(deadline) = deadline
             && std::time::Instant::now() >= deadline
@@ -307,11 +355,38 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
             validators,
             schedule.expect_liveness(),
         );
+
+        // Ordering rule against watcher false positives: the watcher must never
+        // observe a fault it does not yet expect (a killed node would look like an
+        // unexpected death), and must never expect a heal that has not yet landed
+        // (a node still starting would look dead). So faults publish expectations
+        // first and then land; heals land first and then publish.
+        let heals = matches!(
+            action,
+            Action::Start(_) | Action::Unpause(_) | Action::Reconnect(_)
+        );
+        if !heals {
+            publish_expectations(
+                &expectations_sender,
+                &schedule,
+                &mut previous_liveness,
+                &mut liveness_since,
+            );
+        }
         if let Err(error) = ops.apply(action) {
             // A failed injection (e.g. the container is already in that state) is a
             // journalable event, not a reason to stop the experiment.
             println!("  action failed (continuing): {error}");
         }
+        if heals {
+            publish_expectations(
+                &expectations_sender,
+                &schedule,
+                &mut previous_liveness,
+                &mut liveness_since,
+            );
+        }
+
         let entry = JournalEntry {
             elapsed_ms: started.elapsed().as_millis(),
             seed: args.seed,
@@ -323,7 +398,13 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         writeln!(journal, "{}", serde_json::to_string(&entry)?)?;
     }
 
-    // Leave the cluster whole: heal everything before exiting.
+    // A finding that raced Ctrl-C or the deadline still freezes the scene.
+    if let Ok(received) = findings_receiver.try_recv() {
+        return freeze(&args.workdir, &journal_path, &ops, Some(received));
+    }
+
+    // Clean exit: stop watching and leave the cluster whole.
+    watcher.abort();
     println!("healing the cluster before exit");
     for heal in schedule.heal_everything() {
         if let Err(error) = ops.apply(heal) {
@@ -331,6 +412,71 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Handles the watcher's report: freeze the scene. Nothing is healed and the
+/// process exits nonzero — the cluster stays up exactly as it failed, with the
+/// findings, the offending poll, and every container's recent logs captured under
+/// `<workdir>/artifacts/`.
+fn freeze(
+    workdir: &Path,
+    journal_path: &Path,
+    ops: &DockerOps,
+    received: Option<(watch::Poll, Vec<watch::Finding>)>,
+) -> anyhow::Result<()> {
+    let Some((poll, findings)) = received else {
+        anyhow::bail!("the watcher stopped unexpectedly; the experiment is unwatched");
+    };
+    for finding in &findings {
+        println!("FINDING: {finding:?}");
+    }
+
+    let artifacts = workdir.join("artifacts");
+    std::fs::create_dir_all(&artifacts)?;
+    std::fs::write(
+        artifacts.join("findings.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "findings": findings,
+            "poll": poll,
+        }))?,
+    )?;
+    for validator in &ops.manifest.validators {
+        let container = format!("chaos-{}", validator.name);
+        let output = std::process::Command::new("docker")
+            .args(["logs", "--tail", "10000", &container])
+            .output();
+        if let Ok(output) = output {
+            let mut log = output.stdout;
+            log.extend_from_slice(&output.stderr);
+            std::fs::write(artifacts.join(format!("{}.log", validator.name)), log)?;
+        }
+    }
+    anyhow::bail!(
+        "finding(s) recorded at {}; the cluster is left frozen (not healed) for investigation — journal at {}",
+        artifacts.display(),
+        journal_path.display(),
+    )
+}
+
+/// Publishes the driver's current beliefs to the watcher, timestamping the moment
+/// the liveness expectation last flipped (the settle margin and the liveness
+/// window both count from that moment).
+fn publish_expectations(
+    sender: &tokio::sync::watch::Sender<watch::Expectations>,
+    schedule: &Schedule,
+    previous_liveness: &mut bool,
+    liveness_since: &mut std::time::Instant,
+) {
+    let expect_liveness = schedule.expect_liveness();
+    if expect_liveness != *previous_liveness {
+        *previous_liveness = expect_liveness;
+        *liveness_since = std::time::Instant::now();
+    }
+    let _ = sender.send(watch::Expectations {
+        conditions: schedule.conditions(),
+        expect_liveness,
+        since: *liveness_since,
+    });
 }
 
 #[cfg(test)]

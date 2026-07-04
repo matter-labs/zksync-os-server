@@ -16082,11 +16082,14 @@ dependencies = [
  "clap",
  "commonware-codec",
  "commonware-cryptography",
+ "futures",
  "humantime",
  "rand 0.8.5",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
+ "zksync_os_status_server",
 ]
 
 [[package]]

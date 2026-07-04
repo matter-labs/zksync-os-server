@@ -21,6 +21,7 @@
 
 mod drive;
 mod setup;
+mod watch;
 
 use clap::{Parser, Subcommand};
 
