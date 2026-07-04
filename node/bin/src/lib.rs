@@ -784,7 +784,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // TODO(consensus): with no local production loop there is no "block under
     // construction", so RPC surfaces that peek at it (pending-block context for eth_call
     // and gas estimation) fall back to the latest committed block in consensus mode.
-    let (block_context_provider, consensus_committed_receiver) = if config.consensus_config.enabled
+    let (block_context_provider, consensus_committed_receiver, consensus_status_source) = if config
+        .consensus_config
+        .enabled
     {
         // The mempool expects to be initialized with the last replayed block exactly
         // once; the local production pipeline does this on its first replay, consensus
@@ -867,9 +869,34 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.general_config.rocks_db_path.join("consensus"),
         )
         .expect("invalid consensus configuration");
+
+        // Progress and metrics surfaces for `/status`, fed from inside the consensus
+        // world.
+        let (finalized_sender, finalized_receiver) = tokio::sync::watch::channel(None);
+        let (metrics_encoder_sender, metrics_encoder_receiver) = tokio::sync::watch::channel(None);
+        let status_source = zksync_os_status_server::ConsensusStatusSource {
+            committee_size: setup.committee.len(),
+            validator: {
+                use commonware_codec::Encode as _;
+                use commonware_cryptography::Signer as _;
+                alloy::hex::encode(setup.network_key.public_key().encode())
+            },
+            finalized: finalized_receiver,
+            applied_height: applied_block_number_receiver.clone(),
+            metrics_encoder: metrics_encoder_receiver,
+        };
+
         let (consensus_shutdown_sender, consensus_shutdown) = tokio::sync::oneshot::channel();
-        let (_thread, consensus_dead) =
-            consensus::spawn(setup, env, l2_subpool.clone(), consensus_shutdown);
+        let (_thread, consensus_dead) = consensus::spawn(
+            setup,
+            env,
+            l2_subpool.clone(),
+            consensus::ConsensusObservability {
+                finalized: finalized_sender,
+                metrics_encoder: metrics_encoder_sender,
+            },
+            consensus_shutdown,
+        );
         runtime.spawn_critical_task("consensus watchdog", async move {
             // Held for the watchdog's lifetime: when the node runtime tears this task
             // down (shutdown), the dropped sender tells consensus to stop gracefully.
@@ -878,7 +905,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             panic!("consensus stack died; the node cannot continue without it");
         });
 
-        (None, Some(committed_payload_receiver))
+        (None, Some(committed_payload_receiver), Some(status_source))
     } else {
         let provider = BlockContextProvider::new(
             fee_provider,
@@ -898,7 +925,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             &node_startup_state.l1_state.settlement_layer_intervals,
             last_constructed_block_ctx_sender,
         );
-        (Some(provider), None)
+        (Some(provider), None, None)
     };
 
     // ========== Start L1 Persist Batch Watcher ===========
@@ -1022,7 +1049,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
             |shutdown| async move {
-                run_status_server(addr, shutdown)
+                run_status_server(addr, shutdown, consensus_status_source)
                     .await
                     .expect("failed to run status server");
             },

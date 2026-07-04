@@ -18,6 +18,7 @@
 pub mod block;
 pub mod builder;
 pub mod env;
+pub mod metrics;
 pub mod pending_state;
 pub mod rules;
 

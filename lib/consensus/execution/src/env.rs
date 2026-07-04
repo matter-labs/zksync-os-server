@@ -12,6 +12,7 @@
 
 use crate::block::ConsensusBlock;
 use crate::builder::{BuildBlocks, BuiltBlock, ParentInfo, derive_next_cursors};
+use crate::metrics::CONSENSUS_METRICS;
 use crate::pending_state::{BranchOverrides, CommittedHead, Overlay, PendingState};
 use crate::rules::{LocalL1Inputs, ParentView, ValidityConfig, Verdict};
 use commonware_consensus::types::Height;
@@ -447,8 +448,12 @@ where
         };
 
         let view = self.view_on(branch, committed_height);
-        let BuiltBlock { record, output, .. } =
-            builder.lock().await.build_block(&parent_info, view).await?;
+        let Some(BuiltBlock { record, output, .. }) =
+            builder.lock().await.build_block(&parent_info, view).await
+        else {
+            CONSENSUS_METRICS.build_outcomes[&"passed"].inc();
+            return None;
+        };
 
         let block = ConsensusBlock::from_record(&parent, record);
         {
@@ -462,12 +467,14 @@ where
             );
             shared.outputs.insert(block.digest(), output);
         }
+        CONSENSUS_METRICS.build_outcomes[&"built"].inc();
         Some(block)
     }
 
     async fn verify(&mut self, parent: ConsensusBlock, block: ConsensusBlock) -> bool {
         let Some(record) = block.record() else {
             warn!("received a payload-less block above genesis; rejecting");
+            CONSENSUS_METRICS.verify_verdicts[&"invalid"].inc();
             return false;
         };
         if let Err(reason) = self.check_linkage(&parent, record) {
@@ -475,6 +482,7 @@ where
                 height = block.height_u64(),
                 reason, "block failed linkage checks; rejecting"
             );
+            CONSENSUS_METRICS.verify_verdicts[&"invalid"].inc();
             return false;
         }
         if let Some(validation) = self.validity.clone() {
@@ -505,6 +513,7 @@ where
                         height = block.height_u64(),
                         reason, "cannot validate proposal inputs yet; withholding vote"
                     );
+                    CONSENSUS_METRICS.verify_verdicts[&"withhold"].inc();
                     return false;
                 }
                 Verdict::Invalid(reason) => {
@@ -512,6 +521,7 @@ where
                         height = block.height_u64(),
                         reason, "block failed validity rules; rejecting"
                     );
+                    CONSENSUS_METRICS.verify_verdicts[&"invalid"].inc();
                     return false;
                 }
             }
@@ -528,6 +538,7 @@ where
                     pending = shared.pending.len(),
                     "speculative state at capacity (commits lagging?); withholding vote"
                 );
+                CONSENSUS_METRICS.verify_verdicts[&"withhold"].inc();
                 return false;
             }
             shared
@@ -543,6 +554,7 @@ where
                 height = block.height_u64(),
                 "parent state unavailable; withholding vote"
             );
+            CONSENSUS_METRICS.verify_verdicts[&"withhold"].inc();
             return false;
         };
 
@@ -560,6 +572,10 @@ where
                     overlay,
                 );
                 shared.outputs.insert(block.digest(), output);
+                CONSENSUS_METRICS.verify_verdicts[&"valid"].inc();
+                CONSENSUS_METRICS
+                    .speculative_blocks
+                    .set(shared.pending.len() as u64);
                 true
             }
             Err(reason) => {
@@ -567,6 +583,7 @@ where
                     height = block.height_u64(),
                     reason, "block failed re-execution; rejecting"
                 );
+                CONSENSUS_METRICS.verify_verdicts[&"invalid"].inc();
                 false
             }
         }
@@ -716,5 +733,12 @@ where
             pending, outputs, ..
         } = &mut *shared;
         outputs.retain(|digest, _| pending.contains(digest));
+        CONSENSUS_METRICS.committed_height.set(height);
+        CONSENSUS_METRICS
+            .last_commit_unix
+            .set((millis_since_epoch() / 1000) as u64);
+        CONSENSUS_METRICS
+            .speculative_blocks
+            .set(pending.len() as u64);
     }
 }

@@ -29,10 +29,12 @@ use commonware_utils::union_unique;
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use zksync_os_consensus_core::types::Scheme;
-use zksync_os_consensus_core::{Channels, NullReporter, StackConfig, start_validator};
+use zksync_os_consensus_core::types::{Activity, Attributable as _, ConsensusActivity, Scheme};
+use zksync_os_consensus_core::{Channels, StackConfig, start_validator};
 use zksync_os_consensus_execution::NodeExecutionEnv;
+use zksync_os_consensus_execution::metrics::CONSENSUS_METRICS;
 use zksync_os_mempool::subpools::l2::L2Subpool;
+use zksync_os_status_server::{ConsensusMetricsEncoder, FinalizedObservation};
 use zksync_os_storage_api::{ReadStateHistory, WriteState};
 use zksync_os_types::L2Envelope;
 
@@ -176,6 +178,7 @@ pub fn spawn<S, P>(
     setup: ConsensusSetup,
     env: NodeExecutionEnv<S>,
     l2_pool: P,
+    observability: ConsensusObservability,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> (
     std::thread::JoinHandle<anyhow::Result<()>>,
@@ -189,7 +192,7 @@ where
     let handle = std::thread::Builder::new()
         .name("consensus".to_string())
         .spawn(move || {
-            let result = run(setup, env, l2_pool, shutdown);
+            let result = run(setup, env, l2_pool, observability, shutdown);
             // Fire unconditionally: the node must learn about consensus death whether
             // it was an error or a clean shutdown (the watchdog is already gone then).
             let _ = dead_sender.send(());
@@ -203,6 +206,7 @@ fn run<S, P>(
     setup: ConsensusSetup,
     env: NodeExecutionEnv<S>,
     l2_pool: P,
+    observability: ConsensusObservability,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()>
 where
@@ -238,6 +242,15 @@ where
     // a runtime in async context panics). This clone outlives every in-task clone.
     let env_anchor = env.clone();
     let result = runner.start(|context| async move {
+        // From here on the consensus runtime's own registry (engine, marshal, p2p) is
+        // live; hand the node a way to scrape it.
+        let _ = observability
+            .metrics_encoder
+            .send(Some(std::sync::Arc::new({
+                let context = context.clone();
+                move || context.encode()
+            })));
+
         let quota = Quota::per_second(NonZeroU32::new(128).expect("nonzero"));
         // Block traffic is bulkier and rarer than votes; keep its rate low so backfill
         // cannot starve the vote channels.
@@ -330,7 +343,9 @@ where
             oracle,
             channels,
             (),
-            NullReporter::new(),
+            ActivityObserver {
+                finalized: std::sync::Arc::new(observability.finalized),
+            },
         )
         .await;
 
@@ -444,15 +459,18 @@ fn start_tx_gossip<C, P, TxSender, TxReceiver>(
                         Err(_) => return,
                     },
                 };
+                CONSENSUS_METRICS.tx_gossip[&"received"].inc();
                 let Ok(batch) = <Vec<alloy::primitives::Bytes> as alloy_rlp::Decodable>::decode(
                     &mut message.as_ref(),
                 ) else {
                     tracing::debug!(?peer, "undecodable transaction gossip; ignoring");
+                    CONSENSUS_METRICS.tx_gossip[&"undecodable"].inc();
                     continue;
                 };
                 for tx_bytes in batch {
                     let Ok(envelope) = L2Envelope::decode_2718(&mut tx_bytes.as_ref()) else {
                         tracing::debug!(?peer, "undecodable gossiped transaction; ignoring");
+                        CONSENSUS_METRICS.tx_gossip[&"undecodable"].inc();
                         continue;
                     };
                     let Ok(transaction) = envelope.try_into_recovered() else {
@@ -460,11 +478,19 @@ fn start_tx_gossip<C, P, TxSender, TxReceiver>(
                             ?peer,
                             "gossiped transaction with a bad signature; ignoring"
                         );
+                        CONSENSUS_METRICS.tx_gossip[&"undecodable"].inc();
                         continue;
                     };
-                    if let Err(error) = pool.add_gossiped_transaction(transaction).await {
-                        // Routine: the pool already knows most re-gossiped transactions.
-                        tracing::debug!(%error, "gossiped transaction not admitted");
+                    match pool.add_gossiped_transaction(transaction).await {
+                        Ok(_) => {
+                            CONSENSUS_METRICS.tx_gossip[&"admitted"].inc();
+                        }
+                        Err(error) => {
+                            // Routine: the pool already knows most re-gossiped
+                            // transactions.
+                            tracing::debug!(%error, "gossiped transaction not admitted");
+                            CONSENSUS_METRICS.tx_gossip[&"ignored"].inc();
+                        }
                     }
                 }
             }
@@ -485,4 +511,75 @@ fn encode_gossiped_tx(
 ) -> alloy::primitives::Bytes {
     let (envelope, _signer) = event.transaction.to_consensus().into_parts();
     envelope.encoded_2718().into()
+}
+
+/// Handles through which the consensus world reports its progress to the node's
+/// status/metrics surfaces. All senders; the receivers live in the status server.
+pub struct ConsensusObservability {
+    /// The latest finalized round this validator observed.
+    pub finalized: tokio::sync::watch::Sender<Option<FinalizedObservation>>,
+    /// Installed once the consensus runtime is up: encodes its prometheus registry
+    /// (engine, marshal, p2p actors) on demand.
+    pub metrics_encoder: tokio::sync::watch::Sender<Option<ConsensusMetricsEncoder>>,
+}
+
+/// Feeds consensus activity into metrics and the status tip. Fault evidence — proof a
+/// committee member signed contradicting votes — is the loudest signal a validator
+/// can produce: it must stay absent on a healthy committee.
+#[derive(Clone)]
+struct ActivityObserver {
+    finalized: std::sync::Arc<tokio::sync::watch::Sender<Option<FinalizedObservation>>>,
+}
+
+impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
+    type Activity = ConsensusActivity;
+
+    async fn report(&mut self, activity: Self::Activity) {
+        let kind = match &activity {
+            Activity::Notarize(_) => "notarize",
+            Activity::Notarization(_) => "notarization",
+            Activity::Certification(_) => "certification",
+            Activity::Nullify(_) => "nullify",
+            Activity::Nullification(_) => "nullification",
+            Activity::Finalize(_) => "finalize",
+            Activity::Finalization(finalization) => {
+                let round = finalization.round();
+                let _ = self.finalized.send(Some(FinalizedObservation {
+                    epoch: round.epoch().get(),
+                    view: round.view().get(),
+                    observed_unix: unix_now(),
+                }));
+                "finalization"
+            }
+            Activity::ConflictingNotarize(evidence) => {
+                tracing::warn!(
+                    culprit = evidence.signer().get(),
+                    "byzantine fault evidence: conflicting notarize votes"
+                );
+                "conflicting_notarize"
+            }
+            Activity::ConflictingFinalize(evidence) => {
+                tracing::warn!(
+                    culprit = evidence.signer().get(),
+                    "byzantine fault evidence: conflicting finalize votes"
+                );
+                "conflicting_finalize"
+            }
+            Activity::NullifyFinalize(evidence) => {
+                tracing::warn!(
+                    culprit = evidence.signer().get(),
+                    "byzantine fault evidence: nullify and finalize in one view"
+                );
+                "nullify_finalize"
+            }
+        };
+        CONSENSUS_METRICS.activity[&kind].inc();
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }

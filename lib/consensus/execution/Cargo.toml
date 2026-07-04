@@ -34,6 +34,7 @@ bytes.workspace = true
 futures.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+vise.workspace = true
 
 [dev-dependencies]
 num.workspace = true

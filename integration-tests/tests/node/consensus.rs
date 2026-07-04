@@ -97,6 +97,27 @@ async fn three_validators_finalize_and_agree() -> anyhow::Result<()> {
         .wait_for_block_on_all(included_at + 5, CONVERGENCE_TIMEOUT)
         .await?;
 
+    // The observability surfaces external monitors poll: `/status` reports consensus
+    // progress, and the consensus runtime's own registry is served for scraping.
+    let status = cluster.node(1).status().await?;
+    let consensus = status
+        .consensus
+        .expect("validators must report a consensus status section");
+    assert_eq!(consensus.committee_size, 3);
+    let finalized = consensus
+        .finalized
+        .expect("a finalized round must have been observed by now");
+    assert!(finalized.view > 0, "finalized view must have advanced");
+    assert!(
+        consensus.applied_height.unwrap_or(0) >= included_at,
+        "applied height must cover the included transaction",
+    );
+    let metrics = cluster.node(1).consensus_metrics().await?;
+    assert!(
+        !metrics.is_empty(),
+        "the consensus runtime's metrics registry must serve content",
+    );
+
     cluster.shutdown_all().await
 }
 

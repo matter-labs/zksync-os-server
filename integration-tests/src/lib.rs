@@ -455,6 +455,17 @@ impl Tester {
         Ok(response.json::<StatusResponse>().await?)
     }
 
+    /// The consensus runtime's own prometheus registry, as served for scraping.
+    pub async fn consensus_metrics(&self) -> anyhow::Result<String> {
+        let response = reqwest::get(format!(
+            "{}/status/consensus-metrics",
+            self.status_server_url
+        ))
+        .await?
+        .error_for_status()?;
+        Ok(response.text().await?)
+    }
+
     pub async fn wait_for_initial_deposit(&self) -> anyhow::Result<()> {
         tokio::time::timeout(
             Duration::from_secs(60),

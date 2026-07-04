@@ -35,3 +35,12 @@ pub type SchemeProvider = ConstantProvider<Scheme, Epoch>;
 
 /// Deterministic round-robin leader rotation (hash-shuffled per epoch).
 pub type Elector = RoundRobin<Sha256>;
+
+/// The consensus activity stream over this network's concrete types — what an activity
+/// reporter (metrics, status, fault evidence) receives.
+pub type ConsensusActivity =
+    commonware_consensus::simplex::types::Activity<Scheme, commonware_cryptography::sha256::Digest>;
+
+/// Re-export for reporter implementations outside this crate.
+pub use commonware_consensus::Reporter;
+pub use commonware_consensus::simplex::types::{Activity, Attributable};
