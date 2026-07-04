@@ -7,10 +7,10 @@
 //! required to absorb as a no-op.
 
 use crate::execution::ExecutionEnv;
-use commonware_consensus::Reporter;
 use commonware_consensus::marshal::Update;
+use commonware_consensus::{Heightable as _, Reporter};
 use commonware_utils::acknowledgement::{Acknowledgement, Exact};
-use tracing::debug;
+use tracing::{debug, info};
 
 /// Applies each finalized block via [`ExecutionEnv::commit`] and acknowledges it only
 /// after the commit is durable. Plugged into consensus as the finalized-block consumer.
@@ -36,11 +36,13 @@ impl<X: ExecutionEnv> Reporter for FinalizedBlockCommitter<X> {
                 debug!(?round, %height, "observed finalized tip");
             }
             Update::Block(block, ack) => {
+                let height = block.height();
                 self.env.commit(block).await;
                 // Acknowledging tells consensus the block is durable and it may deliver
                 // the next one. Acknowledge strictly after commit: acking early would let
                 // a crash lose a block that consensus considers delivered.
                 ack.acknowledge();
+                info!(%height, "committed finalized block");
             }
         }
     }

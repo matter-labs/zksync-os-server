@@ -36,6 +36,45 @@ pub struct RebuildOptions {
     pub reset_timestamps: bool,
 }
 
+/// Command source for a consensus validator: finalized blocks arrive from consensus
+/// fully executed, in order, and flow straight to persistence. There is no local block
+/// production loop and no canonization fence — consensus already decided.
+#[derive(Debug)]
+pub struct ConsensusCommittedSource {
+    /// Finalized payloads from the consensus execution environment.
+    pub committed: mpsc::Receiver<zksync_os_sequencer::model::blocks::BlockPayload>,
+}
+
+#[async_trait]
+impl PipelineComponent for ConsensusCommittedSource {
+    type Input = ();
+    type Output = zksync_os_sequencer::model::blocks::BlockPayload;
+
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::ConsensusCommittedSource;
+    // Small on purpose: consensus paces itself on the applier's durability
+    // acknowledgements, so deep buffering here would only hide backpressure.
+    const OUTPUT_CHANNEL_CAPACITY: usize = 1;
+
+    async fn run(
+        mut self,
+        _input: PeekableReceiver<()>,
+        output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
+    ) -> anyhow::Result<()> {
+        while let Some(payload) = self.committed.recv().await {
+            let block_number = payload.record.block_context.block_number;
+            let timestamp = payload.record.block_context.timestamp;
+            if output.send(payload).await.is_err() {
+                tracing::info!("output channel closed, stopping consensus committed source");
+                break;
+            }
+            state_reporter.record_processed(block_number, Some(timestamp), None);
+        }
+        Ok(())
+    }
+}
+
 /// External node command source.
 #[derive(Debug)]
 pub struct ExternalNodeCommandSource {

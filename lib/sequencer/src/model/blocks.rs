@@ -198,7 +198,15 @@ pub enum InvalidTxPolicy {
 pub enum SealPolicy {
     /// Seal non-empty blocks after deadline or N transactions. Used when producing a block
     /// (Block Deadline, Block Size)
+    ///
+    /// The deadline arms on the first transaction, so an idle tx source means waiting
+    /// indefinitely rather than producing empty blocks.
     Decide(Duration, usize),
+    /// Like [`SealPolicy::Decide`], but the deadline arms when execution starts, so an
+    /// idle tx source yields an empty block at the deadline. Used by block producers
+    /// that must keep a steady block cadence (consensus leaders: the view moves on with
+    /// or without transactions).
+    Cadence(Duration, usize),
     /// Seal when all txs from tx source are executed.
     /// `allowed_to_finish_early` indicates whether it's expected for block to be sealed earlier for different reason.
     /// - `Replay` maps to `UntilExhausted { allowed_to_finish_early: false }`

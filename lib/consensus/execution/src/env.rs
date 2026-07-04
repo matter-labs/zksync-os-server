@@ -11,6 +11,7 @@
 //! to propose, which consensus treats as this validator passing its turn as leader.
 
 use crate::block::ConsensusBlock;
+use crate::builder::{BuildBlocks, BuiltBlock, ParentInfo, derive_next_cursors};
 use crate::pending_state::{BranchOverrides, CommittedHead, Overlay, PendingState};
 use commonware_consensus::types::Height;
 use commonware_cryptography::Digestible;
@@ -29,17 +30,20 @@ use zksync_os_sequencer::model::blocks::{
     BlockCommandType, BlockOutputWithReads, BlockPayload, InvalidTxPolicy, PreparedBlockCommand,
     SealPolicy,
 };
+use zksync_os_storage_api::BlockHashes;
 use zksync_os_storage_api::state_override_view::OverriddenStateView;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{SystemTxType, ZkEnvelope};
+use zksync_os_types::{ProtocolSemanticVersion, SystemTxType, ZkEnvelope};
 
 /// Chain-level constants the environment needs to anchor the chain root.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ChainAnchor {
     /// Hash of the genesis block header.
     pub genesis_block_hash: alloy::primitives::B256,
     /// Timestamp of the genesis block.
     pub genesis_timestamp: u64,
+    /// Protocol version the chain starts at.
+    pub genesis_protocol_version: ProtocolSemanticVersion,
 }
 
 /// A self-contained read view of the node state at a fixed block height.
@@ -48,7 +52,7 @@ pub struct ChainAnchor {
 /// lock held across VM execution. This wrapper owns a backend handle (cheap to clone)
 /// and opens a fresh view per read — view construction is O(1) on the default backend.
 #[derive(Clone)]
-struct BaseViewAt<S> {
+pub struct BaseViewAt<S> {
     base: S,
     height: u64,
 }
@@ -71,13 +75,20 @@ impl<S: ReadStateHistory + Clone + Send + 'static> PreimageSource for BaseViewAt
     }
 }
 
+/// The state view a build executes against: the parent branch's overlays over the
+/// committed base.
+pub type EnvView<S> = OverriddenStateView<BaseViewAt<S>, BranchOverrides>;
+
 /// What the environment hands the node's persistence pipeline per finalized block.
 /// Identical to what the pre-consensus pipeline's canonization fence emitted, so the
 /// existing applier tail consumes it unchanged.
 pub type CommittedPayload = BlockPayload;
 
 #[derive(Clone)]
-pub struct NodeExecutionEnv<S> {
+pub struct NodeExecutionEnv<S>
+where
+    S: ReadStateHistory + Clone + Send + Sync + 'static,
+{
     base: S,
     anchor: ChainAnchor,
     genesis: ConsensusBlock,
@@ -91,6 +102,9 @@ pub struct NodeExecutionEnv<S> {
     /// Consistency input the proposer and verifiers must agree on; part of the chain
     /// configuration.
     interop_roots_per_block: u64,
+    /// Builds blocks when this validator leads. `None` = never propose (verification
+    /// and commits still work — the configuration for tests and passive followers).
+    builder: Option<Arc<tokio::sync::Mutex<dyn BuildBlocks<EnvView<S>>>>>,
 }
 
 struct Shared {
@@ -98,6 +112,10 @@ struct Shared {
     /// Execution outputs of pending blocks, kept for the eventual commit so finalized
     /// blocks are not re-executed on the happy path.
     outputs: HashMap<Digest, BlockOutputWithReads>,
+    /// Execution-layer hash of the committed tip — the block-hash ring extension when
+    /// building directly on it. `None` after a restart until the node wiring supplies
+    /// it (or the first commit sets it); building waits, verification does not care.
+    committed_el_hash: Option<alloy::primitives::B256>,
 }
 
 impl<S> NodeExecutionEnv<S>
@@ -110,17 +128,22 @@ where
         base: S,
         anchor: ChainAnchor,
         committed_height: u64,
+        committed_el_hash: Option<alloy::primitives::B256>,
         committed_sink: mpsc::Sender<CommittedPayload>,
         applied: watch::Receiver<Option<u64>>,
         interop_roots_per_block: u64,
     ) -> Self {
         let genesis = ConsensusBlock::genesis(anchor.genesis_block_hash);
+        let committed_el_hash =
+            committed_el_hash.or((committed_height == 0).then_some(anchor.genesis_block_hash));
         let committed = CommittedHead {
             height: committed_height,
             // Consensus digests are not persisted in the node's storage; after a
             // restart above genesis, the committed tip's digest is unknown and parents
             // at that height are matched by height (consensus has already validated
             // their ancestry).
+            // TODO(consensus): persist the committed tip's digest (or derive it from the
+            // consensus archive at startup) so height-only matching disappears.
             digest: (committed_height == 0).then(|| genesis.digest()),
         };
         Self {
@@ -130,16 +153,93 @@ where
             shared: Arc::new(Mutex::new(Shared {
                 pending: PendingState::new(committed),
                 outputs: HashMap::new(),
+                committed_el_hash,
             })),
             committed_sink,
             applied,
             reporter: ComponentStateReporter::new("consensus_execution").0,
             interop_roots_per_block,
+            builder: None,
         }
+    }
+
+    /// Attaches the block builder — required on validators that should propose.
+    pub fn with_builder(
+        mut self,
+        builder: Arc<tokio::sync::Mutex<dyn BuildBlocks<EnvView<S>>>>,
+    ) -> Self {
+        self.builder = Some(builder);
+        self
+    }
+
+    /// The inputs block production needs about a parent, or `None` when they are not
+    /// at hand (unknown pending parent, or the committed tip's execution-layer hash is
+    /// missing right after a restart).
+    fn parent_info(&self, parent: &ConsensusBlock) -> Option<ParentInfo> {
+        let shared = self.shared.lock().unwrap();
+        let (el_hash, record) = match parent.record() {
+            // The genesis block: everything comes from the chain anchor.
+            None => {
+                return Some(ParentInfo {
+                    number: 0,
+                    timestamp: self.anchor.genesis_timestamp,
+                    el_hash: self.anchor.genesis_block_hash,
+                    block_hashes: BlockHashes::default(),
+                    protocol_version: self.anchor.genesis_protocol_version.clone(),
+                    next_cursors: Default::default(),
+                    carries_upgrade_tx: false,
+                    digest: parent.digest(),
+                });
+            }
+            Some(record) => {
+                let el_hash = if let Some(output) = shared.outputs.get(&parent.digest()) {
+                    output.as_ref().header.hash()
+                } else if shared.pending.committed().height == parent.height_u64() {
+                    shared.committed_el_hash?
+                } else {
+                    return None;
+                };
+                (el_hash, record)
+            }
+        };
+        Some(ParentInfo {
+            number: record.block_context.block_number,
+            timestamp: record.block_context.timestamp,
+            el_hash,
+            block_hashes: record.block_context.block_hashes,
+            protocol_version: record.protocol_version.clone(),
+            next_cursors: derive_next_cursors(record),
+            carries_upgrade_tx: record
+                .transactions
+                .iter()
+                .any(|tx| matches!(tx.envelope(), ZkEnvelope::Upgrade(_))),
+            digest: parent.digest(),
+        })
+    }
+
+    fn view_on(&self, branch: BranchOverrides, committed_height: u64) -> EnvView<S> {
+        OverriddenStateView::new(
+            BaseViewAt {
+                base: self.base.clone(),
+                height: committed_height,
+            },
+            branch,
+        )
     }
 
     /// Structural consistency between a block's context and its parent — the same
     /// invariants the node's replay path enforces on blocks arriving from outside.
+    // TODO(consensus): these checks cover structural linkage only; they consistency-check
+    // a proposal against its parent but do not yet bound what a byzantine leader can put
+    // in one. Before running with untrusted validators, verification must also enforce:
+    // - timestamp within a configured skew of the verifier's clock (only monotonicity is
+    //   checked today, via the declared-previous-timestamp rule below plus execution);
+    // - fee/gas inputs within configured bounds (basefee, pubdata price, gas/pubdata
+    //   limits are currently taken from the leader as-is);
+    // - authenticity of every L1-sourced transaction — priority *and* upgrade — against
+    //   this validator's own L1 watcher at an agreed L1 finality depth. An L1 input the
+    //   verifier does not know (yet) must withhold the vote, not reject: the view times
+    //   out and rotates, so a lying leader wastes only its own turns.
     fn check_linkage(&self, parent: &ConsensusBlock, record: &ReplayRecord) -> Result<(), String> {
         let context = &record.block_context;
         match parent.record() {
@@ -193,13 +293,7 @@ where
         record: &ReplayRecord,
     ) -> Result<BlockOutputWithReads, String> {
         let committed_height = { self.shared.lock().unwrap().pending.committed().height };
-        let view = OverriddenStateView::new(
-            BaseViewAt {
-                base: self.base.clone(),
-                height: committed_height,
-            },
-            branch,
-        );
+        let view = self.view_on(branch, committed_height);
 
         let expect_sl_chain_id_tx_after_upgrade = record.transactions.windows(2).any(|window| {
             matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
@@ -266,14 +360,54 @@ where
 
     async fn build(
         &mut self,
-        _parent: ConsensusBlock,
+        parent: ConsensusBlock,
         _context: BuildContext,
     ) -> Option<ConsensusBlock> {
-        // Block building (mempool, seal policy, fee/cursor sourcing) is not wired yet.
-        // Declining to propose is safe: consensus times the view out and moves to the
-        // next leader.
-        warn!("block building not implemented; passing this leader turn");
-        None
+        // Declining to propose is always safe: consensus times the view out and moves
+        // to the next leader. Every early return below is exactly that.
+        let Some(builder) = self.builder.clone() else {
+            warn!("no block builder attached; passing this leader turn");
+            return None;
+        };
+        let Some(parent_info) = self.parent_info(&parent) else {
+            warn!(
+                parent = parent.height_u64(),
+                "parent inputs unavailable; passing this leader turn"
+            );
+            return None;
+        };
+        let (branch, committed_height) = {
+            let shared = self.shared.lock().unwrap();
+            let branch = shared
+                .pending
+                .branch_for_parent(parent.height_u64(), parent_info.digest);
+            (branch, shared.pending.committed().height)
+        };
+        let Some(branch) = branch else {
+            warn!(
+                parent = parent.height_u64(),
+                "parent state unavailable; passing this leader turn"
+            );
+            return None;
+        };
+
+        let view = self.view_on(branch, committed_height);
+        let BuiltBlock { record, output, .. } =
+            builder.lock().await.build_block(&parent_info, view).await?;
+
+        let block = ConsensusBlock::from_record(&parent, record);
+        {
+            let mut shared = self.shared.lock().unwrap();
+            let overlay = Self::overlay_of(&output, block.record().expect("just built"));
+            shared.pending.insert(
+                block.digest(),
+                block.height_u64(),
+                parent_info.digest,
+                overlay,
+            );
+            shared.outputs.insert(block.digest(), output);
+        }
+        Some(block)
     }
 
     async fn verify(&mut self, parent: ConsensusBlock, block: ConsensusBlock) -> bool {
@@ -392,6 +526,21 @@ where
             }
         };
 
+        let committed_el_hash = output.as_ref().header.hash();
+        // The mempool follows finality: included transactions leave it here, once, in
+        // final order — never during speculative building.
+        if let Some(builder) = self.builder.clone() {
+            builder
+                .lock()
+                .await
+                .on_committed(
+                    output.as_ref().header.clone(),
+                    &output.as_ref().account_diffs,
+                    &record,
+                )
+                .await;
+        }
+
         // Hand the block to the persistence pipeline and wait until it is durable
         // (in the write-ahead log). Consensus acknowledges — and allows more blocks
         // through — only after this returns: the node is the pacer.
@@ -414,7 +563,10 @@ where
 
         let mut shared = self.shared.lock().unwrap();
         shared.pending.advance_committed(height, block.digest());
-        let Shared { pending, outputs } = &mut *shared;
+        shared.committed_el_hash = Some(committed_el_hash);
+        let Shared {
+            pending, outputs, ..
+        } = &mut *shared;
         outputs.retain(|digest, _| pending.contains(digest));
     }
 }

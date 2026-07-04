@@ -24,6 +24,7 @@ members = [
     "integration-tests",
     "integration-tests-macros",
     "tools/generate-deposit",
+    "tools/consensus-keygen",
     "tools/verify-storage-proof",
     "lib/observability",
     "lib/state_full_diffs",

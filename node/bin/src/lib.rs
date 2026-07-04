@@ -6,6 +6,7 @@ mod batch_sink;
 pub mod batcher;
 mod command_source;
 pub mod config;
+pub mod consensus;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
@@ -24,7 +25,7 @@ pub mod util;
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{
-    ConsensusNodeCommandSource, ExternalNodeCommandSource, RebuildOptions,
+    ConsensusCommittedSource, ConsensusNodeCommandSource, ExternalNodeCommandSource, RebuildOptions,
 };
 use crate::config::{
     Config, ProverApiConfig, RebuildConfig, base_token_price_updater_config, gas_adjuster_config,
@@ -107,6 +108,7 @@ use zksync_os_sequencer::execution::{
     BlockApplier, BlockCanonization, BlockCanonizer, BlockExecutor, FeeProvider, LeadershipSignal,
     NoopCanonization,
 };
+use zksync_os_sequencer::model::blocks::BlockPayload;
 use zksync_os_status_server::run_status_server;
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
@@ -773,24 +775,105 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await
     .expect("failed to create mempool");
-    let block_context_provider = BlockContextProvider::new(
-        fee_provider,
-        pool,
-        zksync_os_sequencer::execution::block_context_provider::Config {
-            l2_chain_id: chain_id,
-            l1_chain_id: node_startup_state.l1_state.l1_chain_id,
-            gas_limit: config.sequencer_config.block_gas_limit,
-            pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
-            fee_collector_address: config.sequencer_config.fee_collector_address,
-            block_time: config.sequencer_config.block_time,
-            service_block_delay: config.sequencer_config.service_block_delay,
-            max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
-            // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
-            interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
-        },
-        &node_startup_state.l1_state.settlement_layer_intervals,
-        last_constructed_block_ctx_sender,
-    );
+    // Durability watermark: the applier reports persisted block numbers; consumed by the
+    // block executor (pacing workaround) or by the consensus environment (commit acks).
+    let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
+
+    // In consensus mode the mempool and fee sourcing drive the consensus block builder;
+    // otherwise they drive the local block production loop.
+    // TODO(consensus): with no local production loop there is no "block under
+    // construction", so RPC surfaces that peek at it (pending-block context for eth_call
+    // and gas estimation) fall back to the latest committed block in consensus mode.
+    let (block_context_provider, consensus_committed_receiver) = if config.consensus_config.enabled
+    {
+        // The mempool expects to be initialized with the last replayed block exactly
+        // once; the local production pipeline does this on its first replay, consensus
+        // mode does it here.
+        let mut pool = pool;
+        let wal_tip_record = block_replay_storage
+            .get_replay_record(block_replay_storage.latest_record())
+            .expect("write-ahead log must contain its latest record");
+        pool.init(&wal_tip_record).await;
+
+        let builder = zksync_os_consensus_execution::ConsensusBlockBuilder::new(
+            pool,
+            fee_provider,
+            zksync_os_consensus_execution::BuilderConfig {
+                l2_chain_id: chain_id,
+                sl_chain_id: node_startup_state.l1_state.sl_chain_id,
+                gas_limit: config.sequencer_config.block_gas_limit,
+                pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
+                fee_collector_address: config.sequencer_config.fee_collector_address,
+                block_time: config.sequencer_config.block_time,
+                // Idle chains keep producing (empty) blocks at the same cadence for now;
+                // whether to slow the idle cadence is a tuning decision for later.
+                idle_block_deadline: config.sequencer_config.block_time,
+                max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
+                interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+            },
+        );
+
+        let genesis_state = genesis.state().await;
+        let genesis_record = block_replay_storage
+            .get_replay_record(0)
+            .expect("write-ahead log must contain the genesis record");
+        let anchor = zksync_os_consensus_execution::ChainAnchor {
+            genesis_block_hash: genesis_state.header.hash(),
+            genesis_timestamp: genesis_state.context.timestamp,
+            genesis_protocol_version: genesis_record.protocol_version,
+        };
+        let committed_height = block_replay_storage.latest_record();
+        let committed_el_hash = repositories
+            .get_block_by_number(committed_height)
+            .ok()
+            .flatten()
+            .map(|block| block.hash());
+
+        let (committed_payload_sender, committed_payload_receiver) = tokio::sync::mpsc::channel(1);
+        let env = zksync_os_consensus_execution::NodeExecutionEnv::new(
+            state.clone(),
+            anchor,
+            committed_height,
+            committed_el_hash,
+            committed_payload_sender,
+            applied_block_number_receiver.clone(),
+            config.batcher_config.interop_roots_per_batch_limit,
+        )
+        .with_builder(std::sync::Arc::new(tokio::sync::Mutex::new(builder)));
+
+        let setup = consensus::ConsensusSetup::from_config(
+            &config.consensus_config,
+            config.general_config.rocks_db_path.join("consensus"),
+        )
+        .expect("invalid consensus configuration");
+        let (_thread, consensus_dead) = consensus::spawn(setup, env);
+        runtime.spawn_critical_task("consensus watchdog", async move {
+            let _ = consensus_dead.await;
+            panic!("consensus stack died; the node cannot continue without it");
+        });
+
+        (None, Some(committed_payload_receiver))
+    } else {
+        let provider = BlockContextProvider::new(
+            fee_provider,
+            pool,
+            zksync_os_sequencer::execution::block_context_provider::Config {
+                l2_chain_id: chain_id,
+                l1_chain_id: node_startup_state.l1_state.l1_chain_id,
+                gas_limit: config.sequencer_config.block_gas_limit,
+                pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
+                fee_collector_address: config.sequencer_config.fee_collector_address,
+                block_time: config.sequencer_config.block_time,
+                service_block_delay: config.sequencer_config.service_block_delay,
+                max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
+                // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
+                interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+            },
+            &node_startup_state.l1_state.settlement_layer_intervals,
+            last_constructed_block_ctx_sender,
+        );
+        (Some(provider), None)
+    };
 
     // ========== Start L1 Persist Batch Watcher ===========
 
@@ -851,6 +934,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             rebuild_options,
             repositories.clone(),
             block_context_provider,
+            consensus_committed_receiver,
+            (applied_block_number_sender, applied_block_number_receiver),
             tree_db,
             finality_storage.clone(),
             chain_id,
@@ -876,7 +961,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state,
             archiving_block_replay_storage,
             runtime,
-            block_context_provider,
+            block_context_provider
+                .expect("external nodes always run the local block context provider"),
             state.clone(),
             tree_db,
             repositories.clone(),
@@ -1062,7 +1148,9 @@ async fn run_main_node_pipeline(
     starting_block: u64,
     rebuild_options: Option<RebuildOptions>,
     repositories: impl WriteRepository + Clone,
-    block_context_provider: BlockContextProvider<impl L2Subpool>,
+    block_context_provider: Option<BlockContextProvider<impl L2Subpool>>,
+    consensus_committed: Option<tokio::sync::mpsc::Receiver<BlockPayload>>,
+    applied_block_number: (watch::Sender<Option<u64>>, watch::Receiver<Option<u64>>),
     tree: MerkleTree<RocksDBWrapper>,
     finality: impl ReadFinality + Clone,
     chain_id: u64,
@@ -1093,29 +1181,41 @@ async fn run_main_node_pipeline(
     let monitor = BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver);
     let pipeline_gate = monitor.subscribe_gate();
 
-    let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
-    let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
+    let (applied_block_number_sender, applied_block_number_receiver) = applied_block_number;
 
-    let pipeline = Pipeline::new(runtime.clone())
-        .pipe(ConsensusNodeCommandSource {
-            block_replay_storage: block_replay_storage.clone(),
-            starting_block,
-            rebuild_options,
-            replays_to_execute,
-            pipeline_gate,
-            leadership,
-        })
-        .pipe(BlockExecutor {
-            block_context_provider,
-            state: state.clone(),
-            config: config.into(),
-            tx_acceptance_state_sender,
-            applied_block_number_receiver,
-        })
-        .pipe(BlockCanonizer {
-            consensus: canonization_engine,
-            canonized_blocks_for_execution: replays_to_execute_sender,
-        })
+    // Two front-ends produce the exact same stream of executed-and-canonical payloads:
+    // consensus mode receives finalized blocks from the consensus environment; the
+    // single-sequencer mode produces blocks locally behind a canonization fence.
+    // Everything downstream of this point is identical.
+    let pipeline = Pipeline::new(runtime.clone());
+    let pipeline = if let Some(committed) = consensus_committed {
+        pipeline.pipe(ConsensusCommittedSource { committed })
+    } else {
+        let (replays_to_execute_sender, replays_to_execute) =
+            tokio::sync::mpsc::unbounded_channel();
+        pipeline
+            .pipe(ConsensusNodeCommandSource {
+                block_replay_storage: block_replay_storage.clone(),
+                starting_block,
+                rebuild_options,
+                replays_to_execute,
+                pipeline_gate,
+                leadership,
+            })
+            .pipe(BlockExecutor {
+                block_context_provider: block_context_provider
+                    .expect("block context provider must exist without consensus"),
+                state: state.clone(),
+                config: config.into(),
+                tx_acceptance_state_sender,
+                applied_block_number_receiver,
+            })
+            .pipe(BlockCanonizer {
+                consensus: canonization_engine,
+                canonized_blocks_for_execution: replays_to_execute_sender,
+            })
+    };
+    let pipeline = pipeline
         .pipe(BlockApplier {
             state: state.clone(),
             replay: block_replay_storage.clone(),

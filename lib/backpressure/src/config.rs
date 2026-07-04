@@ -63,6 +63,7 @@ impl BackpressureConfig {
                 ..Default::default()
             },
             ComponentId::ConsensusNodeCommandSource
+            | ComponentId::ConsensusCommittedSource
             | ComponentId::ExternalNodeCommandSource
             | ComponentId::BlockExecutor
             | ComponentId::Batcher

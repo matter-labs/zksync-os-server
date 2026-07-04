@@ -61,6 +61,7 @@ pub struct Config {
     pub l1_provider_config: ProviderConfig,
     pub gateway_provider_config: Option<ProviderConfig>,
     pub network_config: NetworkConfig,
+    pub consensus_config: ConsensusConfig,
     pub genesis_config: GenesisConfig,
     pub rpc_config: RpcConfig,
     pub mempool_config: MempoolConfig,
@@ -201,6 +202,9 @@ impl Config {
         schema
             .insert(&NetworkConfig::DESCRIPTION, "network")
             .expect("Failed to insert network config");
+        schema
+            .insert(&ConsensusConfig::DESCRIPTION, "consensus")
+            .expect("Failed to insert consensus config");
         schema
             .insert(&GenesisConfig::DESCRIPTION, "genesis")
             .expect("Failed to insert genesis config");
@@ -635,6 +639,58 @@ impl NetworkConfig {
         )
         .id)
     }
+}
+
+/// BFT consensus over block sequencing. When enabled, this node is one validator of a
+/// committee: block production is driven by consensus leadership instead of a local
+/// loop, every block is verified by re-execution before this node votes for it, and
+/// only finalized blocks reach the write-ahead log.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct ConsensusConfig {
+    /// Whether BFT consensus is enabled. WARNING: experimental.
+    #[config(default_t = false)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| !*value || root.general_config.node_role.is_main(),
+        "requires `general.node_role=main`"
+    ))]
+    pub enabled: bool,
+    /// This validator's ed25519 network identity key (hex of the 32-byte seed).
+    /// Also authenticates all validator-to-validator connections.
+    #[config(secret)]
+    #[config(default)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<String>| !root.consensus_config.enabled || value.is_some(),
+        "is required when `consensus.enabled=true`"
+    ))]
+    pub network_key: Option<String>,
+    /// This validator's BLS12-381 consensus signing key (hex). Signs votes and
+    /// certificates; distinct from the network identity.
+    #[config(secret)]
+    #[config(default)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<String>| !root.consensus_config.enabled || value.is_some(),
+        "is required when `consensus.enabled=true`"
+    ))]
+    pub bls_key: Option<String>,
+    /// Address the consensus p2p stack listens on.
+    #[config(default_t = "127.0.0.1:3054".into())]
+    pub listen_address: String,
+    /// The validator committee, one entry per validator (including this one), all
+    /// validators configured identically. Entry format:
+    /// `<ed25519_public_hex>:<bls_public_hex>@<host:port>`.
+    #[config(default, with = Serde![*])]
+    #[config_validate(custom(
+        |root: &Config, value: &Vec<String>| !root.consensus_config.enabled || value.len() >= 2,
+        "needs at least 2 validators when `consensus.enabled=true`"
+    ))]
+    pub validators: Vec<String>,
+    /// Allow validator connections to private IPs (local and containerized networks).
+    #[config(default_t = false)]
+    pub allow_private_ips: bool,
+    /// Upper bound on a consensus network message (must fit the largest block).
+    #[config(default_t = 16 * 1024 * 1024)]
+    pub max_message_size: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -2464,6 +2520,7 @@ mod tests {
             l1_provider_config: ProviderConfig::default(),
             gateway_provider_config: None,
             network_config: NetworkConfig::default(),
+            consensus_config: ConsensusConfig::default(),
             genesis_config: GenesisConfig {
                 bridgehub_address: Some(Address::ZERO),
                 bytecode_supplier_address: Some(Address::with_last_byte(0x01)),

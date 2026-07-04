@@ -64,18 +64,27 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
     /* ---------- deadline config ------------------------------------ */
     let deadline_dur = match command.seal_policy {
-        SealPolicy::Decide(d, _) => Some(d),
+        SealPolicy::Decide(d, _) | SealPolicy::Cadence(d, _) => Some(d),
         SealPolicy::UntilExhausted { .. } => None,
     };
-    let mut deadline: Option<Pin<Box<Sleep>>> = None; // will arm after 1st tx attempt
+    // `Decide` arms the deadline on the 1st tx attempt; `Cadence` arms it right away
+    // (an idle source then seals an empty block at the deadline).
+    let mut deadline: Option<Pin<Box<Sleep>>> = match command.seal_policy {
+        SealPolicy::Cadence(d, _) => Some(Box::pin(tokio::time::sleep(d))),
+        _ => None,
+    };
     let mut interop_roots_count = 0;
     let expect_sl_chain_id_tx_after_upgrade = command.expect_sl_chain_id_tx_after_upgrade;
 
     if expect_sl_chain_id_tx_after_upgrade
-        && let SealPolicy::Decide(duration, tx_limit) = command.seal_policy
+        && let SealPolicy::Decide(duration, tx_limit) | SealPolicy::Cadence(duration, tx_limit) =
+            command.seal_policy
         && tx_limit < 2
     {
-        command.seal_policy = SealPolicy::Decide(duration, 2);
+        command.seal_policy = match command.seal_policy {
+            SealPolicy::Cadence(..) => SealPolicy::Cadence(duration, 2),
+            _ => SealPolicy::Decide(duration, 2),
+        };
         tracing::warn!(
             "Upgrade v31 requires two txs (Upgrade and SetSLChainId) to be included in the first v31 block. \
                 `max_transactions_in_block` is ignored"
@@ -197,7 +206,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                                 );
                             } else {
                                 match &command.seal_policy {
-                                    SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
+                                    SealPolicy::Decide(..) | SealPolicy::Cadence(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
                                         tracing::info!(block_number = ctx.block_number, "sealing block as upgrade tx was executed");
                                         break SealReason::UpgradeTx;
                                     }
@@ -212,7 +221,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         // If the transaction provided is an SL chain id update transaction, we need to seal the block.
                         if let Some(SystemTxType::SetSLChainId(_, _)) = executed_txs.last().unwrap().as_system_tx_type() {
                             match &command.seal_policy {
-                                SealPolicy::Decide(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
+                                SealPolicy::Decide(..) | SealPolicy::Cadence(..) | SealPolicy::UntilExhausted { allowed_to_finish_early: true } => {
                                     tracing::info!(block_number = ctx.block_number, "sealing block as chain id update tx was executed");
                                     break SealReason::SLChainIdUpdateTx;
                                 }
@@ -224,7 +233,9 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         }
 
                         match command.seal_policy {
-                            SealPolicy::Decide(_, limit) if executed_txs.len() >= limit => {
+                            SealPolicy::Decide(_, limit) | SealPolicy::Cadence(_, limit)
+                                if executed_txs.len() >= limit =>
+                            {
                                 tracing::info!(block_number = ctx.block_number,
                                                txs = executed_txs.len(),
                                                "tx limit reached → sealing");
@@ -293,7 +304,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                                         );
                                     },
                                     // For Produce, don't seal if no transactions have been executed yet
-                                    (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..), true) => {
+                                    (TxRejectionMethod::SealBlock(reason), SealPolicy::Decide(..) | SealPolicy::Cadence(..), true) => {
                                         purged_txs.push((*tx.hash(), e.clone()));
                                         tracing::info!(
                                             block_number = ctx.block_number,
@@ -334,7 +345,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
     // seal reason validation
     match command.seal_policy {
-        SealPolicy::Decide(_, _) => {
+        SealPolicy::Decide(_, _) | SealPolicy::Cadence(_, _) => {
             if seal_reason == SealReason::TxStreamExhausted {
                 return Err(BlockDump {
                     ctx,

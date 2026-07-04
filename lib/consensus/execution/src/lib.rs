@@ -15,9 +15,11 @@
 //! adopts it together with block building and validator networking.
 
 pub mod block;
+pub mod builder;
 pub mod env;
 pub mod pending_state;
 
 pub use block::ConsensusBlock;
+pub use builder::{BuilderConfig, BuiltBlock, ConsensusBlockBuilder, ParentInfo};
 pub use env::{ChainAnchor, CommittedPayload, NodeExecutionEnv};
 pub use pending_state::{BranchOverrides, CommittedHead, Overlay, PendingState};

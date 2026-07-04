@@ -29,6 +29,7 @@ commonware-cryptography.workspace = true
 alloy = { workspace = true, features = ["consensus", "rlp", "std", "kzg"] }
 alloy-rlp.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 bytes.workspace = true
 futures.workspace = true
 tokio.workspace = true

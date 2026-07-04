@@ -34,4 +34,4 @@ pub mod storage;
 pub mod types;
 
 pub use execution::{BuildContext, ExecutionEnv};
-pub use stack::{Channels, StackConfig, ValidatorStack, start_validator};
+pub use stack::{Channels, NullReporter, StackConfig, ValidatorStack, start_validator};

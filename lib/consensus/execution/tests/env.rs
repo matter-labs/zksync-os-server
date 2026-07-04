@@ -158,8 +158,9 @@ impl Rig {
         let anchor = ChainAnchor {
             genesis_block_hash: genesis.header_hash,
             genesis_timestamp: genesis.context.timestamp,
+            genesis_protocol_version: "0.31.0".parse().expect("valid version"),
         };
-        let mut env = NodeExecutionEnv::new(base.clone(), anchor, 0, sink, applied, 0);
+        let mut env = NodeExecutionEnv::new(base.clone(), anchor, 0, None, sink, applied, 0);
         let genesis_block = env.genesis_block().await;
         Self {
             env,

@@ -102,6 +102,9 @@ impl StackConfig {
             partition_prefix: partition_prefix.into(),
             // A single effectively-unbounded epoch: one billion blocks is decades of
             // production at sub-second block times, while staying far from any overflow.
+            // TODO(consensus): real epoch rotation is the mechanism for validator-set
+            // changes and for bounding consensus-archive growth — measure storage churn
+            // in staging and revisit before long-lived deployments.
             epoch_length: NonZeroU64::new(1_000_000_000).expect("nonzero"),
             leader_timeout: Duration::from_secs(1),
             certification_timeout: Duration::from_secs(2),
@@ -135,6 +138,34 @@ pub struct Channels<TSender, TReceiver> {
     pub block_broadcast: (TSender, TReceiver),
     /// Request/response backfill of finalized blocks and finalizations.
     pub block_backfill: (TSender, TReceiver),
+}
+
+/// An extra-reporter that observes nothing. Production stacks use this unless they
+/// attach a metrics observer; tests attach recorders instead.
+pub struct NullReporter<A>(std::marker::PhantomData<A>);
+
+impl<A> NullReporter<A> {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<A> Default for NullReporter<A> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<A> Clone for NullReporter<A> {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl<A: Send + 'static> Reporter for NullReporter<A> {
+    type Activity = A;
+
+    async fn report(&mut self, _activity: Self::Activity) {}
 }
 
 /// Handles to a running validator stack. Aborting all handles stops the validator;

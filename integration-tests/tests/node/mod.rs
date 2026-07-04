@@ -1,4 +1,5 @@
 mod batcher;
+mod consensus;
 mod external_node;
 mod mempool;
 mod rebuild;

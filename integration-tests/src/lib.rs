@@ -49,6 +49,7 @@ pub mod assert_traits;
 pub mod config;
 pub mod contracts;
 pub mod l1_helpers;
+pub mod multi_node;
 mod node_log;
 mod prover_tester;
 pub mod provider;
@@ -564,7 +565,7 @@ impl Tester {
         Ok(())
     }
 
-    async fn launch_with_new_runtime(
+    pub(crate) async fn launch_with_new_runtime(
         l1: AnvilL1,
         chain_layout: ChainLayout<'static>,
         mut config: Config,
