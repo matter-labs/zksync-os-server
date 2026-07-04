@@ -1612,8 +1612,17 @@ async fn effective_parallel_impl(
             round_parts.push(part_rx);
         }
     }
+    // Round-phase decomposition: TPS == wallets / round-time, so whichever phase dominates the
+    // round is the throughput governor — assembling pre-read chunks (reader-thread starvation),
+    // spawning the batch tasks (main-task serial work), or the accept barrier (client
+    // serialization + network + server admission round-trip).
+    let mut rounds_total: u32 = 0;
+    let (mut assemble_sum, mut assemble_max) = (Duration::ZERO, Duration::ZERO);
+    let (mut spawn_sum, mut spawn_max) = (Duration::ZERO, Duration::ZERO);
+    let (mut barrier_sum, mut barrier_max) = (Duration::ZERO, Duration::ZERO);
     'rounds: while Instant::now() < deadline {
         // Assemble the round from the group parts, in wallet order.
+        let t_assemble = Instant::now();
         let mut round_chunks: Vec<Vec<Vec<u8>>> = Vec::with_capacity(chunks_total);
         for part_rx in &mut round_parts {
             let Some(part) = part_rx.recv().await else {
@@ -1621,6 +1630,7 @@ async fn effective_parallel_impl(
             };
             round_chunks.extend(part);
         }
+        let assemble_elapsed = t_assemble.elapsed();
         let round_len: usize = round_chunks.iter().map(|chunk| chunk.len()).sum();
 
         // Send this nonce's txs as chunked JSON-RPC batches, concurrently across the client
@@ -1668,11 +1678,22 @@ async fn effective_parallel_impl(
             });
         }
 
+        let spawn_elapsed = sent_at.elapsed();
+        let t_barrier = Instant::now();
+
         // Barrier: every batch of this nonce must be accepted before we advance to the next nonce.
         let mut hashes = Vec::with_capacity(round_len);
         while let Some(res) = batch_tasks.join_next().await {
             hashes.extend(res??);
         }
+        let barrier_elapsed = t_barrier.elapsed();
+        rounds_total += 1;
+        assemble_sum += assemble_elapsed;
+        assemble_max = assemble_max.max(assemble_elapsed);
+        spawn_sum += spawn_elapsed;
+        spawn_max = spawn_max.max(spawn_elapsed);
+        barrier_sum += barrier_elapsed;
+        barrier_max = barrier_max.max(barrier_elapsed);
         if hashes.is_empty() {
             break; // deadline reached mid-round
         }
@@ -1873,6 +1894,19 @@ async fn effective_parallel_impl(
         ?avg_final_receipt_latency,
         "parallel effective load test complete"
     );
+    if rounds_total > 0 {
+        let n = rounds_total;
+        tracing::error!(
+            rounds = n,
+            avg_assemble = ?(assemble_sum / n),
+            max_assemble = ?assemble_max,
+            avg_spawn = ?(spawn_sum / n),
+            max_spawn = ?spawn_max,
+            avg_barrier = ?(barrier_sum / n),
+            max_barrier = ?barrier_max,
+            "round-phase profile"
+        );
+    }
 
     Ok(())
 }
