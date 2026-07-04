@@ -3,21 +3,25 @@
 //! The consensus world lives on its own OS thread with its own async runtime and its
 //! own networking stack, deliberately isolated from the node's main runtime: consensus
 //! must keep making progress (or failing loudly) independently of RPC load or pipeline
-//! stalls. The two worlds touch in exactly three places:
+//! stalls. The two worlds touch in exactly four places:
 //!
 //! - the execution environment (given to consensus at spawn), through which consensus
 //!   builds, verifies, and commits blocks;
 //! - the committed-payload channel, feeding finalized blocks into the node's
 //!   persistence pipeline;
+//! - the L2 mempool, whose transactions the committee gossips among itself so a
+//!   transaction reaches the next leader no matter which validator's RPC received it;
 //! - a death signal back to the node — if consensus dies, the node must go down with
 //!   it rather than keep serving a chain that stopped.
 
+use alloy::consensus::transaction::SignerRecoverable as _;
+use alloy::eips::eip2718::{Decodable2718, Encodable2718};
 use anyhow::Context as _;
 use commonware_cryptography::bls12381::primitives::group;
 use commonware_cryptography::bls12381::primitives::variant::{MinPk, Variant};
 use commonware_cryptography::ed25519;
 use commonware_p2p::authenticated::lookup;
-use commonware_p2p::{Address, AddressableManager as _, Ingress};
+use commonware_p2p::{Address, AddressableManager as _, Ingress, Receiver, Sender};
 use commonware_runtime::{Metrics as _, Quota, Runner as _, Spawner as _};
 use commonware_utils::TryCollect as _;
 use commonware_utils::ordered::{BiMap, Map};
@@ -28,7 +32,9 @@ use std::path::PathBuf;
 use zksync_os_consensus_core::types::Scheme;
 use zksync_os_consensus_core::{Channels, NullReporter, StackConfig, start_validator};
 use zksync_os_consensus_execution::NodeExecutionEnv;
+use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_storage_api::{ReadStateHistory, WriteState};
+use zksync_os_types::L2Envelope;
 
 use crate::config::ConsensusConfig;
 
@@ -42,6 +48,11 @@ const CERTIFICATES: u64 = 1;
 const CERTIFICATE_BACKFILL: u64 = 2;
 const BLOCK_BROADCAST: u64 = 3;
 const BLOCK_BACKFILL: u64 = 4;
+const TX_GOSSIP: u64 = 5;
+
+/// Most transactions one gossip message carries (the sender drains whatever is
+/// immediately available up to this).
+const MAX_TXS_PER_GOSSIP: usize = 64;
 
 /// One committee member as configured: who they are (network identity, consensus key)
 /// and where to reach them.
@@ -161,9 +172,10 @@ impl ConsensusSetup {
 /// `shutdown` asks consensus to stop gracefully (releasing its p2p listener and
 /// journals); the *sender being dropped* counts as that request too, so holding the
 /// sender inside a node-runtime task makes node shutdown stop consensus automatically.
-pub fn spawn<S>(
+pub fn spawn<S, P>(
     setup: ConsensusSetup,
     env: NodeExecutionEnv<S>,
+    l2_pool: P,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> (
     std::thread::JoinHandle<anyhow::Result<()>>,
@@ -171,12 +183,13 @@ pub fn spawn<S>(
 )
 where
     S: ReadStateHistory + WriteState + Clone + Send + Sync + 'static,
+    P: L2Subpool + Clone,
 {
     let (dead_sender, dead_receiver) = tokio::sync::oneshot::channel();
     let handle = std::thread::Builder::new()
         .name("consensus".to_string())
         .spawn(move || {
-            let result = run(setup, env, shutdown);
+            let result = run(setup, env, l2_pool, shutdown);
             // Fire unconditionally: the node must learn about consensus death whether
             // it was an error or a clean shutdown (the watchdog is already gone then).
             let _ = dead_sender.send(());
@@ -186,13 +199,15 @@ where
     (handle, dead_receiver)
 }
 
-fn run<S>(
+fn run<S, P>(
     setup: ConsensusSetup,
     env: NodeExecutionEnv<S>,
+    l2_pool: P,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()>
 where
     S: ReadStateHistory + WriteState + Clone + Send + Sync + 'static,
+    P: L2Subpool + Clone,
 {
     // One consensus instance per storage directory, ever. A restarting node must not
     // open the journals while the previous instance is still flushing them, and two
@@ -201,7 +216,7 @@ where
     // by the OS even on a crash.
     std::fs::create_dir_all(&setup.storage_directory)
         .context("failed to create the consensus storage directory")?;
-    let storage_lock = std::fs::File::create(setup.storage_directory.join(".instance-lock"))
+    let storage_lock = std::fs::File::create(instance_lock_path(&setup.storage_directory))
         .context("failed to open the consensus storage lock")?;
     if fs2::FileExt::try_lock_exclusive(&storage_lock).is_err() {
         tracing::info!(
@@ -292,7 +307,16 @@ where
             block_broadcast: network.register(BLOCK_BROADCAST, block_quota, BACKLOG),
             block_backfill: network.register(BLOCK_BACKFILL, block_quota, BACKLOG),
         };
+        let (tx_gossip_sender, tx_gossip_receiver) = network.register(TX_GOSSIP, quota, BACKLOG);
         let network_handle = network.start();
+
+        start_tx_gossip(
+            &context,
+            l2_pool,
+            tx_gossip_sender,
+            tx_gossip_receiver,
+            setup.max_message_size,
+        );
 
         use commonware_cryptography::Signer as _;
         let identity = setup.network_key.public_key();
@@ -335,4 +359,130 @@ where
     // next instance open this storage.
     drop(storage_lock);
     result
+}
+
+/// Starts both halves of committee transaction gossip on the consensus runtime.
+///
+/// Outbound: every transaction newly inserted into this node's L2 pool — whether it
+/// arrived over RPC or from a peer — is offered to the whole committee once. The pool
+/// does not announce transactions it already knows, which is what keeps the flood
+/// from echoing forever while still letting any holder heal a lost delivery.
+///
+/// Inbound: gossiped transactions go through the same decoding and pool validation as
+/// local RPC submissions; duplicates and invalid ones die in the pool. Peers are
+/// authenticated committee members, so gossip adds no new spam surface beyond what
+/// each validator's own RPC already accepts.
+fn start_tx_gossip<C, P, TxSender, TxReceiver>(
+    context: &C,
+    pool: P,
+    mut sender: TxSender,
+    mut receiver: TxReceiver,
+    max_message_size: usize,
+) where
+    C: commonware_runtime::Spawner + commonware_runtime::Metrics,
+    P: L2Subpool + Clone,
+    TxSender: Sender<PublicKey = ed25519::PublicKey>,
+    TxReceiver: Receiver<PublicKey = ed25519::PublicKey>,
+{
+    // Leave generous headroom under the network's message cap; a batch is cut early
+    // when it grows past this.
+    let byte_budget = max_message_size / 2;
+
+    let gossip_pool = pool.clone();
+    context
+        .with_label("tx_gossip_out")
+        .spawn(move |task_context| async move {
+            // The pool's listener never closes on consensus shutdown (the pool lives
+            // node-side), so this task must watch the stop signal itself — a parked
+            // task would hold pool handles (and the databases under them) past the
+            // runtime's shutdown deadline.
+            let mut stopped = task_context.stopped();
+            let mut new_txs = gossip_pool.new_transactions_listener();
+            loop {
+                let event = tokio::select! {
+                    _ = &mut stopped => return,
+                    event = new_txs.recv() => match event {
+                        Some(event) => event,
+                        None => return,
+                    },
+                };
+                // Greedily drain whatever else is already queued into one message.
+                let mut batch = vec![encode_gossiped_tx(&event)];
+                let mut batch_bytes = batch[0].len();
+                while batch.len() < MAX_TXS_PER_GOSSIP && batch_bytes < byte_budget {
+                    match new_txs.try_recv() {
+                        Ok(event) => {
+                            let encoded = encode_gossiped_tx(&event);
+                            batch_bytes += encoded.len();
+                            batch.push(encoded);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let message = alloy_rlp::encode(&batch);
+                if sender
+                    .send(commonware_p2p::Recipients::All, message, false)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
+    context
+        .with_label("tx_gossip_in")
+        .spawn(move |task_context| async move {
+            // `recv` errors once the network tears down, but watch the stop signal
+            // too so this task never outlives the runtime with its pool handle.
+            let mut stopped = task_context.stopped();
+            loop {
+                let (peer, message) = tokio::select! {
+                    _ = &mut stopped => return,
+                    received = receiver.recv() => match received {
+                        Ok(received) => received,
+                        Err(_) => return,
+                    },
+                };
+                let Ok(batch) = <Vec<alloy::primitives::Bytes> as alloy_rlp::Decodable>::decode(
+                    &mut message.as_ref(),
+                ) else {
+                    tracing::debug!(?peer, "undecodable transaction gossip; ignoring");
+                    continue;
+                };
+                for tx_bytes in batch {
+                    let Ok(envelope) = L2Envelope::decode_2718(&mut tx_bytes.as_ref()) else {
+                        tracing::debug!(?peer, "undecodable gossiped transaction; ignoring");
+                        continue;
+                    };
+                    let Ok(transaction) = envelope.try_into_recovered() else {
+                        tracing::debug!(
+                            ?peer,
+                            "gossiped transaction with a bad signature; ignoring"
+                        );
+                        continue;
+                    };
+                    if let Err(error) = pool.add_gossiped_transaction(transaction).await {
+                        // Routine: the pool already knows most re-gossiped transactions.
+                        tracing::debug!(%error, "gossiped transaction not admitted");
+                    }
+                }
+            }
+        });
+}
+
+/// Path of the advisory lock that serializes consensus instances on one storage
+/// directory. Also useful to *observe*: whoever can take this lock knows no consensus
+/// instance (with everything it holds) is alive on this storage.
+pub fn instance_lock_path(storage_directory: &std::path::Path) -> PathBuf {
+    storage_directory.join(".instance-lock")
+}
+
+/// The canonical wire form of one gossiped transaction: its EIP-2718 encoding — the
+/// exact bytes a user would submit over RPC.
+fn encode_gossiped_tx(
+    event: &zksync_os_mempool::NewTransactionEvent<zksync_os_mempool::L2PooledTransaction>,
+) -> alloy::primitives::Bytes {
+    let (envelope, _signer) = event.transaction.to_consensus().into_parts();
+    envelope.encoded_2718().into()
 }

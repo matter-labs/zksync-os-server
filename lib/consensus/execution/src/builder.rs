@@ -173,8 +173,12 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
         };
 
         // Proposer-chosen timestamp: wall clock, but never behind the parent (virtual
-        // or real clock skews must not produce a non-monotonic chain).
-        let timestamp = ((millis_since_epoch() / 1000) as u64).max(parent.timestamp + 1);
+        // or real clock skews must not produce a non-monotonic chain). Equal
+        // timestamps across consecutive blocks are routine — at sub-second block
+        // cadence, several blocks share a second — and forcing a strict increase
+        // would make chain time outrun the wall clock (and, eventually, the
+        // verifiers' timestamp bound).
+        let timestamp = ((millis_since_epoch() / 1000) as u64).max(parent.timestamp);
 
         // Protocol upgrades ride the same path as in linear production: if an upgrade
         // transaction is pending and newer than the parent's protocol version, this

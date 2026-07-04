@@ -170,11 +170,34 @@ impl MultiNodeTester {
         let Validator::Stopped(stopped) = validator else {
             anyhow::bail!("validator {index} is not stopped");
         };
-        // The consensus listener of the stopped node can take a moment to disappear;
-        // wait until the port is bindable so the restart cannot lose the race to its
-        // own ghost. (The lockfile reservation keeps other tests away meanwhile.)
+        // The previous instance's consensus thread winds down asynchronously after the
+        // node runtime stops, holding its p2p listener and database handles until the
+        // very end. Its storage lock is released last, so "the lock is acquirable"
+        // means everything else is gone too — gate the relaunch on it, then on the
+        // listen port being bindable. (The lockfile reservation keeps other tests
+        // away from the port meanwhile.)
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        let instance_lock = zksync_os_server::consensus::instance_lock_path(
+            &stopped
+                .config()
+                .general_config
+                .rocks_db_path
+                .join("consensus"),
+        );
+        loop {
+            if let Ok(probe) = std::fs::File::create(&instance_lock)
+                && fs2::FileExt::try_lock_exclusive(&probe).is_ok()
+            {
+                drop(probe);
+                break;
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "the previous consensus instance did not release its storage in time",
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
         let port = self.consensus_ports[index].port;
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
                 Ok(probe) => {

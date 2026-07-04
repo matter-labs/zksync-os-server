@@ -84,7 +84,9 @@ reth-tasks.workspace = true
 reth-network-peers.workspace = true
 reth-net-nat.workspace = true
 
+alloy-rlp.workspace = true
 anyhow.workspace = true
+bytes.workspace = true
 fs2.workspace = true
 backon.workspace = true
 alloy = { workspace = true, default-features = false, features = [

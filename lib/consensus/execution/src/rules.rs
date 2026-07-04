@@ -153,13 +153,15 @@ pub async fn check_proposal(
         );
     }
 
-    // Timestamps: strictly increasing along the chain, and not running ahead of this
-    // validator's clock by more than the allowed skew. (A verdict only withholds this
-    // round's vote, so a proposal rejected purely for clock skew self-heals on
-    // re-proposal once clocks catch up.)
-    if context.timestamp <= parent.timestamp {
+    // Timestamps: never behind the parent, and not ahead of this validator's clock by
+    // more than the allowed skew. Monotonicity is non-strict — at sub-second block
+    // cadence several blocks share a second, and demanding a strict increase would
+    // make chain time outrun the wall clock straight into the skew bound. (A verdict
+    // only withholds this round's vote, so a proposal rejected purely for clock skew
+    // self-heals on re-proposal once clocks catch up.)
+    if context.timestamp < parent.timestamp {
         invalid!(
-            "timestamp {} does not advance past the parent's {}",
+            "timestamp {} regresses behind the parent's {}",
             context.timestamp,
             parent.timestamp
         );
@@ -538,14 +540,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn timestamps_advance_but_not_into_the_future() {
+    async fn timestamps_never_regress_and_never_outrun_the_clock() {
+        // Behind the parent: invalid.
         let mut record = valid_record(Vec::new());
-        record.block_context.timestamp = PARENT_TIMESTAMP;
+        record.block_context.timestamp = PARENT_TIMESTAMP - 1;
         assert_verdict!(
             check(&record, &StubInputs::default()).await,
             Verdict::Invalid(_)
         );
 
+        // Equal to the parent: routine at sub-second block cadence.
+        let mut record = valid_record(Vec::new());
+        record.block_context.timestamp = PARENT_TIMESTAMP;
+        assert_verdict!(check(&record, &StubInputs::default()).await, Verdict::Valid);
+
+        // Beyond the verifier's clock plus skew: invalid.
         let mut record = valid_record(Vec::new());
         record.block_context.timestamp = NOW + 11; // skew allowance is 10s
         assert_verdict!(

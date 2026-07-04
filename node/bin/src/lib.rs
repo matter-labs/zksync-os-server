@@ -868,7 +868,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .expect("invalid consensus configuration");
         let (consensus_shutdown_sender, consensus_shutdown) = tokio::sync::oneshot::channel();
-        let (_thread, consensus_dead) = consensus::spawn(setup, env, consensus_shutdown);
+        let (_thread, consensus_dead) =
+            consensus::spawn(setup, env, l2_subpool.clone(), consensus_shutdown);
         runtime.spawn_critical_task("consensus watchdog", async move {
             // Held for the watchdog's lifetime: when the node runtime tears this task
             // down (shutdown), the dropped sender tells consensus to stop gracefully.

@@ -177,3 +177,101 @@ async fn three_validator_chain_pauses_without_quorum_and_resumes() -> anyhow::Re
 
     cluster.shutdown_all().await
 }
+
+/// A transaction must reach a leader no matter which validator's RPC received it: the
+/// committee gossips its mempools. The setup makes gossip the only possible carrier —
+/// a nonce-gapped transaction (not yet includable) is submitted to one validator, that
+/// validator dies, and only then is the gap filled through a different validator. The
+/// gapped transaction's inclusion proves it left the dead validator's mempool over
+/// gossip; nothing else ever had its bytes.
+#[test_log::test(tokio::test)]
+async fn gossiped_transaction_survives_its_receiving_validator() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::start(4).await?;
+    let sender = cluster.node(3).l2_wallet.default_signer().address();
+    let base_nonce = cluster
+        .node(3)
+        .l2_provider
+        .get_transaction_count(sender)
+        .await?;
+
+    // The gapped transaction: queued everywhere until `base_nonce` is used, so no
+    // leader can include it while validator 3 is still alive. Gas is set explicitly —
+    // estimation would simulate with the gapped nonce and refuse.
+    let gapped = cluster
+        .node(3)
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(Address::repeat_byte(0x61))
+                .with_value(U256::from(1u64))
+                .with_nonce(base_nonce + 1)
+                .with_gas_limit(210_000),
+        )
+        .await?;
+    let gapped_hash = *gapped.tx_hash();
+
+    // Gossip carries it to the rest of the committee (visible in their pools).
+    let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        if cluster
+            .node(0)
+            .l2_provider
+            .get_transaction_by_hash(gapped_hash)
+            .await?
+            .is_some()
+        {
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "transaction did not gossip to other validators within {CONVERGENCE_TIMEOUT:?}",
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // The only validator whose RPC ever saw the transaction goes away...
+    cluster.stop_validator(3).await?;
+
+    // ...and once the gap is filled through a different validator, the gossiped copy
+    // becomes includable and lands.
+    cluster
+        .node(0)
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(Address::repeat_byte(0x62))
+                .with_value(U256::from(1u64))
+                .with_nonce(base_nonce)
+                .with_gas_limit(210_000),
+        )
+        .await?;
+
+    let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+    let receipt = loop {
+        if let Some(receipt) = cluster
+            .node(0)
+            .l2_provider
+            .get_transaction_receipt(gapped_hash)
+            .await?
+        {
+            break receipt;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "gossiped transaction was not included within {CONVERGENCE_TIMEOUT:?} \
+             after its receiving validator died",
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(receipt.status(), "gossiped transaction must succeed");
+
+    let included_at = receipt
+        .block_number
+        .expect("included transactions have a block");
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+    cluster.assert_block_hashes_agree(included_at).await?;
+
+    cluster.shutdown_all().await
+}
