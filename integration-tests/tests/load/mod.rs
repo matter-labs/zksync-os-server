@@ -1585,8 +1585,13 @@ async fn effective_parallel_impl(
     let chunks_per_group = chunks_total.div_ceil(reader_threads).max(1);
     let group_size = chunks_per_group * submit_pipeline;
     // Reader threads own contiguous, chunk-aligned wallet ranges, and route each pre-built
-    // chunk into that chunk's OWN small queue (a few rounds deep) instead of a global round
-    // assembly.
+    // chunk into that chunk's OWN queue instead of a global round assembly. Queue depth is the
+    // DECOUPLING BUDGET between chunks that share a reader thread: the reader distributes its
+    // group's chunks sequentially with blocking sends, so one straggler chunk stalls its
+    // siblings once their queues drain — size the queues to ride out straggler round-trips
+    // (max observed RTT / avg RTT rounds), or raise `LOAD_TEST_READER_THREADS` to shrink
+    // groups.
+    let chunk_queue_depth: usize = env_or("LOAD_TEST_CHUNK_QUEUE_DEPTH", 32);
     let mut chunk_queues: Vec<tokio::sync::mpsc::Receiver<Vec<Vec<u8>>>> =
         Vec::with_capacity(chunks_total);
     {
@@ -1597,7 +1602,8 @@ async fn effective_parallel_impl(
             let group_chunks = group.len().div_ceil(submit_pipeline);
             let mut senders = Vec::with_capacity(group_chunks);
             for _ in 0..group_chunks {
-                let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<Vec<Vec<u8>>>(4);
+                let (chunk_tx, chunk_rx) =
+                    tokio::sync::mpsc::channel::<Vec<Vec<u8>>>(chunk_queue_depth);
                 senders.push(chunk_tx);
                 chunk_queues.push(chunk_rx);
             }
