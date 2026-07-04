@@ -164,10 +164,11 @@ where
             };
 
             state_reporter.enter_state(BlockApplierState::AddingToStorage);
-            // Bench probe: skip the replay-record WAL write in the parallel-blocks bench (no restart /
-            // replay / proving needed there). The serial path (production, parallel_blocks == 1) is
-            // unaffected.
-            if self.config.parallel_blocks <= 1 {
+            // Bench-only opt-in: skip the replay-record WAL write in the pure-throughput
+            // parallel benches (no restart / replay / proving needed there). The serial path
+            // (production, parallel_blocks == 1) always writes, and parallel deployments write
+            // unless `parallel_skip_replay_wal` is explicitly set.
+            if self.config.parallel_blocks <= 1 || !self.config.parallel_skip_replay_wal {
                 if let Err(err) = self
                     .replay
                     .write(

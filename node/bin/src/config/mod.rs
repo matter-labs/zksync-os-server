@@ -945,6 +945,19 @@ pub struct SequencerConfig {
     #[config(default_t = Duration::ZERO)]
     pub parallel_block_linger: Duration,
 
+    /// Bench-only: with `parallel_blocks > 1` and the batcher disabled, replace the Merkle tree
+    /// manager with a no-op sink (its Blake2s hashing + RocksDB writes would otherwise steal
+    /// cores from VM threads). `false` (default) keeps the production tree running.
+    #[config(default_t = false)]
+    pub parallel_elide_tree_manager: bool,
+
+    /// Bench-only: with `parallel_blocks > 1`, skip the replay-record WAL write in the applier
+    /// (no restart/replay/proving in the pure-throughput benches). `false` (default) keeps the
+    /// production WAL. NOTE: without replay records, `eth_call` / `eth_estimateGas` fail — they
+    /// resolve block contexts from replay storage.
+    #[config(default_t = false)]
+    pub parallel_skip_replay_wal: bool,
+
     /// Max gas used per block.
     /// One of the block Seal Criteria. Only affects the Main Node.
     #[config(default_t = 100_000_000)]
@@ -2074,6 +2087,7 @@ impl From<&Config> for zksync_os_sequencer::config::SequencerConfig {
             block_time: c.sequencer_config.block_time,
             max_transactions_in_block: c.sequencer_config.max_transactions_in_block,
             parallel_blocks: c.sequencer_config.parallel_blocks,
+            parallel_skip_replay_wal: c.sequencer_config.parallel_skip_replay_wal,
             block_dump_path: c.sequencer_config.block_dump_path.clone(),
             block_gas_limit: c.sequencer_config.block_gas_limit,
             block_pubdata_limit_bytes: c.sequencer_config.block_pubdata_limit_bytes,

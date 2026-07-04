@@ -1295,10 +1295,13 @@ async fn run_main_node_pipeline(
             "clear failing block config",
             clear_failing_block_config_task(finality, internal_config_manager),
         );
-        // Bench-only (`parallel_blocks > 1`): elide the Merkle tree entirely. With the batcher off
-        // nothing consumes its output, yet at bench throughput its Blake2s hashing + RocksDB writes
-        // saturate several cores that would otherwise run VM threads.
-        let components = if config.sequencer_config.parallel_blocks > 1 {
+        // Bench-only opt-in (`parallel_blocks > 1` + `parallel_elide_tree_manager`): elide the
+        // Merkle tree entirely. With the batcher off nothing consumes its output, yet at bench
+        // throughput its Blake2s hashing + RocksDB writes saturate several cores that would
+        // otherwise run VM threads. Default keeps the production tree running.
+        let components = if config.sequencer_config.parallel_blocks > 1
+            && config.sequencer_config.parallel_elide_tree_manager
+        {
             tracing::warn!("parallel-blocks bench mode — skipping Merkle tree manager");
             let pipeline = pipeline.pipe(NoOpSink::new());
             let components = pipeline.components();

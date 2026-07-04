@@ -234,18 +234,21 @@ impl WriteRepository for RepositoryManager {
             .db
             .wait_for_block_number(should_be_persisted_up_to)
             .await;
-        // let (block, transactions) = self
-        //     .in_memory
-        //     .populate_in_memory(block_output, transactions);
-        //
-        // // todo: move notifications upstream of `RepositoryManager`
-        // let notification = BlockNotification {
-        //     block,
-        //     transactions,
-        //     failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
-        // };
-        // // Ignore error if there are no subscribed receivers
-        // let _ = self.block_sender.send(notification);
+        let (block, transactions) = self
+            .in_memory
+            .populate_in_memory(block_output, transactions);
+
+        // todo: move notifications upstream of `RepositoryManager`
+        let notification = BlockNotification {
+            block,
+            transactions: transactions
+                .iter()
+                .map(|data| (*data.tx.hash(), data.clone()))
+                .collect(),
+            failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
+        };
+        // Ignore error if there are no subscribed receivers
+        let _ = self.block_sender.send(notification);
         Ok(())
     }
 }

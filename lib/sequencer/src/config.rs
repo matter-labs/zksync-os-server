@@ -31,6 +31,12 @@ pub struct SequencerConfig {
     /// direct-injection path. `1` = serial production (default).
     pub parallel_blocks: usize,
 
+    /// Bench-only: with `parallel_blocks > 1`, skip the replay-record WAL write in the applier
+    /// (no restart/replay/proving in the pure-throughput benches). `false` (default) keeps the
+    /// production WAL. NOTE: without replay records, `eth_call` / `eth_estimateGas` fail —
+    /// they resolve block contexts from replay storage.
+    pub parallel_skip_replay_wal: bool,
+
     /// Path to the directory where block dumps for unexpected failures will be saved.
     pub block_dump_path: PathBuf,
 

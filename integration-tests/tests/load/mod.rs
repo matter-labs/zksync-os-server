@@ -171,6 +171,48 @@ fn ensure_rpc_corpus(
     Ok(path)
 }
 
+/// Like [`ensure_rpc_corpus`] but each tx is a REAL-signed `token.transfer(recipient, 1)` call
+/// (EIP-1559, zero fees, zero value). The token and recipient are folded into the fingerprint so
+/// a redeployed token or a changed recipient scheme regenerates the corpus instead of silently
+/// reusing stale calldata.
+fn ensure_rpc_erc20_corpus(
+    chain_id: u64,
+    index: usize,
+    signer: &PrivateKeySigner,
+    token: Address,
+    recipient: Address,
+    count: u64,
+) -> anyhow::Result<std::path::PathBuf> {
+    let recipient_lo = u64::from_be_bytes(recipient.as_slice()[12..20].try_into().unwrap());
+    let token_lo = u64::from_be_bytes(token.as_slice()[12..20].try_into().unwrap());
+    let fp = corpus::fingerprint(&[
+        chain_id,
+        1, // rpc erc20 scheme version
+        recipient_lo,
+        token_lo,
+    ]);
+    let path = corpus::signer_file("rpc-parallel-erc20", index);
+    let signer = signer.clone();
+    corpus::ensure_corpus(&path, count, fp, move |n| {
+        let tx = TxEip1559 {
+            chain_id,
+            nonce: n,
+            gas_limit: LOAD_GAS_LIMIT,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            to: TxKind::Call(token),
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: erc20_transfer_calldata(recipient, 1).into(),
+        };
+        let sig = signer
+            .sign_hash_sync(&tx.signature_hash())
+            .expect("sign corpus tx");
+        tx.into_signed(sig).encoded_2718()
+    })?;
+    Ok(path)
+}
+
 /// Drives sustained transaction load for a configurable duration and reports the effective TPS
 /// (transactions confirmed per second).
 ///
@@ -939,6 +981,10 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     config.sequencer_config.max_transactions_in_block = 29_200;
     config.sequencer_config.block_gas_limit = 1_000_000_000_000;
     config.sequencer_config.parallel_blocks = k;
+    // Pure-throughput bench: elide the tree + replay WAL (opt-in; production-realistic runs like
+    // `effective_parallel_*` keep both).
+    config.sequencer_config.parallel_elide_tree_manager = true;
+    config.sequencer_config.parallel_skip_replay_wal = true;
     let tester = env.launch(config).await?;
 
     let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
@@ -1062,6 +1108,10 @@ async fn parallel_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()
     config.sequencer_config.parallel_blocks = k;
     config.sequencer_config.parallel_block_linger =
         Duration::from_millis(env_or("PARALLEL_BLOCK_LINGER_MS", 5));
+    // Pure-throughput bench: elide the tree + replay WAL (opt-in; production-realistic runs like
+    // `effective_parallel_*` keep both).
+    config.sequencer_config.parallel_elide_tree_manager = true;
+    config.sequencer_config.parallel_skip_replay_wal = true;
     // In-memory base state: the RocksDB read path (an iterator seek per storage read) collapses
     // under K-way concurrent VM execution and dominates exec time.
     config.general_config.state_backend = StateBackendConfig::InMemory;
@@ -1206,6 +1256,32 @@ async fn parallel_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()
 #[test_multisetup([NEXT_TO_L1])]
 #[test_runtime(flavor = "multi_thread")]
 async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    effective_parallel_impl(env, EffectiveWorkload::Eth).await
+}
+
+/// [`effective_parallel_tps`] with `TestERC20.transfer` calls instead of native transfers: same
+/// RPC path, lanes, and disjointness argument (each wallet transfers token to its own
+/// `bench_addr(i)` recipient; the token contract itself is only a shared *read*), but every tx
+/// runs the full EVM interpreter and rewrites two `balances[..]` mapping slots. The ERC20
+/// counterpart of the injection pair [`parallel_injection_tps`] / [`parallel_injection_erc20_tps`].
+#[test_multisetup([NEXT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn effective_parallel_erc20_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    effective_parallel_impl(env, EffectiveWorkload::Erc20).await
+}
+
+/// Workload for [`effective_parallel_impl`]. Fees are zero either way, so `Erc20` wallets need
+/// token balance but no ETH.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EffectiveWorkload {
+    Eth,
+    Erc20,
+}
+
+async fn effective_parallel_impl(
+    env: TestEnvironment,
+    workload: EffectiveWorkload,
+) -> anyhow::Result<()> {
     let k: usize = env_or("PARALLEL_BLOCKS", 2);
     let mut config = env.default_config().await?;
     config.prover_input_generator_config.enable_input_generation = false;
@@ -1232,10 +1308,12 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // the block rate the tree must sustain. Tunable via `PARALLEL_BLOCK_LINGER_MS` (default 5).
     config.sequencer_config.parallel_block_linger =
         Duration::from_millis(env_or("PARALLEL_BLOCK_LINGER_MS", 5));
-    // In-memory state backend, like the injection benches: the RocksDB FullDiffs backend does an
-    // iterator seek per server-side state read, which collapses under 128-way concurrent blocks
-    // (300-400µs/read observed on a 7995WX — ~25ms of VM-thread time per block).
-    config.general_config.state_backend = StateBackendConfig::InMemory;
+    // Unlike the pure-throughput injection benches, keep the DEFAULT (RocksDB-backed FullDiffs)
+    // state backend: the effective tests measure the production-realistic path. Known cost: the
+    // Rocks read path does an iterator seek per server-side state read and degrades under
+    // K-way concurrent blocks (300-400µs/read observed on a 7995WX) — that is part of the
+    // measurement, not a bug in the test. Run WITHOUT `--features in-memory-storage` for real
+    // (RocksDB) repositories too.
     // Receipt visibility: the in-memory repository prunes receipts `blocks_to_retain_in_memory`
     // blocks after inclusion (default 512). At bench block rates (1000s of blocks/s) that is a
     // sub-second window — receipt waiters that lag it find nothing, ever. Floor the retention so
@@ -1302,14 +1380,40 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
         DynProvider::new(ProviderBuilder::new().connect_client(clients[0].clone()));
     let root = receipt_provider.root().clone();
 
-    // Each wallet's real-signed corpus (one-time; real ECDSA signing is expensive). A distinct
-    // corpus family from `effective_tps` so the two tests never invalidate each other's files; the
-    // per-wallet recipient is folded into the fingerprint.
+    // ERC20 workload: deploy the token up front — its address is baked into the corpus calldata
+    // and fingerprint. Explicit gas + gas price: `eth_estimateGas` doesn't work under the
+    // in-memory backend (no historical state to estimate against).
+    let token_addr = match workload {
+        EffectiveWorkload::Eth => None,
+        EffectiveWorkload::Erc20 => {
+            let deploy_receipt = TestERC20::deploy_builder(
+                tester.l2_provider.clone(),
+                U256::ZERO,
+                "Load".to_string(),
+                "LOAD".to_string(),
+            )
+            .gas(6_000_000)
+            .gas_price(0)
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+            let token_addr = deploy_receipt
+                .contract_address()
+                .expect("deploy receipt missing contract address");
+            tracing::info!(%token_addr, "deployed TestERC20");
+            Some(token_addr)
+        }
+    };
+
+    // Each wallet's real-signed corpus (one-time; real ECDSA signing is expensive). Distinct
+    // corpus families per test/workload so they never invalidate each other's files; the
+    // per-wallet recipient (and the token, for ERC20) is folded into the fingerprint.
     let paths: Vec<std::path::PathBuf> = signers
         .iter()
         .enumerate()
-        .map(|(i, signer)| {
-            ensure_rpc_corpus(
+        .map(|(i, signer)| match workload {
+            EffectiveWorkload::Eth => ensure_rpc_corpus(
                 "rpc-parallel",
                 chain_id,
                 i,
@@ -1317,26 +1421,59 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
                 recipients[i],
                 value,
                 txs_per_file(),
-            )
+            ),
+            EffectiveWorkload::Erc20 => ensure_rpc_erc20_corpus(
+                chain_id,
+                i,
+                signer,
+                token_addr.expect("token deployed for the ERC20 workload"),
+                recipients[i],
+                txs_per_file(),
+            ),
         })
         .collect::<anyhow::Result<_>>()?;
 
-    // Fund every sender from alice (covers the per-tx value; fees are 0). Split at most half of
-    // alice's balance evenly so total funding never exceeds what she holds.
-    let alice = tester.l2_wallet.default_signer().address();
-    let alice_balance = tester.l2_provider.get_balance(alice).await?;
-    let funding = alice_balance / U256::from((num_wallets * 2) as u64);
-    let mut funding_txs = Vec::with_capacity(num_wallets);
-    for signer in &signers {
-        let tx = TransactionRequest::default()
-            .with_to(signer.address())
-            .with_value(funding)
-            .with_gas_price(gas_price)
-            .with_gas_limit(LOAD_GAS_LIMIT);
-        funding_txs.push(tester.l2_provider.send_transaction(tx).await?);
+    match workload {
+        EffectiveWorkload::Eth => {
+            // Fund every sender from alice (covers the per-tx value; fees are 0). Split at most
+            // half of alice's balance evenly so total funding never exceeds what she holds.
+            let alice = tester.l2_wallet.default_signer().address();
+            let alice_balance = tester.l2_provider.get_balance(alice).await?;
+            let funding = alice_balance / U256::from((num_wallets * 2) as u64);
+            let mut funding_txs = Vec::with_capacity(num_wallets);
+            for signer in &signers {
+                let tx = TransactionRequest::default()
+                    .with_to(signer.address())
+                    .with_value(funding)
+                    .with_gas_price(gas_price)
+                    .with_gas_limit(LOAD_GAS_LIMIT);
+                funding_txs.push(tester.l2_provider.send_transaction(tx).await?);
+            }
+            funding_txs.expect_successful_receipts().await?;
+            tracing::info!(num_wallets, k, %funding, "funded sender wallets");
+        }
+        EffectiveWorkload::Erc20 => {
+            // Mint every sender its whole corpus' worth of token (amount 1 per transfer). Fees
+            // are zero and the transfers carry no ETH value, so wallets need no ETH at all.
+            let token = TestERC20::new(
+                token_addr.expect("token deployed for the ERC20 workload"),
+                tester.l2_provider.clone(),
+            );
+            let mut mint_txs = Vec::with_capacity(num_wallets);
+            for signer in &signers {
+                mint_txs.push(
+                    token
+                        .mint(signer.address(), U256::from(txs_per_file()))
+                        .gas(300_000)
+                        .gas_price(0)
+                        .send()
+                        .await?,
+                );
+            }
+            mint_txs.expect_successful_receipts().await?;
+            tracing::info!(num_wallets, k, "minted sender token balances");
+        }
     }
-    funding_txs.expect_successful_receipts().await?;
-    tracing::info!(num_wallets, k, %funding, "funded sender wallets");
 
     // Switch block production onto the parallel direct-injection path. This mirrors the transition
     // in `parallel_injection_tps`: let the producer settle into the serial `produce()` parked on the
@@ -1657,6 +1794,19 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
         );
     }
 
+    // ERC20 workload: end-to-end state check — tokens really moved. Also exercises `eth_call`
+    // at `latest`, which resolves its block context from the replay storage: it only works
+    // because the effective tests keep the replay WAL enabled (unlike the pure-throughput
+    // injection benches, which set `parallel_skip_replay_wal`).
+    if let Some(token_addr) = token_addr {
+        let token = TestERC20::new(token_addr, tester.l2_provider.clone());
+        let received = token.balanceOf(recipients[0]).call().await?;
+        anyhow::ensure!(
+            received > U256::ZERO,
+            "recipient 0 has zero token balance after the ERC20 run"
+        );
+    }
+
     // Render the flamegraph (if profiling was enabled) before computing the summary.
     if let (Some(guard), Some(path)) = (profiler_guard, flamegraph_path.as_ref()) {
         match guard.report().build() {
@@ -1695,6 +1845,7 @@ async fn effective_parallel_tps(env: TestEnvironment) -> anyhow::Result<()> {
     };
     tracing::error!(
         k,
+        ?workload,
         num_wallets,
         concurrency,
         wait_for_receipts,

@@ -107,7 +107,7 @@ impl RepositoryInMemory {
     /// - Upon successful return, all repositories are considered up to date at `block_number`.
     pub fn populate_in_memory(
         &self,
-        mut block_output: &BlockOutput,
+        block_output: &BlockOutput,
         transactions: Vec<ZkTransaction>,
     ) -> (Arc<RepositoryBlock>, Vec<Arc<StoredTxData>>) {
         let total_latency_observer = REPOSITORIES_METRICS.insert_block[&"total"].start();
@@ -120,41 +120,43 @@ impl RepositoryInMemory {
             .collect();
         let tx_hashes_elapsed = t_tx_hashes.elapsed();
 
-        // Drop rejected transactions from the block output
-        // block_output.tx_results.retain(|result| result.is_ok());
+        // `tx_results` is retained to successful results upstream (the executor drops rejected
+        // txs from the output before shipping it — see `execute_block_in_vm`), so it aligns 1:1
+        // (by index) with `transactions`. We can no longer retain here: the output is borrowed.
+        debug_assert_eq!(
+            block_output.tx_results.len(),
+            transactions.len(),
+            "tx_results not retained to executed transactions upstream"
+        );
 
         // Add transaction receipts to the transaction receipt repository.
         let hash = BlockHash::from(block_output.header.hash());
         let sealed_block_output = Sealed::new_unchecked(block_output, hash);
 
         // Precompute the running offsets (logs-before / cumulative-gas-before) in a cheap serial
-        // pass so each tx's receipt+meta can be built in parallel: `transaction_to_api_data` is pure
-        // given these offsets. `tx_results` was retained to successful results above, so it aligns
-        // 1:1 (by index) with `transactions`.
-        // let mut log_prefix = Vec::with_capacity(transactions.len());
-        // let mut gas_prefix = Vec::with_capacity(transactions.len());
-        // let mut log_index = 0u64;
-        // let mut cumulative_gas_used = 0u64;
-        // for tx_output in sealed_block_output.tx_results.iter() {
-        //     if !tx_output.is_ok() {
-        //         continue;
-        //     }
-        //     log_prefix.push(log_index);
-        //     gas_prefix.push(cumulative_gas_used);
-        //     let tx_output = tx_output.as_ref().ok().unwrap();
-        //     log_index += tx_output.logs.len() as u64;
-        //     cumulative_gas_used += tx_output.gas_used;
-        // }
+        // pass; `transaction_to_api_data` is pure given these offsets.
+        let mut log_prefix = Vec::with_capacity(transactions.len());
+        let mut gas_prefix = Vec::with_capacity(transactions.len());
+        let mut log_index = 0u64;
+        let mut cumulative_gas_used = 0u64;
+        for tx_output in sealed_block_output.tx_results.iter() {
+            log_prefix.push(log_index);
+            gas_prefix.push(cumulative_gas_used);
+            let tx_output = tx_output.as_ref().ok().unwrap();
+            log_index += tx_output.logs.len() as u64;
+            cumulative_gas_used += tx_output.gas_used;
+        }
 
         let t_stored_vec = Instant::now();
-        // Build receipts/meta in parallel (this is the bulk of `populate`'s cost).
+        // Build receipts/meta. Sequential per block: the applier already overlaps `populate`
+        // across blocks (its in-flight window), so per-block rayon would only oversubscribe.
         let mut stored_vec: Vec<Arc<StoredTxData>> = Vec::with_capacity(transactions.len());
         for (tx_index, tx) in transactions.into_iter().enumerate() {
             let stored_tx = Arc::new(transaction_to_api_data(
                 &sealed_block_output,
                 tx_index,
-                0,
-                0,
+                log_prefix[tx_index],
+                gas_prefix[tx_index],
                 tx,
             ));
             stored_vec.push(stored_tx);
@@ -162,14 +164,11 @@ impl RepositoryInMemory {
         let stored_vec_elapsed = t_stored_vec.elapsed();
 
         let t_block = Instant::now();
-        // Fold the per-tx blooms and index by hash (cheap relative to receipt construction). Bloom
-        // accrual is commutative, so the parallel collection order is irrelevant.
-        let block_bloom = Bloom::default();
-        // let mut stored_txs = HashMap::with_capacity(stored_vec.len());
-        // for (tx_hash, stored_tx) in stored_vec {
-        //     // block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
-        //     stored_txs.insert(tx_hash, stored_tx);
-        // }
+        // Fold the per-tx blooms into the block bloom (cheap relative to receipt construction).
+        let mut block_bloom = Bloom::default();
+        for stored_tx in &stored_vec {
+            block_bloom.accrue_bloom(stored_tx.receipt.logs_bloom());
+        }
         let (block_output, hash) = sealed_block_output.into_parts();
         let header = {
             let mut h = block_output.header.clone().unseal();
@@ -331,12 +330,15 @@ impl WriteRepository for RepositoryInMemory {
         let block_number = block_output.header.number;
         let (block, transactions) = self.populate_in_memory(block_output, transactions);
 
-        // // Notify RPC subscribers. Ignore the error when there are no receivers.
-        // let _ = self.block_sender.send(BlockNotification {
-        //     block,
-        //     transactions,
-        //     failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
-        // });
+        // Notify RPC subscribers. Ignore the error when there are no receivers.
+        let _ = self.block_sender.send(BlockNotification {
+            block,
+            transactions: transactions
+                .iter()
+                .map(|data| (*data.tx.hash(), data.clone()))
+                .collect(),
+            failed_transactions: Arc::new(failed_transactions.into_iter().collect()),
+        });
 
         // Bounded retention: drop the block that just fell out of the window. Genesis (0) is never
         // pruned. Reads of blocks older than the window will miss — acceptable for bench use.
@@ -429,11 +431,11 @@ impl TransactionReceiptRepository {
     /// already exists, it will be overwritten.
     pub fn insert<'a>(&'a self, txs: impl IntoIterator<Item = &'a Arc<StoredTxData>>) {
         for data in txs {
-            // let sender = data.tx.signer();
-            // let nonce = data.tx.nonce();
+            let sender = data.tx.signer();
+            let nonce = data.tx.nonce();
             self.tx_data.insert(*data.tx.hash(), data.clone());
-            // self.sender_nonce_index
-            //     .insert((sender, nonce), *data.tx.hash());
+            self.sender_nonce_index
+                .insert((sender, nonce), *data.tx.hash());
         }
     }
 
@@ -513,25 +515,25 @@ fn transaction_to_api_data(
 ) -> StoredTxData {
     let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
 
-    // let l2_to_l1_logs = tx_output
-    //     .l2_to_l1_logs
-    //     .iter()
-    //     .map(|l2_to_l1_log| L2ToL1Log {
-    //         l2_shard_id: l2_to_l1_log.log.l2_shard_id,
-    //         is_service: l2_to_l1_log.log.is_service,
-    //         tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
-    //         sender: l2_to_l1_log.log.sender,
-    //         key: l2_to_l1_log.log.key,
-    //         value: l2_to_l1_log.log.value,
-    //     })
-    //     .collect();
+    let l2_to_l1_logs = tx_output
+        .l2_to_l1_logs
+        .iter()
+        .map(|l2_to_l1_log| L2ToL1Log {
+            l2_shard_id: l2_to_l1_log.log.l2_shard_id,
+            is_service: l2_to_l1_log.log.is_service,
+            tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
+            sender: l2_to_l1_log.log.sender,
+            key: l2_to_l1_log.log.key,
+            value: l2_to_l1_log.log.value,
+        })
+        .collect();
     let receipt = ZkReceiptEnvelope::from_typed(
         tx.tx_type(),
         ZkReceipt {
             status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
             cumulative_gas_used: cumulative_gas_used_before_this_tx + tx_output.gas_used,
-            logs: vec![],
-            l2_to_l1_logs: vec![],
+            logs: tx_output.logs.clone(),
+            l2_to_l1_logs,
         },
     );
     let meta = TxMeta {
