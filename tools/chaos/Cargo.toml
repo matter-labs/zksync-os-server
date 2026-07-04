@@ -1,0 +1,27 @@
+[package]
+name = "zksync_os_chaos"
+description = "Chaos rig for BFT consensus: generates containerized validator clusters and drives seeded fault schedules against them"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "chaos"
+path = "src/main.rs"
+
+[dependencies]
+alloy.workspace = true
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+commonware-codec.workspace = true
+commonware-cryptography.workspace = true
+humantime = "2.2.0"
+rand08.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }

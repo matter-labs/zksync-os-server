@@ -16074,6 +16074,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zksync_os_chaos"
+version = "0.20.8"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap",
+ "commonware-codec",
+ "commonware-cryptography",
+ "humantime",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "zksync_os_config_validation_macros"
 version = "0.20.8"
 dependencies = [
