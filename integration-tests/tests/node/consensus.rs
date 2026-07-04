@@ -14,6 +14,7 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
+use zksync_os_integration_tests::l1_helpers::wait_for_l1_state;
 use zksync_os_integration_tests::multi_node::MultiNodeTester;
 
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -169,6 +170,64 @@ async fn validator_restart_rejoins_catches_up_and_votes_again() -> anyhow::Resul
     cluster.shutdown_all().await
 }
 
+/// The batcher validator must survive a restart. Its recovery is the strictest in the
+/// committee: the batcher resumes from the last L1-*executed* batch and re-creates
+/// every batch already committed on L1, which requires the pipeline to replay blocks
+/// from that point — strictly below the WAL tip where the live consensus stream
+/// resumes. Found by the chaos rig's first soak: consensus mode fed the pipeline only
+/// live finalized blocks, and the restarted batcher died on the gap ("Existing batch
+/// first block (N) does not match next block in stream (M)").
+#[test_log::test(tokio::test)]
+async fn batcher_validator_restart_recreates_batches_and_keeps_settling() -> anyhow::Result<()> {
+    // Four validators: the chain keeps finalizing while the batcher validator is
+    // down, so it restarts into a moving committee, replays its own write-ahead log,
+    // and backfills the rest — the exact shape of the chaos-rig failure.
+    let mut cluster = MultiNodeTester::start(4).await?;
+
+    // Real batches on L1: wait until a batch is committed whose execution has not
+    // landed yet. That is precisely the state whose recovery was broken — and it
+    // stays that way while the batcher validator is down, because both the commit
+    // and the execute senders live on that node.
+    let included_at = send_transfer(&cluster, 1, Address::repeat_byte(0x61)).await?;
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+    let before_restart = wait_for_l1_state(
+        cluster.node(0),
+        "a batch committed but not yet executed on L1",
+        |state| state.last_committed_batch > state.last_executed_batch,
+    )
+    .await?;
+
+    // Restart the batcher validator while that recovery window is open; the chain
+    // moves on without it in the meantime.
+    cluster.stop_validator(0).await?;
+    let while_down = send_transfer(&cluster, 1, Address::repeat_byte(0x62)).await?;
+    cluster
+        .wait_for_block_on_all(while_down, CONVERGENCE_TIMEOUT)
+        .await?;
+    cluster.start_validator(0).await?;
+
+    // The restarted node must replay, catch up to the moving tip, and agree.
+    let target = cluster.max_height().await? + 3;
+    cluster
+        .wait_for_block_on_all(target, CONVERGENCE_TIMEOUT)
+        .await?;
+    cluster.assert_block_hashes_agree(while_down).await?;
+
+    // The sharp assertion: the batcher is alive *past its recovery* — new batches
+    // land on L1 after the restart. Before the restart-replay fix the batcher task
+    // panicked within seconds of startup and settlement stopped for good.
+    wait_for_l1_state(
+        cluster.node(0),
+        "the restarted batcher commits new batches to L1",
+        |state| state.last_committed_batch > before_restart.last_committed_batch,
+    )
+    .await?;
+
+    cluster.shutdown_all().await
+}
+
 /// A three-validator simplex committee tolerates zero faults (quorum is 3-of-3):
 /// stopping any validator pauses finalization, and restarting it resumes the chain.
 /// This pins the availability boundary as an executable fact — deployments that need
@@ -254,8 +313,9 @@ async fn gossiped_transaction_survives_its_receiving_validator() -> anyhow::Resu
     cluster.stop_validator(3).await?;
 
     // ...and once the gap is filled through a different validator, the gossiped copy
-    // becomes includable and lands.
-    cluster
+    // becomes includable and lands. The gap-filler's own receipt is not awaited —
+    // the gapped transaction's receipt below proves both were included, in order.
+    let _ = cluster
         .node(0)
         .l2_provider
         .send_transaction(

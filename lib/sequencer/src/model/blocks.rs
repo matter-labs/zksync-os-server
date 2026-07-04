@@ -183,6 +183,45 @@ pub struct PreparedBlockCommand<'a> {
     pub strict_subpool_cleanup: bool,
 }
 
+impl PreparedBlockCommand<'_> {
+    /// The canonical way to re-execute a historical block: every transaction comes
+    /// from the record, the block must reproduce the recorded output hash exactly,
+    /// and any failure aborts. Used by WAL replay on restart (single-sequencer and
+    /// consensus alike) and by consensus verification.
+    pub fn for_replay(
+        record: ReplayRecord,
+        metrics_label: &'static str,
+        interop_roots_per_block: u64,
+    ) -> Self {
+        let expect_sl_chain_id_tx_after_upgrade = record.transactions.windows(2).any(|window| {
+            matches!(
+                window[0].envelope(),
+                zksync_os_types::ZkEnvelope::Upgrade(_)
+            ) && matches!(
+                window[1].as_system_tx_type(),
+                Some(zksync_os_types::SystemTxType::SetSLChainId(_, _))
+            )
+        });
+        PreparedBlockCommand {
+            block_context: record.block_context,
+            seal_policy: SealPolicy::UntilExhausted {
+                allowed_to_finish_early: false,
+            },
+            invalid_tx_policy: InvalidTxPolicy::Abort,
+            tx_source: MarkingTxStream::unmarkable(futures::stream::iter(record.transactions)),
+            metrics_label,
+            protocol_version: record.protocol_version,
+            expected_block_output_hash: Some(record.block_output_hash),
+            previous_block_timestamp: record.previous_block_timestamp,
+            force_preimages: record.force_preimages,
+            expect_sl_chain_id_tx_after_upgrade,
+            starting_cursors: record.starting_cursors,
+            interop_roots_per_block,
+            strict_subpool_cleanup: false,
+        }
+    }
+}
+
 /// Behaviour when VM returns an InvalidTransaction error.
 #[derive(Clone, Copy, Debug)]
 pub enum InvalidTxPolicy {

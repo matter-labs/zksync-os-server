@@ -3,12 +3,16 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
 use zksync_os_backpressure::PipelineAdmissionReceiver;
+use zksync_os_interface::tracing::{NopTracer, NopValidator};
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
+use zksync_os_sequencer::execution::execute_block_in_vm::execute_block_in_vm;
 use zksync_os_sequencer::execution::{ConsensusRole, LeadershipSignal};
-use zksync_os_sequencer::model::blocks::{BlockCommand, ProduceCommand, RebuildCommand};
-use zksync_os_storage_api::{ReadReplay, ReplayRecord};
+use zksync_os_sequencer::model::blocks::{
+    BlockCommand, BlockCommandType, PreparedBlockCommand, ProduceCommand, RebuildCommand,
+};
+use zksync_os_storage_api::{OverlayBuffer, ReadReplay, ReadStateHistory, ReplayRecord};
 
 /// Command source for consensus-enabled main node.
 /// Replays local WAL starting from `starting_block` and then produces new blocks when leader.
@@ -39,14 +43,37 @@ pub struct RebuildOptions {
 /// Command source for a consensus validator: finalized blocks arrive from consensus
 /// fully executed, in order, and flow straight to persistence. There is no local block
 /// production loop and no canonization fence — consensus already decided.
+///
+/// On startup it first re-executes the WAL range `starting_block..=replay_until` into
+/// the same payloads, exactly like the single-sequencer source replays on restart.
+/// This is what lets everything downstream recover from its own watermark — most
+/// strictly the batcher, which resumes from the last L1-*executed* batch and must see
+/// every block from there to recreate the batches already committed on L1. Live
+/// consensus commits start at `replay_until + 1`, so the stream stays gapless and
+/// ordered. (The mempool is *not* touched here: consensus mode fast-forwards it to the
+/// WAL tip at startup.)
 #[derive(Debug)]
-pub struct ConsensusCommittedSource {
+pub struct ConsensusCommittedSource<Replay, State> {
     /// Finalized payloads from the consensus execution environment.
     pub committed: mpsc::Receiver<zksync_os_sequencer::model::blocks::BlockPayload>,
+    /// Local block replays (aka `WAL`).
+    pub block_replay_storage: Replay,
+    /// First block to re-execute on startup (see `determine_starting_block`).
+    pub starting_block: u64,
+    /// Last block to re-execute: the WAL tip at startup, which is also the height the
+    /// consensus environment resumes committing after.
+    pub replay_until: u64,
+    /// Base state for historical execution views during replay.
+    pub state: State,
+    pub interop_roots_per_block: u64,
 }
 
 #[async_trait]
-impl PipelineComponent for ConsensusCommittedSource {
+impl<Replay, State> PipelineComponent for ConsensusCommittedSource<Replay, State>
+where
+    Replay: ReadReplay,
+    State: ReadStateHistory + Clone + Send + 'static,
+{
     type Input = ();
     type Output = zksync_os_sequencer::model::blocks::BlockPayload;
 
@@ -62,6 +89,52 @@ impl PipelineComponent for ConsensusCommittedSource {
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
+        tracing::info!(
+            "Replaying WAL blocks from {} until {}.",
+            self.starting_block,
+            self.replay_until
+        );
+        // Rolling overlay so each replayed block executes on its parent's state even
+        // where the persisted base has not caught up (and harmlessly where it has).
+        let mut state_overlay_buffer = OverlayBuffer::default();
+        for block_number in self.starting_block..=self.replay_until {
+            if block_number == 0 {
+                // Genesis is never re-executed; it is baked into the state.
+                continue;
+            }
+            let record = self
+                .block_replay_storage
+                .get_replay_record(block_number)
+                .with_context(|| format!("missing replay record for block {block_number}"))?;
+            let command =
+                PreparedBlockCommand::for_replay(record, "replay", self.interop_roots_per_block);
+            let view = state_overlay_buffer
+                .sync_with_base_and_build_view_for_block(&self.state, block_number)?;
+            let (block_output, replay_record, failed_transactions, _) =
+                execute_block_in_vm(command, view, &state_reporter, NopTracer, NopValidator)
+                    .await
+                    .map_err(|dump| {
+                        anyhow::anyhow!("replay of block {block_number}: {}", dump.error)
+                    })?;
+            state_overlay_buffer.add_block(
+                block_number,
+                block_output.as_ref().storage_writes.clone(),
+                block_output.as_ref().published_preimages.clone(),
+            )?;
+            let payload = zksync_os_sequencer::model::blocks::BlockPayload {
+                output: block_output,
+                record: replay_record,
+                command_type: BlockCommandType::Replay,
+                failed_transactions,
+            };
+            if output.send(payload).await.is_err() {
+                tracing::info!("output channel closed, stopping WAL replay");
+                return Ok(());
+            }
+            state_reporter.record_processed(block_number, None, None);
+        }
+        tracing::info!("All WAL blocks replayed. Forwarding consensus commits.");
+
         while let Some(payload) = self.committed.recv().await {
             let block_number = payload.record.block_context.block_number;
             let timestamp = payload.record.block_context.timestamp;

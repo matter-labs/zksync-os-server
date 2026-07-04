@@ -104,6 +104,8 @@ pub struct Checker {
     finalized_views: Vec<u64>,
     applied_heights: Vec<u64>,
     evidence: Vec<u64>,
+    /// The driver's beliefs at the previous poll, for spotting heal transitions.
+    previous_conditions: Vec<Condition>,
     /// Highest finalized view seen anywhere, and when it last advanced.
     tip_view: u64,
     tip_view_advanced_at: Instant,
@@ -120,6 +122,7 @@ impl Checker {
             finalized_views: vec![0; validators],
             applied_heights: vec![0; validators],
             evidence: vec![0; validators],
+            previous_conditions: vec![Condition::Healthy; validators],
             tip_view: 0,
             tip_view_advanced_at: Instant::now(),
             forbidden_baseline: None,
@@ -135,6 +138,23 @@ impl Checker {
         poll: &Poll,
     ) -> Vec<Finding> {
         let mut findings = Vec::new();
+
+        // A node healed from Killed/Stopped has *restarted*: its applied height is
+        // the applier's per-run progress and legitimately starts over from the
+        // restart replay range, so its baseline resets. Unpause and reconnect do not
+        // restart the process, and finalized views come from the consensus journal
+        // and stay monotone across restarts — neither resets.
+        for (index, condition) in expectations.conditions.iter().enumerate() {
+            if *condition == Condition::Healthy
+                && matches!(
+                    self.previous_conditions[index],
+                    Condition::Killed | Condition::Stopped
+                )
+            {
+                self.applied_heights[index] = 0;
+            }
+        }
+        self.previous_conditions = expectations.conditions.clone();
 
         // Agreement: everyone who answered the probe must agree.
         if let Some(height) = poll.probe_height {
@@ -635,6 +655,55 @@ mod tests {
                 .iter()
                 .any(|finding| matches!(finding, Finding::UnexpectedDeath { .. }))
         );
+    }
+
+    #[test]
+    fn applied_height_baseline_resets_after_a_restart_heal() {
+        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(60));
+        let now = Instant::now();
+        let poll = |applied| Poll {
+            probe_height: None,
+            nodes: vec![NodeObservation {
+                applied_height: Some(applied),
+                ..observation(50, "0x")
+            }],
+        };
+
+        // Healthy progress to applied height 40.
+        checker.observe(now, &healthy_expectations(1), &poll(40));
+
+        // Killed, then healed: the restarted node replays from its own watermark, so
+        // a lower applied height right after the heal is legitimate...
+        let mut expectations = healthy_expectations(1);
+        expectations.conditions[0] = Condition::Killed;
+        checker.observe(
+            now,
+            &expectations,
+            &Poll {
+                probe_height: None,
+                nodes: vec![NodeObservation {
+                    running: false,
+                    finalized_view: None,
+                    applied_height: None,
+                    block_hash_at_probe: None,
+                    ..observation(0, "0x")
+                }],
+            },
+        );
+        expectations.conditions[0] = Condition::Healthy;
+        assert!(checker.observe(now, &expectations, &poll(10)).is_empty());
+
+        // ...but with no restart in between, the same regression is a finding.
+        let findings = checker.observe(now, &expectations, &poll(3));
+        assert!(matches!(
+            findings[0],
+            Finding::FinalityRegression {
+                what: "applied height",
+                from: 10,
+                to: 3,
+                ..
+            }
+        ));
     }
 
     #[test]

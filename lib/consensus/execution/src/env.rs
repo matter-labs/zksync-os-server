@@ -25,19 +25,17 @@ use tracing::{error, info, warn};
 use zksync_os_consensus_core::{BuildContext, ExecutionEnv};
 use zksync_os_interface::tracing::{NopTracer, NopValidator};
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
-use zksync_os_mempool::MarkingTxStream;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_sequencer::execution::FeeParams;
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::execution::execute_block_in_vm::execute_block_in_vm;
 use zksync_os_sequencer::model::blocks::{
-    BlockCommandType, BlockOutputWithReads, BlockPayload, InvalidTxPolicy, PreparedBlockCommand,
-    SealPolicy,
+    BlockCommandType, BlockOutputWithReads, BlockPayload, PreparedBlockCommand,
 };
 use zksync_os_storage_api::BlockHashes;
 use zksync_os_storage_api::state_override_view::OverriddenStateView;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ProtocolSemanticVersion, SystemTxType, ZkEnvelope};
+use zksync_os_types::{ProtocolSemanticVersion, ZkEnvelope};
 
 /// Chain-level constants the environment needs to anchor the chain root.
 #[derive(Debug, Clone)]
@@ -344,33 +342,11 @@ where
         let committed_height = { self.shared.lock().unwrap().pending.committed().height };
         let view = self.view_on(branch, committed_height);
 
-        let expect_sl_chain_id_tx_after_upgrade = record.transactions.windows(2).any(|window| {
-            matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
-                && matches!(
-                    window[1].as_system_tx_type(),
-                    Some(SystemTxType::SetSLChainId(_, _))
-                )
-        });
-
-        let command = PreparedBlockCommand {
-            block_context: record.block_context,
-            seal_policy: SealPolicy::UntilExhausted {
-                allowed_to_finish_early: false,
-            },
-            invalid_tx_policy: InvalidTxPolicy::Abort,
-            tx_source: MarkingTxStream::unmarkable(futures::stream::iter(
-                record.transactions.clone(),
-            )),
-            metrics_label: "consensus_verify",
-            protocol_version: record.protocol_version.clone(),
-            expected_block_output_hash: Some(record.block_output_hash),
-            previous_block_timestamp: record.previous_block_timestamp,
-            force_preimages: record.force_preimages.clone(),
-            expect_sl_chain_id_tx_after_upgrade,
-            starting_cursors: record.starting_cursors.clone(),
-            interop_roots_per_block: self.interop_roots_per_block,
-            strict_subpool_cleanup: false,
-        };
+        let command = PreparedBlockCommand::for_replay(
+            record.clone(),
+            "consensus_verify",
+            self.interop_roots_per_block,
+        );
 
         match execute_block_in_vm(command, view, &self.reporter, NopTracer, NopValidator).await {
             Ok((output, _record, _failed, _)) => Ok(output),

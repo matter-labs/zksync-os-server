@@ -1242,7 +1242,18 @@ async fn run_main_node_pipeline(
     // Everything downstream of this point is identical.
     let pipeline = Pipeline::new(runtime.clone());
     let pipeline = if let Some(committed) = consensus_committed {
-        pipeline.pipe(ConsensusCommittedSource { committed })
+        pipeline.pipe(ConsensusCommittedSource {
+            committed,
+            block_replay_storage: block_replay_storage.clone(),
+            starting_block,
+            // The WAL tip has not moved since startup: nothing writes the WAL until
+            // the pipeline's applier runs. This is the same height the consensus
+            // environment resumed from, so live commits continue at exactly
+            // `replay_until + 1`.
+            replay_until: block_replay_storage.latest_record(),
+            state: state.clone(),
+            interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+        })
     } else {
         let (replays_to_execute_sender, replays_to_execute) =
             tokio::sync::mpsc::unbounded_channel();
