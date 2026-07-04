@@ -1327,6 +1327,13 @@ async fn effective_parallel_impl(
     // behind"), crashing the node. The submit loop below treats "not accepting" as transient and
     // backs off, so the measured rate self-regulates to what the full pipeline (tree included) can
     // sustain.
+    //
+    // `eth_call` resolves its block context from replay storage, so it only works when the
+    // replay WAL is actually written. Env overrides (`sequencer_parallel_skip_replay_wal=true`,
+    // via the config env layer) may re-enable the pure-throughput elisions on this test — read
+    // the final config to know which post-run checks are possible.
+    let eth_call_available = config.sequencer_config.parallel_blocks <= 1
+        || !config.sequencer_config.parallel_skip_replay_wal;
     let tester = env.launch(config).await?;
 
     let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
@@ -1794,11 +1801,12 @@ async fn effective_parallel_impl(
         );
     }
 
-    // ERC20 workload: end-to-end state check — tokens really moved. Also exercises `eth_call`
-    // at `latest`, which resolves its block context from the replay storage: it only works
-    // because the effective tests keep the replay WAL enabled (unlike the pure-throughput
-    // injection benches, which set `parallel_skip_replay_wal`).
-    if let Some(token_addr) = token_addr {
+    // ERC20 workload: end-to-end state check — tokens really moved. Uses `eth_call`, which is
+    // only available when the replay WAL is written (skipped when the run was env-overridden
+    // into pure-throughput elision mode; receipt statuses still prove non-revert there).
+    if let Some(token_addr) = token_addr
+        && eth_call_available
+    {
         let token = TestERC20::new(token_addr, tester.l2_provider.clone());
         let received = token.balanceOf(recipients[0]).call().await?;
         anyhow::ensure!(
