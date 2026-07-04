@@ -56,6 +56,7 @@ use commonware_cryptography::ed25519::PublicKey;
 use commonware_parallel::Sequential;
 use commonware_runtime::buffer::paged::CacheRef;
 use commonware_runtime::{BufferPooler, Clock, Handle, Metrics, Spawner, Storage};
+use commonware_storage::archive::{Archive as _, Identifier};
 use commonware_utils::{NZU16, NZUsize};
 use rand08::{CryptoRng, Rng};
 use std::num::{NonZeroU64, NonZeroUsize};
@@ -259,6 +260,16 @@ where
         block_codec_config.clone(),
     )
     .await;
+
+    // The execution side persists chain content but not consensus identities; after a
+    // restart it knows how tall its chain is, not which digest its tip has. The block
+    // archive holds the finalized block at that height — hand it back before anything
+    // builds on the tip.
+    if let Some(committed) = env.committed_height().await
+        && let Ok(Some(block)) = blocks.get(Identifier::Index(committed.get())).await
+    {
+        env.adopt_committed_block(&block).await;
+    }
 
     let epocher = FixedEpocher::new(config.epoch_length);
     let (marshal_actor, marshal_mailbox, marshal_height) = marshal_core::Actor::init(

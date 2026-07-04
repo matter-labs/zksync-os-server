@@ -63,6 +63,9 @@ impl MultiNodeTester {
         let keys: Vec<ValidatorKeys> = (0..num_validators)
             .map(|_| generate_validator_keys())
             .collect();
+        // Chain-level constants must be configured identically across the committee
+        // (verification pins them); the per-node defaults randomize this one.
+        let fee_collector = alloy::primitives::Address::random();
         // Consensus listen ports are allocated here and stay locked until all nodes are
         // up (the node harness allocates its own RPC/network ports separately).
         let mut consensus_ports = Vec::with_capacity(num_validators);
@@ -89,6 +92,7 @@ impl MultiNodeTester {
                         let mut config = build_node_config(&l1, chain_layout, false).await?;
                         disable_prover_input_generation(&mut config);
                         config.general_config.node_role = NodeRole::MainNode;
+                        config.sequencer_config.fee_collector_address = fee_collector;
                         // Exactly one batcher; every other validator is sequencing-only.
                         config.batcher_config.enabled = index == 0;
                         config.consensus_config.enabled = true;

@@ -10,7 +10,7 @@ mod interop_fee_updater;
 pub use interop_fee_updater::{InteropFeeUpdaterConfig, LocalEthCall};
 
 mod pool;
-pub use pool::{Config, MarkingTxStream, Pool, StreamOutcome};
+pub use pool::{Config, L1InputsView, MarkingTxStream, Pool, StreamOutcome};
 
 mod metrics;
 

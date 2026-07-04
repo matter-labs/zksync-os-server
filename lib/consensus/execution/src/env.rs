@@ -5,26 +5,29 @@
 //! handed to the node's persistence pipeline (write-ahead log first, then state,
 //! repositories, tree) with consensus paced by durability.
 //!
-//! Scope note — currently implemented: the follower/replica half (verify, commit,
-//! genesis, committed height). Block *building* (the leader half: mempool integration,
-//! seal policy, fee and cursor sourcing) is not wired yet; until it is, `build` declines
-//! to propose, which consensus treats as this validator passing its turn as leader.
+//! Verification is two checks in sequence: the proposal validity rules (see
+//! [`crate::rules`] — bounding what a leader may put in a block) and full re-execution
+//! (proving the declared outcome). Building runs through the attached
+//! [`BuildBlocks`] implementation when this validator leads.
 
 use crate::block::ConsensusBlock;
 use crate::builder::{BuildBlocks, BuiltBlock, ParentInfo, derive_next_cursors};
 use crate::pending_state::{BranchOverrides, CommittedHead, Overlay, PendingState};
+use crate::rules::{LocalL1Inputs, ParentView, ValidityConfig, Verdict};
 use commonware_consensus::types::Height;
 use commonware_cryptography::Digestible;
 use commonware_cryptography::sha256::Digest;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use zksync_os_consensus_core::{BuildContext, ExecutionEnv};
 use zksync_os_interface::tracing::{NopTracer, NopValidator};
 use zksync_os_interface::traits::{PreimageSource, ReadStorage};
 use zksync_os_mempool::MarkingTxStream;
 use zksync_os_observability::ComponentStateReporter;
+use zksync_os_sequencer::execution::FeeParams;
+use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::execution::execute_block_in_vm::execute_block_in_vm;
 use zksync_os_sequencer::model::blocks::{
     BlockCommandType, BlockOutputWithReads, BlockPayload, InvalidTxPolicy, PreparedBlockCommand,
@@ -44,6 +47,9 @@ pub struct ChainAnchor {
     pub genesis_timestamp: u64,
     /// Protocol version the chain starts at.
     pub genesis_protocol_version: ProtocolSemanticVersion,
+    /// Fee parameters of the genesis block — the base of the per-block fee clamps for
+    /// the first block built on it.
+    pub genesis_fee_params: FeeParams,
 }
 
 /// A self-contained read view of the node state at a fixed block height.
@@ -105,6 +111,17 @@ where
     /// Builds blocks when this validator leads. `None` = never propose (verification
     /// and commits still work — the configuration for tests and passive followers).
     builder: Option<Arc<tokio::sync::Mutex<dyn BuildBlocks<EnvView<S>>>>>,
+    /// Proposal validity rules and the local L1 view they authenticate against.
+    /// `None` = verification is structural checks + re-execution only (a test-only
+    /// configuration; production wiring always attaches this).
+    validity: Option<ProposalValidation>,
+}
+
+/// The inputs proposal-validity checking needs (see [`crate::rules`]).
+#[derive(Clone)]
+pub struct ProposalValidation {
+    pub config: Arc<ValidityConfig>,
+    pub inputs: Arc<dyn LocalL1Inputs>,
 }
 
 struct Shared {
@@ -139,11 +156,11 @@ where
         let committed = CommittedHead {
             height: committed_height,
             // Consensus digests are not persisted in the node's storage; after a
-            // restart above genesis, the committed tip's digest is unknown and parents
-            // at that height are matched by height (consensus has already validated
-            // their ancestry).
-            // TODO(consensus): persist the committed tip's digest (or derive it from the
-            // consensus archive at startup) so height-only matching disappears.
+            // restart above genesis the tip's digest starts out unknown, and the
+            // consensus stack hands it back from its block archive at startup (see
+            // `adopt_committed_block`). Until then — or if the archive lost it —
+            // parents at the committed height are matched by height alone (consensus
+            // has already validated their ancestry).
             digest: (committed_height == 0).then(|| genesis.digest()),
         };
         Self {
@@ -160,6 +177,7 @@ where
             reporter: ComponentStateReporter::new("consensus_execution").0,
             interop_roots_per_block,
             builder: None,
+            validity: None,
         }
     }
 
@@ -169,6 +187,14 @@ where
         builder: Arc<tokio::sync::Mutex<dyn BuildBlocks<EnvView<S>>>>,
     ) -> Self {
         self.builder = Some(builder);
+        self
+    }
+
+    /// Attaches the proposal validity rules — required on every production validator
+    /// (without them, verification cannot tell an honest leader's L1 inputs from
+    /// fabricated ones).
+    pub fn with_validity(mut self, validation: ProposalValidation) -> Self {
+        self.validity = Some(validation);
         self
     }
 
@@ -188,6 +214,7 @@ where
                     protocol_version: self.anchor.genesis_protocol_version.clone(),
                     next_cursors: Default::default(),
                     carries_upgrade_tx: false,
+                    fee_params: self.anchor.genesis_fee_params,
                     digest: parent.digest(),
                 });
             }
@@ -213,6 +240,11 @@ where
                 .transactions
                 .iter()
                 .any(|tx| matches!(tx.envelope(), ZkEnvelope::Upgrade(_))),
+            fee_params: FeeParams {
+                eip1559_basefee: record.block_context.eip1559_basefee,
+                native_price: record.block_context.native_price,
+                pubdata_price: record.block_context.pubdata_price,
+            },
             digest: parent.digest(),
         })
     }
@@ -229,17 +261,9 @@ where
 
     /// Structural consistency between a block's context and its parent — the same
     /// invariants the node's replay path enforces on blocks arriving from outside.
-    // TODO(consensus): these checks cover structural linkage only; they consistency-check
-    // a proposal against its parent but do not yet bound what a byzantine leader can put
-    // in one. Before running with untrusted validators, verification must also enforce:
-    // - timestamp within a configured skew of the verifier's clock (only monotonicity is
-    //   checked today, via the declared-previous-timestamp rule below plus execution);
-    // - fee/gas inputs within configured bounds (basefee, pubdata price, gas/pubdata
-    //   limits are currently taken from the leader as-is);
-    // - authenticity of every L1-sourced transaction — priority *and* upgrade — against
-    //   this validator's own L1 watcher at an agreed L1 finality depth. An L1 input the
-    //   verifier does not know (yet) must withhold the vote, not reject: the view times
-    //   out and rotates, so a lying leader wastes only its own turns.
+    /// Bounding what a leader may put *inside* a structurally-sound block (timestamps,
+    /// fees, L1-input authenticity) is [`crate::rules`]'s job, in `verify` right after
+    /// these checks.
     fn check_linkage(&self, parent: &ConsensusBlock, record: &ReplayRecord) -> Result<(), String> {
         let context = &record.block_context;
         match parent.record() {
@@ -422,6 +446,45 @@ where
             );
             return false;
         }
+        if let Some(validation) = self.validity.clone() {
+            let parent_view = match parent.record() {
+                Some(parent_record) => crate::rules::parent_view_of_record(parent_record),
+                None => ParentView {
+                    timestamp: self.anchor.genesis_timestamp,
+                    protocol_version: self.anchor.genesis_protocol_version.clone(),
+                    next_cursors: Default::default(),
+                    fee_params: self.anchor.genesis_fee_params,
+                },
+            };
+            let now_epoch_seconds = (millis_since_epoch() / 1000) as u64;
+            let verdict = crate::rules::check_proposal(
+                &parent_view,
+                record,
+                now_epoch_seconds,
+                validation.inputs.as_ref(),
+                &validation.config,
+            )
+            .await;
+            match verdict {
+                Verdict::Valid => {}
+                Verdict::Withhold(reason) => {
+                    // Not a fault: this node's L1 view lags the leader's. No vote this
+                    // round; a later round re-verifies against fresher knowledge.
+                    info!(
+                        height = block.height_u64(),
+                        reason, "cannot validate proposal inputs yet; withholding vote"
+                    );
+                    return false;
+                }
+                Verdict::Invalid(reason) => {
+                    warn!(
+                        height = block.height_u64(),
+                        reason, "block failed validity rules; rejecting"
+                    );
+                    return false;
+                }
+            }
+        }
         let branch = {
             let shared = self.shared.lock().unwrap();
             shared
@@ -469,6 +532,16 @@ where
     async fn committed_height(&mut self) -> Option<Height> {
         let height = self.shared.lock().unwrap().pending.committed().height;
         (height > 0).then(|| Height::new(height))
+    }
+
+    async fn adopt_committed_block(&mut self, block: &ConsensusBlock) {
+        let mut shared = self.shared.lock().unwrap();
+        let committed = shared.pending.committed();
+        if block.height_u64() == committed.height {
+            shared
+                .pending
+                .adopt_committed_digest(committed.height, block.digest());
+        }
     }
 
     async fn commit(&mut self, block: ConsensusBlock) {

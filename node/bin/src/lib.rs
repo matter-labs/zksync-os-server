@@ -794,6 +794,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .get_replay_record(block_replay_storage.latest_record())
             .expect("write-ahead log must contain its latest record");
         pool.init(&wal_tip_record).await;
+        // The verification-side view of locally-watched L1 inputs, taken before the
+        // pool moves into the builder.
+        let l1_inputs_view = pool.l1_inputs_view();
 
         let builder = zksync_os_consensus_execution::ConsensusBlockBuilder::new(
             pool,
@@ -820,6 +823,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let anchor = zksync_os_consensus_execution::ChainAnchor {
             genesis_block_hash: genesis_state.header.hash(),
             genesis_timestamp: genesis_state.context.timestamp,
+            genesis_fee_params: zksync_os_sequencer::execution::FeeParams {
+                eip1559_basefee: genesis_record.block_context.eip1559_basefee,
+                native_price: genesis_record.block_context.native_price,
+                pubdata_price: genesis_record.block_context.pubdata_price,
+            },
             genesis_protocol_version: genesis_record.protocol_version,
         };
         let committed_height = block_replay_storage.latest_record();
@@ -828,6 +836,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .ok()
             .flatten()
             .map(|block| block.hash());
+
+        let validation = zksync_os_consensus_execution::ProposalValidation {
+            config: std::sync::Arc::new(zksync_os_consensus_execution::ValidityConfig {
+                max_timestamp_skew: config.consensus_config.max_timestamp_skew,
+                chain_id,
+                fee_collector_address: config.sequencer_config.fee_collector_address,
+                gas_limit: config.sequencer_config.block_gas_limit,
+                pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
+                fee: config.fee_config.clone().into(),
+            }),
+            inputs: std::sync::Arc::new(l1_inputs_view),
+        };
 
         let (committed_payload_sender, committed_payload_receiver) = tokio::sync::mpsc::channel(1);
         let env = zksync_os_consensus_execution::NodeExecutionEnv::new(
@@ -839,7 +859,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             applied_block_number_receiver.clone(),
             config.batcher_config.interop_roots_per_batch_limit,
         )
-        .with_builder(std::sync::Arc::new(tokio::sync::Mutex::new(builder)));
+        .with_builder(std::sync::Arc::new(tokio::sync::Mutex::new(builder)))
+        .with_validity(validation);
 
         let setup = consensus::ConsensusSetup::from_config(
             &config.consensus_config,

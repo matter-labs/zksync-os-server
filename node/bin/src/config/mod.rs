@@ -691,6 +691,11 @@ pub struct ConsensusConfig {
     /// Upper bound on a consensus network message (must fit the largest block).
     #[config(default_t = 16 * 1024 * 1024)]
     pub max_message_size: usize,
+    /// How far ahead of this validator's clock a proposed block timestamp may be
+    /// before the proposal is rejected. Absorbs honest clock skew between validators;
+    /// bounds how far a leader can pre-date time-dependent logic.
+    #[config(default_t = Duration::from_secs(10))]
+    pub max_timestamp_skew: Duration,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

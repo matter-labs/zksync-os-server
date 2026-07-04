@@ -36,6 +36,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+num.workspace = true
 semver.workspace = true
 zksync_os_multivm.workspace = true
 # Test fixtures: the simulation crate provides the in-memory production genesis and

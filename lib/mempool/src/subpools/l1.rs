@@ -1,5 +1,5 @@
 use futures::{Stream, StreamExt};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -20,6 +20,16 @@ pub struct L1Subpool {
 struct Inner {
     sender: Option<mpsc::Sender<Arc<L1PriorityEnvelope>>>,
     pending_txs: VecDeque<Arc<L1PriorityEnvelope>>,
+    /// Every priority transaction seen from L1 that could still appear in a block that
+    /// is not committed yet, keyed by serial id. Unlike `pending_txs`, entries survive
+    /// block *inclusion* and are dropped only once the committed chain moves past them:
+    /// consensus verification authenticates leader-proposed L1 transactions against
+    /// this map, and proposals run ahead of commits.
+    seen_txs: BTreeMap<L1TxSerialId, Arc<L1PriorityEnvelope>>,
+    /// The highest serial id ever inserted (monotonic, never pruned). Lets a verifier
+    /// distinguish "my L1 watcher has not seen this id yet" from "I have diverging
+    /// data" for ids at the frontier.
+    seen_watermark: Option<L1TxSerialId>,
 }
 
 impl L1Subpool {
@@ -29,9 +39,21 @@ impl L1Subpool {
             inner: Arc::new(RwLock::new(Inner {
                 sender: None,
                 pending_txs: VecDeque::new(),
+                seen_txs: BTreeMap::new(),
+                seen_watermark: None,
             })),
             channel_size,
         }
+    }
+
+    /// The locally-watched priority transaction with this serial id (if seen and not
+    /// yet passed by the committed chain), plus the highest id seen so far.
+    pub async fn seen_priority_tx(
+        &self,
+        id: L1TxSerialId,
+    ) -> (Option<Arc<L1PriorityEnvelope>>, Option<L1TxSerialId>) {
+        let inner = self.inner.read().await;
+        (inner.seen_txs.get(&id).cloned(), inner.seen_watermark)
     }
 
     pub async fn best_transactions_stream(&self) -> L1TransactionsStream {
@@ -52,6 +74,9 @@ impl L1Subpool {
                 inner.sender.take();
             }
         }
+        let id = tx.priority_id();
+        inner.seen_txs.insert(id, tx.clone());
+        inner.seen_watermark = Some(inner.seen_watermark.map_or(id, |mark| mark.max(id)));
         inner.pending_txs.push_front(tx);
         self.notify.notify_waiters();
     }
@@ -84,6 +109,11 @@ impl L1Subpool {
             priority_id = pending_tx.priority_id();
         }
 
+        // The committed chain has moved past these ids; no future valid block can
+        // include them again (ids ratchet), so their authenticity records can go.
+        let mut inner = self.inner.write().await;
+        inner.seen_txs = inner.seen_txs.split_off(&(priority_id + 1));
+
         Some(priority_id)
     }
 }
@@ -106,5 +136,62 @@ impl Stream for L1TransactionsStream {
             Poll::Pending => Poll::Pending,
             Poll::Ready(_) => Poll::Ready(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::{Address, B256, Bytes, U256};
+    use std::marker::PhantomData;
+    use zksync_os_types::{L1PriorityTxType, L1Tx};
+
+    fn priority_tx(id: L1TxSerialId) -> Arc<L1PriorityEnvelope> {
+        Arc::new(L1PriorityEnvelope {
+            inner: L1Tx::<L1PriorityTxType> {
+                hash: B256::repeat_byte(id as u8 + 1),
+                initiator: Address::ZERO,
+                to: Address::ZERO,
+                gas_limit: 0,
+                gas_per_pubdata_byte_limit: 0,
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+                nonce: id,
+                value: U256::ZERO,
+                to_mint: U256::ZERO,
+                refund_recipient: Address::ZERO,
+                input: Bytes::new(),
+                factory_deps: Vec::new(),
+                marker: PhantomData,
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn seen_txs_survive_inclusion_and_prune_at_commit() {
+        let mut subpool = L1Subpool::new(4);
+        let txs: Vec<_> = (0..3).map(priority_tx).collect();
+        for tx in &txs {
+            subpool.insert(tx.clone()).await;
+        }
+
+        // All watched transactions are known, and the watermark tracks the frontier.
+        let (found, watermark) = subpool.seen_priority_tx(1).await;
+        assert_eq!(found.as_deref(), Some(txs[1].as_ref()));
+        assert_eq!(watermark, Some(2));
+
+        // Committing a block with the first two prunes exactly those: the chain can
+        // never include them again, while id 2 may still appear in a proposal.
+        subpool
+            .on_canonical_state_change(vec![txs[0].as_ref(), txs[1].as_ref()])
+            .await;
+        assert!(subpool.seen_priority_tx(0).await.0.is_none());
+        assert!(subpool.seen_priority_tx(1).await.0.is_none());
+        assert_eq!(
+            subpool.seen_priority_tx(2).await.0.as_deref(),
+            Some(txs[2].as_ref())
+        );
+        // The watermark is monotonic — pruning does not roll it back.
+        assert_eq!(subpool.seen_priority_tx(2).await.1, Some(2));
     }
 }

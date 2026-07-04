@@ -7,19 +7,22 @@
 //!   around the node's replay record.
 //! - [`pending_state`]: speculative per-block state overlays for blocks that consensus
 //!   is still deciding on, floating above the strictly-linear durable state backend.
-//! - [`env::NodeExecutionEnv`]: verification by re-execution through the production VM,
-//!   and durability-paced commit of finalized blocks into the node's persistence
-//!   pipeline.
+//! - [`env::NodeExecutionEnv`]: verification (proposal validity rules plus re-execution
+//!   through the production VM) and durability-paced commit of finalized blocks into
+//!   the node's persistence pipeline.
+//! - [`rules`]: the validity rules bounding what a leader may put in a proposal.
 //!
-//! Nothing in this crate is wired into the running node yet; the node composition root
-//! adopts it together with block building and validator networking.
+//! The node composition root wires this crate together with block building and
+//! validator networking.
 
 pub mod block;
 pub mod builder;
 pub mod env;
 pub mod pending_state;
+pub mod rules;
 
 pub use block::ConsensusBlock;
 pub use builder::{BuilderConfig, BuiltBlock, ConsensusBlockBuilder, ParentInfo};
-pub use env::{ChainAnchor, CommittedPayload, NodeExecutionEnv};
+pub use env::{ChainAnchor, CommittedPayload, NodeExecutionEnv, ProposalValidation};
 pub use pending_state::{BranchOverrides, CommittedHead, Overlay, PendingState};
+pub use rules::{LocalL1Inputs, ValidityConfig, Verdict};

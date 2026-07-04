@@ -17,6 +17,7 @@ use reth_execution_types::ChangedAccount;
 use reth_primitives_traits::SealedBlock;
 use reth_tasks::Runtime;
 use reth_transaction_pool::{CanonicalStateUpdate, PoolUpdateKind};
+use std::sync::Arc;
 use tokio::time::Instant;
 use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -28,8 +29,8 @@ use zksync_os_l1_watcher::{
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo, UpgradeMetadata,
-    ZkEnvelope, ZkTransaction,
+    L1PriorityEnvelope, L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo,
+    UpgradeMetadata, ZkEnvelope, ZkTransaction,
 };
 
 /// General pool that provides unified access to all transaction sources in the system.
@@ -218,6 +219,16 @@ impl<T: L2Subpool> Pool<T> {
                 self.runtime
                     .spawn_critical_task("interop fee updater", interop_fee_updater.run());
             }
+        }
+    }
+
+    /// A read-only, cloneable view of the locally-watched L1 inputs (priority and
+    /// upgrade transactions), detached from the pool's lifecycle. Consensus
+    /// verification authenticates leader-proposed L1 inputs against it.
+    pub fn l1_inputs_view(&self) -> L1InputsView {
+        L1InputsView {
+            l1_subpool: self.l1_subpool.clone(),
+            upgrade_subpool: self.upgrade_subpool.clone(),
         }
     }
 
@@ -460,6 +471,31 @@ pub struct StreamOutcome<'a> {
     pub upgrade_metadata: Option<UpgradeMetadata>,
     /// Non-empty stream of transactions.
     pub stream: MarkingTxStream<'a>,
+}
+
+/// Read-only view of the L1 inputs this node has watched from L1 (see
+/// [`Pool::l1_inputs_view`]). Answers "have I seen this exact transaction on L1?" —
+/// independent of whether any block already included it.
+#[derive(Clone)]
+pub struct L1InputsView {
+    l1_subpool: L1Subpool,
+    upgrade_subpool: UpgradeSubpool,
+}
+
+impl L1InputsView {
+    /// The locally-watched priority transaction with this serial id (if seen and not
+    /// yet passed by the committed chain), plus the highest id seen so far.
+    pub async fn seen_priority_tx(
+        &self,
+        id: L1TxSerialId,
+    ) -> (Option<Arc<L1PriorityEnvelope>>, Option<L1TxSerialId>) {
+        self.l1_subpool.seen_priority_tx(id).await
+    }
+
+    /// The locally-watched upgrade targeting this protocol version, if any.
+    pub async fn seen_upgrade(&self, version: &ProtocolSemanticVersion) -> Option<UpgradeInfo> {
+        self.upgrade_subpool.seen_upgrade(version).await
+    }
 }
 
 #[derive(Debug, Default)]

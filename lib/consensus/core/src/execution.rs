@@ -57,8 +57,10 @@ pub trait ExecutionEnv: Clone + Send + 'static {
     ) -> impl Future<Output = Option<Self::Block>> + Send;
 
     /// Fully validate `block` against its (already-validated) `parent`. Returns whether
-    /// the block is valid; `false` is a *permanent* verdict for this block, and an honest
-    /// validator will consequently never vote for it.
+    /// this validator vouches for the block. The verdict is scoped to the current round:
+    /// `false` withholds this validator's vote (the view times out and rotates), and a
+    /// later re-proposal is verified afresh — so "cannot validate against my current
+    /// knowledge yet" safely answers `false` too.
     fn verify(
         &mut self,
         parent: Self::Block,
@@ -69,6 +71,14 @@ pub trait ExecutionEnv: Clone + Send + 'static {
     /// fresh chain. Used on startup so consensus does not re-deliver history the node
     /// already has.
     fn committed_height(&mut self) -> impl Future<Output = Option<Height>> + Send;
+
+    /// Startup hand-back of the finalized block at the environment's committed height,
+    /// read from the consensus archive. Lets an environment that persists chain content
+    /// but not consensus identities (digests) re-anchor its tip after a restart. The
+    /// default does nothing.
+    fn adopt_committed_block(&mut self, _block: &Self::Block) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 
     /// Durably apply a finalized block. Must be idempotent (at-least-once delivery) and
     /// must only return once the block would survive a crash — consensus acknowledges

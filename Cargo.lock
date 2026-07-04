@@ -16114,6 +16114,7 @@ dependencies = [
  "commonware-cryptography",
  "commonware-runtime",
  "futures",
+ "num",
  "semver 1.0.26",
  "tokio",
  "tracing",

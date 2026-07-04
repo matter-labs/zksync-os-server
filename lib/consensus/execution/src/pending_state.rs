@@ -100,6 +100,20 @@ impl PendingState {
         self.committed
     }
 
+    /// Supplies the committed tip's digest when it was unknown (after a restart, until
+    /// the consensus archive hands the tip block back). Never changes a known digest.
+    pub fn adopt_committed_digest(&mut self, height: u64, digest: Digest) {
+        assert_eq!(
+            height, self.committed.height,
+            "adopted digest must describe the committed tip"
+        );
+        let previous = self.committed.digest.replace(digest);
+        assert!(
+            previous.is_none_or(|known| known == digest),
+            "adopted digest contradicts the known committed digest"
+        );
+    }
+
     /// Resolves the branch a child of `parent` executes on: the overlays from the
     /// parent down to (excluding) the committed head, tip-first. `None` means this
     /// parent's state is not available (unknown digest, or already superseded).

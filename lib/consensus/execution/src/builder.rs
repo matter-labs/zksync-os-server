@@ -25,9 +25,9 @@ use tokio::time::Instant;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool, StreamOutcome};
 use zksync_os_observability::ComponentStateReporter;
-use zksync_os_sequencer::execution::FeeProvider;
 use zksync_os_sequencer::execution::block_context_provider::millis_since_epoch;
 use zksync_os_sequencer::execution::execute_block_in_vm::execute_block_in_vm;
+use zksync_os_sequencer::execution::{FeeParams, FeeProvider};
 use zksync_os_sequencer::model::blocks::{
     BlockOutputWithReads, InvalidTxPolicy, PreparedBlockCommand, SealPolicy,
 };
@@ -56,6 +56,10 @@ pub struct ParentInfo {
     /// the pool only unlists an upgrade at commit time, while building runs ahead of
     /// commits.
     pub carries_upgrade_tx: bool,
+    /// The parent's fee parameters — the base for this block's fee clamps. Building
+    /// clamps against the actual parent (not the last *finalized* block) so verifiers
+    /// can hold proposals to the exact per-block fee movement rules.
+    pub fee_params: FeeParams,
     /// Consensus digest of the parent (children's speculative state key).
     pub digest: Digest,
 }
@@ -136,7 +140,10 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
         view: V,
     ) -> anyhow::Result<BuiltBlock> {
         let block_number = parent.number + 1;
-        let fee_params = self.fee_provider.produce_fee_params().await?;
+        let fee_params = self
+            .fee_provider
+            .produce_fee_params_on(parent.fee_params)
+            .await?;
         self.pool
             .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
 

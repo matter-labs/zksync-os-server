@@ -159,6 +159,11 @@ impl Rig {
             genesis_block_hash: genesis.header_hash,
             genesis_timestamp: genesis.context.timestamp,
             genesis_protocol_version: "0.31.0".parse().expect("valid version"),
+            genesis_fee_params: zksync_os_sequencer::execution::FeeParams {
+                eip1559_basefee: genesis.context.eip1559_basefee,
+                native_price: genesis.context.native_price,
+                pubdata_price: genesis.context.pubdata_price,
+            },
         };
         let mut env = NodeExecutionEnv::new(base.clone(), anchor, 0, None, sink, applied, 0);
         let genesis_block = env.genesis_block().await;
@@ -451,4 +456,93 @@ async fn digest_is_independent_of_node_version() {
     let block = ConsensusBlock::from_record(&rig.genesis_block, record);
     let relabeled_block = ConsensusBlock::from_record(&rig.genesis_block, relabeled);
     assert_eq!(block.digest(), relabeled_block.digest());
+}
+
+/// A validator with no local L1 knowledge at all — sufficient for blocks that carry
+/// no L1-sourced inputs.
+struct NoL1Inputs;
+
+#[async_trait::async_trait]
+impl zksync_os_consensus_execution::LocalL1Inputs for NoL1Inputs {
+    async fn seen_priority_tx(
+        &self,
+        _id: zksync_os_types::L1TxSerialId,
+    ) -> (
+        Option<Arc<zksync_os_types::L1PriorityEnvelope>>,
+        Option<zksync_os_types::L1TxSerialId>,
+    ) {
+        (None, None)
+    }
+
+    async fn seen_upgrade(
+        &self,
+        _version: &zksync_os_types::ProtocolSemanticVersion,
+    ) -> Option<zksync_os_types::UpgradeInfo> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn validity_rules_run_before_re_execution() {
+    use num::rational::Ratio;
+    use zksync_os_consensus_execution::{ProposalValidation, ValidityConfig};
+
+    let mut rig = Rig::new().await;
+    // Pin the config to exactly what the rig's producer emits (fee overrides pin the
+    // fee rules; the chain constants mirror `produce_record`).
+    let validation = ProposalValidation {
+        config: Arc::new(ValidityConfig {
+            max_timestamp_skew: std::time::Duration::from_secs(3600),
+            chain_id: rig.genesis.context.chain_id,
+            fee_collector_address: alloy::primitives::Address::ZERO,
+            gas_limit: 100_000_000,
+            pubdata_limit: 100_000_000,
+            fee: zksync_os_sequencer::execution::FeeConfig {
+                native_price_usd: Ratio::from_integer(1u32.into()),
+                base_fee_override: Some(1_000_000_000u64.into()),
+                native_per_gas: 1,
+                pubdata_price_override: Some(0u64.into()),
+                pubdata_price_cap: None,
+                native_price_override: Some(1u64.into()),
+            },
+        }),
+        inputs: Arc::new(NoL1Inputs),
+    };
+    rig.env = rig.env.clone().with_validity(validation);
+
+    // An honest block sails through the rules and re-execution alike.
+    let (record, _el, _diff) = rig
+        .produce_record(
+            None,
+            rig.genesis.header_hash,
+            None,
+            rig.genesis.context.timestamp + 1,
+            vec![transfer(&rig.genesis, 0)],
+        )
+        .await;
+    let block = ConsensusBlock::from_record(&rig.genesis_block, record.clone());
+    assert!(rig.env.verify(rig.genesis_block.clone(), block).await);
+
+    // A far-future timestamp fails the rules (well before re-execution could object —
+    // the VM executes any timestamp just fine).
+    let far_future = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_secs())
+        + 2 * 3600;
+    let (mut record, _el, _diff) = rig
+        .produce_record(
+            None,
+            rig.genesis.header_hash,
+            None,
+            far_future,
+            vec![transfer(&rig.genesis, 0)],
+        )
+        .await;
+    record.block_context.timestamp = far_future;
+    let block = ConsensusBlock::from_record(&rig.genesis_block, record);
+    assert!(
+        !rig.env.verify(rig.genesis_block.clone(), block).await,
+        "a timestamp beyond the allowed skew must be rejected"
+    );
 }
