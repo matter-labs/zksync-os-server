@@ -1243,13 +1243,13 @@ async fn parallel_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()
 /// dropped tx). `LOAD_TEST_WALLETS` should stay comfortably above `PARALLEL_BLOCKS` so every lane
 /// gets at least one wallet — an empty lane stalls the round.
 ///
-/// Submission is **nonce-major**: each round sends one tx per wallet, all at the same nonce, split
-/// into JSON-RPC batches of up to `LOAD_TEST_SUBMIT_PIPELINE` txs. A batch's calls are all distinct
-/// accounts, so their (concurrent) processing order is irrelevant; and the next nonce round starts
-/// only after the current round's sends return, so each wallet's nonce n reaches its lane before its
-/// nonce n+1. This preserves per-wallet order WITHOUT relying on the node processing a batch in order
-/// (jsonrpsee dispatches batch entries concurrently) — a plain per-wallet pipeline of >1 in-flight
-/// txs reorders and gets purged `NonceTooHigh`.
+/// Submission is **per-chunk pipelined**: wallets are split into fixed chunks of up to
+/// `LOAD_TEST_SUBMIT_PIPELINE`, and each chunk runs its own independent nonce-round loop — one
+/// JSON-RPC batch per nonce, next nonce only after the current batch's sends return. A batch's
+/// calls are all distinct accounts, so their (concurrent) processing order is irrelevant, and a
+/// wallet lives in exactly one chunk, so per-wallet nonce order holds with NO global barrier
+/// (a global nonce-major barrier makes every round wait for the slowest chunk — a convoy).
+/// A plain per-wallet pipeline of >1 in-flight txs would reorder and get purged `NonceTooHigh`.
 ///
 /// Tunables: `PARALLEL_BLOCKS` (default 2), `LOAD_TEST_DURATION_SECS` (60), `LOAD_TEST_WALLETS`
 /// (128), `LOAD_TEST_CONCURRENCY` (16384), `LOAD_TEST_SUBMIT_PIPELINE` (batch size, default 1).
@@ -1294,11 +1294,18 @@ async fn effective_parallel_impl(
     config.sequencer_config.revm_consistency_checker_enabled = false;
     config.batcher_config.enabled = false;
     config.sequencer_config.block_pubdata_limit_bytes = u64::MAX;
-    // Match `direct_injection_tps`'s seal-safety knobs: a count-based seal just under the VM's
-    // NativeCycles limit, and a gas limit high enough that no block seals on `GasLimit` (which
-    // consumes-without-executing the triggering tx and would open a permanent nonce gap the lane
-    // cannot re-serve).
-    config.sequencer_config.max_transactions_in_block = 29_200;
+    // Seal-safety knobs: a count-based seal whose summed native cost stays under the VM's
+    // per-block NativeCycles limit, and a gas limit high enough that no block seals on
+    // `GasLimit` — either limit firing mid-block purges the overflowing txs
+    // (consumes-without-executing), permanently nonce-gapping their wallets (a lane cannot
+    // re-serve a purged tx). Native transfers fit ~29k per block; ERC20 transfers cost far
+    // more native cycles, so cap like the injection ERC20 bench (`ERC20_MAX_TX`). This
+    // matters since the feed became continuously pipelined: blocks fill to the count cap
+    // instead of sealing on inter-round idle gaps.
+    config.sequencer_config.max_transactions_in_block = match workload {
+        EffectiveWorkload::Eth => 29_200,
+        EffectiveWorkload::Erc20 => env_or("ERC20_MAX_TX", 1_000),
+    };
     config.sequencer_config.block_gas_limit = 1_000_000_000_000;
     config.sequencer_config.parallel_blocks = k;
     // Batch bursty RPC arrivals into larger blocks: without lingering the producer outruns ingestion
@@ -1534,26 +1541,15 @@ async fn effective_parallel_impl(
     let start = Instant::now();
     let deadline = start + duration;
 
-    // Submit "nonce-major": each round sends one tx PER WALLET, all at the SAME nonce. A batch's
-    // calls are then all distinct accounts, so their order within the batch is irrelevant (jsonrpsee
-    // dispatches batch entries concurrently) — and we only start the next nonce after the whole
-    // round's sends have returned, so every wallet's nonce n reaches its lane before its nonce n+1.
-    // This preserves per-wallet order WITHOUT relying on in-order batch processing. Within a round the
-    // wallets are split into batches of up to `submit_pipeline` txs, sent concurrently over the
-    // client pool (`round-robin`). Receipts are watched by a detached waiter per tx, permit-bounded.
-    let mut readers: Vec<corpus::CorpusReader> = paths
+    // Wallets are split into fixed chunks of up to `submit_pipeline`; each chunk pipelines its
+    // own nonce rounds independently over its (round-robin) client. Receipts are watched by a
+    // detached waiter per tx, permit-bounded, drained per chunk.
+    let readers: Vec<corpus::CorpusReader> = paths
         .iter()
         .map(|p| corpus::CorpusReader::open(p))
         .collect::<anyhow::Result<_>>()?;
-    let mut receipts = JoinSet::new();
-    let mut last_round_hashes: Vec<B256> = Vec::new();
-    let mut last_round_sent_at = start;
-    // Fully-accepted nonce rounds; used by the failure diagnostics below to tell a stalled
-    // wallet (on-chain nonce < rounds submitted => a tx was accepted but never executed) from an
-    // executed-but-receipt-invisible tx.
-    let mut rounds_submitted: u64 = 0;
     // Reads one nonce round (one tx per wallet, wallet order preserved), pre-chunked for the
-    // batch tasks so the hot round loop never re-copies raw txs — the chunks are MOVED into
+    // submit pipelines so the hot path never re-copies raw txs — the chunks are MOVED into
     // their tasks. Returns `None` once any wallet's corpus is exhausted.
     fn read_round(
         readers: &mut [corpus::CorpusReader],
@@ -1578,73 +1574,99 @@ async fn effective_parallel_impl(
         }
         Ok(Some(chunks))
     }
-    // Shard the corpus readers across threads: one thread reading every wallet's record per
-    // round caps the whole feed at ~1/record-read-time (~1M tx/s) — it became the global
-    // ceiling once everything downstream was parallelized. Each thread owns a contiguous,
-    // chunk-aligned wallet range (so concatenating group parts in order preserves wallet order)
-    // and streams its rounds' pre-built chunks through a small channel, staying a few rounds
-    // ahead of the submit barrier.
+    // Per-chunk pipelined submission. A global nonce-major barrier makes every round wait for
+    // the slowest of all chunks (measured: the barrier was ~90% of round time with ~34% of the
+    // CPU idle in its tail). Per-wallet ordering only requires a wallet's own nonce n to be
+    // accepted before its nonce n+1 — and a wallet lives in exactly ONE chunk — so each chunk
+    // pipelines its own nonce rounds independently: `chunks_total` desynchronized submit loops,
+    // no convoy, no burst/tail utilization sawtooth.
     let reader_threads: usize = env_or("LOAD_TEST_READER_THREADS", 8);
     let chunks_total = num_wallets.div_ceil(submit_pipeline);
     let chunks_per_group = chunks_total.div_ceil(reader_threads).max(1);
     let group_size = chunks_per_group * submit_pipeline;
-    let mut round_parts = Vec::new();
+    // Reader threads own contiguous, chunk-aligned wallet ranges, and route each pre-built
+    // chunk into that chunk's OWN small queue (a few rounds deep) instead of a global round
+    // assembly.
+    let mut chunk_queues: Vec<tokio::sync::mpsc::Receiver<Vec<Vec<u8>>>> =
+        Vec::with_capacity(chunks_total);
     {
         let mut readers = readers;
         while !readers.is_empty() {
             let mut group: Vec<corpus::CorpusReader> =
                 readers.drain(..group_size.min(readers.len())).collect();
-            let (part_tx, part_rx) = tokio::sync::mpsc::channel::<Vec<Vec<Vec<u8>>>>(4);
+            let group_chunks = group.len().div_ceil(submit_pipeline);
+            let mut senders = Vec::with_capacity(group_chunks);
+            for _ in 0..group_chunks {
+                let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<Vec<Vec<u8>>>(4);
+                senders.push(chunk_tx);
+                chunk_queues.push(chunk_rx);
+            }
             std::thread::spawn(move || {
                 loop {
                     match read_round(&mut group, submit_pipeline) {
                         Ok(Some(chunks)) => {
-                            if part_tx.blocking_send(chunks).is_err() {
-                                return; // main loop finished
+                            for (i, chunk) in chunks.into_iter().enumerate() {
+                                // A closed queue means its chunk task finished (deadline); the
+                                // whole group stops — every other chunk task has a few rounds
+                                // buffered and stops on its own deadline check.
+                                if senders[i].blocking_send(chunk).is_err() {
+                                    return;
+                                }
                             }
                         }
-                        // Corpus exhausted (or read error): drop the sender; the main loop
-                        // sees the closed channel and stops cleanly.
+                        // Corpus exhausted (or read error): drop the senders; the chunk tasks
+                        // see closed queues and stop cleanly.
                         Ok(None) | Err(_) => return,
                     }
                 }
             });
-            round_parts.push(part_rx);
         }
     }
-    // Round-phase decomposition: TPS == wallets / round-time, so whichever phase dominates the
-    // round is the throughput governor — assembling pre-read chunks (reader-thread starvation),
-    // spawning the batch tasks (main-task serial work), or the accept barrier (client
-    // serialization + network + server admission round-trip).
-    let mut rounds_total: u32 = 0;
-    let (mut assemble_sum, mut assemble_max) = (Duration::ZERO, Duration::ZERO);
-    let (mut spawn_sum, mut spawn_max) = (Duration::ZERO, Duration::ZERO);
-    let (mut barrier_sum, mut barrier_max) = (Duration::ZERO, Duration::ZERO);
-    'rounds: while Instant::now() < deadline {
-        // Assemble the round from the group parts, in wallet order.
-        let t_assemble = Instant::now();
-        let mut round_chunks: Vec<Vec<Vec<u8>>> = Vec::with_capacity(chunks_total);
-        for part_rx in &mut round_parts {
-            let Some(part) = part_rx.recv().await else {
-                break 'rounds; // a wallet's corpus is exhausted
-            };
-            round_chunks.extend(part);
-        }
-        let assemble_elapsed = t_assemble.elapsed();
-        let round_len: usize = round_chunks.iter().map(|chunk| chunk.len()).sum();
 
-        // Send this nonce's txs as chunked JSON-RPC batches, concurrently across the client
-        // pool. Any RPC error other than admission throttling is a real failure.
-        let sent_at = Instant::now();
-        let mut batch_tasks = JoinSet::new();
-        for (idx, chunk) in round_chunks.into_iter().enumerate() {
-            let client = clients[idx % clients.len()].clone();
-            batch_tasks.spawn(async move {
-                // Batch entries are admitted CONCURRENTLY server-side, so the throttle gate
-                // ("not accepting") can flip mid-batch and admit only part of a chunk. Resend
-                // only the rejected entries: the accepted ones are already in their lanes, and
-                // per-wallet nonce order holds because a wallet's tx either lands this round or
-                // is retried before the round barrier releases.
+    /// One chunk pipeline's result: the wallets it owns, how many FULL nonce rounds it
+    /// accepted (the per-wallet expected-nonce floor for the stall audit), round-trip stats,
+    /// and receipt-waiter failures (per-tx receipts mode). Final receipts are confirmed inside
+    /// the chunk task itself (see below), so they don't appear here.
+    struct ChunkOutcome {
+        wallet_base: usize,
+        wallet_count: usize,
+        full_rounds: u64,
+        rtt_count: u32,
+        rtt_sum: Duration,
+        rtt_max: Duration,
+        receipt_failed: u64,
+        receipt_errors: Vec<String>,
+    }
+    let mut chunk_tasks: JoinSet<anyhow::Result<ChunkOutcome>> = JoinSet::new();
+    for (chunk_index, mut queue) in chunk_queues.into_iter().enumerate() {
+        let client = clients[chunk_index % clients.len()].clone();
+        let submitted = submitted.clone();
+        let submit_latency_micros = submit_latency_micros.clone();
+        let sem = sem.clone();
+        let confirmed = confirmed.clone();
+        let latency_micros = latency_micros.clone();
+        let watcher_missed = watcher_missed.clone();
+        let final_receipts_confirmed = final_receipts_confirmed.clone();
+        let final_receipt_latency_micros = final_receipt_latency_micros.clone();
+        let root = root.clone();
+        chunk_tasks.spawn(async move {
+            let wallet_base = chunk_index * submit_pipeline;
+            let mut wallet_count = 0usize;
+            let mut full_rounds = 0u64;
+            let mut final_targets: Vec<(B256, Instant)> = Vec::new();
+            let (mut rtt_count, mut rtt_sum, mut rtt_max) = (0u32, Duration::ZERO, Duration::ZERO);
+            let mut receipts: JoinSet<anyhow::Result<()>> = JoinSet::new();
+            while Instant::now() < deadline {
+                let Some(chunk) = queue.recv().await else {
+                    break; // this chunk's corpus slice is exhausted
+                };
+                wallet_count = wallet_count.max(chunk.len());
+                let chunk_len = chunk.len();
+                let sent_at = Instant::now();
+                // One JSON-RPC batch per nonce round; on admission throttling retry only the
+                // rejected entries (accepted ones are already in their lanes, and this chunk's
+                // next round starts only after the current one fully lands — per-wallet order
+                // holds with no global coordination).
                 let mut remaining = chunk;
                 let mut accepted = Vec::with_capacity(remaining.len());
                 loop {
@@ -1667,158 +1689,181 @@ async fn effective_parallel_impl(
                             Err(e) => return Err(anyhow::Error::from(e)),
                         }
                     }
-                    // Give up on still-rejected txs only at the deadline — their wallets simply
-                    // never get a later nonce (the round loop exits), so no gap forms.
+                    // Give up on still-rejected txs only at the deadline — those wallets simply
+                    // never get a later nonce (this pipeline exits), so no gap forms.
                     if rejected.is_empty() || Instant::now() >= deadline {
-                        return anyhow::Ok(accepted);
+                        break;
                     }
                     remaining = rejected;
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
-            });
-        }
-
-        let spawn_elapsed = sent_at.elapsed();
-        let t_barrier = Instant::now();
-
-        // Barrier: every batch of this nonce must be accepted before we advance to the next nonce.
-        let mut hashes = Vec::with_capacity(round_len);
-        while let Some(res) = batch_tasks.join_next().await {
-            hashes.extend(res??);
-        }
-        let barrier_elapsed = t_barrier.elapsed();
-        rounds_total += 1;
-        assemble_sum += assemble_elapsed;
-        assemble_max = assemble_max.max(assemble_elapsed);
-        spawn_sum += spawn_elapsed;
-        spawn_max = spawn_max.max(spawn_elapsed);
-        barrier_sum += barrier_elapsed;
-        barrier_max = barrier_max.max(barrier_elapsed);
-        if hashes.is_empty() {
-            break; // deadline reached mid-round
-        }
-        submitted.fetch_add(hashes.len() as u64, Ordering::Relaxed);
-        submit_latency_micros.fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
-        if hashes.len() == num_wallets {
-            rounds_submitted += 1;
-        }
-
-        if wait_for_receipts {
-            for hash in hashes {
-                let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
-                let confirmed = confirmed.clone();
-                let latency_micros = latency_micros.clone();
-                let watcher_missed = watcher_missed.clone();
-                let root = root.clone();
-                receipts.spawn(async move {
-                    // Fast path: the provider's heartbeat watcher. At bench block rates
-                    // (1000s of newHeads/s over one ws subscription) the heartbeat drops
-                    // heads, and a watcher whose block was skipped hangs forever — so give
-                    // it a short slice and fall back to authoritative direct receipt
-                    // polling. Only the missed fraction ever polls.
-                    const WATCH_SLICE: Duration = Duration::from_secs(10);
-                    let watched = PendingTransactionBuilder::new(root.clone(), hash)
-                        .with_timeout(Some(WATCH_SLICE))
-                        .get_receipt()
-                        .await;
-                    let receipt = match watched {
-                        Ok(receipt) => receipt,
-                        Err(_) => {
-                            watcher_missed.fetch_add(1, Ordering::Relaxed);
-                            loop {
-                                let polled = root
-                                    .get_transaction_receipt(hash)
-                                    .await
-                                    .map_err(|e| {
-                                        anyhow::anyhow!("getTransactionReceipt {hash}: {e}")
-                                    })?;
-                                match polled {
-                                    Some(receipt) => break receipt,
-                                    None if sent_at.elapsed() > RECEIPT_TIMEOUT => {
-                                        anyhow::bail!(
-                                            "receipt for tx {hash} not found within timeout (direct poll)"
-                                        );
+                let rtt = sent_at.elapsed();
+                rtt_count += 1;
+                rtt_sum += rtt;
+                rtt_max = rtt_max.max(rtt);
+                if accepted.is_empty() {
+                    break; // deadline hit while fully throttled
+                }
+                submitted.fetch_add(accepted.len() as u64, Ordering::Relaxed);
+                submit_latency_micros.fetch_add(rtt.as_micros() as u64, Ordering::Relaxed);
+                if accepted.len() == chunk_len {
+                    full_rounds += 1;
+                }
+                if wait_for_receipts {
+                    for hash in accepted {
+                        let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
+                        let confirmed = confirmed.clone();
+                        let latency_micros = latency_micros.clone();
+                        let watcher_missed = watcher_missed.clone();
+                        let root = root.clone();
+                        receipts.spawn(async move {
+                            // Fast path: the provider's heartbeat watcher. At bench block
+                            // rates the ws heartbeat drops heads and a watcher whose block
+                            // was skipped hangs forever — so give it a short slice, then
+                            // fall back to authoritative direct receipt polling.
+                            const WATCH_SLICE: Duration = Duration::from_secs(10);
+                            let watched = PendingTransactionBuilder::new(root.clone(), hash)
+                                .with_timeout(Some(WATCH_SLICE))
+                                .get_receipt()
+                                .await;
+                            let receipt = match watched {
+                                Ok(receipt) => receipt,
+                                Err(_) => {
+                                    watcher_missed.fetch_add(1, Ordering::Relaxed);
+                                    loop {
+                                        let polled = root
+                                            .get_transaction_receipt(hash)
+                                            .await
+                                            .map_err(|e| {
+                                                anyhow::anyhow!(
+                                                    "getTransactionReceipt {hash}: {e}"
+                                                )
+                                            })?;
+                                        match polled {
+                                            Some(receipt) => break receipt,
+                                            None if sent_at.elapsed() > RECEIPT_TIMEOUT => {
+                                                anyhow::bail!(
+                                                    "receipt for tx {hash} not found within timeout (direct poll)"
+                                                );
+                                            }
+                                            None => {
+                                                tokio::time::sleep(Duration::from_millis(500))
+                                                    .await
+                                            }
+                                        }
                                     }
-                                    None => tokio::time::sleep(Duration::from_millis(500)).await,
                                 }
-                            }
-                        }
-                    };
-                    drop(permit);
+                            };
+                            drop(permit);
+                            anyhow::ensure!(
+                                receipt.status(),
+                                "transaction reverted: {:?}",
+                                receipt.transaction_hash()
+                            );
+                            confirmed.fetch_add(1, Ordering::Relaxed);
+                            latency_micros.fetch_add(
+                                sent_at.elapsed().as_micros() as u64,
+                                Ordering::Relaxed,
+                            );
+                            anyhow::Ok(())
+                        });
+                    }
+                } else if wait_for_final_receipts {
+                    final_targets = accepted.iter().map(|hash| (*hash, sent_at)).collect();
+                }
+            }
+            // Release this chunk's queue so its reader group can wind down.
+            drop(queue);
+            // Confirm this chunk's final round NOW, while its receipts are guaranteed within
+            // the repository retention window: chunks finish at different times, and waiting
+            // for the global end would let an early finisher's receipts get pruned while
+            // later chunks keep producing blocks. Per-wallet nonce ordering makes the final
+            // receipt prove the wallet's whole chain executed.
+            if wait_for_final_receipts {
+                for (hash, sent_at) in final_targets.drain(..) {
+                    let receipt = PendingTransactionBuilder::new(root.clone(), hash)
+                        .with_timeout(Some(RECEIPT_TIMEOUT))
+                        .get_receipt()
+                        .await?;
                     anyhow::ensure!(
                         receipt.status(),
                         "transaction reverted: {:?}",
                         receipt.transaction_hash()
                     );
-                    confirmed.fetch_add(1, Ordering::Relaxed);
-                    latency_micros
+                    final_receipts_confirmed.fetch_add(1, Ordering::Relaxed);
+                    final_receipt_latency_micros
                         .fetch_add(sent_at.elapsed().as_micros() as u64, Ordering::Relaxed);
-                    anyhow::Ok(())
-                });
+                }
             }
-        } else if wait_for_final_receipts {
-            last_round_hashes = hashes;
-            last_round_sent_at = sent_at;
-        }
+            // Drain this chunk's receipt waiters (per-tx receipts mode).
+            let mut receipt_failed = 0u64;
+            let mut receipt_errors: Vec<String> = Vec::new();
+            while let Some(res) = receipts.join_next().await {
+                if let Err(e) = res? {
+                    receipt_failed += 1;
+                    if receipt_errors.len() < 2 {
+                        receipt_errors.push(e.to_string());
+                    }
+                }
+            }
+            anyhow::Ok(ChunkOutcome {
+                wallet_base,
+                wallet_count,
+                full_rounds,
+                rtt_count,
+                rtt_sum,
+                rtt_max,
+                receipt_failed,
+                receipt_errors,
+            })
+        });
     }
 
-    // In final-receipts mode, confirm the last submitted nonce round landed (proxy for the run).
-    if wait_for_final_receipts {
-        for hash in last_round_hashes {
-            let receipt = PendingTransactionBuilder::new(root.clone(), hash)
-                .with_timeout(Some(RECEIPT_TIMEOUT))
-                .get_receipt()
-                .await?;
-            anyhow::ensure!(
-                receipt.status(),
-                "transaction reverted: {:?}",
-                receipt.transaction_hash()
-            );
-            final_receipts_confirmed.fetch_add(1, Ordering::Relaxed);
-            final_receipt_latency_micros.fetch_add(
-                last_round_sent_at.elapsed().as_micros() as u64,
-                Ordering::Relaxed,
-            );
-        }
-    }
-    // Drain receipt waiters, collecting failures instead of aborting on the first: a single lost
-    // tx breaks its wallet's whole nonce chain, and the aggregate + per-wallet audit below is far
-    // more diagnostic than one opaque timeout.
+    // Join every chunk pipeline and aggregate outcomes.
+    let mut expected_per_wallet = vec![0u64; num_wallets];
     let mut receipt_failed = 0u64;
     let mut receipt_errors: Vec<String> = Vec::new();
-    while let Some(res) = receipts.join_next().await {
-        if let Err(e) = res? {
-            receipt_failed += 1;
-            if receipt_errors.len() < 8 {
-                receipt_errors.push(e.to_string());
-            }
+    let mut chunk_rounds_total: u64 = 0;
+    let (mut rtt_sum_total, mut rtt_max_total) = (Duration::ZERO, Duration::ZERO);
+    while let Some(res) = chunk_tasks.join_next().await {
+        let outcome = res??;
+        let end = (outcome.wallet_base + outcome.wallet_count).min(num_wallets);
+        for wallet in outcome.wallet_base..end {
+            expected_per_wallet[wallet] = outcome.full_rounds;
         }
+        receipt_failed += outcome.receipt_failed;
+        if receipt_errors.len() < 8 {
+            receipt_errors.extend(outcome.receipt_errors);
+        }
+        chunk_rounds_total += outcome.rtt_count as u64;
+        rtt_sum_total += outcome.rtt_sum;
+        rtt_max_total = rtt_max_total.max(outcome.rtt_max);
     }
     if receipt_failed > 0 {
         // Tell apart "accepted but never executed" (sequencer-side loss: the wallet's on-chain
-        // nonce stalls below the rounds submitted) from "executed but receipt not visible"
-        // (API-side: nonces all advanced). A stalled wallet's first missing nonce is its current
-        // on-chain nonce; the node-side purge WARN log identifies the VM error for that tx.
+        // nonce stalls below its chunk's accepted rounds) from "executed but receipt not
+        // visible" (API-side: nonces all advanced). A stalled wallet's first missing nonce is
+        // its current on-chain nonce; the node-side purge WARN log identifies the VM error.
         let mut stalled = 0usize;
         for (i, signer) in signers.iter().enumerate() {
             let nonce = receipt_provider
                 .get_transaction_count(signer.address())
                 .await?;
-            if nonce < rounds_submitted {
+            if nonce < expected_per_wallet[i] {
                 stalled += 1;
                 if stalled <= 16 {
                     tracing::error!(
                         wallet = i,
                         address = %signer.address(),
                         on_chain_nonce = nonce,
-                        rounds_submitted,
+                        expected = expected_per_wallet[i],
                         "wallet nonce chain stalled: its tx at nonce `on_chain_nonce` was accepted but never executed"
                     );
                 }
             }
         }
         anyhow::bail!(
-            "{receipt_failed} receipt waits failed; {stalled} of {num_wallets} wallets have stalled nonce chains (rounds_submitted={rounds_submitted}); first errors: {receipt_errors:#?}"
+            "{receipt_failed} receipt waits failed; {stalled} of {num_wallets} wallets have stalled nonce chains; first errors: {receipt_errors:#?}"
         );
     }
 
@@ -1894,17 +1939,13 @@ async fn effective_parallel_impl(
         ?avg_final_receipt_latency,
         "parallel effective load test complete"
     );
-    if rounds_total > 0 {
-        let n = rounds_total;
+    if chunk_rounds_total > 0 {
         tracing::error!(
-            rounds = n,
-            avg_assemble = ?(assemble_sum / n),
-            max_assemble = ?assemble_max,
-            avg_spawn = ?(spawn_sum / n),
-            max_spawn = ?spawn_max,
-            avg_barrier = ?(barrier_sum / n),
-            max_barrier = ?barrier_max,
-            "round-phase profile"
+            chunks = chunks_total,
+            chunk_rounds = chunk_rounds_total,
+            avg_chunk_rtt = ?(rtt_sum_total / chunk_rounds_total as u32),
+            max_chunk_rtt = ?rtt_max_total,
+            "chunk-pipeline profile"
         );
     }
 
