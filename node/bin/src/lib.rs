@@ -779,6 +779,24 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // block executor (pacing workaround) or by the consensus environment (commit acks).
     let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
 
+    // Rollback guard: running single-sequencer on a chain that has consensus state
+    // strands that state, and a later re-enable could mix two consensus histories.
+    // Refuse unless the operator acknowledged a deliberate rollback (which never
+    // deletes anything — the write-ahead log is valid either way, and the consensus
+    // state stays on disk).
+    if !config.consensus_config.enabled {
+        let engine_dir = config.general_config.rocks_db_path.join("consensus");
+        let has_consensus_state = std::fs::read_dir(&engine_dir)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+        if has_consensus_state && !config.consensus_config.acknowledge_rollback {
+            panic!(
+                "this chain has consensus state ({}) but consensus is disabled. If this                  rollback to single-sequencer operation is deliberate, set                  `consensus.acknowledge_rollback: true`; the consensus state is left untouched",
+                engine_dir.display(),
+            );
+        }
+    }
+
     // In consensus mode the mempool and fee sourcing drive the consensus block builder;
     // otherwise they drive the local block production loop.
     // TODO(consensus): with no local production loop there is no "block under
@@ -818,20 +836,36 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             },
         );
 
+        // The consensus anchor: the block the consensus genesis stands for — the
+        // chain's real genesis on a fresh chain (height 0), the agreed cutover block
+        // on a chain migrated from single-sequencer operation. Everything the first
+        // consensus block is verified against comes from the anchored block's own
+        // record.
+        let anchor_height = config.consensus_config.genesis_height;
+        let anchor_record = block_replay_storage
+            .get_replay_record(anchor_height)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the write-ahead log has no record at the consensus genesis height                      {anchor_height} — this node is missing history up to the agreed anchor"
+                )
+            });
         let genesis_state = genesis.state().await;
-        let genesis_record = block_replay_storage
-            .get_replay_record(0)
-            .expect("write-ahead log must contain the genesis record");
-        let anchor = zksync_os_consensus_execution::ChainAnchor {
-            genesis_block_hash: genesis_state.header.hash(),
-            genesis_timestamp: genesis_state.context.timestamp,
-            genesis_fee_params: zksync_os_sequencer::execution::FeeParams {
-                eip1559_basefee: genesis_record.block_context.eip1559_basefee,
-                native_price: genesis_record.block_context.native_price,
-                pubdata_price: genesis_record.block_context.pubdata_price,
-            },
-            genesis_protocol_version: genesis_record.protocol_version,
+        let anchor_el_hash = if anchor_height == 0 {
+            genesis_state.header.hash()
+        } else {
+            repositories
+                .get_block_by_number(anchor_height)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "repositories have no block at the consensus genesis height                          {anchor_height} — this node is missing history up to the agreed anchor"
+                    )
+                })
+                .hash()
         };
+        let anchor =
+            zksync_os_consensus_execution::ChainAnchor::from_record(&anchor_record, anchor_el_hash);
         let committed_height = block_replay_storage.latest_record();
         let committed_el_hash = repositories
             .get_block_by_number(committed_height)
@@ -863,6 +897,70 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             )
             .expect("failed to open the finality store"),
         );
+
+        // The consensus-era guards. The era is the consensus genesis digest (anchor
+        // height + anchored block hash): recorded at the first consensus start,
+        // checked on every later one, so that a mis-configured anchor — or a
+        // re-migration over stale engine state after a rollback — fails startup
+        // instead of mixing two consensus histories.
+        {
+            use commonware_cryptography::Digestible as _;
+            let genesis_digest = zksync_os_wire::ConsensusBlock::genesis_at(
+                anchor.genesis_height,
+                anchor.genesis_block_hash,
+            )
+            .digest();
+            let era: [u8; 32] = genesis_digest.as_ref().try_into().expect("32-byte digest");
+            let engine_dir = config.general_config.rocks_db_path.join("consensus");
+            let engine_state_is_fresh = std::fs::read_dir(&engine_dir)
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(true);
+            match finality_store
+                .consensus_era()
+                .expect("failed to read the consensus era")
+            {
+                Some(recorded) if recorded == era => {}
+                Some(_) if engine_state_is_fresh => {
+                    // The engine state was deliberately cleared: a re-migration (the
+                    // rollback-then-migrate-again procedure). Adopt the new era.
+                    tracing::warn!(
+                        anchor_height,
+                        "consensus era changed over cleared engine state — starting a new                          consensus era at the configured anchor"
+                    );
+                    assert_eq!(
+                        committed_height, anchor_height,
+                        "a new consensus era must start exactly at the agreed cutover: the                          write-ahead log ends at {committed_height} but `consensus.genesis_height`                          is {anchor_height}",
+                    );
+                    finality_store
+                        .record_consensus_era(era)
+                        .expect("failed to record the consensus era");
+                }
+                Some(_) => panic!(
+                    "this chain previously ran consensus with a different anchor than                      `consensus.genesis_height` = {anchor_height} derives. If this is a deliberate                      re-migration after a rollback, clear the consensus engine state ({}) and                      restart; otherwise fix the configured genesis height",
+                    engine_dir.display(),
+                ),
+                None if engine_state_is_fresh => {
+                    // The first consensus start of this chain: it must happen exactly
+                    // at the agreed cutover — a write-ahead log that already ran past
+                    // the anchor means the committee's agreed anchor is stale.
+                    assert_eq!(
+                        committed_height, anchor_height,
+                        "the first consensus start must happen exactly at the agreed cutover:                          the write-ahead log ends at {committed_height} but                          `consensus.genesis_height` is {anchor_height}",
+                    );
+                    finality_store
+                        .record_consensus_era(era)
+                        .expect("failed to record the consensus era");
+                }
+                None => {
+                    // A consensus instance from before era tracking existed: adopt its
+                    // era as this one (the anchor still derives it — a mismatch would
+                    // have broken consensus itself long before this check).
+                    finality_store
+                        .record_consensus_era(era)
+                        .expect("failed to record the consensus era");
+                }
+            }
+        }
 
         let (committed_payload_sender, committed_payload_receiver) = tokio::sync::mpsc::channel(1);
         let env = zksync_os_consensus_execution::NodeExecutionEnv::new(

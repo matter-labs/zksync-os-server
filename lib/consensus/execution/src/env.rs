@@ -37,18 +37,62 @@ use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProtocolSemanticVersion, ZkEnvelope};
 use zksync_os_wire::ConsensusBlock;
 
-/// Chain-level constants the environment needs to anchor the chain root.
+/// What the consensus genesis block stands for: the chain state consensus builds on
+/// top of. For a fresh chain that is the chain's real genesis (height 0); for a
+/// chain migrated from single-sequencer operation it is the tip at the agreed
+/// cutover height. Either way, every field comes from the anchored block's own
+/// replay record — the committee-agreed ground truth the first consensus block is
+/// verified against.
 #[derive(Debug, Clone)]
 pub struct ChainAnchor {
-    /// Hash of the genesis block header.
+    /// Height consensus is anchored at: the first consensus-decided block is
+    /// `genesis_height + 1`.
+    pub genesis_height: u64,
+    /// Execution-layer hash of the anchored block.
     pub genesis_block_hash: alloy::primitives::B256,
-    /// Timestamp of the genesis block.
+    /// Timestamp of the anchored block.
     pub genesis_timestamp: u64,
-    /// Protocol version the chain starts at.
+    /// Protocol version at the anchor.
     pub genesis_protocol_version: ProtocolSemanticVersion,
-    /// Fee parameters of the genesis block — the base of the per-block fee clamps for
-    /// the first block built on it.
+    /// Fee parameters of the anchored block — the base of the per-block fee clamps
+    /// for the first block built on it.
     pub genesis_fee_params: FeeParams,
+    /// L1-input cursors as of *after* the anchored block: where the first consensus
+    /// block must continue consuming L1 inputs from.
+    pub genesis_next_cursors: zksync_os_types::BlockStartCursors,
+    /// The block-hash ring the anchored block executed with (its own context ring,
+    /// not including its own hash) — the base of the ring-continuity check for the
+    /// first consensus block. All zeros for a fresh chain.
+    pub genesis_block_hashes: BlockHashes,
+    /// Whether the anchored block carries a protocol-upgrade transaction (the
+    /// builder's re-offer discrimination needs this about any parent, the anchor
+    /// included).
+    pub genesis_carries_upgrade_tx: bool,
+}
+
+impl ChainAnchor {
+    /// Builds the anchor from the anchored block's replay record and its
+    /// execution-layer hash — the one constructor both fresh chains (record 0) and
+    /// migrated chains (record at the cutover height) go through.
+    pub fn from_record(record: &ReplayRecord, el_hash: alloy::primitives::B256) -> Self {
+        Self {
+            genesis_height: record.block_context.block_number,
+            genesis_block_hash: el_hash,
+            genesis_timestamp: record.block_context.timestamp,
+            genesis_protocol_version: record.protocol_version.clone(),
+            genesis_fee_params: FeeParams {
+                eip1559_basefee: record.block_context.eip1559_basefee,
+                native_price: record.block_context.native_price,
+                pubdata_price: record.block_context.pubdata_price,
+            },
+            genesis_next_cursors: derive_next_cursors(record),
+            genesis_block_hashes: record.block_context.block_hashes,
+            genesis_carries_upgrade_tx: record
+                .transactions
+                .iter()
+                .any(|tx| matches!(tx.envelope(), ZkEnvelope::Upgrade(_))),
+        }
+    }
 }
 
 /// A self-contained read view of the node state at a fixed block height.
@@ -168,9 +212,9 @@ where
         applied: watch::Receiver<Option<u64>>,
         interop_roots_per_block: u64,
     ) -> Self {
-        let genesis = ConsensusBlock::genesis(anchor.genesis_block_hash);
-        let committed_el_hash =
-            committed_el_hash.or((committed_height == 0).then_some(anchor.genesis_block_hash));
+        let genesis = ConsensusBlock::genesis_at(anchor.genesis_height, anchor.genesis_block_hash);
+        let committed_el_hash = committed_el_hash
+            .or((committed_height == anchor.genesis_height).then_some(anchor.genesis_block_hash));
         let committed = CommittedHead {
             height: committed_height,
             // Consensus digests are not persisted in the node's storage; after a
@@ -179,7 +223,7 @@ where
             // `adopt_committed_block`). Until then — or if the archive lost it —
             // parents at the committed height are matched by height alone (consensus
             // has already validated their ancestry).
-            digest: (committed_height == 0).then(|| genesis.digest()),
+            digest: (committed_height == anchor.genesis_height).then(|| genesis.digest()),
         };
         Self {
             base,
@@ -243,13 +287,13 @@ where
             // The genesis block: everything comes from the chain anchor.
             None => {
                 return Some(ParentInfo {
-                    number: 0,
+                    number: self.anchor.genesis_height,
                     timestamp: self.anchor.genesis_timestamp,
                     el_hash: self.anchor.genesis_block_hash,
-                    block_hashes: BlockHashes::default(),
+                    block_hashes: self.anchor.genesis_block_hashes,
                     protocol_version: self.anchor.genesis_protocol_version.clone(),
-                    next_cursors: Default::default(),
-                    carries_upgrade_tx: false,
+                    next_cursors: self.anchor.genesis_next_cursors.clone(),
+                    carries_upgrade_tx: self.anchor.genesis_carries_upgrade_tx,
                     fee_params: self.anchor.genesis_fee_params,
                     digest: parent.digest(),
                 });
@@ -322,18 +366,23 @@ where
                 }
             }
             None => {
-                // Parent is the genesis block.
-                if context.block_number != 1 {
+                // Parent is the genesis block — which stands for the anchored block
+                // (the chain's real genesis, or the pre-consensus tip after a
+                // migration); its record-derived facts live in the chain anchor.
+                if context.block_number != self.anchor.genesis_height + 1 {
                     return Err(format!(
-                        "block number {} does not follow genesis",
-                        context.block_number
+                        "block number {} does not follow the consensus genesis at {}",
+                        context.block_number, self.anchor.genesis_height
                     ));
                 }
                 if record.previous_block_timestamp != self.anchor.genesis_timestamp {
                     return Err(format!(
-                        "declared previous timestamp {} does not match genesis timestamp {}",
+                        "declared previous timestamp {} does not match the genesis timestamp {}",
                         record.previous_block_timestamp, self.anchor.genesis_timestamp
                     ));
+                }
+                if self.anchor.genesis_block_hashes.0[1..] != context.block_hashes.0[..255] {
+                    return Err("block-hash ring does not extend the anchored block's".to_string());
                 }
                 let expected =
                     alloy::primitives::U256::from_be_bytes(self.anchor.genesis_block_hash.0);
@@ -480,7 +529,7 @@ where
                 None => ParentView {
                     timestamp: self.anchor.genesis_timestamp,
                     protocol_version: self.anchor.genesis_protocol_version.clone(),
-                    next_cursors: Default::default(),
+                    next_cursors: self.anchor.genesis_next_cursors.clone(),
                     fee_params: self.anchor.genesis_fee_params,
                 },
             };

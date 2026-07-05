@@ -106,7 +106,16 @@ pub struct RealStfExecution {
 struct Inner {
     genesis: Arc<SharedGenesis>,
     genesis_block: StfBlock,
-    /// The committed chain and the state layer at its tip.
+    /// Height the chain is anchored at: 0 when consensus runs from the true genesis,
+    /// the cutover height when it took over pre-existing history. The pre-history
+    /// itself lives in `committed_layer` (the state at the anchor) — blocks below
+    /// the anchor are never consensus's business.
+    anchor_height: u64,
+    /// State at the anchor — what the genesis block stands for. `None` when the
+    /// anchor is the true genesis state itself.
+    anchor_layer: Option<Arc<StateLayer>>,
+    /// The committed consensus-era chain (entry `i` has height `anchor_height+i+1`)
+    /// and the state layer at the overall tip.
     committed: Vec<StfBlock>,
     committed_layer: Option<Arc<StateLayer>>,
     /// State layers of blocks consensus is still deciding on, keyed by block digest.
@@ -132,12 +141,48 @@ impl RealStfExecution {
             inner: Arc::new(Mutex::new(Inner {
                 genesis,
                 genesis_block,
+                anchor_height: 0,
+                anchor_layer: None,
                 committed: Vec::new(),
                 committed_layer: None,
                 pending: HashMap::new(),
                 sender,
             })),
         }
+    }
+
+    /// A chain with `pre_blocks` blocks of real pre-consensus history: the same
+    /// one-transfer-per-block schedule the consensus-era builder produces, executed
+    /// directly (no consensus involved — this *is* the single-sequencer era), with
+    /// consensus then anchored at the resulting tip. Transfer amounts encode
+    /// absolute heights, so the recipient-balance formula spans both eras — a
+    /// balance check after migration proves the pre-history carried over.
+    pub fn anchored(pre_blocks: u64) -> Self {
+        let this = Self::new();
+        {
+            let mut inner = this.inner.lock().unwrap();
+            let mut layer = None;
+            let mut tip = (0, inner.genesis.header_hash);
+            for height in 1..=pre_blocks {
+                let timestamp = inner.genesis.context.timestamp + height;
+                let transfer = make_transfer(
+                    &inner.sender,
+                    inner.genesis.context.chain_id,
+                    height - 1,
+                    height,
+                );
+                let (output, next_layer) = inner
+                    .execute(&layer, timestamp, std::slice::from_ref(&transfer))
+                    .expect("pre-consensus history must execute");
+                tip = (timestamp, output.header.hash());
+                layer = Some(next_layer);
+            }
+            inner.genesis_block = StfBlock::anchor(pre_blocks, tip.0, tip.1);
+            inner.anchor_height = pre_blocks;
+            inner.anchor_layer = layer.clone();
+            inner.committed_layer = layer;
+        }
+        this
     }
 
     /// Balance of `address` in the committed state (test probe).
@@ -167,7 +212,9 @@ impl Inner {
     /// pending candidates, or the genesis itself.
     fn layer_for_parent(&self, parent: &StfBlock) -> Option<Option<Arc<StateLayer>>> {
         if parent.digest() == self.genesis_block.digest() {
-            return Some(None);
+            // The genesis block stands for the anchor state: the true genesis for a
+            // fresh chain, the pre-consensus tip for a migrated one.
+            return Some(self.anchor_layer.clone());
         }
         if let Some(layer) = self.pending.get(&parent.digest()) {
             return Some(Some(layer.clone()));
@@ -363,19 +410,22 @@ impl ExecutionEnv for RealStfExecution {
 
     async fn committed_height(&mut self) -> Option<Height> {
         let inner = self.inner.lock().unwrap();
-        inner
-            .committed
-            .last()
-            .map(|block| Height::new(block.height_u64()))
+        let tip = inner.anchor_height + inner.committed.len() as u64;
+        (tip > 0).then(|| Height::new(tip))
     }
 
     async fn commit(&mut self, block: StfBlock) {
         let mut inner = self.inner.lock().unwrap();
-        let next_height = inner.committed.len() as u64 + 1;
         let height = block.height_u64();
+        assert!(
+            height > inner.anchor_height,
+            "consensus committed height {height} at or below the anchor {}",
+            inner.anchor_height,
+        );
+        let next_height = inner.anchor_height + inner.committed.len() as u64 + 1;
         if height < next_height {
             // At-least-once delivery after restarts: the same block may arrive again.
-            let existing = inner.committed[(height - 1) as usize].digest();
+            let existing = inner.committed[(height - inner.anchor_height - 1) as usize].digest();
             assert_eq!(
                 existing,
                 block.digest(),
@@ -420,7 +470,8 @@ impl ExecutionEnv for RealStfExecution {
 impl SimEnv for RealStfExecution {
     fn committed_tip(&self) -> Option<u64> {
         let inner = self.inner.lock().unwrap();
-        inner.committed.last().map(|block| block.height_u64())
+        let tip = inner.anchor_height + inner.committed.len() as u64;
+        (tip > 0).then_some(tip)
     }
 
     fn committed_chain_digests(&self) -> Vec<Digest> {

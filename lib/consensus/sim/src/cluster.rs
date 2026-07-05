@@ -127,11 +127,27 @@ where
     /// brings one up later. This models a validator that is part of the committee from
     /// genesis but deploys long after the chain started — the late-join case.
     pub async fn start_with_env_stopped(
+        context: deterministic::Context,
+        behaviors: &[Behavior],
+        link: Link,
+        env_factory: impl Fn(usize, deterministic::Context) -> X,
+        stopped: &[usize],
+    ) -> Self {
+        Self::start_era(context, behaviors, link, env_factory, stopped, "validator").await
+    }
+
+    /// The fullest constructor: `storage_prefix` namespaces every validator's
+    /// journals and archives within the run's shared in-memory storage. Scenarios
+    /// that start a *second* cluster in one run (the re-migration shape: a new
+    /// consensus era on deliberately fresh state) pass a distinct prefix — reusing
+    /// the default would silently reopen the first era's storage.
+    pub async fn start_era(
         mut context: deterministic::Context,
         behaviors: &[Behavior],
         link: Link,
         env_factory: impl Fn(usize, deterministic::Context) -> X,
         stopped: &[usize],
+        storage_prefix: &str,
     ) -> Self {
         let Fixture {
             participants,
@@ -168,7 +184,7 @@ where
                 scheme: schemes[index].clone(),
                 // Stable across restarts: a restarted validator must find its own vote
                 // journal (double-sign protection) and archives under the same prefix.
-                partition_prefix: format!("validator-{index}"),
+                partition_prefix: format!("{storage_prefix}-{index}"),
                 incarnation: 0,
             };
             if !stopped.contains(&index) {

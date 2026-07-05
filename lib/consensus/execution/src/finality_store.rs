@@ -56,6 +56,7 @@ impl NamedColumnFamily for FinalityCF {
 
 const WATERMARK_KEY: &[u8] = b"certified_watermark";
 const OBSERVED_ROUND_KEY: &[u8] = b"highest_observed_round";
+const ERA_KEY: &[u8] = b"consensus_era";
 
 pub struct FinalityStore {
     db: RocksDB<FinalityCF>,
@@ -115,6 +116,29 @@ impl FinalityStore {
         batch.put_cf(FinalityCF::HeightIndex, &height.to_be_bytes(), &digest);
         self.db.write(batch)?;
         self.advance_watermark()
+    }
+
+    /// The consensus era this chain runs: the digest of the consensus genesis block
+    /// (which commits to the anchor height and the anchored block's hash). Written at
+    /// the first consensus start; startup refuses to proceed when the configured
+    /// anchor derives a different digest over non-fresh consensus state — mixing
+    /// consensus eras (e.g. re-migrating after a rollback without clearing the old
+    /// era's engine state) must be impossible to do by accident.
+    pub fn consensus_era(&self) -> anyhow::Result<Option<[u8; 32]>> {
+        let Some(bytes) = self.db.get_cf(FinalityCF::Meta, ERA_KEY)? else {
+            return Ok(None);
+        };
+        bytes
+            .try_into()
+            .map(Some)
+            .map_err(|_| anyhow::anyhow!("stored consensus era is not a 32-byte digest"))
+    }
+
+    pub fn record_consensus_era(&self, genesis_digest: [u8; 32]) -> anyhow::Result<()> {
+        let mut batch = self.db.new_write_batch();
+        batch.put_cf(FinalityCF::Meta, ERA_KEY, &genesis_digest);
+        self.db.write(batch)?;
+        Ok(())
     }
 
     /// Records the highest consensus round this validator has *seen* — an upper

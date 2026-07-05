@@ -688,6 +688,21 @@ pub struct ConsensusConfig {
     /// Allow validator connections to private IPs (local and containerized networks).
     #[config(default_t = false)]
     pub allow_private_ips: bool,
+    /// The block height consensus is anchored at: 0 for a chain that runs consensus
+    /// from its genesis, the agreed cutover height for a chain migrated from
+    /// single-sequencer operation. A committee-wide constant: every validator must
+    /// name the same height, and the first consensus start must happen with the
+    /// write-ahead log ending exactly there (the guard refuses otherwise). The first
+    /// consensus-decided block is `genesis_height + 1`.
+    #[config(default_t = 0)]
+    pub genesis_height: u64,
+    /// Single-sequencer operation refuses to start on a chain that has previously
+    /// run consensus — its consensus state would silently go stale, and a later
+    /// re-enable could mix eras. Setting this acknowledges a deliberate rollback:
+    /// the node runs single-sequencer from the same write-ahead log (which only ever
+    /// contains finalized blocks) and consensus state is left untouched on disk.
+    #[config(default_t = false)]
+    pub acknowledge_rollback: bool,
     /// The committee protocol version, carried in the network's domain-separation
     /// namespaces (p2p handshake and vote signing). A committee-wide fact:
     /// validators on different protocol versions must fail to pair — loudly, at the

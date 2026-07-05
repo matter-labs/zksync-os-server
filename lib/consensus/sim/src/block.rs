@@ -27,6 +27,15 @@ impl SimBlock {
         Self::assemble(0, Sha256::hash(b"sim-genesis-parent"), 0)
     }
 
+    /// A genesis block anchored at `height` — the migration shape: consensus takes
+    /// over a chain that already has `height` blocks of pre-consensus history, and
+    /// this block *stands for* that history's tip. Every validator derives the
+    /// identical anchor from the agreed height, exactly like the real node derives
+    /// it from the agreed cutover block.
+    pub fn anchor(height: u64) -> Self {
+        Self::assemble(height, Sha256::hash(b"sim-anchor-parent"), height)
+    }
+
     /// A child block on top of `parent`, with `seed` standing in for its content.
     pub fn child_of(parent: &SimBlock, seed: u64) -> Self {
         Self::assemble(parent.height + 1, parent.digest(), seed)

@@ -35,7 +35,12 @@ pub struct MockExecution {
 
 #[derive(Default)]
 struct Inner {
-    /// The committed chain, starting at height 1 (genesis is implicit at height 0).
+    /// Height the chain is anchored at: 0 for a chain that runs consensus from its
+    /// genesis, the cutover height for a chain migrated from pre-consensus history
+    /// (which this mock summarizes as just the anchor — content-free, like the rest
+    /// of it).
+    anchor_height: u64,
+    /// The committed consensus-era chain: entry `i` has height `anchor_height + i + 1`.
     committed: Vec<SimBlock>,
 }
 
@@ -44,18 +49,29 @@ impl MockExecution {
         Self::default()
     }
 
+    /// A chain with `anchor_height` blocks of pre-consensus history; consensus starts
+    /// at `anchor_height + 1` on top of the anchored genesis.
+    pub fn anchored(anchor_height: u64) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                anchor_height,
+                committed: Vec::new(),
+            })),
+        }
+    }
+
     /// The committed chain so far (test probe).
     pub fn committed_chain(&self) -> Vec<SimBlock> {
         self.inner.lock().unwrap().committed.clone()
     }
 
-    /// Height of the last committed block, if any (test probe).
+    /// Height of the last committed block — the anchor height counts as committed
+    /// (pre-consensus history is durable by definition). `None` only for a fresh
+    /// unanchored chain (test probe).
     pub fn committed_tip(&self) -> Option<u64> {
         let inner = self.inner.lock().unwrap();
-        inner.committed.last().map(|block| {
-            use commonware_consensus::Heightable;
-            block.height().get()
-        })
+        let tip = inner.anchor_height + inner.committed.len() as u64;
+        (tip > 0).then_some(tip)
     }
 }
 
@@ -76,7 +92,12 @@ impl ExecutionEnv for MockExecution {
     type Block = SimBlock;
 
     async fn genesis_block(&mut self) -> SimBlock {
-        SimBlock::genesis()
+        let anchor_height = self.inner.lock().unwrap().anchor_height;
+        if anchor_height == 0 {
+            SimBlock::genesis()
+        } else {
+            SimBlock::anchor(anchor_height)
+        }
     }
 
     async fn build(&mut self, parent: SimBlock, context: BuildContext) -> Option<SimBlock> {
@@ -101,14 +122,19 @@ impl ExecutionEnv for MockExecution {
     async fn commit(&mut self, block: SimBlock) {
         use commonware_consensus::Heightable;
         let mut inner = self.inner.lock().unwrap();
-        let next_height = inner.committed.len() as u64 + 1;
         let height = block.height().get();
+        assert!(
+            height > inner.anchor_height,
+            "consensus committed height {height} at or below the anchor {}",
+            inner.anchor_height,
+        );
+        let next_height = inner.anchor_height + inner.committed.len() as u64 + 1;
         if height < next_height {
             // At-least-once delivery: after a restart, consensus replays blocks the node
             // already has. They must be the *same* blocks — a mismatch here would mean
             // two conflicting blocks were finalized at one height, the one thing BFT
             // consensus exists to prevent.
-            let existing = &inner.committed[(height - 1) as usize];
+            let existing = &inner.committed[(height - inner.anchor_height - 1) as usize];
             assert_eq!(
                 existing, &block,
                 "re-committed block at height {height} differs from the committed one"

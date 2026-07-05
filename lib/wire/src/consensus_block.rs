@@ -51,7 +51,17 @@ impl ConsensusBlock {
     /// The chain root, derived from the genesis block hash so that chains with
     /// different genesis states get different consensus identities.
     pub fn genesis(genesis_block_hash: alloy::primitives::B256) -> Self {
-        Self::from_parts(0, Digest::from(genesis_block_hash.0), None)
+        Self::genesis_at(0, genesis_block_hash)
+    }
+
+    /// A chain root anchored at `height` — the migration shape: consensus takes over
+    /// an existing chain, and its genesis block *stands for* that chain's tip at the
+    /// agreed cutover height. Height 0 is the ordinary fresh-chain genesis. The
+    /// digest commits to both the height and the anchored block's hash, so two
+    /// migrations of the same chain at different heights are different consensus
+    /// identities.
+    pub fn genesis_at(height: u64, anchored_block_hash: alloy::primitives::B256) -> Self {
+        Self::from_parts(height, Digest::from(anchored_block_hash.0), None)
     }
 
     /// Envelope a produced/replayed record as the child of `parent`.

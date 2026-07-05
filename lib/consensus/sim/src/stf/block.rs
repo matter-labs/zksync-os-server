@@ -48,6 +48,21 @@ impl StfBlock {
         )
     }
 
+    /// A chain root anchored at `height` — the migration shape: this block stands for
+    /// the tip of `height` blocks of pre-consensus history, identified by that tip's
+    /// real execution-layer header hash. Every validator derives the identical anchor
+    /// from the agreed (height, hash) pair.
+    pub fn anchor(height: u64, timestamp: u64, tip_header_hash: B256) -> Self {
+        Self::assemble(
+            height,
+            Sha256::hash(b"stf-anchor-parent"),
+            timestamp,
+            Vec::new(),
+            tip_header_hash,
+            B256::ZERO,
+        )
+    }
+
     pub fn assemble(
         height: u64,
         parent: Digest,

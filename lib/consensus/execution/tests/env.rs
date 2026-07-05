@@ -164,9 +164,13 @@ impl Rig {
         });
 
         let anchor = ChainAnchor {
+            genesis_height: 0,
             genesis_block_hash: genesis.header_hash,
             genesis_timestamp: genesis.context.timestamp,
             genesis_protocol_version: "0.31.0".parse().expect("valid version"),
+            genesis_next_cursors: Default::default(),
+            genesis_block_hashes: Default::default(),
+            genesis_carries_upgrade_tx: false,
             genesis_fee_params: zksync_os_sequencer::execution::FeeParams {
                 eip1559_basefee: genesis.context.eip1559_basefee,
                 native_price: genesis.context.native_price,
