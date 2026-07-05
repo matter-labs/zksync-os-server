@@ -16089,7 +16089,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "zksync_os_contract_interface",
  "zksync_os_status_server",
+ "zksync_os_types",
 ]
 
 [[package]]

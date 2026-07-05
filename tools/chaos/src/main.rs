@@ -20,6 +20,7 @@
 //! distilled into deterministic regression tests where they belong.
 
 mod drive;
+mod load;
 mod setup;
 mod watch;
 
@@ -38,6 +39,8 @@ enum Command {
     Setup(setup::SetupArgs),
     /// Run the seeded fault schedule against a running cluster.
     Drive(drive::DriveArgs),
+    /// Put transaction load on a running cluster (fund + spam + report).
+    Load(load::LoadArgs),
 }
 
 #[tokio::main]
@@ -45,5 +48,6 @@ async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Setup(args) => setup::run(args),
         Command::Drive(args) => drive::run(args).await,
+        Command::Load(args) => load::run(args).await,
     }
 }

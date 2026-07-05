@@ -65,6 +65,40 @@ pub enum Condition {
     Paused,
     /// Detached from the cluster network; everything else about it keeps running.
     Partitioned,
+    /// Lossy, slow network (tc netem) — degraded but alive: it still counts toward
+    /// liveness expectations, because consensus is supposed to ride through it.
+    Degraded,
+}
+
+/// A network-degradation profile applied with `tc netem`: packet loss plus delay
+/// with jitter. Profiles are deliberately conservative — bad-but-survivable
+/// weather; a committee that cannot stay live through them is a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct NetemProfile {
+    pub loss_percent: u8,
+    pub delay_ms: u16,
+}
+
+impl NetemProfile {
+    /// The menu the schedule samples from.
+    const MENU: [NetemProfile; 3] = [
+        NetemProfile {
+            loss_percent: 5,
+            delay_ms: 50,
+        },
+        NetemProfile {
+            loss_percent: 15,
+            delay_ms: 150,
+        },
+        NetemProfile {
+            loss_percent: 30,
+            delay_ms: 300,
+        },
+    ];
+
+    pub fn jitter_ms(&self) -> u16 {
+        self.delay_ms / 3
+    }
 }
 
 /// What the driver can do to the cluster. The I/O layer maps these onto docker
@@ -79,6 +113,8 @@ pub enum Action {
     Unpause(usize),
     Disconnect(usize),
     Reconnect(usize),
+    Degrade(usize, NetemProfile),
+    ClearDegradation(usize),
 }
 
 /// The pure decision core: owns the seeded RNG and the believed cluster state, and
@@ -115,10 +151,20 @@ impl Schedule {
             .count()
     }
 
+    /// Validators expected to participate in consensus right now: pristine ones
+    /// plus degraded ones — a lossy, slow network is exactly the weather consensus
+    /// must ride through, so degradation never excuses a stall.
+    pub fn live_count(&self) -> usize {
+        self.conditions
+            .iter()
+            .filter(|&&condition| matches!(condition, Condition::Healthy | Condition::Degraded))
+            .count()
+    }
+
     /// Whether the committee is expected to finalize right now — the fact a monitor
     /// needs to decide if a stalled chain is a finding or the driver's own doing.
     pub fn expect_liveness(&self) -> bool {
-        self.healthy_count() >= self.quorum
+        self.live_count() >= self.quorum
     }
 
     /// Produces the next action. Due heals always go first; otherwise a fault is
@@ -139,19 +185,29 @@ impl Schedule {
         }
 
         // A small chance to sanction a full outage: take any node down regardless of
-        // quorum, with a short heal horizon. Everything else respects quorum.
+        // quorum, with a short heal horizon. Everything else respects quorum —
+        // counting degraded validators as live, since they are expected to keep
+        // participating.
         let sanction_outage = self.rng.gen_ratio(1, 20);
-        let can_break_another = self.healthy_count() > self.quorum || sanction_outage;
+        let can_break_another = self.live_count() > self.quorum || sanction_outage;
 
         let action = if can_break_another && self.rng.gen_ratio(2, 3) {
             // Break something.
             let target = self.pick_healthy();
             let heal_in = self.rng.gen_range(2..=6);
-            let (fault, heal) = match self.rng.gen_range(0..4u8) {
+            let (fault, heal) = match self.rng.gen_range(0..5u8) {
                 0 => (Action::Kill(target), Action::Start(target)),
                 1 => (Action::Stop(target), Action::Start(target)),
                 2 => (Action::Pause(target), Action::Unpause(target)),
-                _ => (Action::Disconnect(target), Action::Reconnect(target)),
+                3 => (Action::Disconnect(target), Action::Reconnect(target)),
+                _ => {
+                    let profile =
+                        NetemProfile::MENU[self.rng.gen_range(0..NetemProfile::MENU.len())];
+                    (
+                        Action::Degrade(target, profile),
+                        Action::ClearDegradation(target),
+                    )
+                }
             };
             self.pending_heals.push((self.step + heal_in, heal));
             fault
@@ -190,9 +246,11 @@ impl Schedule {
             Action::Stop(index) => (index, Condition::Stopped),
             Action::Pause(index) => (index, Condition::Paused),
             Action::Disconnect(index) => (index, Condition::Partitioned),
-            Action::Start(index) | Action::Unpause(index) | Action::Reconnect(index) => {
-                (index, Condition::Healthy)
-            }
+            Action::Degrade(index, _) => (index, Condition::Degraded),
+            Action::Start(index)
+            | Action::Unpause(index)
+            | Action::Reconnect(index)
+            | Action::ClearDegradation(index) => (index, Condition::Healthy),
         };
         self.conditions[index] = condition;
     }
@@ -207,6 +265,7 @@ impl Schedule {
                 Condition::Killed | Condition::Stopped => Some(Action::Start(index)),
                 Condition::Paused => Some(Action::Unpause(index)),
                 Condition::Partitioned => Some(Action::Reconnect(index)),
+                Condition::Degraded => Some(Action::ClearDegradation(index)),
             })
             .collect()
     }
@@ -215,7 +274,7 @@ impl Schedule {
 /// Applies actions to a real cluster. One implementation shells out to docker; tests
 /// record actions instead.
 pub trait ClusterOps {
-    fn apply(&mut self, action: Action) -> anyhow::Result<()>;
+    async fn apply(&mut self, action: Action) -> anyhow::Result<()>;
 }
 
 /// Docker-backed operations, addressing containers by the names `chaos setup` wrote.
@@ -223,13 +282,21 @@ pub struct DockerOps {
     manifest: Manifest,
 }
 
+/// Docker CLI calls are asynchronous and hard-bounded so a slow daemon degrades
+/// one injection, never the driver's clock (stop waits for the container's grace
+/// period, hence the generous bound).
+const DOCKER_TIMEOUT: Duration = Duration::from_secs(30);
+
 impl DockerOps {
     fn container(&self, index: usize) -> String {
         format!("chaos-{}", self.manifest.validators[index].name)
     }
 
-    fn docker(&self, args: &[&str]) -> anyhow::Result<()> {
-        let output = std::process::Command::new("docker").args(args).output()?;
+    async fn docker(&self, args: &[&str]) -> anyhow::Result<()> {
+        let command = tokio::process::Command::new("docker").args(args).output();
+        let output = tokio::time::timeout(DOCKER_TIMEOUT, command)
+            .await
+            .map_err(|_| anyhow::anyhow!("docker {args:?} timed out after {DOCKER_TIMEOUT:?}"))??;
         anyhow::ensure!(
             output.status.success(),
             "docker {:?} failed: {}",
@@ -241,18 +308,20 @@ impl DockerOps {
 }
 
 impl ClusterOps for DockerOps {
-    fn apply(&mut self, action: Action) -> anyhow::Result<()> {
+    async fn apply(&mut self, action: Action) -> anyhow::Result<()> {
         let network = self.manifest.network.clone();
         match action {
             Action::Kill(index) => {
                 self.docker(&["kill", "--signal", "SIGKILL", &self.container(index)])
+                    .await
             }
-            Action::Stop(index) => self.docker(&["stop", &self.container(index)]),
-            Action::Start(index) => self.docker(&["start", &self.container(index)]),
-            Action::Pause(index) => self.docker(&["pause", &self.container(index)]),
-            Action::Unpause(index) => self.docker(&["unpause", &self.container(index)]),
+            Action::Stop(index) => self.docker(&["stop", &self.container(index)]).await,
+            Action::Start(index) => self.docker(&["start", &self.container(index)]).await,
+            Action::Pause(index) => self.docker(&["pause", &self.container(index)]).await,
+            Action::Unpause(index) => self.docker(&["unpause", &self.container(index)]).await,
             Action::Disconnect(index) => {
                 self.docker(&["network", "disconnect", &network, &self.container(index)])
+                    .await
             }
             Action::Reconnect(index) => {
                 // Reattach at the pinned address: the committee dials this exact IP,
@@ -266,6 +335,46 @@ impl ClusterOps for DockerOps {
                     &network,
                     &self.container(index),
                 ])
+                .await
+            }
+            Action::Degrade(index, profile) => {
+                // `replace` is idempotent: re-degrading swaps the profile in place.
+                // `-u 0`: tc needs root inside the container (the node itself runs
+                // unprivileged); the compose file grants NET_ADMIN.
+                self.docker(&[
+                    "exec",
+                    "-u",
+                    "0",
+                    &self.container(index),
+                    "tc",
+                    "qdisc",
+                    "replace",
+                    "dev",
+                    "eth0",
+                    "root",
+                    "netem",
+                    "loss",
+                    &format!("{}%", profile.loss_percent),
+                    "delay",
+                    &format!("{}ms", profile.delay_ms),
+                    &format!("{}ms", profile.jitter_ms()),
+                ])
+                .await
+            }
+            Action::ClearDegradation(index) => {
+                self.docker(&[
+                    "exec",
+                    "-u",
+                    "0",
+                    &self.container(index),
+                    "tc",
+                    "qdisc",
+                    "del",
+                    "dev",
+                    "eth0",
+                    "root",
+                ])
+                .await
             }
         }
     }
@@ -302,7 +411,9 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
     let probes = watch::NodeProbe::from_manifest(&manifest);
     let mut ops = DockerOps { manifest };
     let started = std::time::Instant::now();
-    let deadline = args.duration.map(|duration| started + *duration);
+    let deadline = args
+        .duration
+        .map(|duration| tokio::time::Instant::now() + *duration);
 
     // The watcher learns the driver's beliefs through a watch channel and reports
     // the first finding back once; the driver then freezes the experiment.
@@ -335,23 +446,22 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         let gap = Duration::from_millis(schedule.rng.gen_range(base / 2..=base * 3 / 2));
         tokio::select! {
             _ = tokio::time::sleep(gap) => {}
+            // The deadline is its own select arm: a long fault gap must not delay
+            // ending the run (the check used to only happen after a completed gap).
+            _ = async { tokio::time::sleep_until(deadline.unwrap()).await },
+                if deadline.is_some() => break,
             _ = tokio::signal::ctrl_c() => break,
             received = findings_receiver.recv() => {
                 return freeze(&args.workdir, &journal_path, &ops, received);
             }
         }
-        if let Some(deadline) = deadline
-            && std::time::Instant::now() >= deadline
-        {
-            break;
-        }
 
         let action = schedule.next_action();
         println!(
-            "[{:>6}s] {:?} (healthy {}/{}, liveness expected: {})",
+            "[{:>6}s] {:?} (live {}/{}, liveness expected: {})",
             started.elapsed().as_secs(),
             action,
-            schedule.healthy_count(),
+            schedule.live_count(),
             validators,
             schedule.expect_liveness(),
         );
@@ -363,7 +473,10 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         // first and then land; heals land first and then publish.
         let heals = matches!(
             action,
-            Action::Start(_) | Action::Unpause(_) | Action::Reconnect(_)
+            Action::Start(_)
+                | Action::Unpause(_)
+                | Action::Reconnect(_)
+                | Action::ClearDegradation(_)
         );
         if !heals {
             publish_expectations(
@@ -373,7 +486,7 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
                 &mut liveness_since,
             );
         }
-        if let Err(error) = ops.apply(action) {
+        if let Err(error) = ops.apply(action).await {
             // A failed injection (e.g. the container is already in that state) is a
             // journalable event, not a reason to stop the experiment.
             println!("  action failed (continuing): {error}");
@@ -407,7 +520,7 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
     watcher.abort();
     println!("healing the cluster before exit");
     for heal in schedule.heal_everything() {
-        if let Err(error) = ops.apply(heal) {
+        if let Err(error) = ops.apply(heal).await {
             println!("  heal failed: {error}");
         }
     }
@@ -529,6 +642,27 @@ mod tests {
             }
             assert_eq!(schedule.healthy_count(), 7, "seed {seed}");
         }
+    }
+
+    #[test]
+    fn degradations_are_paired_with_clears_and_count_as_live() {
+        let mut schedule = Schedule::new(11, 5, 4);
+        let mut saw_degrade = false;
+        for _ in 0..2_000 {
+            let action = schedule.next_action();
+            if let Action::Degrade(index, profile) = action {
+                saw_degrade = true;
+                assert!(profile.loss_percent <= 30, "profiles stay conservative");
+                assert_eq!(schedule.conditions()[index], Condition::Degraded);
+            }
+            // Degraded validators keep counting toward liveness expectations.
+            assert!(schedule.live_count() >= schedule.healthy_count());
+        }
+        assert!(saw_degrade, "the fault menu must produce degradations");
+        for heal in schedule.heal_everything() {
+            schedule.apply(heal);
+        }
+        assert_eq!(schedule.healthy_count(), 5);
     }
 
     #[test]

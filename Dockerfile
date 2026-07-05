@@ -39,9 +39,11 @@ RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
 FROM debian:stable-slim
 
 # ---- minimal runtime deps + tini ----
+# iproute2 provides `tc`, which the chaos rig uses to inject network degradation
+# (packet loss/delay) into running validators; harmless baggage elsewhere.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        libssl3 ca-certificates tini && \
+        libssl3 ca-certificates tini iproute2 && \
     rm -rf /var/lib/apt/lists/*
 
 ARG UID=10001

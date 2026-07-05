@@ -1,11 +1,13 @@
 # Chaos rig
 
 Runs a containerized BFT validator committee and injects faults on a seeded random
-schedule — kill, graceful stop, freeze (container pause), network partition — for as
-long as you leave it running, while a built-in watcher continuously checks that the
-consensus algorithm's properties hold. The goal is to surface the bugs that only
-sustained, randomized wall-clock time finds: torn state after dirty crashes,
-teardown races, drift interactions, slow leaks.
+schedule — kill, graceful stop, freeze (container pause), network partition, and
+network degradation (packet loss + delay via `tc netem`) — for as long as you leave
+it running, while a built-in watcher continuously checks that the consensus
+algorithm's properties hold and `chaos load` puts real transaction traffic through
+the committee. The goal is to surface the bugs that only sustained, randomized
+wall-clock time finds: torn state after dirty crashes, teardown races, drift
+interactions, slow leaks.
 
 Ground rules:
 
@@ -37,6 +39,10 @@ docker compose -f ./chaos-workdir/docker-compose.yaml up -d
 # 4. Drive faults against it.
 cargo run -p zksync_os_chaos -- drive --workdir ./chaos-workdir --seed 42 \
     --fault-interval 30s            # add --duration 2h for a bounded run
+
+# 5. (Optionally, in parallel:) put transaction load on the committee.
+cargo run -p zksync_os_chaos -- load --workdir ./chaos-workdir \
+    --tps 20 --pattern sustained --spread even --duration 2h
 ```
 
 Watch the cluster through any validator's mapped ports (see the manifest):
@@ -63,7 +69,8 @@ driver injected:
   certificates already in flight);
 - **no protocol fault evidence** — the `conflicting_*`/`nullify_finalize` activity
   counters must stay zero on an honest committee;
-- **no unexpected deaths** — a container the driver did not touch must be running;
+- **no unexpected deaths** — a container the driver did not touch (or has merely
+  paused, partitioned, or degraded) must be running;
 - **clean logs** — no panics or ERROR lines beyond an explicit allowlist of known
   teardown noise;
 - **liveness** — when the committee is expected live for a whole `--liveness-window`
@@ -74,17 +81,44 @@ findings plus the offending poll plus every container's recent logs land in
 `<workdir>/artifacts/`, and the driver exits nonzero. The cluster stays up exactly
 as it failed — attach, inspect, then `docker compose down -v` when done.
 
+## Network degradation
+
+Besides binary faults, the schedule degrades validators' networking in place with
+`tc netem` (`docker exec`, root, `NET_ADMIN` from the compose file): packet loss
+plus delay with jitter, from a conservative menu (5%/50ms up to 30%/300ms).
+Degraded validators still **count as live** — a lossy, slow network is exactly the
+weather consensus must ride through, so a stall while nodes are merely degraded is
+a finding, not an excuse. Degradation applies to the container's whole interface
+(peers and L1 alike); per-destination shaping (peers-only vs L1-only, via tc
+filters) is a known possible extension.
+
+## Load
+
+`chaos load` puts real transactions through the committee while the driver does its
+work. Sender accounts are derived deterministically and funded once through a real
+L1→L2 bridgehub deposit (signed by anvil's default rich account), then drive plain
+transfers:
+
+- `--pattern sustained --tps N` — steady traffic (low N = background hum, high N =
+  stress);
+- `--pattern bursts --burst-secs 5 --idle-secs 15` — on/off duty cycle;
+- `--spread even` pins senders round-robin across validators (tx gossip carries
+  them to whoever leads); `--spread single:2` aims everything at one validator.
+
+Submission failures are counted, never fatal — validators go down mid-run by
+design. The end-of-run report shows per-validator accepted/rejected counts,
+achieved tps, and whether each sender's final transaction was actually included
+(end-to-end proof that traffic flowed through consensus).
+
 ## Notes and known gaps
 
 - **anvil image**: the compose file pins `ghcr.io/foundry-rs/foundry:v1.5.1` (newer
   anvil cannot load the checked-in L1 state). The service gunzips the chain's
-  `l1-state.json.gz` and runs anvil the same way `run_local.sh` does.
+  `l1-state.json.gz` and runs anvil the same way `run_local.sh` does; it is also
+  published on a host port (see the manifest) so `chaos load` can fund deposits.
 - **Static validator IPs**: the node parses committee addresses as socket addresses
   (numeric, no DNS), so `setup` pins each validator's IP on the compose network and
   a partition heal reconnects with `--ip` to restore exactly the address the rest of
   the committee dials.
-- **Load generation** is not wired yet: the chain runs on empty-block cadence, which
-  exercises every consensus/restart/liveness invariant but no transaction flow. To
-  add load, fund an L2 account (a deposit through the bridgehub) and run `loadbase`
-  against any validator's RPC port. Wiring a funded spammer into the rig is a
-  follow-up.
+- **Log rotation**: container logs are capped (json-file, 50 MB × 3) so the
+  watcher's `docker logs` polls stay cheap on multi-hour runs.

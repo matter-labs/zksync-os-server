@@ -209,9 +209,14 @@ impl Checker {
                 self.evidence[index] = node.evidence;
             }
 
-            // A validator the driver believes healthy must be running (and not
-            // frozen); anything else died on its own.
-            if expectations.conditions[index] == Condition::Healthy && !node.running {
+            // "Not running" is only ever expected while the driver holds a node
+            // killed or stopped; a paused, partitioned, degraded, or healthy
+            // validator that is not running died on its own.
+            if !matches!(
+                expectations.conditions[index],
+                Condition::Killed | Condition::Stopped
+            ) && !node.running
+            {
                 findings.push(Finding::UnexpectedDeath { validator: index });
             }
 
@@ -268,10 +273,14 @@ const FORBIDDEN_LOG_PATTERNS: [&str; 2] = ["panicked at", " ERROR "];
 /// errors, and the runtime-drop panic is a registered shutdown wart (tracked in
 /// the shortcut register; harmless but not yet eliminated). Deliberately narrow —
 /// a *novel* critical-task panic must still surface.
-const ALLOWED_LOG_PATTERNS: [&str; 3] = [
+const ALLOWED_LOG_PATTERNS: [&str; 4] = [
     "pipeline segment failed",
     "failed to receive deregistration",
+    // The known runtime-drop teardown wart panics across two log lines; the
+    // second carries the message, the first only the site. Both are allowed by
+    // their most specific identifying text.
     "Cannot drop a runtime",
+    "runtime/blocking/shutdown.rs",
 ];
 
 pub fn is_suspicious_log_line(line: &str) -> bool {
@@ -302,6 +311,22 @@ fn strip_ansi(line: &str) -> String {
     cleaned
 }
 
+/// Runs a docker CLI command asynchronously with a hard timeout, returning its
+/// stdout+stderr on success and `None` on failure/timeout. Every watcher probe
+/// must stay non-blocking and bounded: a slow docker daemon may degrade a poll,
+/// never the whole runtime.
+async fn docker_output(args: &[&str], timeout: Duration) -> Option<String> {
+    let child = tokio::process::Command::new("docker").args(args).output();
+    match tokio::time::timeout(timeout, child).await {
+        Ok(Ok(output)) if output.status.success() => {
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            Some(text)
+        }
+        _ => None,
+    }
+}
+
 /// The I/O half: polls one validator's endpoints and container state.
 pub struct NodeProbe {
     pub container: String,
@@ -325,39 +350,53 @@ impl NodeProbe {
     }
 
     /// Container state via docker; (running, paused).
-    fn container_state(&self) -> (bool, bool) {
-        let output = std::process::Command::new("docker")
-            .args([
+    ///
+    /// Async and bounded: the watcher used to shell out synchronously here, which
+    /// parked tokio workers and — as container logs grew — eventually stalled the
+    /// whole drive runtime (found by the overnight campaign).
+    async fn container_state(&self) -> (bool, bool) {
+        let output = docker_output(
+            &[
                 "inspect",
                 "--format",
                 "{{.State.Running}} {{.State.Paused}}",
                 &self.container,
-            ])
-            .output();
+            ],
+            Duration::from_secs(5),
+        )
+        .await;
         match output {
-            Ok(output) if output.status.success() => {
-                let text = String::from_utf8_lossy(&output.stdout);
+            Some(text) => {
                 let mut parts = text.split_whitespace();
                 let running = parts.next() == Some("true");
                 let paused = parts.next() == Some("true");
                 (running, paused)
             }
-            _ => (false, false),
+            None => (false, false),
         }
     }
 
-    /// New log lines since `since` that match the forbidden patterns.
-    fn suspicious_logs(&self, since: Instant, now: Instant) -> Vec<String> {
+    /// New log lines since `since` that match the forbidden patterns. `--tail`
+    /// keeps the scan bounded no matter how old the container is.
+    async fn suspicious_logs(&self, since: Instant, now: Instant) -> Vec<String> {
         let seconds = now.duration_since(since).as_secs().max(1);
-        let output = std::process::Command::new("docker")
-            .args(["logs", "--since", &format!("{seconds}s"), &self.container])
-            .output();
-        let Ok(output) = output else {
+        let Some(text) = docker_output(
+            &[
+                "logs",
+                "--since",
+                &format!("{seconds}s"),
+                "--tail",
+                "400",
+                &self.container,
+            ],
+            Duration::from_secs(5),
+        )
+        .await
+        else {
             return Vec::new();
         };
-        let mut lines: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        let mut lines: Vec<String> = text
             .lines()
-            .chain(String::from_utf8_lossy(&output.stderr).lines())
             .map(strip_ansi)
             .filter(|line| is_suspicious_log_line(line))
             .collect();
@@ -372,11 +411,11 @@ impl NodeProbe {
         logs_since: Instant,
         now: Instant,
     ) -> NodeObservation {
-        let (running, paused) = self.container_state();
+        let (running, paused) = self.container_state().await;
 
-        // The three HTTP probes run concurrently: an unreachable node costs one
-        // client timeout per poll, not three.
-        let (status, block_hash_at_probe, evidence) = tokio::join!(
+        // All probes run concurrently: an unreachable node costs one client
+        // timeout per poll, not a sum of them.
+        let (status, block_hash_at_probe, evidence, suspicious_log_lines) = tokio::join!(
             self.status(client),
             async {
                 match probe_height {
@@ -385,6 +424,7 @@ impl NodeProbe {
                 }
             },
             self.evidence_total(client),
+            self.suspicious_logs(logs_since, now),
         );
         let consensus = status.and_then(|status| status.consensus);
         let finalized_view = consensus
@@ -393,8 +433,6 @@ impl NodeProbe {
         let applied_height = consensus
             .as_ref()
             .and_then(|consensus| consensus.applied_height);
-
-        let suspicious_log_lines = self.suspicious_logs(logs_since, now);
 
         NodeObservation {
             running,
@@ -715,10 +753,14 @@ mod tests {
         assert!(!is_suspicious_log_line(
             "ERROR reth_tasks::runtime: Critical task `pipeline` panicked: `failed to receive deregistration`"
         ));
-        // The registered teardown wart is tolerated...
+        // The registered teardown wart is tolerated — both of its lines: the
+        // site-bearing first line and the message-bearing second.
         assert!(!is_suspicious_log_line(
-            "thread 'consensus' panicked at tokio/src/runtime/blocking/shutdown.rs: \
-             Cannot drop a runtime in a context where blocking is not allowed"
+            "thread 'tokio-rt-worker' (215) panicked at /usr/local/cargo/registry/\
+             src/index.crates.io-xxx/tokio-1.52.3/src/runtime/blocking/shutdown.rs:51:21:"
+        ));
+        assert!(!is_suspicious_log_line(
+            "Cannot drop a runtime in a context where blocking is not allowed"
         ));
         // ...but a *novel* critical-task panic is not.
         assert!(is_suspicious_log_line(
