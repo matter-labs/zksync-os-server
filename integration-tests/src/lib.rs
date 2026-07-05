@@ -342,6 +342,11 @@ impl Tester {
 
     fn apply_external_node_defaults(&self, config: &mut Config) {
         config.general_config.node_role = NodeRole::ExternalNode;
+        // External nodes are never committee members: they follow the finalized chain
+        // over the replay protocol regardless of how the upstream node sequences it —
+        // so a validator's consensus settings (keys, committee, enablement) must not
+        // travel into an EN cloned from its config.
+        config.consensus_config = Default::default();
         config.network_config.boot_nodes = vec![self.node_record.into()];
         config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
         config.gateway_provider_config = self

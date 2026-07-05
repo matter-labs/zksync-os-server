@@ -846,6 +846,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 fee_collector_address: config.sequencer_config.fee_collector_address,
                 gas_limit: config.sequencer_config.block_gas_limit,
                 pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
+                max_transactions: config.sequencer_config.max_transactions_in_block,
+                max_encoded_record_size: config.consensus_config.max_message_size,
                 fee: config.fee_config.clone().into(),
             }),
             inputs: std::sync::Arc::new(l1_inputs_view),

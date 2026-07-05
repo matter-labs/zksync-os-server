@@ -91,6 +91,12 @@ impl ConsensusBlock {
     pub fn height_u64(&self) -> u64 {
         self.height
     }
+
+    /// Byte length of the record's wire encoding — what peers actually transport, and
+    /// what the block-size validity rule bounds. Zero for the genesis block.
+    pub fn encoded_record_len(&self) -> usize {
+        self.encoded_record().len()
+    }
 }
 
 fn encode_record(record: &ReplayRecord) -> Vec<u8> {

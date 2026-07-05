@@ -475,6 +475,7 @@ where
             let verdict = crate::rules::check_proposal(
                 &parent_view,
                 record,
+                block.encoded_record_len(),
                 now_epoch_seconds,
                 validation.inputs.as_ref(),
                 &validation.config,

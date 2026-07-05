@@ -416,3 +416,80 @@ async fn gossiped_transaction_survives_its_receiving_validator() -> anyhow::Resu
 
     cluster.shutdown_all().await
 }
+
+/// Waits until a single node's RPC serves at least block `height`.
+async fn wait_for_block_on(
+    node: &zksync_os_integration_tests::Tester,
+    height: u64,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if node.l2_provider.get_block_number().await.unwrap_or(0) >= height {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "node did not reach block {height} within {timeout:?}",
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// External nodes are not committee members: they follow the finalized chain over the
+/// same replay protocol they use against a single sequencer, pointed at any validator
+/// of their choice. Consensus must leave that contract untouched — an EN needs no
+/// consensus keys, no committee membership, and no awareness that its upstream is one
+/// of several validators.
+#[test_log::test(tokio::test)]
+async fn external_node_syncs_from_a_consensus_validator() -> anyhow::Result<()> {
+    let cluster = MultiNodeTester::start(3).await?;
+
+    // Build history *before* the EN exists, so its sync starts with pure catch-up.
+    let recipient = Address::repeat_byte(0x51);
+    let value = U256::from(1_000_000u64);
+    let included_at = send_transfer(&cluster, 1, recipient).await?;
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+
+    // The EN follows a NON-batcher validator: the replay stream is a property of
+    // every validator, not of the settlement node.
+    let en = cluster.node(1).launch_external_node().await?;
+
+    // Catch-up: the EN replays the pre-existing history and serves the same chain.
+    wait_for_block_on(&en, included_at, CONVERGENCE_TIMEOUT).await?;
+    {
+        use alloy::eips::BlockId;
+        let en_block = en
+            .l2_provider
+            .get_block(BlockId::number(included_at))
+            .await?
+            .expect("the EN just reported this height");
+        let validator_block = cluster
+            .node(1)
+            .l2_provider
+            .get_block(BlockId::number(included_at))
+            .await?
+            .expect("the validator served this block already");
+        assert_eq!(
+            en_block.header.hash, validator_block.header.hash,
+            "the EN synced a different block {included_at} than the committee finalized",
+        );
+    }
+    let balance = en.l2_provider.get_balance(recipient).await?;
+    assert_eq!(balance, value, "the EN replayed to a different state");
+
+    // Live tail: traffic that happens after the EN joined keeps streaming to it.
+    let second_at = send_transfer(&cluster, 2, recipient).await?;
+    wait_for_block_on(&en, second_at, CONVERGENCE_TIMEOUT).await?;
+    let balance = en.l2_provider.get_balance(recipient).await?;
+    assert_eq!(
+        balance,
+        value + value,
+        "the EN did not follow the chain past its join point",
+    );
+
+    en.shutdown().await?;
+    cluster.shutdown_all().await
+}

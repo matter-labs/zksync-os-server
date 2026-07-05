@@ -76,6 +76,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             .await;
         let first_expected_block = last_executed_batch.last_block_number() + 1;
         let mut prev_batch_info = last_executed_batch.batch_info;
+        // The first block the next batch must start with; advances as batches are
+        // built. Every batch — recreated or fresh — must continue the chain exactly
+        // here: batches with silently missing blocks must never be sealed.
+        let mut next_expected_block = first_expected_block;
 
         // We might receive some blocks that belong to already executed batches. We can skip these
         // as there is no need to perform any L1 operations on them.
@@ -122,43 +126,63 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             state_reporter.enter_state(GenericComponentState::Active);
 
             let recreated;
-            let batch_envelope =
-                if prev_batch_info.batch_number < self.startup_config.last_committed_batch {
-                    let committed_batch = self
-                        .committed_batch_provider
-                        .wait_for_batch(prev_batch_info.batch_number + 1)
-                        .await;
-                    // Validate that the existing batch's first block matches the next block in the stream
-                    anyhow::ensure!(
-                        committed_batch.first_block_number() == next_block_number,
-                        "Existing batch first block ({}) does not match next block in stream ({})",
-                        committed_batch.first_block_number(),
-                        next_block_number
-                    );
+            let batch_envelope = if prev_batch_info.batch_number
+                < self.startup_config.last_committed_batch
+            {
+                let committed_batch = self
+                    .committed_batch_provider
+                    .wait_for_batch(prev_batch_info.batch_number + 1)
+                    .await;
+                // Validate that the existing batch's first block matches the next block in the stream
+                anyhow::ensure!(
+                    committed_batch.first_block_number() == next_block_number,
+                    "Existing batch first block ({}) does not match next block in stream ({})",
+                    committed_batch.first_block_number(),
+                    next_block_number
+                );
+                // ... and that it continues the chain where the previous batch
+                // ended — a mismatch here means L1 batch discovery derived a
+                // wrong block range.
+                anyhow::ensure!(
+                    committed_batch.first_block_number() == next_expected_block,
+                    "Existing batch first block ({}) does not continue the previous batch (which ended at block {})",
+                    committed_batch.first_block_number(),
+                    next_expected_block - 1
+                );
 
-                    let Some(batch_envelope) = self
-                        .recreate_existing_batch(
-                            &mut input,
-                            &prev_batch_info,
-                            committed_batch,
-                            &state_reporter,
-                        )
-                        .await?
-                    else {
-                        return Ok(());
-                    };
-                    recreated = true;
-                    batch_envelope
-                } else {
-                    let Some(batch_envelope) = self
-                        .create_batch(&mut input, &prev_batch_info, &state_reporter)
-                        .await?
-                    else {
-                        return Ok(());
-                    };
-                    recreated = false;
-                    batch_envelope
+                let Some(batch_envelope) = self
+                    .recreate_existing_batch(
+                        &mut input,
+                        &prev_batch_info,
+                        committed_batch,
+                        &state_reporter,
+                    )
+                    .await?
+                else {
+                    return Ok(());
                 };
+                recreated = true;
+                batch_envelope
+            } else {
+                // A fresh batch must start exactly where the previous batch
+                // ended. Without this check a gapped block stream would seal a
+                // batch with silently missing blocks — L1 would reject it only
+                // at commit time (or not at all), long after the damage.
+                anyhow::ensure!(
+                    next_block_number == next_expected_block,
+                    "New batch would start at block {} but the previous batch ended at block {}",
+                    next_block_number,
+                    next_expected_block - 1
+                );
+                let Some(batch_envelope) = self
+                    .create_batch(&mut input, &prev_batch_info, &state_reporter)
+                    .await?
+                else {
+                    return Ok(());
+                };
+                recreated = false;
+                batch_envelope
+            };
 
             let time_since_last_batch =
                 last_created_batch_at.map(|last_created_batch_at| last_created_batch_at.elapsed());
@@ -172,6 +196,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 
             // Update prev_batch_info for the next iteration
             prev_batch_info = batch_envelope.batch.batch_info.clone().into_stored();
+            next_expected_block = batch_envelope.batch.last_block_number + 1;
 
             BATCHER_METRICS
                 .transactions_per_batch

@@ -113,10 +113,25 @@ where
     /// network with valid credentials — they are real committee members whose key
     /// happens to sign contradictory votes.
     pub async fn start_with_env(
+        context: deterministic::Context,
+        behaviors: &[Behavior],
+        link: Link,
+        env_factory: impl Fn(usize, deterministic::Context) -> X,
+    ) -> Self {
+        Self::start_with_env_stopped(context, behaviors, link, env_factory, &[]).await
+    }
+
+    /// Like [`Self::start_with_env`], but the validators listed in `stopped` are only
+    /// *provisioned* — they have keys, committee membership, and an execution
+    /// environment, but no running stack and no storage history. [`Self::restart`]
+    /// brings one up later. This models a validator that is part of the committee from
+    /// genesis but deploys long after the chain started — the late-join case.
+    pub async fn start_with_env_stopped(
         mut context: deterministic::Context,
         behaviors: &[Behavior],
         link: Link,
         env_factory: impl Fn(usize, deterministic::Context) -> X,
+        stopped: &[usize],
     ) -> Self {
         let Fixture {
             participants,
@@ -156,7 +171,9 @@ where
                 partition_prefix: format!("validator-{index}"),
                 incarnation: 0,
             };
-            Self::spawn(&cluster.context, &mut cluster.oracle, index, &mut validator).await;
+            if !stopped.contains(&index) {
+                Self::spawn(&cluster.context, &mut cluster.oracle, index, &mut validator).await;
+            }
             cluster.validators.push(validator);
         }
         cluster
@@ -258,6 +275,9 @@ where
 
     /// Starts a crashed validator again over its surviving storage. Its vote journal
     /// replays (so it cannot double-sign) and it catches up via gossip and backfill.
+    /// Also brings up a validator that was provisioned stopped and has no storage yet
+    /// (see [`Self::start_with_env_stopped`]) — a first start and a restart differ
+    /// only in what the storage holds.
     pub async fn restart(&mut self, index: usize) {
         assert!(
             self.validators[index].running.is_none(),

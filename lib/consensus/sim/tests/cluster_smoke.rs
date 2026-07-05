@@ -76,6 +76,58 @@ fn crashed_validator_rejoins_and_catches_up() {
     );
 }
 
+/// Everything dies at once — the datacenter-outage shape. Each validator's vote
+/// journal and block archive are its only survivors; the recovered cluster must
+/// extend the pre-crash chain, never contradict it.
+#[test]
+fn whole_cluster_power_cycle_resumes_the_chain() {
+    run_scenario(
+        "power_cycle",
+        0..3,
+        Duration::from_secs(600),
+        |context| async move {
+            let mut cluster = SimCluster::start(context, NUM_VALIDATORS, links::healthy()).await;
+            cluster.wait_for_committed_height_all(10).await;
+
+            for index in 0..NUM_VALIDATORS as usize {
+                cluster.crash(index);
+            }
+            for index in 0..NUM_VALIDATORS as usize {
+                cluster.restart(index).await;
+            }
+
+            // Journal replay keeps every validator honest about its own pre-crash
+            // votes, so whatever was in flight at the moment of the outage (including
+            // notarized-but-unfinalized blocks) resolves without a fork.
+            cluster.wait_for_committed_height_all(20).await;
+            cluster.assert_committed_chains_agree(20);
+            cluster.assert_no_faults();
+            cluster.assert_no_blocked_peers().await;
+        },
+    );
+}
+
+/// The committee size the architecture must scale to (an order of magnitude past the
+/// v1 deployment). Happy path only, few blocks: the point is that nothing in the
+/// stack — vote aggregation, certificate assembly, the full p2p mesh — breaks or
+/// crawls at forty validators. Behavior under faults at this size belongs to the
+/// nightly sweep, not the PR gate.
+#[test]
+fn forty_validators_finalize() {
+    run_scenario(
+        "forty_validators",
+        0..1,
+        Duration::from_secs(600),
+        |context| async move {
+            let mut cluster = SimCluster::start(context, 40, links::healthy()).await;
+            cluster.wait_for_committed_height_all(5).await;
+            cluster.assert_committed_chains_agree(5);
+            cluster.assert_no_faults();
+            cluster.assert_no_blocked_peers().await;
+        },
+    );
+}
+
 /// Sanity check on the determinism machinery itself: fingerprints must actually capture
 /// the execution, so different seeds (different interleavings) must produce different
 /// fingerprints. Guards against the fingerprint degenerating into a constant.

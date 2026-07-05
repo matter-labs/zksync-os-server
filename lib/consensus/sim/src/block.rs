@@ -32,6 +32,13 @@ impl SimBlock {
         Self::assemble(parent.height + 1, parent.digest(), seed)
     }
 
+    /// A block with arbitrary linkage — byzantine fixtures use this to produce
+    /// deliberately broken proposals (a parent digest nobody has, a height that does
+    /// not follow the parent's). Honest code paths never need it.
+    pub fn mislinked(height: u64, parent: Digest, seed: u64) -> Self {
+        Self::assemble(height, parent, seed)
+    }
+
     pub fn seed(&self) -> u64 {
         self.seed
     }

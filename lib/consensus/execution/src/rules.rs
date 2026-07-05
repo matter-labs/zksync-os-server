@@ -59,6 +59,15 @@ pub struct ValidityConfig {
     pub fee_collector_address: alloy::primitives::Address,
     pub gas_limit: u64,
     pub pubdata_limit: u64,
+    /// Upper bound on the number of transactions in one block. Wired from the same
+    /// configuration the block builder reads, so an honest leader never exceeds it.
+    pub max_transactions: usize,
+    /// Upper bound on the encoded size of a block's replay record, in bytes. Wired
+    /// from the committee network's message-size limit: a record that large could not
+    /// have traveled the wire honestly anyway, so this is defense in depth — it turns
+    /// "silently undeliverable" into an explicit verdict and stays load-bearing if
+    /// the transport limit is ever raised for other reasons.
+    pub max_encoded_record_size: usize,
     /// Fee production config; the fee rules accept exactly the values an honest
     /// producer could emit under it.
     pub fee: FeeConfig,
@@ -103,14 +112,36 @@ macro_rules! withhold {
 
 /// Checks a proposed record against its parent, this validator's L1 view, and the
 /// committee's chain constants. Cheap structural rules run first; L1 lookups last.
+///
+/// `encoded_record_size` is the byte length of the record's wire encoding — callers
+/// have it at hand (the record arrived encoded), so it is passed in rather than
+/// re-serialized here.
 pub async fn check_proposal(
     parent: &ParentView,
     record: &ReplayRecord,
+    encoded_record_size: usize,
     now_epoch_seconds: u64,
     inputs: &dyn LocalL1Inputs,
     config: &ValidityConfig,
 ) -> Verdict {
     let context = &record.block_context;
+
+    // Block size: both bounds are committee constants an honest builder stays under,
+    // so exceeding either means a lying leader. Checked before anything else — an
+    // oversized block earns no further work.
+    if record.transactions.len() > config.max_transactions {
+        invalid!(
+            "{} transactions exceed the per-block cap of {}",
+            record.transactions.len(),
+            config.max_transactions
+        );
+    }
+    if encoded_record_size > config.max_encoded_record_size {
+        invalid!(
+            "encoded record of {encoded_record_size} bytes exceeds the cap of {} bytes",
+            config.max_encoded_record_size
+        );
+    }
 
     // Chain constants: fixed for every block by committee configuration (and by what
     // the v1 builder emits). The fee collector matters economically — a leader must
@@ -445,6 +476,10 @@ mod tests {
         }
     }
 
+    /// Encoded-record size passed for tests that are not about the size rule; well
+    /// under `config()`'s cap.
+    const HONEST_ENCODED_SIZE: usize = 1_000;
+
     fn config() -> ValidityConfig {
         ValidityConfig {
             max_timestamp_skew: Duration::from_secs(10),
@@ -452,6 +487,8 @@ mod tests {
             fee_collector_address: Address::repeat_byte(9),
             gas_limit: 100_000_000,
             pubdata_limit: 110_000,
+            max_transactions: 100,
+            max_encoded_record_size: 10_000,
             fee: FeeConfig {
                 native_price_usd: num::rational::Ratio::from_integer(1u32.into()),
                 base_fee_override: None,
@@ -496,7 +533,15 @@ mod tests {
     }
 
     async fn check(record: &ReplayRecord, inputs: &StubInputs) -> Verdict {
-        check_proposal(&parent(), record, NOW, inputs, &config()).await
+        check_proposal(
+            &parent(),
+            record,
+            HONEST_ENCODED_SIZE,
+            NOW,
+            inputs,
+            &config(),
+        )
+        .await
     }
 
     macro_rules! assert_verdict {
@@ -537,6 +582,66 @@ mod tests {
                 Verdict::Invalid(_)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn oversized_blocks_are_rejected() {
+        // Two authentic, contiguous L1 transactions — a record that passes every
+        // other rule, so the caps are the only thing under test here.
+        let mut inputs = StubInputs::default();
+        inputs.priority_txs.insert(0, Arc::new(priority_tx(0, 100)));
+        inputs.priority_txs.insert(1, Arc::new(priority_tx(1, 100)));
+        let record = valid_record(vec![
+            ZkTransaction::from(priority_tx(0, 100)),
+            ZkTransaction::from(priority_tx(1, 100)),
+        ]);
+
+        // At both caps exactly: still valid.
+        let mut config = config();
+        config.max_transactions = 2;
+        assert_verdict!(
+            check_proposal(
+                &parent(),
+                &record,
+                config.max_encoded_record_size,
+                NOW,
+                &inputs,
+                &config
+            )
+            .await,
+            Verdict::Valid
+        );
+
+        // One transaction over the cap: invalid, even though every transaction is
+        // individually authentic.
+        config.max_transactions = 1;
+        assert_verdict!(
+            check_proposal(
+                &parent(),
+                &record,
+                HONEST_ENCODED_SIZE,
+                NOW,
+                &inputs,
+                &config
+            )
+            .await,
+            Verdict::Invalid(_)
+        );
+
+        // One byte over the size cap: invalid.
+        config.max_transactions = 2;
+        assert_verdict!(
+            check_proposal(
+                &parent(),
+                &record,
+                config.max_encoded_record_size + 1,
+                NOW,
+                &inputs,
+                &config
+            )
+            .await,
+            Verdict::Invalid(_)
+        );
     }
 
     #[tokio::test]

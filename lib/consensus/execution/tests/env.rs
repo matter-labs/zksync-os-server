@@ -491,21 +491,25 @@ impl zksync_os_consensus_execution::LocalL1Inputs for NoL1Inputs {
     }
 }
 
-#[tokio::test]
-async fn validity_rules_run_before_re_execution() {
+/// Validity rules pinned to exactly what the rig's producer emits (fee overrides pin
+/// the fee rules; the chain constants mirror `produce_record`). Tests lower
+/// `max_transactions` to provoke the cap verdict.
+fn rig_validation(
+    rig: &Rig,
+    max_transactions: usize,
+) -> zksync_os_consensus_execution::ProposalValidation {
     use num::rational::Ratio;
     use zksync_os_consensus_execution::{ProposalValidation, ValidityConfig};
 
-    let mut rig = Rig::new().await;
-    // Pin the config to exactly what the rig's producer emits (fee overrides pin the
-    // fee rules; the chain constants mirror `produce_record`).
-    let validation = ProposalValidation {
+    ProposalValidation {
         config: Arc::new(ValidityConfig {
             max_timestamp_skew: std::time::Duration::from_secs(3600),
             chain_id: rig.genesis.context.chain_id,
             fee_collector_address: alloy::primitives::Address::ZERO,
             gas_limit: 100_000_000,
             pubdata_limit: 100_000_000,
+            max_transactions,
+            max_encoded_record_size: 16 * 1024 * 1024,
             fee: zksync_os_sequencer::execution::FeeConfig {
                 native_price_usd: Ratio::from_integer(1u32.into()),
                 base_fee_override: Some(1_000_000_000u64.into()),
@@ -516,8 +520,13 @@ async fn validity_rules_run_before_re_execution() {
             },
         }),
         inputs: Arc::new(NoL1Inputs),
-    };
-    rig.env = rig.env.clone().with_validity(validation);
+    }
+}
+
+#[tokio::test]
+async fn validity_rules_run_before_re_execution() {
+    let mut rig = Rig::new().await;
+    rig.env = rig.env.clone().with_validity(rig_validation(&rig, 100));
 
     // An honest block sails through the rules and re-execution alike.
     let (record, _el, _diff) = rig
@@ -553,6 +562,30 @@ async fn validity_rules_run_before_re_execution() {
     assert!(
         !rig.env.verify(rig.genesis_block.clone(), block).await,
         "a timestamp beyond the allowed skew must be rejected"
+    );
+}
+
+/// The block-size caps run inside the same rule pass: with the transaction cap set to
+/// zero, an otherwise perfectly honest one-transfer block is rejected before any
+/// re-execution happens.
+#[tokio::test]
+async fn transaction_cap_is_enforced_at_verification() {
+    let mut rig = Rig::new().await;
+    rig.env = rig.env.clone().with_validity(rig_validation(&rig, 0));
+
+    let (record, _el, _diff) = rig
+        .produce_record(
+            None,
+            rig.genesis.header_hash,
+            None,
+            rig.genesis.context.timestamp + 1,
+            vec![transfer(&rig.genesis, 0)],
+        )
+        .await;
+    let block = ConsensusBlock::from_record(&rig.genesis_block, record);
+    assert!(
+        !rig.env.verify(rig.genesis_block.clone(), block).await,
+        "a block over the transaction cap must be rejected"
     );
 }
 

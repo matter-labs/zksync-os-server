@@ -24,6 +24,12 @@ use std::time::Duration;
 /// `virtual_timeout` bounds the scenario in *virtual* time: a scenario that fails to
 /// finish within it panics ("runtime timeout"), turning liveness bugs into loud failures
 /// instead of hangs. Generous values cost nothing — virtual time is free.
+///
+/// Seed-sweep override: when the `CONSENSUS_SIM_SEEDS` environment variable is set to
+/// a number N, every scenario sweeps seeds `0..N` instead of the set it was called
+/// with. PR CI leaves it unset (each scenario's own small set keeps the suite fast);
+/// the nightly lane sets it large to hunt interleavings no small sweep would hit. A
+/// failure still names the exact seed, so the reproducer is one local run.
 pub fn run_scenario<F, Fut>(
     name: &str,
     seeds: impl IntoIterator<Item = u64>,
@@ -33,6 +39,15 @@ pub fn run_scenario<F, Fut>(
     F: Fn(deterministic::Context) -> Fut,
     Fut: Future<Output = ()>,
 {
+    let seeds: Vec<u64> = match std::env::var("CONSENSUS_SIM_SEEDS") {
+        Ok(count) => {
+            let count: u64 = count
+                .parse()
+                .expect("CONSENSUS_SIM_SEEDS must be a number (the seed-sweep size)");
+            (0..count).collect()
+        }
+        Err(_) => seeds.into_iter().collect(),
+    };
     for seed in seeds {
         let first = fingerprint(seed, virtual_timeout, &body);
         let second = fingerprint(seed, virtual_timeout, &body);
