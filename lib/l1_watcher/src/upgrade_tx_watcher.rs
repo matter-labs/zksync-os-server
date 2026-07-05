@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::watcher::{L1WatcherError, StartResolver};
 use crate::{EventSink, L1WatcherConfig, ProcessL1Event, util};
@@ -106,9 +105,13 @@ impl L1UpgradeTxWatcher {
         let max_blocks_to_process = config.max_blocks_to_process;
 
         let resolve_start = move |current_protocol_version: ProtocolSemanticVersion| async move {
-            let last_l1_block =
-                find_l1_block_by_protocol_version(zk_chain_l1, current_protocol_version.clone())
-                    .await?;
+            let last_l1_block = find_l1_block_by_protocol_version(
+                zk_chain_l1,
+                ctm_l1,
+                current_protocol_version.clone(),
+                max_blocks_to_process,
+            )
+            .await?;
             tracing::info!(last_l1_block, "checking block starting from");
 
             let processor = Self {
@@ -769,22 +772,40 @@ async fn fetch_upgrade_cut_log_at(
     })
 }
 
+/// The L1 block to scan upgrade events forward from, for a chain currently on
+/// `protocol_version`: the CTM's `NewUpgradeCutData` publication for that version
+/// (which the chain can only have executed at or after), or the chain's deployment
+/// block when the version was never published as an upgrade (the chain still runs
+/// its genesis version). Resolved by scanning logs backward from the head — no
+/// historical *state* queries, which fail on RPCs with bounded state retention
+/// once the chain has aged.
 async fn find_l1_block_by_protocol_version(
     zk_chain: ZkChain<NodeProvider>,
+    ctm: Address,
     protocol_version: ProtocolSemanticVersion,
+    max_blocks_per_query: u64,
 ) -> anyhow::Result<BlockNumber> {
     let protocol_version = protocol_version.packed()?;
-
-    let deployment_block = zk_chain.deployment_block().await?;
-    util::find_l1_block_by_predicate(
-        Arc::new(zk_chain),
-        deployment_block,
-        move |zk, block| async move {
-            let res = zk.get_raw_protocol_version(block.into()).await?;
-            Ok(res >= protocol_version)
-        },
-    )
-    .await
+    let provider = zk_chain.provider();
+    let latest = provider.get_block_number().await?;
+    for (from, to) in util::backward_windows(latest, max_blocks_per_query) {
+        let logs = provider
+            .get_logs(
+                &Filter::new()
+                    .address(ctm)
+                    .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
+                    .topic1(protocol_version)
+                    .from_block(from)
+                    .to_block(to),
+            )
+            .await?;
+        if let Some(log) = logs.last() {
+            return Ok(log
+                .block_number
+                .expect("indexed event log without block number"));
+        }
+    }
+    zk_chain.deployment_block().await
 }
 
 #[cfg(test)]

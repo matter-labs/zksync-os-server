@@ -812,6 +812,7 @@ impl StoppedTester {
             drop(ports);
             Ports::from_config(&config).await?
         };
+        wait_for_rocksdb_locks_released(&config.general_config.rocks_db_path).await?;
         let mut tester = Tester::launch_node_inner(
             l1,
             config,
@@ -998,6 +999,45 @@ async fn wait_for_port_to_be_unused(port: u16) -> anyhow::Result<()> {
                 });
             }
         }
+    }
+}
+
+/// Waits until every RocksDB instance under `rocks_db_path` has released its `LOCK`
+/// file. `graceful_shutdown` returning does not guarantee storage handles are
+/// dropped — pipeline teardown can lag a moment — and an in-process relaunch that
+/// wins that race dies with "lock hold by current process: .../LOCK". The faster
+/// node startup gets, the more often the relaunch wins, so the gate belongs here
+/// rather than in sleeps sprinkled over tests. (The multi-node consensus harness
+/// gates the same way on the consensus instance lock.)
+async fn wait_for_rocksdb_locks_released(rocks_db_path: &std::path::Path) -> anyhow::Result<()> {
+    use fs2::FileExt as _;
+    let deadline = tokio::time::Instant::now() + PORT_ACQUISITION_TIMEOUT;
+    loop {
+        let mut held_lock = None;
+        // Each database is a direct subdirectory holding its own `LOCK` file.
+        if let Ok(entries) = std::fs::read_dir(rocks_db_path) {
+            for entry in entries.flatten() {
+                let lock_path = entry.path().join("LOCK");
+                let Ok(file) = std::fs::File::open(&lock_path) else {
+                    continue;
+                };
+                if file.try_lock_exclusive().is_err() {
+                    held_lock = Some(lock_path);
+                    break;
+                }
+                let _ = fs2::FileExt::unlock(&file);
+            }
+        }
+        let Some(held_lock) = held_lock else {
+            return Ok(());
+        };
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "rocksdb lock at {} is still held {:?} after the node stopped",
+            held_lock.display(),
+            PORT_ACQUISITION_TIMEOUT,
+        );
+        tokio::time::sleep(PORT_ACQUISITION_POLL_INTERVAL).await;
     }
 }
 

@@ -308,6 +308,31 @@ impl NodeProvider {
         Ok(*block)
     }
 
+    /// Like [`Self::deployment_block`], but with a caller-supplied discovery routine —
+    /// for contracts whose deployment block can be found without historical *state*
+    /// queries (e.g. via an event emitted at deployment). Historical `eth_getCode`
+    /// fails on RPCs with bounded state retention (non-archive nodes, long-lived
+    /// anvil), so startup paths must prefer this. Shares the per-address cache, so
+    /// each address still resolves at most once.
+    pub async fn deployment_block_with<F>(
+        &self,
+        address: Address,
+        discover: impl FnOnce() -> F,
+    ) -> anyhow::Result<u64>
+    where
+        F: Future<Output = anyhow::Result<u64>>,
+    {
+        let cell = {
+            let mut guard = self
+                .deployment_blocks
+                .lock()
+                .expect("deployment block cache mutex poisoned");
+            guard.entry(address).or_default().clone()
+        };
+        let block = cell.get_or_try_init(discover).await?;
+        Ok(*block)
+    }
+
     /// Binary-searches for the first block where `address` has non-empty code. See
     /// [`Self::deployment_block`] for the `0` fallback semantics.
     async fn discover_deployment_block(&self, address: Address) -> anyhow::Result<u64> {

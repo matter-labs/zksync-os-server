@@ -41,10 +41,15 @@ impl L1TxWatcher {
         let provider = zk_chain_l1.provider().clone();
         let address = (*zk_chain_l1.address()).into();
         let l1_chain_id = provider.get_chain_id().await?;
+        let max_blocks_to_process = config.max_blocks_to_process;
 
         let resolve_start = move |next_l1_priority_id: u64| async move {
-            let next_l1_block =
-                find_l1_block_by_priority_id(zk_chain_l1.clone(), next_l1_priority_id).await?;
+            let next_l1_block = find_l1_block_by_priority_id(
+                zk_chain_l1.clone(),
+                next_l1_priority_id,
+                max_blocks_to_process,
+            )
+            .await?;
             tracing::info!(next_l1_block, "resolved on L1");
             let processor = Self {
                 next_l1_priority_id,
@@ -59,20 +64,46 @@ impl L1TxWatcher {
     }
 }
 
+/// The L1 block to scan `NewPriorityRequest` events forward from: the block of the
+/// newest event with `txId < next_l1_priority_id` (priority ids are sequential, so
+/// everything at or after that block covers the ids still to process; already-seen
+/// ids are skipped by `process_event`). Resolved by scanning logs backward from the
+/// head — no historical *state* queries, which fail on RPCs with bounded state
+/// retention once the chain has aged.
 async fn find_l1_block_by_priority_id(
     zk_chain: ZkChain<NodeProvider>,
     next_l1_priority_id: u64,
+    max_blocks_per_query: u64,
 ) -> anyhow::Result<BlockNumber> {
-    let deployment_block = zk_chain.deployment_block().await?;
-    util::find_l1_block_by_predicate(
-        Arc::new(zk_chain),
-        deployment_block,
-        move |zk, block| async move {
-            let res = zk.get_total_priority_txs_at_block(block.into()).await?;
-            Ok(res >= next_l1_priority_id)
-        },
-    )
-    .await
+    use alloy::sol_types::SolEvent as _;
+    if next_l1_priority_id == 0 {
+        // Nothing processed yet: scan from the chain's beginning.
+        return zk_chain.deployment_block().await;
+    }
+    let provider = zk_chain.provider();
+    let latest = provider.get_block_number().await?;
+    for (from, to) in util::backward_windows(latest, max_blocks_per_query) {
+        let logs = provider
+            .get_logs(
+                &alloy::rpc::types::Filter::new()
+                    .address(*zk_chain.address())
+                    .event_signature(NewPriorityRequest::SIGNATURE_HASH)
+                    .from_block(from)
+                    .to_block(to),
+            )
+            .await?;
+        for log in logs.iter().rev() {
+            let tx_id = NewPriorityRequest::decode_log(&log.inner)?.txId;
+            if tx_id < alloy::primitives::U256::from(next_l1_priority_id) {
+                return Ok(log
+                    .block_number
+                    .expect("indexed event log without block number"));
+            }
+        }
+    }
+    // No earlier request found although some were processed — the chain data is
+    // gone or the cursor is wrong; scanning from the beginning stays correct.
+    zk_chain.deployment_block().await
 }
 
 #[async_trait::async_trait]

@@ -116,13 +116,17 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 })?;
                 let end_block = match interval.last_batch {
                     Some(last_batch) => Some(
-                        util::find_l1_execute_block_by_batch_number(zk_chain.clone(), last_batch)
-                            .await
-                            .with_context(|| {
-                                format!(
-                                    "failed to find L1 execute for batch #{last_batch} in interval {interval}"
-                                )
-                            })?,
+                        util::find_l1_execute_block_by_batch_number(
+                            zk_chain.clone(),
+                            last_batch,
+                            max_blocks_to_process,
+                        )
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to find L1 execute for batch #{last_batch} in interval {interval}"
+                            )
+                        })?,
                     ),
                     None => None,
                 };

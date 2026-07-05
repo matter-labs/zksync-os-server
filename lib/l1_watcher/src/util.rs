@@ -4,8 +4,8 @@ use alloy::primitives::{Address, BlockNumber, Log, TxHash, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
+use anyhow::Context as _;
 use backon::{ConstantBuilder, Retryable};
-use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
@@ -86,10 +86,60 @@ pub async fn find_block_by_migration_number(
     .await
 }
 
-/// Maximum number of L1 blocks that we can scan in a reasonable amount of time.
+/// Block windows for scanning `[0, latest]` newest-first: `[latest-chunk+1, latest]`,
+/// then the next `chunk` blocks below, ending with a (possibly shorter) window that
+/// starts at 0.
+pub(crate) fn backward_windows(
+    latest: BlockNumber,
+    chunk: u64,
+) -> impl Iterator<Item = (u64, u64)> {
+    let chunk = chunk.max(1);
+    let mut high = Some(latest);
+    std::iter::from_fn(move || {
+        let hi = high?;
+        let lo = (hi + 1).saturating_sub(chunk);
+        high = lo.checked_sub(1);
+        Some((lo, hi))
+    })
+}
+
+/// Finds the newest event `E` on `zk_chain`'s diamond proxy whose first indexed topic
+/// is `batch_number`, scanning `eth_getLogs` backward from the chain head in windows
+/// of `max_blocks_per_query`. Returns the L1 block containing it.
 ///
-/// Rough calculations: 10min * 10 req/s * 1000 blocks/req = 600 * 10 * 1000 = 6_000_000
-const MAX_L1_BLOCKS_TO_SCAN_LINEARLY: u64 = 6_000_000;
+/// This deliberately never queries historical *state*: log queries are served over an
+/// RPC's full history, while `eth_call` at old heights fails once the chain outgrows
+/// the node's state retention (~128–256 blocks on non-archive nodes, and similarly on
+/// a long-lived anvil) — which would make every node restart on an aged chain fail.
+async fn find_last_batch_event_block<E: SolEvent>(
+    zk_chain: &ZkChain<NodeProvider>,
+    batch_number: u64,
+    max_blocks_per_query: u64,
+) -> anyhow::Result<Option<BlockNumber>> {
+    let latest = zk_chain.provider().get_block_number().await?;
+    for (from, to) in backward_windows(latest, max_blocks_per_query) {
+        let logs = zk_chain
+            .provider()
+            .get_logs(
+                &Filter::new()
+                    .address(*zk_chain.address())
+                    .event_signature(E::SIGNATURE_HASH)
+                    .topic1(U256::from(batch_number))
+                    .from_block(from)
+                    .to_block(to),
+            )
+            .await?;
+        // Logs come ordered oldest-first; the newest one in the newest non-empty
+        // window is the newest match overall.
+        if let Some(log) = logs.last() {
+            return Ok(Some(
+                log.block_number
+                    .expect("indexed event log without block number"),
+            ));
+        }
+    }
+    Ok(None)
+}
 
 /// Binary-searches `[start_block_number, latest]` for the first block at which `predicate` returns
 /// `true`. The predicate must be monotonic over the search range (caller's responsibility).
@@ -126,199 +176,53 @@ pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool
     Ok(lo)
 }
 
-/// Looks for an L1 event that happened in block range `[start_block_number; latest_block]`
-/// and matching provided predicate. Returns latest L1 block that contains such an event or `None`
-/// if there is not any.
-async fn find_last_matching_event<E: SolEvent + Debug>(
-    address: Address,
-    provider: &NodeProvider,
-    start_block_number: BlockNumber,
-    max_blocks_to_scan: u64,
-    predicate: impl Fn(&E) -> bool,
-) -> anyhow::Result<Option<BlockNumber>> {
-    let mut current_block = start_block_number;
-    let latest_block = provider.get_block_number().await?;
-
-    tracing::debug!(
-        %address,
-        start_block_number,
-        latest_block,
-        max_blocks_to_scan,
-        signature = E::SIGNATURE,
-        "looking for last matching event"
-    );
-
-    // Early return if latest block is behind start block. This can happen if we hit different
-    // L1 nodes between calls where the second node is behind the first.
-    if latest_block < start_block_number {
-        tracing::info!(
-            "latest block is behind start block (hitting different L1 nodes?), skipping revert checks"
-        );
-        return Ok(None);
-    }
-
-    let blocks_to_scan = latest_block + 1 - start_block_number;
-    if blocks_to_scan > MAX_L1_BLOCKS_TO_SCAN_LINEARLY {
-        tracing::warn!(blocks_to_scan, "scanning a lot of L1 blocks");
-    }
-
-    let mut filter = Filter::new()
-        .address(address)
-        .event_signature(E::SIGNATURE_HASH);
-    let mut last_block_with_event = None;
-    while current_block < latest_block {
-        // Inspect up to `max_blocks_to_scan` L1 blocks at a time
-        let filter_to_block = latest_block.min(current_block + max_blocks_to_scan - 1);
-        filter = filter.from_block(current_block).to_block(filter_to_block);
-        let logs = provider.get_logs(&filter).await?;
-        tracing::trace!(
-            from_block = current_block,
-            to_block = filter_to_block,
-            log_count = logs.len(),
-            "fetched logs"
-        );
-        for log in logs {
-            let event = E::decode_log(&log.inner)?.data;
-            if predicate(&event) {
-                let l1_block = log
-                    .block_number
-                    .expect("indexed event log without block number");
-                tracing::debug!(
-                    %address,
-                    ?event,
-                    "found new matching event on L1"
-                );
-                last_block_with_event = Some(l1_block);
-            }
-        }
-        current_block = filter_to_block + 1;
-    }
-    Ok(last_block_with_event)
-}
-
-/// Looks for an L1 batch revert event that happened in block range `[start_block_number; latest_block]`
-/// and has affected batch `batch_number`. Returns latest L1 block that contains such an event or `None`
-/// if there is not any.
+/// Finds the L1 block containing the **currently valid** commit of `batch_number`:
+/// the newest `BlockCommit` event for that batch. Any earlier commit event was
+/// necessarily reverted and superseded (a currently-committed batch's last commit is
+/// the one in force), so reverts need no separate handling.
 ///
-/// Batch `batch_number` MUST have been committed before `start_block_number`.
-async fn find_latest_l1_revert(
-    zk_chain: &ZkChain<NodeProvider>,
-    batch_number: u64,
-    start_block_number: BlockNumber,
-    max_blocks_to_scan: u64,
-) -> anyhow::Result<Option<BlockNumber>> {
-    find_last_matching_event::<IExecutor::BlocksRevert>(
-        *zk_chain.address(),
-        zk_chain.provider(),
-        start_block_number,
-        max_blocks_to_scan,
-        |e| e.totalBatchesCommitted < batch_number,
-    )
-    .await
-}
-
-/// Finds first L1 block that contains **non-reverted** batch commitment event on L1 matching
-/// requested batch.
-///
-/// Returns latest L1 block is there is none.
-///
-/// For any batch `B` that was reverted in tx `T` belonging to L1 block `b` the following MUST hold:
-/// `b` CAN contain commit event for `B` that happened either before `T` or after `T` but MUST NOT
-/// contain both. See comments inside the implementation for more details.
+/// The caller is responsible for only asking about batches that are committed at the
+/// chain head (all callers read them from the head L1 state); for an uncommitted
+/// batch the newest event — if any — would be a stale, reverted commit.
 pub async fn find_l1_commit_block_by_batch_number(
     zk_chain: ZkChain<NodeProvider>,
     batch_number: u64,
     max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
-    let is_batch_committed = move |zk: Arc<ZkChain<NodeProvider>>, block: BlockNumber| async move {
-        let res = zk.get_total_batches_committed(block.into()).await?;
-        Ok(res >= batch_number)
-    };
-    let deployment_block = zk_chain.deployment_block().await?;
-    // This predicate is not monotonic because committed batches can be reverted. Even then, this
-    // binary search will find **some** L1 block that commits our batch. If revert and another commit
-    // happen after the found L1 block, then we will find them as handled by logic in the rest of the
-    // function. If there are none, then we will not find anything and return this L1 block as a
-    // result.
-    let l1_block_with_commit = find_l1_block_by_predicate(
-        Arc::new(zk_chain.clone()),
-        deployment_block,
-        is_batch_committed,
-    )
-    .await?;
-    tracing::debug!(
-        batch_number,
-        l1_block_with_commit,
-        "found first L1 block containing batch commitment"
-    );
-
-    let last_l1_block_with_revert = find_latest_l1_revert(
+    if batch_number == 0 {
+        // The genesis batch is baked into the contract at deployment; no commit
+        // event exists for it. Callers special-case genesis before searching, so
+        // this is only a defensive floor.
+        return Ok(0);
+    }
+    find_last_batch_event_block::<IExecutor::BlockCommit>(
         &zk_chain,
         batch_number,
-        // Start from next block as current block might contain unrelated reverts. Note that our
-        // batch was observed as committed at the END of block `l1_block_with_commit` so any
-        // preceding reverts are irrelevant.
-        l1_block_with_commit + 1,
         max_l1_blocks_to_scan,
     )
-    .await?;
-    match last_l1_block_with_revert {
-        Some(last_l1_block_with_revert) => {
-            tracing::info!(
-                batch_number,
-                last_l1_block_with_revert,
-                "looking for batch commitment after last revert"
-            );
-            // Run binary search one more time but start from `last_l1_block_with_revert` now.
-            // `last_l1_block_with_revert` might contain EITHER commit event for our batch that
-            // happened BEFORE revert or AFTER revert. But it cannot contain both, otherwise L1
-            // Watcher will index reverted commit first. To mitigate this, we can make L1 Watcher
-            // interactively resistant to reverts that happened in the same block (it would watch
-            // for both `BlockCommit` and `BlocksRevert`). This scenario should not happen in the
-            // current implementation, however, and hence can be safely ignored for now.
-            let l1_block_with_commit = find_l1_block_by_predicate(
-                Arc::new(zk_chain),
-                last_l1_block_with_revert,
-                is_batch_committed,
-            )
-            .await?;
-            tracing::info!(
-                batch_number,
-                l1_block_with_commit,
-                "found non-reverted batch commitment on L1"
-            );
-            Ok(l1_block_with_commit)
-        }
-        None => {
-            tracing::info!(
-                batch_number,
-                l1_block_with_commit,
-                "no batch reverts found on L1"
-            );
-            Ok(l1_block_with_commit)
-        }
-    }
+    .await?
+    .with_context(|| format!("no BlockCommit event found for batch {batch_number}"))
 }
 
-/// Finds first L1 block that contains batch execution event on L1 matching requested batch.
-///
-/// Returns latest L1 block is there is none.
+/// Finds the L1 block containing the execution event of `batch_number`. Execution is
+/// never reverted, so the batch has exactly one `BlockExecution` event.
 pub async fn find_l1_execute_block_by_batch_number(
     zk_chain: ZkChain<NodeProvider>,
     batch_number: u64,
+    max_l1_blocks_to_scan: u64,
 ) -> anyhow::Result<BlockNumber> {
-    // Execution cannot be reverted, so unlike in `find_l1_commit_block_by_batch_number`, we do not need
-    // to take L1 reverts into account here.
-    let deployment_block = zk_chain.deployment_block().await?;
-    find_l1_block_by_predicate(
-        Arc::new(zk_chain),
-        deployment_block,
-        move |zk, block| async move {
-            let res = zk.get_total_batches_executed(block.into()).await?;
-            Ok(res >= batch_number)
-        },
+    if batch_number == 0 {
+        // Nothing was executed yet; scanning "from genesis onwards" is the caller's
+        // correct continuation point.
+        return Ok(0);
+    }
+    find_last_batch_event_block::<IExecutor::BlockExecution>(
+        &zk_chain,
+        batch_number,
+        max_l1_blocks_to_scan,
     )
-    .await
+    .await?
+    .with_context(|| format!("no BlockExecution event found for batch {batch_number}"))
 }
 
 /// Finds the first L1 block where `interopRootLogId >= next_interop_root_id`.
@@ -516,4 +420,95 @@ pub async fn fetch_committed_batch_data(
         commit_info: commit_batch_info,
         commitment,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{backward_windows, find_l1_commit_block_by_batch_number};
+    use alloy::network::EthereumWallet;
+    use alloy::primitives::{Address, U64};
+    use alloy::providers::ProviderBuilder;
+    use alloy::rpc::types::{Block, Header, Log};
+    use alloy::transports::mock::Asserter;
+    use zksync_os_contract_interface::ZkChain;
+    use zksync_os_provider::NodeProvider;
+
+    fn header_with_number(number: u64) -> Header {
+        let mut block: Block = Block::default();
+        block.header.inner.number = number;
+        block.header
+    }
+
+    async fn mocked_provider(asserter: &Asserter) -> NodeProvider {
+        // `NodeProvider` capability probes consume three responses:
+        // get_header(latest), get_header(finalized), chain id.
+        asserter.push_success(&header_with_number(250));
+        asserter.push_success(&header_with_number(250));
+        asserter.push_success(&U64::from(1));
+        NodeProvider::new(
+            ProviderBuilder::new()
+                .disable_recommended_fillers()
+                .wallet(EthereumWallet::default())
+                .connect_mocked_client(asserter.clone()),
+        )
+        .await
+        .expect("mocked provider construction should succeed")
+    }
+
+    /// The regression pin for the chaos rig's finding #2: batch discovery must reach
+    /// the chain only through the head number and log queries. The old
+    /// implementation binary-searched with `eth_call`s at historical heights, which
+    /// fail (`BlockOutOfRangeError`) once the chain outgrows a non-archive RPC's
+    /// state retention — killing every node restart on an aged chain. The mock
+    /// serves responses in exact order, so *any* other request the discovery makes
+    /// consumes a mismatched response and fails the test.
+    #[tokio::test]
+    async fn commit_discovery_asks_only_for_the_head_and_logs() {
+        let asserter = Asserter::new();
+        let provider = mocked_provider(&asserter).await;
+        let zk_chain = ZkChain::new(Address::repeat_byte(0x11), provider);
+
+        // eth_blockNumber, then one getLogs per backward window until a hit:
+        // (151..=250) empty, (51..=150) contains the commit at block 75.
+        asserter.push_success(&U64::from(250));
+        asserter.push_success(&Vec::<Log>::new());
+        let commit_log: Log = Log {
+            block_number: Some(75),
+            ..Default::default()
+        };
+        asserter.push_success(&vec![commit_log]);
+
+        let block = find_l1_commit_block_by_batch_number(zk_chain, 7, 100)
+            .await
+            .expect("discovery should succeed against logs alone");
+        assert_eq!(block, 75);
+        assert!(
+            asserter.read_q().is_empty(),
+            "discovery made RPC calls beyond the head number and log scans"
+        );
+    }
+
+    #[test]
+    fn windows_cover_the_whole_range_newest_first_without_overlap() {
+        let windows: Vec<_> = backward_windows(10, 4).collect();
+        assert_eq!(windows, vec![(7, 10), (3, 6), (0, 2)]);
+    }
+
+    #[test]
+    fn window_edges() {
+        // Chunk exactly divides the range.
+        assert_eq!(
+            backward_windows(9, 5).collect::<Vec<_>>(),
+            vec![(5, 9), (0, 4)]
+        );
+        // Single-block chain.
+        assert_eq!(backward_windows(0, 100).collect::<Vec<_>>(), vec![(0, 0)]);
+        // Chunk larger than the chain.
+        assert_eq!(backward_windows(3, 100).collect::<Vec<_>>(), vec![(0, 3)]);
+        // A zero chunk must not loop forever.
+        assert_eq!(
+            backward_windows(2, 0).collect::<Vec<_>>(),
+            vec![(2, 2), (1, 1), (0, 0)]
+        );
+    }
 }

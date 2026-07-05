@@ -772,12 +772,59 @@ pub struct ZkChain<P: Provider> {
     instance: IZKChainInstance<P, Ethereum>,
 }
 
+/// Blocks per `eth_getLogs` request when scanning for the deployment event; public
+/// RPCs commonly cap log queries at around this range.
+const DEPLOYMENT_EVENT_SCAN_CHUNK: u64 = 10_000;
+
 impl ZkChain<NodeProvider> {
-    /// L1 block at which this diamond proxy was deployed, used as the lower bound for binary
-    /// searches over L1 history. Convenience over [`NodeProvider::deployment_block`] that the
-    /// provider caches per address.
+    /// L1 block at which this diamond proxy was deployed: the block carrying the
+    /// chain's one `GenesisUpgrade` event, found by scanning logs backward from the
+    /// head. Used as the lower bound for scans over this chain's L1 history.
+    ///
+    /// Deliberately avoids historical `get_code_at` probes — those fail once the
+    /// chain outgrows an RPC's state retention (~128–256 blocks on non-archive
+    /// nodes, similarly on long-lived anvil), which would make every node start
+    /// require an archive-grade RPC. Log queries are served over full history.
+    /// Cached per address by the provider.
     pub async fn deployment_block(&self) -> anyhow::Result<u64> {
-        self.provider().deployment_block(*self.address()).await
+        let provider = self.provider().clone();
+        let address = *self.address();
+        self.provider()
+            .deployment_block_with(address, move || async move {
+                let latest = provider.get_block_number().await?;
+                let mut high = Some(latest);
+                while let Some(hi) = high {
+                    let lo = (hi + 1).saturating_sub(DEPLOYMENT_EVENT_SCAN_CHUNK);
+                    let logs = provider
+                        .get_logs(
+                            &alloy::rpc::types::Filter::new()
+                                .address(address)
+                                .event_signature(
+                                    <IL1GenesisUpgrade::GenesisUpgrade as alloy::sol_types::SolEvent>::SIGNATURE_HASH,
+                                )
+                                .from_block(lo)
+                                .to_block(hi),
+                        )
+                        .await?;
+                    if let Some(log) = logs.last() {
+                        let block = log
+                            .block_number
+                            .ok_or_else(|| anyhow::anyhow!("indexed log without block number"))?;
+                        tracing::debug!(
+                            %address,
+                            deployment_block = block,
+                            "resolved diamond proxy deployment block from the GenesisUpgrade event"
+                        );
+                        return Ok(block);
+                    }
+                    high = lo.checked_sub(1);
+                }
+                // No event anywhere: the proxy is not deployed on this chain (e.g. bare
+                // local setups). `0` keeps the value usable as a scan floor, matching
+                // `NodeProvider::deployment_block` semantics.
+                Ok(0)
+            })
+            .await
     }
 }
 

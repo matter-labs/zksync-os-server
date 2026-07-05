@@ -57,6 +57,7 @@ impl InteropWatcher {
             return Ok(None);
         }
 
+        let max_blocks_to_process = config.max_blocks_to_process;
         let resolve_segments = move |starting_interop_root_id: u64| async move {
             let mut segments = Vec::new();
             for interval in intervals.intervals() {
@@ -105,14 +106,18 @@ impl InteropWatcher {
                 // is that they will be stuck in memory until the next restart.
                 let end_block = match interval.last_batch {
                     Some(last_batch) => Some(
-                        find_l1_execute_block_by_batch_number(gw_zk_chain.clone(), last_batch)
-                            .await
-                            .with_context(|| {
-                                format!(
-                                    "failed to find Gateway execute block for batch \
-                                     #{last_batch} in interval {interval}"
-                                )
-                            })?,
+                        find_l1_execute_block_by_batch_number(
+                            gw_zk_chain.clone(),
+                            last_batch,
+                            max_blocks_to_process,
+                        )
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to find Gateway execute block for batch \
+                                 #{last_batch} in interval {interval}"
+                            )
+                        })?,
                     ),
                     None => None,
                 };
