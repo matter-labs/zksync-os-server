@@ -46,6 +46,8 @@ fn generate_validator_keys() -> ValidatorKeys {
 
 /// One validator slot: a running node, a stopped one (restartable on the same state
 /// and keys), or the momentary in-between while a transition is in flight.
+/// (Test-harness type — the size imbalance between variants is irrelevant here.)
+#[allow(clippy::large_enum_variant)]
 enum Validator {
     Running(Tester),
     Stopped(StoppedTester),
@@ -90,6 +92,89 @@ impl MultiNodeTester {
         proxied_l1.address = proxy.url();
         let tester = Self::start_inner(num_validators, chain_layout, proxied_l1).await?;
         Ok((tester, proxy))
+    }
+
+    /// The migration cutover: a committee takes over a chain that a single
+    /// sequencer produced. `source` is the drained (stopped) sequencer node; every
+    /// validator starts on a copy of its chain databases — the snapshot-distribution
+    /// step of a real migration — with consensus anchored at the drained tip.
+    pub async fn migrate_from(
+        source: &StoppedTester,
+        num_validators: usize,
+    ) -> anyhow::Result<Self> {
+        assert!(
+            num_validators >= 2,
+            "a committee needs at least 2 validators"
+        );
+
+        // The anchor is the drained chain's exact write-ahead-log tip. An RPC height
+        // read before the stop is not reliable (the sequencer keeps producing until
+        // the process winds down), so read it from the stopped node's database —
+        // the same thing a migration operator does after draining.
+        let source_rocks = source.config.general_config.rocks_db_path.clone();
+        crate::wait_for_rocksdb_locks_released(&source_rocks).await?;
+        let anchor_height = {
+            use zksync_os_storage_api::ReadReplay as _;
+            let wal = zksync_os_storage::db::BlockReplayStorage::new_without_genesis(
+                &source_rocks.join(zksync_os_server::BLOCK_REPLAY_WAL_DB_NAME),
+            );
+            wal.latest_record()
+        };
+
+        let keys: Vec<ValidatorKeys> = (0..num_validators)
+            .map(|_| generate_validator_keys())
+            .collect();
+        let mut consensus_ports = Vec::with_capacity(num_validators);
+        for _ in 0..num_validators {
+            consensus_ports.push(LockedPort::acquire_unused().await?);
+        }
+        let committee: Vec<String> = keys
+            .iter()
+            .zip(&consensus_ports)
+            .map(|(keys, port)| format!("{}@127.0.0.1:{}", keys.committee_entry_keys, port.port))
+            .collect();
+
+        let l1 = source.l1.clone();
+        let chain_layout = source.chain_layout;
+        // Chain constants are committee-wide and pinned by verification; keeping the
+        // pre-migration chain's fee collector is the realistic choice (any uniform
+        // value would verify — fees flow wherever the committee configures).
+        let fee_collector = source.config.sequencer_config.fee_collector_address;
+        let launches =
+            keys.iter()
+                .zip(&consensus_ports)
+                .enumerate()
+                .map(|(index, (keys, consensus_port))| {
+                    let l1 = l1.clone();
+                    let committee = committee.clone();
+                    let network_key = alloy::hex::encode(keys.network.encode());
+                    let bls_key = alloy::hex::encode(keys.bls.encode());
+                    let listen_address = format!("127.0.0.1:{}", consensus_port.port);
+                    let source_rocks = source_rocks.clone();
+                    async move {
+                        let mut config = build_node_config(&l1, chain_layout, false).await?;
+                        disable_prover_input_generation(&mut config);
+                        config.general_config.node_role = NodeRole::MainNode;
+                        config.sequencer_config.fee_collector_address = fee_collector;
+                        // Exactly one batcher, as before the migration.
+                        config.batcher_config.enabled = index == 0;
+                        config.consensus_config.enabled = true;
+                        config.consensus_config.network_key = Some(network_key);
+                        config.consensus_config.bls_key = Some(bls_key);
+                        config.consensus_config.listen_address = listen_address;
+                        config.consensus_config.validators = committee;
+                        config.consensus_config.allow_private_ips = true;
+                        config.consensus_config.genesis_height = anchor_height;
+                        Tester::launch_with_seeded_state(l1, chain_layout, config, &source_rocks)
+                            .await
+                            .with_context(|| format!("failed to launch migrated validator {index}"))
+                    }
+                });
+        let nodes = try_join_all(launches).await?;
+        Ok(Self {
+            validators: nodes.into_iter().map(Validator::Running).collect(),
+            consensus_ports,
+        })
     }
 
     async fn start_inner(

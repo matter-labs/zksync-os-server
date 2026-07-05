@@ -310,12 +310,12 @@ pub struct Tester {
 /// started again.
 #[derive(Debug)]
 pub struct StoppedTester {
-    l1: AnvilL1,
-    config: Config,
+    pub(crate) l1: AnvilL1,
+    pub(crate) config: Config,
     ports: Ports,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
-    chain_layout: ChainLayout<'static>,
+    pub(crate) chain_layout: ChainLayout<'static>,
     owned_supporting_nodes: Vec<SupportingNode>,
 }
 
@@ -590,6 +590,23 @@ impl Tester {
         let tempdir = Arc::new(tempfile::tempdir()?);
         let ports = Ports::acquire_unused().await?;
         Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config, &ports);
+        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
+    }
+
+    /// Like [`Self::launch_with_new_runtime`], but the node starts on a *copy* of
+    /// another node's chain databases — the snapshot-distribution step of a
+    /// migration, where every new validator receives the drained sequencer's chain
+    /// state. `seed_rocks_from` is the source node's RocksDB root.
+    pub(crate) async fn launch_with_seeded_state(
+        l1: AnvilL1,
+        chain_layout: ChainLayout<'static>,
+        mut config: Config,
+        seed_rocks_from: &std::path::Path,
+    ) -> anyhow::Result<Self> {
+        let tempdir = Arc::new(tempfile::tempdir()?);
+        let ports = Ports::acquire_unused().await?;
+        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config, &ports);
+        copy_dir_recursively(seed_rocks_from, &config.general_config.rocks_db_path)?;
         Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
     }
 
@@ -1008,6 +1025,23 @@ async fn wait_for_port_to_be_unused(port: u16) -> anyhow::Result<()> {
     }
 }
 
+/// Recursively copies a directory tree — the snapshot-distribution step of a
+/// migration, where a fresh validator starts on a copy of the drained sequencer's
+/// chain databases.
+fn copy_dir_recursively(from: &std::path::Path, to: &std::path::Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursively(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 /// Waits until every RocksDB instance under `rocks_db_path` has released its `LOCK`
 /// file. `graceful_shutdown` returning does not guarantee storage handles are
 /// dropped — pipeline teardown can lag a moment — and an in-process relaunch that
@@ -1015,7 +1049,9 @@ async fn wait_for_port_to_be_unused(port: u16) -> anyhow::Result<()> {
 /// node startup gets, the more often the relaunch wins, so the gate belongs here
 /// rather than in sleeps sprinkled over tests. (The multi-node consensus harness
 /// gates the same way on the consensus instance lock.)
-async fn wait_for_rocksdb_locks_released(rocks_db_path: &std::path::Path) -> anyhow::Result<()> {
+pub(crate) async fn wait_for_rocksdb_locks_released(
+    rocks_db_path: &std::path::Path,
+) -> anyhow::Result<()> {
     use fs2::FileExt as _;
     let deadline = tokio::time::Instant::now() + PORT_ACQUISITION_TIMEOUT;
     loop {

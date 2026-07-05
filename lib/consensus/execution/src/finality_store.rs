@@ -134,11 +134,34 @@ impl FinalityStore {
             .map_err(|_| anyhow::anyhow!("stored consensus era is not a 32-byte digest"))
     }
 
-    pub fn record_consensus_era(&self, genesis_digest: [u8; 32]) -> anyhow::Result<()> {
+    /// `anchor_height` floors the certified watermark: heights at or below the
+    /// consensus anchor are pre-consensus history — finalized by the era cutover
+    /// itself, with no certificates to wait for. Without the floor, a migrated
+    /// chain's watermark would wait forever for certificates that can never exist.
+    pub fn record_consensus_era(
+        &self,
+        genesis_digest: [u8; 32],
+        anchor_height: u64,
+    ) -> anyhow::Result<()> {
         let mut batch = self.db.new_write_batch();
         batch.put_cf(FinalityCF::Meta, ERA_KEY, &genesis_digest);
         self.db.write(batch)?;
-        Ok(())
+        {
+            let _guard = self.watermark_lock.lock().unwrap();
+            if anchor_height > 0 && self.certified_watermark()?.unwrap_or(0) < anchor_height {
+                let mut batch = self.db.new_write_batch();
+                batch.put_cf(
+                    FinalityCF::Meta,
+                    WATERMARK_KEY,
+                    &anchor_height.to_be_bytes(),
+                );
+                self.db.write(batch)?;
+                self.watermark_watch.send_replace(Some(anchor_height));
+            }
+        }
+        // Certificates observed before the era was recorded may already continue
+        // past the floor.
+        self.advance_watermark()
     }
 
     /// Records the highest consensus round this validator has *seen* — an upper
@@ -320,6 +343,25 @@ mod tests {
         }
         let store = FinalityStore::open(dir.path()).expect("reopen");
         assert_eq!(store.highest_observed_round().expect("read"), Some((1, 1)));
+    }
+
+    #[test]
+    fn era_recording_floors_the_watermark_at_the_anchor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FinalityStore::open(dir.path()).expect("open");
+        // A migrated chain: heights 1..=20 are pre-consensus, no certificates exist
+        // for them and none ever will.
+        store.record_consensus_era([7; 32], 20).expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(20));
+        // The first consensus-era block certifies normally on top of the floor.
+        store.index_height(21, [1; 32]).expect("write");
+        store
+            .put_certificate(&certificate(1, [1; 32]))
+            .expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(21));
+        // Re-recording the same era never regresses anything.
+        store.record_consensus_era([7; 32], 20).expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(21));
     }
 
     #[test]

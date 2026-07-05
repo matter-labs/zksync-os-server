@@ -119,7 +119,10 @@ use zksync_os_storage_api::{
 };
 use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAcceptanceState};
 
-const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
+/// Directory name of the write-ahead log inside `general.rocks_db_path`. Public so
+/// tooling (and the test harness) can locate a *stopped* node's WAL — e.g. to read
+/// the drained tip during a migration.
+pub const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
@@ -779,22 +782,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // block executor (pacing workaround) or by the consensus environment (commit acks).
     let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
 
-    // Rollback guard: running single-sequencer on a chain that has consensus state
-    // strands that state, and a later re-enable could mix two consensus histories.
-    // Refuse unless the operator acknowledged a deliberate rollback (which never
-    // deletes anything — the write-ahead log is valid either way, and the consensus
-    // state stays on disk).
+    // Rollback guard (decision unit-tested in the consensus module): running
+    // single-sequencer on a chain that has consensus state requires an explicit
+    // acknowledgment. Nothing is ever deleted.
     if !config.consensus_config.enabled {
         let engine_dir = config.general_config.rocks_db_path.join("consensus");
         let has_consensus_state = std::fs::read_dir(&engine_dir)
             .map(|mut entries| entries.next().is_some())
             .unwrap_or(false);
-        if has_consensus_state && !config.consensus_config.acknowledge_rollback {
-            panic!(
-                "this chain has consensus state ({}) but consensus is disabled. If this                  rollback to single-sequencer operation is deliberate, set                  `consensus.acknowledge_rollback: true`; the consensus state is left untouched",
-                engine_dir.display(),
-            );
-        }
+        consensus::check_rollback_acknowledged(
+            has_consensus_state,
+            config.consensus_config.acknowledge_rollback,
+        )
+        .unwrap_or_else(|err| panic!("{err} (consensus engine state: {})", engine_dir.display()));
     }
 
     // In consensus mode the mempool and fee sourcing drive the consensus block builder;
@@ -898,11 +898,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .expect("failed to open the finality store"),
         );
 
-        // The consensus-era guards. The era is the consensus genesis digest (anchor
-        // height + anchored block hash): recorded at the first consensus start,
-        // checked on every later one, so that a mis-configured anchor — or a
-        // re-migration over stale engine state after a rollback — fails startup
-        // instead of mixing two consensus histories.
+        // The consensus-era guards (the decision matrix is pure and unit-tested in
+        // the consensus module; this block only gathers its inputs and applies the
+        // outcome).
         {
             use commonware_cryptography::Digestible as _;
             let genesis_digest = zksync_os_wire::ConsensusBlock::genesis_at(
@@ -915,48 +913,31 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             let engine_state_is_fresh = std::fs::read_dir(&engine_dir)
                 .map(|mut entries| entries.next().is_none())
                 .unwrap_or(true);
-            match finality_store
+            let recorded = finality_store
                 .consensus_era()
-                .expect("failed to read the consensus era")
-            {
-                Some(recorded) if recorded == era => {}
-                Some(_) if engine_state_is_fresh => {
-                    // The engine state was deliberately cleared: a re-migration (the
-                    // rollback-then-migrate-again procedure). Adopt the new era.
-                    tracing::warn!(
-                        anchor_height,
-                        "consensus era changed over cleared engine state — starting a new                          consensus era at the configured anchor"
-                    );
-                    assert_eq!(
-                        committed_height, anchor_height,
-                        "a new consensus era must start exactly at the agreed cutover: the                          write-ahead log ends at {committed_height} but `consensus.genesis_height`                          is {anchor_height}",
-                    );
+                .expect("failed to read the consensus era");
+            let decision = consensus::decide_consensus_era(
+                recorded,
+                era,
+                engine_state_is_fresh,
+                committed_height,
+                anchor.genesis_height,
+            )
+            .unwrap_or_else(|err| {
+                panic!("{err} (consensus engine state: {})", engine_dir.display())
+            });
+            match decision {
+                consensus::EraDecision::Proceed => {}
+                consensus::EraDecision::Adopt => {
+                    if recorded.is_some() {
+                        tracing::warn!(
+                            anchor_height = anchor.genesis_height,
+                            "consensus era changed over cleared engine state — starting a new \
+                             consensus era at the configured anchor"
+                        );
+                    }
                     finality_store
-                        .record_consensus_era(era)
-                        .expect("failed to record the consensus era");
-                }
-                Some(_) => panic!(
-                    "this chain previously ran consensus with a different anchor than                      `consensus.genesis_height` = {anchor_height} derives. If this is a deliberate                      re-migration after a rollback, clear the consensus engine state ({}) and                      restart; otherwise fix the configured genesis height",
-                    engine_dir.display(),
-                ),
-                None if engine_state_is_fresh => {
-                    // The first consensus start of this chain: it must happen exactly
-                    // at the agreed cutover — a write-ahead log that already ran past
-                    // the anchor means the committee's agreed anchor is stale.
-                    assert_eq!(
-                        committed_height, anchor_height,
-                        "the first consensus start must happen exactly at the agreed cutover:                          the write-ahead log ends at {committed_height} but                          `consensus.genesis_height` is {anchor_height}",
-                    );
-                    finality_store
-                        .record_consensus_era(era)
-                        .expect("failed to record the consensus era");
-                }
-                None => {
-                    // A consensus instance from before era tracking existed: adopt its
-                    // era as this one (the anchor still derives it — a mismatch would
-                    // have broken consensus itself long before this check).
-                    finality_store
-                        .record_consensus_era(era)
+                        .record_consensus_era(era, anchor.genesis_height)
                         .expect("failed to record the consensus era");
                 }
             }

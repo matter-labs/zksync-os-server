@@ -97,6 +97,72 @@ fn decode_hex_key<T: commonware_codec::DecodeExt<()>>(hex: &str) -> anyhow::Resu
     T::decode(bytes.as_slice()).map_err(|err| anyhow::anyhow!("invalid key encoding: {err}"))
 }
 
+/// What startup should do about the consensus era: proceed on a match, or record
+/// the (new) era. Any state that could mix two consensus histories is an error.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EraDecision {
+    /// The recorded era matches the configured anchor — normal operation.
+    Proceed,
+    /// Record the configured era: the first consensus start of this chain, a
+    /// deliberate re-migration over cleared engine state, or an instance from
+    /// before era tracking existed.
+    Adopt,
+}
+
+/// The consensus-era guard, pure so the whole matrix is unit-testable. The era is
+/// the consensus genesis digest (anchor height + anchored block hash): recorded at
+/// the first consensus start, compared on every later one.
+pub fn decide_consensus_era(
+    recorded: Option<[u8; 32]>,
+    configured: [u8; 32],
+    engine_state_is_fresh: bool,
+    wal_tip: u64,
+    anchor_height: u64,
+) -> anyhow::Result<EraDecision> {
+    match (recorded, engine_state_is_fresh) {
+        (Some(era), _) if era == configured => Ok(EraDecision::Proceed),
+        (Some(_), false) => anyhow::bail!(
+            "this chain previously ran consensus with a different anchor than \
+             `consensus.genesis_height` = {anchor_height} derives. If this is a deliberate \
+             re-migration after a rollback, clear the consensus engine state and restart; \
+             otherwise fix the configured genesis height"
+        ),
+        // A different era over deliberately cleared engine state (re-migration), or
+        // no era at all over fresh state (the first consensus start of this chain):
+        // either way this is an era's first start and must happen exactly at the
+        // agreed cutover — a write-ahead log that ran past the anchor means the
+        // committee's agreed anchor is stale.
+        (_, true) => {
+            anyhow::ensure!(
+                wal_tip == anchor_height,
+                "a consensus era must start exactly at the agreed cutover: the write-ahead \
+                 log ends at {wal_tip} but `consensus.genesis_height` is {anchor_height}"
+            );
+            Ok(EraDecision::Adopt)
+        }
+        // No marker over existing engine state: an instance from before era tracking
+        // existed. Adopt its era (the anchor still derives it — a mismatch would have
+        // broken consensus itself long before this check).
+        (None, false) => Ok(EraDecision::Adopt),
+    }
+}
+
+/// The rollback guard: single-sequencer operation over existing consensus state
+/// strands that state and a later re-enable could mix histories — refuse unless the
+/// operator acknowledged the rollback. Never deletes anything.
+pub fn check_rollback_acknowledged(
+    has_consensus_state: bool,
+    acknowledged: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !has_consensus_state || acknowledged,
+        "this chain has consensus state but consensus is disabled. If this rollback to \
+         single-sequencer operation is deliberate, set `consensus.acknowledge_rollback: \
+         true`; the consensus state is left untouched"
+    );
+    Ok(())
+}
+
 /// Everything the consensus thread needs, resolved and validated on the node side
 /// before the thread spawns (so misconfiguration fails startup, not a background
 /// thread).
@@ -673,4 +739,56 @@ fn unix_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ERA_A: [u8; 32] = [0xA; 32];
+    const ERA_B: [u8; 32] = [0xB; 32];
+
+    #[test]
+    fn era_guard_covers_the_whole_matrix() {
+        // Normal operation: the recorded era matches, at any WAL tip.
+        assert_eq!(
+            decide_consensus_era(Some(ERA_A), ERA_A, false, 500, 0).unwrap(),
+            EraDecision::Proceed
+        );
+
+        // First consensus start: fresh everything, exactly at the cutover.
+        assert_eq!(
+            decide_consensus_era(None, ERA_A, true, 20, 20).unwrap(),
+            EraDecision::Adopt
+        );
+        // ... but never off the cutover (the sequencer ran past the agreed anchor,
+        // or the node is missing history).
+        assert!(decide_consensus_era(None, ERA_A, true, 25, 20).is_err());
+        assert!(decide_consensus_era(None, ERA_A, true, 15, 20).is_err());
+
+        // Deliberate re-migration: a different era over cleared engine state, at
+        // the new cutover.
+        assert_eq!(
+            decide_consensus_era(Some(ERA_A), ERA_B, true, 40, 40).unwrap(),
+            EraDecision::Adopt
+        );
+        assert!(decide_consensus_era(Some(ERA_A), ERA_B, true, 41, 40).is_err());
+
+        // Era mixing: a different era over EXISTING engine state is always fatal.
+        assert!(decide_consensus_era(Some(ERA_A), ERA_B, false, 40, 40).is_err());
+
+        // Legacy instance from before era tracking: adopt regardless of tip.
+        assert_eq!(
+            decide_consensus_era(None, ERA_A, false, 500, 0).unwrap(),
+            EraDecision::Adopt
+        );
+    }
+
+    #[test]
+    fn rollback_requires_acknowledgment_over_consensus_state() {
+        assert!(check_rollback_acknowledged(true, false).is_err());
+        check_rollback_acknowledged(true, true).unwrap();
+        check_rollback_acknowledged(false, false).unwrap();
+        check_rollback_acknowledged(false, true).unwrap();
+    }
 }
