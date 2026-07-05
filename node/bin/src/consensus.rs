@@ -40,8 +40,15 @@ use zksync_os_types::L2Envelope;
 
 use crate::config::ConsensusConfig;
 
-/// Domain-separation namespace for everything this network signs and speaks.
-const NAMESPACE: &[u8] = b"zksync-os-consensus";
+/// Domain-separation namespace for everything this network signs and speaks,
+/// carrying the committee protocol version. Consensus messages cannot be
+/// per-connection negotiated (a certificate aggregates signatures over one message
+/// encoding, so the whole committee must speak one version per round) — versioning
+/// the namespace makes a version mismatch fail at the handshake, loudly, instead of
+/// producing garbage decodes or cross-version signature confusion.
+fn namespace(protocol_version: u32) -> Vec<u8> {
+    format!("zksync-os-consensus/{protocol_version}").into_bytes()
+}
 
 /// Channel ids, one per consensus traffic class. Every validator must register the
 /// same set — an unrecognized channel gets its sender banned.
@@ -101,6 +108,10 @@ pub struct ConsensusSetup {
     pub allow_private_ips: bool,
     pub max_message_size: usize,
     pub storage_directory: PathBuf,
+    /// The protocol-versioned base namespace (see [`namespace`]); the signing
+    /// namespace already baked it into `scheme`, the p2p stack derives from it at
+    /// startup.
+    pub namespace: Vec<u8>,
 }
 
 impl ConsensusSetup {
@@ -140,8 +151,9 @@ impl ConsensusSetup {
             .map(|member| (member.network_key.clone(), member.bls_key))
             .try_collect()
             .map_err(|err| anyhow::anyhow!("duplicate committee member: {err:?}"))?;
-        let namespace = union_unique(NAMESPACE, b"_CONSENSUS");
-        let scheme = Scheme::signer(&namespace, participants, bls_key).context(
+        let base_namespace = namespace(config.protocol_version);
+        let signing_namespace = union_unique(&base_namespace, b"_CONSENSUS");
+        let scheme = Scheme::signer(&signing_namespace, participants, bls_key).context(
             "this validator's BLS key does not belong to any configured committee member",
         )?;
 
@@ -164,6 +176,7 @@ impl ConsensusSetup {
             allow_private_ips: config.allow_private_ips,
             max_message_size: config.max_message_size,
             storage_directory,
+            namespace: base_namespace,
         })
     }
 }
@@ -269,7 +282,7 @@ where
         // fixed at values suitable for small committees on good links; expose the ones
         // staging shows a need to tune (leader timeout, quotas, message size already is).
         let p2p_config = lookup::Config {
-            namespace: union_unique(NAMESPACE, b"_P2P"),
+            namespace: union_unique(&setup.namespace, b"_P2P"),
             crypto: setup.network_key.clone(),
             listen: setup.listen_address,
             max_message_size: setup.max_message_size as u32,
@@ -557,6 +570,31 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
     type Activity = ConsensusActivity;
 
     async fn report(&mut self, activity: Self::Activity) {
+        // Every vote or certificate names its round; the highest one ever seen is
+        // persisted as the recovery floor for journal-loss restarts (see
+        // `FinalityStore::note_observed_round`). Fault-evidence kinds are skipped —
+        // their rounds ride inside the evidence pairs, and the votes they contain
+        // were already observed individually.
+        let observed_round = match &activity {
+            Activity::Notarize(vote) => Some(vote.round()),
+            Activity::Notarization(certificate) => Some(certificate.round()),
+            Activity::Certification(certificate) => Some(certificate.round()),
+            Activity::Nullify(vote) => Some(vote.round()),
+            Activity::Nullification(certificate) => Some(certificate.round()),
+            Activity::Finalize(vote) => Some(vote.round()),
+            Activity::Finalization(finalization) => Some(finalization.round()),
+            Activity::ConflictingNotarize(_)
+            | Activity::ConflictingFinalize(_)
+            | Activity::NullifyFinalize(_) => None,
+        };
+        if let Some(round) = observed_round
+            && let Err(err) = self
+                .finality
+                .note_observed_round(round.epoch().get(), round.view().get())
+        {
+            tracing::error!(?err, "failed to persist the observed-round floor");
+        }
+
         let kind = match &activity {
             Activity::Notarize(_) => "notarize",
             Activity::Notarization(_) => "notarization",

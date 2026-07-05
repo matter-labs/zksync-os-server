@@ -91,3 +91,28 @@ fn record_frames_with_trailing_garbage_are_rejected() {
         "a record frame with trailing bytes must not decode",
     );
 }
+
+/// A record framed with a future version discriminator (a first byte below RLP's
+/// list-prefix range) is a leader speaking a wire version this node does not know:
+/// a clean, named decode error — the routine no-vote path — never a panic and never
+/// misinterpretation as v3.
+#[test]
+fn future_record_versions_are_rejected_cleanly() {
+    let genesis = ConsensusBlock::genesis(B256::repeat_byte(0x11));
+    let block = ConsensusBlock::from_record(&genesis, empty_record());
+    let mut encoded = encode_block(&block);
+
+    // Replace the record bytes with a hypothetical v4 frame: discriminator 0x04
+    // followed by arbitrary payload. Adjust the length prefix accordingly.
+    const LENGTH_PREFIX_AT: usize = 8 + 32 + 1;
+    let fake_record = [0x04, 0xDE, 0xAD, 0xBE, 0xEF];
+    encoded.truncate(LENGTH_PREFIX_AT);
+    encoded.extend_from_slice(&(fake_record.len() as u64).to_be_bytes());
+    encoded.extend_from_slice(&fake_record);
+
+    let result = ConsensusBlock::read_cfg(&mut encoded.as_slice(), &());
+    assert!(
+        result.is_err(),
+        "an unknown record wire version must not decode",
+    );
+}

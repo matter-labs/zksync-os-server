@@ -197,6 +197,18 @@ impl MultiNodeTester {
     /// Restarts a stopped validator on its original state and keys. It rejoins the
     /// committee, backfills what it missed, and participates again.
     pub async fn start_validator(&mut self, index: usize) -> anyhow::Result<()> {
+        self.start_validator_with_config_overrides(index, |_| {})
+            .await
+    }
+
+    /// Like [`Self::start_validator`], but the new incarnation runs a modified
+    /// configuration — how tests pin what a misconfigured (or half-upgraded)
+    /// validator does to the committee, e.g. one on a different protocol version.
+    pub async fn start_validator_with_config_overrides(
+        &mut self,
+        index: usize,
+        configure: impl FnOnce(&mut zksync_os_server::config::Config),
+    ) -> anyhow::Result<()> {
         let validator = std::mem::replace(&mut self.validators[index], Validator::Transitioning);
         let Validator::Stopped(stopped) = validator else {
             anyhow::bail!("validator {index} is not stopped");
@@ -244,7 +256,7 @@ impl MultiNodeTester {
                 }
             }
         }
-        self.validators[index] = Validator::Running(stopped.start().await?);
+        self.validators[index] = Validator::Running(stopped.start_with_overrides(configure).await?);
         Ok(())
     }
 

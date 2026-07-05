@@ -116,12 +116,30 @@ impl ConsensusBlock {
     }
 }
 
+// Emitting is deliberately pinned to one version: a leader proposes in the newest
+// encoding the whole committee is known to decode, and that fact changes by
+// committee-coordinated configuration (decoders widen in one release, emission
+// flips in a later one), not per node.
 fn encode_record(record: &ReplayRecord) -> Vec<u8> {
     let wire: replays::v3::ReplayRecord = record.clone().into();
     alloy_rlp::encode(&wire)
 }
 
 fn decode_record(bytes: &[u8]) -> Result<ReplayRecord, Error> {
+    // Version dispatch on the first byte, the way EIP-2718 typed transactions
+    // coexist with legacy RLP ones: an RLP-encoded record always starts with a list
+    // prefix (>= 0xc0), so low bytes are free to act as version discriminators for
+    // future record encodings. Today v3 is the only released version; a low first
+    // byte is a leader running a wire version this node does not know, which is a
+    // routine no-vote (the committee widens decoders before anyone emits a new
+    // version), never a panic.
+    match bytes.first() {
+        None => return Err(Error::EndOfBuffer),
+        Some(discriminator @ 0x01..=0x7f) => {
+            return Err(Error::InvalidEnum(*discriminator));
+        }
+        _ => {}
+    }
     let mut remaining = bytes;
     let wire = <replays::v3::ReplayRecord as alloy_rlp::Decodable>::decode(&mut remaining)
         .map_err(|err| Error::Wrapped("decoding wire replay record", err.into()))?;

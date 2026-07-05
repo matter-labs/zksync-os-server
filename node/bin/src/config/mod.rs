@@ -688,6 +688,14 @@ pub struct ConsensusConfig {
     /// Allow validator connections to private IPs (local and containerized networks).
     #[config(default_t = false)]
     pub allow_private_ips: bool,
+    /// The committee protocol version, carried in the network's domain-separation
+    /// namespaces (p2p handshake and vote signing). A committee-wide fact:
+    /// validators on different protocol versions must fail to pair — loudly, at the
+    /// handshake — rather than exchange messages they interpret differently.
+    /// Deploying a binary that supports a newer version and activating that version
+    /// are separate steps; bumping this value is the coordinated activation.
+    #[config(default_t = 1)]
+    pub protocol_version: u32,
     /// Upper bound on a consensus network message (must fit the largest block).
     #[config(default_t = 16 * 1024 * 1024)]
     pub max_message_size: usize,

@@ -55,6 +55,7 @@ impl NamedColumnFamily for FinalityCF {
 }
 
 const WATERMARK_KEY: &[u8] = b"certified_watermark";
+const OBSERVED_ROUND_KEY: &[u8] = b"highest_observed_round";
 
 pub struct FinalityStore {
     db: RocksDB<FinalityCF>,
@@ -114,6 +115,43 @@ impl FinalityStore {
         batch.put_cf(FinalityCF::HeightIndex, &height.to_be_bytes(), &digest);
         self.db.write(batch)?;
         self.advance_watermark()
+    }
+
+    /// Records the highest consensus round this validator has *seen* — an upper
+    /// bound on the views it could have signed votes in. This is the recovery floor
+    /// for the one scenario the consensus engine's own journal cannot cover: the
+    /// journal becoming unreadable (a consensus-library upgrade breaking its format,
+    /// disk loss). The restart runbook then requires the live committee's view to be
+    /// beyond this floor before the validator starts voting again — seconds of
+    /// waiting instead of an equivocation risk. Deliberately not enforced inside the
+    /// engine (vote admission is the consensus library's job; this is operator
+    /// input), and deliberately an over-approximation (observing a round is cheaper
+    /// and safer to track than proving which rounds were signed).
+    pub fn note_observed_round(&self, epoch: u64, view: u64) -> anyhow::Result<()> {
+        let _guard = self.watermark_lock.lock().unwrap();
+        if let Some((seen_epoch, seen_view)) = self.highest_observed_round()?
+            && (epoch, view) <= (seen_epoch, seen_view)
+        {
+            return Ok(());
+        }
+        let mut value = Vec::with_capacity(16);
+        value.extend_from_slice(&epoch.to_be_bytes());
+        value.extend_from_slice(&view.to_be_bytes());
+        let mut batch = self.db.new_write_batch();
+        batch.put_cf(FinalityCF::Meta, OBSERVED_ROUND_KEY, &value);
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    /// The highest `(epoch, view)` ever observed by this validator, if any.
+    pub fn highest_observed_round(&self) -> anyhow::Result<Option<(u64, u64)>> {
+        let Some(bytes) = self.db.get_cf(FinalityCF::Meta, OBSERVED_ROUND_KEY)? else {
+            return Ok(None);
+        };
+        anyhow::ensure!(bytes.len() == 16, "stored observed round is not two u64s");
+        let epoch = u64::from_be_bytes(bytes[..8].try_into().expect("checked length"));
+        let view = u64::from_be_bytes(bytes[8..].try_into().expect("checked length"));
+        Ok(Some((epoch, view)))
     }
 
     pub fn certificate_by_digest(
@@ -240,6 +278,24 @@ mod tests {
             .expect("present");
         assert_eq!(by_height.view, 11);
         assert!(store.certificate_by_height(4).expect("read").is_none());
+    }
+
+    #[test]
+    fn observed_round_floor_is_monotone_and_survives_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let store = FinalityStore::open(dir.path()).expect("open");
+            assert_eq!(store.highest_observed_round().expect("read"), None);
+            store.note_observed_round(0, 5).expect("write");
+            // A lower round never regresses the floor.
+            store.note_observed_round(0, 3).expect("write");
+            assert_eq!(store.highest_observed_round().expect("read"), Some((0, 5)));
+            // A later epoch advances it regardless of the view number.
+            store.note_observed_round(1, 1).expect("write");
+            assert_eq!(store.highest_observed_round().expect("read"), Some((1, 1)));
+        }
+        let store = FinalityStore::open(dir.path()).expect("reopen");
+        assert_eq!(store.highest_observed_round().expect("read"), Some((1, 1)));
     }
 
     #[test]

@@ -517,3 +517,90 @@ async fn external_node_syncs_from_a_consensus_validator() -> anyhow::Result<()> 
     en.shutdown().await?;
     cluster.shutdown_all().await
 }
+
+/// The committee protocol version is part of the network's identity: a validator
+/// configured with a different version must fail to pair at the handshake — cleanly
+/// and loudly — rather than exchange messages the committee would interpret
+/// differently. A committee of n >= 3f+1 rides through it as a one-member fault;
+/// deploying a binary that *supports* a new version is thus always safe, and only
+/// the coordinated activation (flipping the config) changes behavior.
+#[test_log::test(tokio::test)]
+async fn validator_on_a_different_protocol_version_cannot_pair() -> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::start(4).await?;
+
+    // A healthy baseline: the full committee applies the same chain.
+    let recipient = Address::repeat_byte(0x77);
+    let included_at = send_transfer(&cluster, 1, recipient).await?;
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+
+    // Validator 3 comes back believing the committee speaks protocol version 2.
+    let height_before_restart = {
+        use alloy::providers::Provider as _;
+        cluster.node(3).l2_provider.get_block_number().await?
+    };
+    cluster.stop_validator(3).await?;
+    cluster
+        .start_validator_with_config_overrides(3, |config| {
+            config.consensus_config.protocol_version = 2;
+        })
+        .await?;
+
+    // The remaining three are exactly quorum: the committee is unimpaired.
+    let second_at = send_transfer(&cluster, 0, recipient).await?;
+    for index in 0..3 {
+        wait_for_block_on(cluster.node(index), second_at, CONVERGENCE_TIMEOUT).await?;
+    }
+
+    // What "cannot pair" observably means: the validator's consensus knowledge
+    // freezes where its own disk left off. (Its journal replay re-reports rounds it
+    // finalized *before* the restart, so merely "observed a finalization" proves
+    // nothing — the sharp fact is that the committee's finalized view keeps
+    // advancing while the mismatched validator's stands still.)
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    fn finalized_view(status: zksync_os_status_server::StatusResponse) -> u64 {
+        status
+            .consensus
+            .and_then(|consensus| consensus.finalized)
+            .map(|finalized| finalized.view)
+            .unwrap_or(0)
+    }
+    let stuck_view = finalized_view(cluster.node(3).status().await?);
+
+    // Let the committee finalize well past everything the mismatched validator knows.
+    let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        let committee_view = finalized_view(cluster.node(0).status().await?);
+        if committee_view >= stuck_view + 40 {
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the committee's finalized view did not advance past the mismatched \
+             validator's ({committee_view} vs {stuck_view})",
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    let view_now = finalized_view(cluster.node(3).status().await?);
+    assert_eq!(
+        view_now, stuck_view,
+        "a protocol-mismatched validator must not observe new finalizations",
+    );
+    let height_after = {
+        use alloy::providers::Provider as _;
+        cluster.node(3).l2_provider.get_block_number().await?
+    };
+    assert!(
+        height_after <= height_before_restart,
+        "a protocol-mismatched validator must not apply new blocks \
+         ({height_after} > {height_before_restart})",
+    );
+    assert!(
+        second_at > height_before_restart,
+        "sanity: the committee must have moved past the mismatched validator",
+    );
+
+    cluster.shutdown_all().await
+}
