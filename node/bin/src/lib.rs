@@ -853,6 +853,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             inputs: std::sync::Arc::new(l1_inputs_view),
         };
 
+        // The node's own certificate store: the consensus engine's archives are a
+        // rebuildable cache, this is the durable record (fed by the activity
+        // observer and the commit path; surfaced in /status as the certified
+        // watermark).
+        let finality_store = std::sync::Arc::new(
+            zksync_os_consensus_execution::FinalityStore::open(
+                &config.general_config.rocks_db_path.join("finality"),
+            )
+            .expect("failed to open the finality store"),
+        );
+
         let (committed_payload_sender, committed_payload_receiver) = tokio::sync::mpsc::channel(1);
         let env = zksync_os_consensus_execution::NodeExecutionEnv::new(
             state.clone(),
@@ -864,7 +875,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.batcher_config.interop_roots_per_batch_limit,
         )
         .with_builder(std::sync::Arc::new(tokio::sync::Mutex::new(builder)))
-        .with_validity(validation);
+        .with_validity(validation)
+        .with_finality_store(finality_store.clone());
 
         let setup = consensus::ConsensusSetup::from_config(
             &config.consensus_config,
@@ -885,6 +897,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             },
             finalized: finalized_receiver,
             applied_height: applied_block_number_receiver.clone(),
+            finality_certified: finality_store.watermark_subscription(),
             metrics_encoder: metrics_encoder_receiver,
         };
 
@@ -896,6 +909,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             consensus::ConsensusObservability {
                 finalized: finalized_sender,
                 metrics_encoder: metrics_encoder_sender,
+                finality: finality_store,
             },
             consensus_shutdown,
         );

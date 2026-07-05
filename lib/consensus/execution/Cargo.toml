@@ -15,10 +15,11 @@ zksync_os_consensus_core.workspace = true
 
 zksync_os_genesis.workspace = true
 zksync_os_mempool.workspace = true
-zksync_os_network.workspace = true
 zksync_os_observability.workspace = true
 zksync_os_sequencer.workspace = true
+zksync_os_rocksdb.workspace = true
 zksync_os_storage_api.workspace = true
+zksync_os_wire = { workspace = true, features = ["consensus"] }
 zksync_os_types.workspace = true
 zksync_os_interface.workspace = true
 
@@ -38,6 +39,7 @@ vise.workspace = true
 
 [dev-dependencies]
 num.workspace = true
+tempfile.workspace = true
 semver.workspace = true
 zksync_os_multivm.workspace = true
 # Test fixtures: the simulation crate provides the in-memory production genesis and

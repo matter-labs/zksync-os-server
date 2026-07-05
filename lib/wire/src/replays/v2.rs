@@ -7,7 +7,7 @@
 // - Added `starting_migration_number` field to `ReplayRecord`.
 // - Added `starting_interop_fee_number` field to `ReplayRecord`.
 
-use crate::wire::{BlockHashes, ForcedPreimage};
+use crate::primitives::{BlockHashes, ForcedPreimage};
 use alloy::primitives::{Address, B256, U256};
 use alloy_rlp::{RlpDecodable, RlpEncodable};
 use zksync_os_types::{InteropRootsLogIndex, L1TxSerialId, ProtocolSemanticVersion, ZkEnvelope};

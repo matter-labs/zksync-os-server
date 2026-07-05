@@ -22,17 +22,14 @@
 //!   consensus identity.
 //! - Moving a live network to a newer wire version is a coordinated, deliberate change
 //!   by construction — a new version file, never an edit.
-//!
-//! The wire types currently live in the networking crate; consensus depending on it is
-//! a known layering wart pending extraction of the encodings into a standalone crate.
 
+use crate::replays;
 use bytes::{Buf, BufMut};
 use commonware_codec::{EncodeSize, Error, Read, ReadExt, Write};
 use commonware_consensus::types::Height;
 use commonware_cryptography::sha256::Digest;
 use commonware_cryptography::{Digestible, Hasher, Sha256};
 use std::sync::OnceLock;
-use zksync_os_network::replays;
 use zksync_os_storage_api::ReplayRecord;
 
 #[derive(Debug, Clone)]
@@ -68,12 +65,32 @@ impl ConsensusBlock {
     }
 
     fn from_parts(height: u64, parent: Digest, record: Option<ReplayRecord>) -> Self {
+        Self::assemble(height, parent, record, OnceLock::new())
+    }
+
+    /// Reconstruction from the wire: the record's *received* bytes seed the encoding
+    /// cache, so the digest — and any re-serialization — reproduces exactly what
+    /// traveled, independent of how this node would encode the record itself. That
+    /// independence is what allows the committee to ever speak more than one record
+    /// wire version: identity follows the bytes, not the local encoder.
+    fn from_wire(height: u64, parent: Digest, record: ReplayRecord, encoded: Vec<u8>) -> Self {
+        let cache = OnceLock::new();
+        cache.set(encoded).expect("a fresh cache accepts a value");
+        Self::assemble(height, parent, Some(record), cache)
+    }
+
+    fn assemble(
+        height: u64,
+        parent: Digest,
+        record: Option<ReplayRecord>,
+        encoded_record: OnceLock<Vec<u8>>,
+    ) -> Self {
         let mut block = Self {
             height,
             parent,
             record,
             digest: Digest::from([0u8; 32]),
-            encoded_record: OnceLock::new(),
+            encoded_record,
         };
         let mut encoded = Vec::with_capacity(block.encode_size());
         block.write(&mut encoded);
@@ -105,8 +122,18 @@ fn encode_record(record: &ReplayRecord) -> Vec<u8> {
 }
 
 fn decode_record(bytes: &[u8]) -> Result<ReplayRecord, Error> {
-    let wire = <replays::v3::ReplayRecord as alloy_rlp::Decodable>::decode(&mut &bytes[..])
+    let mut remaining = bytes;
+    let wire = <replays::v3::ReplayRecord as alloy_rlp::Decodable>::decode(&mut remaining)
         .map_err(|err| Error::Wrapped("decoding wire replay record", err.into()))?;
+    // The frame's length prefix must cover exactly one record: trailing bytes would
+    // let two different wire forms carry the same logical block, and the received
+    // bytes are the block's identity.
+    if !remaining.is_empty() {
+        return Err(Error::Invalid(
+            "ConsensusBlock",
+            "trailing bytes after the record",
+        ));
+    }
     // Recovers transaction signers from their signatures — an invalid signature makes
     // the whole block undecodable, so a block that decodes carries only authentic
     // transactions. Stamps `node_version` with this node's own (it is metadata, not
@@ -169,8 +196,8 @@ impl Read for ConsensusBlock {
         if buf.remaining() < 1 {
             return Err(Error::EndOfBuffer);
         }
-        let record = match buf.get_u8() {
-            0 => None,
+        match buf.get_u8() {
+            0 => Ok(Self::from_parts(height, parent, None)),
             1 => {
                 if buf.remaining() < 8 {
                     return Err(Error::EndOfBuffer);
@@ -181,11 +208,11 @@ impl Read for ConsensusBlock {
                 }
                 let mut encoded = vec![0u8; length];
                 buf.copy_to_slice(&mut encoded);
-                Some(decode_record(&encoded)?)
+                let record = decode_record(&encoded)?;
+                Ok(Self::from_wire(height, parent, record, encoded))
             }
-            _ => return Err(Error::Invalid("ConsensusBlock", "bad record flag")),
-        };
-        Ok(Self::from_parts(height, parent, record))
+            _ => Err(Error::Invalid("ConsensusBlock", "bad record flag")),
+        }
     }
 }
 

@@ -119,6 +119,30 @@ async fn three_validators_finalize_and_agree() -> anyhow::Result<()> {
         "the consensus runtime's metrics registry must serve content",
     );
 
+    // The sovereign finality trail: every finalized block's certificate is converted
+    // into the node's own store the moment it is observed. The certified watermark
+    // covering the transaction's block proves both write paths — certificates from
+    // the activity observer, the height index from the commit path — are live and
+    // joining correctly, end to end.
+    let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        let certified = cluster
+            .node(1)
+            .status()
+            .await?
+            .consensus
+            .and_then(|consensus| consensus.finality_certified_height);
+        if certified.unwrap_or(0) >= included_at {
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "finality certificates did not cover block {included_at} within \
+             {CONVERGENCE_TIMEOUT:?} (certified so far: {certified:?})",
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
     cluster.shutdown_all().await
 }
 

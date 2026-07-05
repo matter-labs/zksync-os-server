@@ -30,6 +30,7 @@ zksync_os_mempool.workspace = true
 zksync_os_rocksdb.workspace = true
 zksync_os_consensus_core.workspace = true
 zksync_os_consensus_execution.workspace = true
+zksync_os_wire = { workspace = true, features = ["consensus"] }
 commonware-codec.workspace = true
 commonware-cryptography.workspace = true
 commonware-p2p.workspace = true

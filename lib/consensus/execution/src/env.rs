@@ -10,7 +10,6 @@
 //! (proving the declared outcome). Building runs through the attached
 //! [`BuildBlocks`] implementation when this validator leads.
 
-use crate::block::ConsensusBlock;
 use crate::builder::{BuildBlocks, BuiltBlock, ParentInfo, derive_next_cursors};
 use crate::metrics::CONSENSUS_METRICS;
 use crate::pending_state::{BranchOverrides, CommittedHead, Overlay, PendingState};
@@ -36,6 +35,7 @@ use zksync_os_storage_api::BlockHashes;
 use zksync_os_storage_api::state_override_view::OverriddenStateView;
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProtocolSemanticVersion, ZkEnvelope};
+use zksync_os_wire::ConsensusBlock;
 
 /// Chain-level constants the environment needs to anchor the chain root.
 #[derive(Debug, Clone)]
@@ -120,6 +120,10 @@ where
     /// this bound turns unbounded growth into withheld votes once reached, and the
     /// backlog self-heals as commits drain.
     pending_cap: usize,
+    /// The node's sovereign finality store. Commit records each finalized block's
+    /// height→digest here (the certificate half is written by the consensus activity
+    /// observer); `None` in tests that do not care about certificates.
+    finality: Option<Arc<crate::finality_store::FinalityStore>>,
 }
 
 /// Default for [`NodeExecutionEnv`]'s speculative-block bound: far above any healthy
@@ -194,6 +198,7 @@ where
             builder: None,
             validity: None,
             pending_cap: DEFAULT_PENDING_CAP,
+            finality: None,
         }
     }
 
@@ -201,6 +206,14 @@ where
     /// values; production keeps the default).
     pub fn with_pending_cap(mut self, cap: usize) -> Self {
         self.pending_cap = cap;
+        self
+    }
+
+    /// Attaches the node's finality store — the commit path records every finalized
+    /// block's height→digest mapping in it (the certificate half arrives from the
+    /// consensus activity observer).
+    pub fn with_finality_store(mut self, store: Arc<crate::finality_store::FinalityStore>) -> Self {
+        self.finality = Some(store);
         self
     }
 
@@ -593,6 +606,29 @@ where
 
     async fn commit(&mut self, block: ConsensusBlock) {
         let height = block.height_u64();
+        // Record the height→digest mapping first thing: it is a pure finality fact
+        // (true regardless of what happens to this delivery), idempotent under
+        // redelivery, and the certificate written by the activity observer is only
+        // reachable by height once this index exists.
+        if let Some(finality) = &self.finality
+            && let Err(err) = finality.index_height(
+                height,
+                block
+                    .digest()
+                    .as_ref()
+                    .try_into()
+                    .expect("sha256 digests are 32 bytes"),
+            )
+        {
+            // Never block consensus on the auxiliary store: certificates remain
+            // recoverable from the consensus archives while those exist, and the
+            // certified watermark surfaces the gap loudly.
+            error!(
+                height,
+                ?err,
+                "failed to index finalized block in the finality store"
+            );
+        }
         let committed = {
             let shared = self.shared.lock().unwrap();
             if shared.pipeline_closed {

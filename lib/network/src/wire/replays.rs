@@ -1,19 +1,15 @@
 //! Implements the `GetBlockReplays` and `BlockReplays` message types.
 //!
-//! `BlockReplays` is versioned over all the possible replay record wire formats supported by this
-//! node.
+//! `BlockReplays` is versioned over all the possible replay record wire formats
+//! supported by this node. The formats themselves (and the [`WireReplayRecord`]
+//! trait) live in `zksync_os_wire` — they are durable encodings shared with
+//! consensus, not protocol messages — and are re-exported here so this crate's
+//! consumers keep one import path.
 
-pub mod v0;
-pub mod v1;
-pub mod v2;
-pub mod v3;
+pub use zksync_os_wire::replays::*;
 
-mod impls;
-
-use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
-use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
-use std::fmt::Debug;
+use alloy_rlp::{RlpDecodable, RlpEncodable};
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
 
 /// A request for a peer to return block replays starting at the requested block number.
@@ -50,20 +46,4 @@ impl<T: WireReplayRecord> BlockReplays<T> {
         let records = records.into_iter().map(T::from).collect();
         Self { records }
     }
-}
-
-/// Represents any replay record wire format. It's expected to be convertable from/to replay record
-/// used by sequencer and storage layers.
-pub trait WireReplayRecord:
-    From<StorageReplayRecord>
-    + TryInto<StorageReplayRecord, Error = RecoveryError>
-    + Encodable
-    + Decodable
-    + Debug
-    + Send
-    + Sync
-    + Unpin
-{
-    /// Get record's block number.
-    fn block_number(&self) -> BlockNumber;
 }

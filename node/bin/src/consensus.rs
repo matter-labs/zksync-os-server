@@ -353,6 +353,8 @@ where
             (),
             ActivityObserver {
                 finalized: std::sync::Arc::new(observability.finalized),
+                finality: observability.finality,
+                committee_size: setup.committee.len() as u32,
             },
         )
         .await;
@@ -536,6 +538,9 @@ pub struct ConsensusObservability {
     /// Installed once the consensus runtime is up: encodes its prometheus registry
     /// (engine, marshal, p2p actors) on demand.
     pub metrics_encoder: tokio::sync::watch::Sender<Option<ConsensusMetricsEncoder>>,
+    /// The node's sovereign finality store: every observed finalization certificate
+    /// is converted to the node's own format and persisted here.
+    pub finality: std::sync::Arc<zksync_os_consensus_execution::FinalityStore>,
 }
 
 /// Feeds consensus activity into metrics and the status tip. Fault evidence — proof a
@@ -544,6 +549,8 @@ pub struct ConsensusObservability {
 #[derive(Clone)]
 struct ActivityObserver {
     finalized: std::sync::Arc<tokio::sync::watch::Sender<Option<FinalizedObservation>>>,
+    finality: std::sync::Arc<zksync_os_consensus_execution::FinalityStore>,
+    committee_size: u32,
 }
 
 impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
@@ -564,6 +571,37 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
                     view: round.view().get(),
                     observed_unix: unix_now(),
                 }));
+                // The sovereign copy: convert the certificate out of the consensus
+                // library's types the moment it exists, so the durable record never
+                // depends on the library's encoding staying stable.
+                let signers: Vec<u32> = finalization
+                    .certificate
+                    .signers
+                    .iter()
+                    .map(|participant| participant.get())
+                    .collect();
+                let mut signature = Vec::new();
+                commonware_codec::Write::write(&finalization.certificate.signature, &mut signature);
+                let certificate = zksync_os_wire::FinalityCertificate {
+                    scheme: zksync_os_wire::SignatureScheme::Bls12381Multisig,
+                    epoch: round.epoch().get(),
+                    view: round.view().get(),
+                    block_digest: finalization
+                        .proposal
+                        .payload
+                        .as_ref()
+                        .try_into()
+                        .expect("consensus digests are 32 bytes"),
+                    committee_size: self.committee_size,
+                    signers: zksync_os_wire::FinalityCertificate::bitmap_from_positions(
+                        self.committee_size,
+                        &signers,
+                    ),
+                    signature,
+                };
+                if let Err(err) = self.finality.put_certificate(&certificate) {
+                    tracing::error!(?err, "failed to persist a finality certificate");
+                }
                 "finalization"
             }
             Activity::ConflictingNotarize(evidence) => {

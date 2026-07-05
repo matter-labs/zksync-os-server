@@ -3,8 +3,8 @@
 //! Note that this file is allowed to change as traits can evolve over time and hence can the
 //! surrounding logic.
 
-use crate::wire::replays::{WireReplayRecord, v0, v1, v2, v3};
-use crate::wire::{BlockHashes, ForcedPreimage};
+use crate::primitives::{BlockHashes, ForcedPreimage};
+use crate::replays::{WireReplayRecord, v0, v1, v2, v3};
 use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
 use zksync_os_metadata::NODE_SEMVER_VERSION;
