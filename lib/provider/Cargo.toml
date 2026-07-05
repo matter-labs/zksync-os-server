@@ -16,6 +16,9 @@ alloy = { workspace = true, default-features = false, features = [
     "providers",
     "rpc-client",
     "transports",
+    # For the L1-outage classifier: recognizing `contract::Error`'s transport
+    # variant in error chains (see src/resilience.rs).
+    "contract",
 ] }
 async-trait.workspace = true
 anyhow.workspace = true

@@ -5,6 +5,7 @@
 //! no quorum, produces no blocks, and would therefore never see the initial deposit
 //! that node startup waits for.
 
+use crate::l1_proxy::SeverableL1Proxy;
 use crate::test_config::{build_node_config, disable_prover_input_generation};
 use crate::utils::LockedPort;
 use crate::{ChainLayout, PROTOCOL_VERSION, StoppedTester, Tester};
@@ -62,14 +63,44 @@ impl MultiNodeTester {
     /// Starts `num_validators` validators as one committee. Exactly one node (the first)
     /// runs the batcher; all serve RPC.
     pub async fn start(num_validators: usize) -> anyhow::Result<Self> {
-        assert!(
-            num_validators >= 2,
-            "a committee needs at least 2 validators"
-        );
         let chain_layout = ChainLayout::Default {
             protocol_version: PROTOCOL_VERSION,
         };
         let l1 = crate::AnvilL1::start(chain_layout).await?;
+        Self::start_inner(num_validators, chain_layout, l1).await
+    }
+
+    /// Like [`Self::start`], but every validator reaches L1 through a
+    /// [`SeverableL1Proxy`] the test controls — sever it to emulate a shared L1
+    /// RPC provider outage for the whole committee, restore it to end the outage.
+    /// The returned tester's own L1 helpers keep a direct anvil connection, so
+    /// tests can observe L1 while the committee cannot.
+    pub async fn start_with_severable_l1(
+        num_validators: usize,
+    ) -> anyhow::Result<(Self, SeverableL1Proxy)> {
+        let chain_layout = ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let l1 = crate::AnvilL1::start(chain_layout).await?;
+        let proxy = SeverableL1Proxy::start(&l1.address).await?;
+        // Nodes derive their L1 RPC URL from the `AnvilL1` handle they are launched
+        // with; substituting the address routes every validator through the proxy
+        // (the handle's own provider object stays directly connected).
+        let mut proxied_l1 = l1.clone();
+        proxied_l1.address = proxy.url();
+        let tester = Self::start_inner(num_validators, chain_layout, proxied_l1).await?;
+        Ok((tester, proxy))
+    }
+
+    async fn start_inner(
+        num_validators: usize,
+        chain_layout: ChainLayout<'static>,
+        l1: crate::AnvilL1,
+    ) -> anyhow::Result<Self> {
+        assert!(
+            num_validators >= 2,
+            "a committee needs at least 2 validators"
+        );
 
         let keys: Vec<ValidatorKeys> = (0..num_validators)
             .map(|_| generate_validator_keys())

@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
-use zksync_os_provider::EthWalletProvider;
+use zksync_os_provider::{EthWalletProvider, until_l1_available};
 
 /// Component-specific state for the L1 sender.
 pub enum L1SenderState {
@@ -235,19 +235,41 @@ where
             tracing::info!(command_name, range, "sending L1 transactions");
             L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
 
-            let operator_address = self.operator_address().await?;
-            let sim_fee_params = self
-                .resolve_fee_params(fee_config, force_transaction_resubmission)
-                .await?;
-            let gas_limits = self
-                .estimate_gas_limits(&commands, operator_address, sim_fee_params)
-                .await?;
+            // Read-only preparation: an unreachable L1 is waited out (nothing has
+            // been sent yet, so retrying is free). The send itself below still
+            // fails fast — a transport error there leaves an ambiguous in-flight
+            // transaction that only full restart recovery reconciles today.
+            let operator_address =
+                until_l1_available(command_name, || self.operator_address()).await?;
+            let sim_fee_params = until_l1_available(command_name, || {
+                self.resolve_fee_params(fee_config, force_transaction_resubmission)
+            })
+            .await?;
+            let gas_limits = until_l1_available(command_name, || {
+                self.estimate_gas_limits(&commands, operator_address, sim_fee_params)
+            })
+            .await?;
             tracing::info!(
                 command_name,
                 range,
                 ?gas_limits,
                 "estimated gas limits via eth_simulateV1",
             );
+
+            // Reachability gate: hold new submissions while L1 is away. The reads
+            // above don't prove reachability (the signer address is local and gas
+            // estimation degrades to a fallback), and a transport failure on the
+            // send itself is ambiguous — the transaction may already be in the
+            // mempool — so the send stays fail-fast and full restart recovery
+            // reconciles it. This gate confines that residual to outages beginning
+            // mid-send.
+            until_l1_available(command_name, || async {
+                self.provider
+                    .get_block_number()
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+            .await?;
 
             // It's important to preserve the order of commands -
             // so that we send them downstream also in order.
@@ -258,11 +280,9 @@ where
                 .then(|(mut cmd, gas_limit)| {
                     let range = range.clone();
                     async move {
-                    let fee_params = self
-                        .resolve_fee_params(
-                        fee_config,
-                        force_transaction_resubmission,
-                    )
+                    let fee_params = until_l1_available(command_name, || {
+                        self.resolve_fee_params(fee_config, force_transaction_resubmission)
+                    })
                     .await?;
                     let mut tx_request = TransactionRequest::default()
                         .with_from(operator_address)
@@ -275,7 +295,13 @@ where
                     let mut blob_gas_limit = 0;
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
                         blob_gas_limit = blob_sidecar.blobs.len() as u64 * DATA_GAS_PER_BLOB;
-                        let fee_per_blob_gas = self.provider.get_blob_base_fee().await?;
+                        let fee_per_blob_gas = until_l1_available(command_name, || async {
+                            self.provider
+                                .get_blob_base_fee()
+                                .await
+                                .map_err(anyhow::Error::from)
+                        })
+                        .await?;
                         L1_SENDER_METRICS
                             .report_blob_base_fee(fee_per_blob_gas)?;
                         let max_fee_per_blob_gas = fee_params.max_fee_per_blob_gas;
@@ -382,12 +408,23 @@ where
         .await?;
 
         let range = Input::display_range(&completed_commands);
-        let operator_address = self.operator_address().await?;
-        let balance = format_ether(self.provider.get_balance(operator_address).await?);
-        let nonce = self
-            .provider
-            .get_transaction_count(operator_address)
-            .await?;
+        let operator_address = until_l1_available(command_name, || self.operator_address()).await?;
+        let balance = format_ether(
+            until_l1_available(command_name, || async {
+                self.provider
+                    .get_balance(operator_address)
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+            .await?,
+        );
+        let nonce = until_l1_available(command_name, || async {
+            self.provider
+                .get_transaction_count(operator_address)
+                .await
+                .map_err(anyhow::Error::from)
+        })
+        .await?;
         tracing::info!(
             command_name,
             range,
@@ -421,21 +458,28 @@ where
             };
 
             loop {
-                let latest_block = provider.get_block_number().await.map_err(|err| {
-                tracing::warn!(
-                    "Failed to fetch latest L1 block while waiting for transaction confirmation \
-                 for tx {tx_hash}: {err}",
-                );
-                anyhow::Error::from(err)
-            })?;
+                // The transaction is already on its way: an L1 outage while polling
+                // for its confirmation is waited out, never fatal.
+                let latest_block = match provider.get_block_number().await {
+                    Ok(number) => number,
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to fetch latest L1 block while waiting for transaction \
+                             confirmation for tx {tx_hash}: {err}; retrying",
+                        );
+                        tokio::time::sleep(poll_interval).await;
+                        continue;
+                    }
+                };
                 let receipt = match provider.get_transaction_receipt(tx_hash).await {
                     Ok(receipt) => receipt,
                     Err(err) => {
                         tracing::warn!(
                             "Failed to fetch transaction receipt while waiting for confirmation \
-                     for tx {tx_hash}: {err}",
+                     for tx {tx_hash}: {err}; retrying",
                         );
-                        return Err(err.into());
+                        tokio::time::sleep(poll_interval).await;
+                        continue;
                     }
                 };
                 if let Some(receipt) = receipt.as_ref() {
@@ -805,15 +849,24 @@ where
         let mut timer = tokio::time::interval(OPERATOR_METRICS_POLL_INTERVAL);
         loop {
             timer.tick().await;
-            let operator_address = self.operator_address().await?;
-            let balance = format_ether(self.provider.get_balance(operator_address).await?);
-            let nonce = self
-                .provider
-                .get_transaction_count(operator_address)
-                .await?;
-            L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
-            L1_SENDER_METRICS.nonce[&command_name].set(nonce);
+            // Purely informational: a failed poll (most often an unreachable L1)
+            // skips the tick and must never take the sender down with it.
+            if let Err(err) = self.report_operator_metrics_once(command_name).await {
+                tracing::warn!(command_name, "skipping operator metrics tick: {err:#}");
+            }
         }
+    }
+
+    async fn report_operator_metrics_once(&self, command_name: &'static str) -> anyhow::Result<()> {
+        let operator_address = self.operator_address().await?;
+        let balance = format_ether(self.provider.get_balance(operator_address).await?);
+        let nonce = self
+            .provider
+            .get_transaction_count(operator_address)
+            .await?;
+        L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
+        L1_SENDER_METRICS.nonce[&command_name].set(nonce);
+        Ok(())
     }
 
     /// Estimates EIP-1559 fees using the provided percentile of priority fees over the specified

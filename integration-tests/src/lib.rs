@@ -49,6 +49,7 @@ pub mod assert_traits;
 pub mod config;
 pub mod contracts;
 pub mod l1_helpers;
+pub mod l1_proxy;
 pub mod multi_node;
 mod node_log;
 mod prover_tester;

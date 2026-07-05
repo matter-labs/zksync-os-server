@@ -1,3 +1,8 @@
+// `Error` is deliberately large — see its doc comment: an unboxed `#[source]`
+// keeps transport failures classifiable by the L1-outage policy. The lint fires
+// on every function returning `Result`, hence the crate-level allow.
+#![allow(clippy::result_large_err)]
+
 pub mod calldata;
 pub mod l1_discovery;
 mod metrics;
@@ -999,12 +1004,20 @@ pub fn is_method_missing(err: &alloy::contract::Error) -> bool {
 }
 
 /// Enriched error when interacting with contracts.
+///
+/// Deliberately large (`result_large_err` allowed): the alloy error is a direct
+/// `#[source]` — not boxed — so the typed `contract::Error` stays visible in
+/// error chains. The L1-outage policy (`zksync_os_provider::resilience`)
+/// classifies transport failures by downcasting chain links; a boxed source
+/// surfaces as `Box<...>` and defeats the downcast, and everything below this
+/// level is type-erased by `#[error(transparent)]` wrappers. These are pure
+/// error paths, so the size is irrelevant.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("failed to call `{1}`: {0}")]
-    Call(Box<alloy::contract::Error>, String),
+    Call(#[source] alloy::contract::Error, String),
     #[error("failed to call `{1}` at block id `{2}`: {0}")]
-    CallAtBlock(Box<alloy::contract::Error>, String, BlockId),
+    CallAtBlock(#[source] alloy::contract::Error, String, BlockId),
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
@@ -1018,8 +1031,29 @@ impl<T> Enrich for alloy::contract::Result<T> {
     type Output = T;
     fn enrich(self, function_name: &str, block_id: Option<BlockId>) -> Result<Self::Output> {
         self.map_err(|e| match block_id {
-            None => Error::Call(Box::new(e), function_name.to_string()),
-            Some(block_id) => Error::CallAtBlock(Box::new(e), function_name.to_string(), block_id),
+            None => Error::Call(e, function_name.to_string()),
+            Some(block_id) => Error::CallAtBlock(e, function_name.to_string(), block_id),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The L1-outage policy classifies by walking error sources down to the
+    /// transport error; `Error`'s `#[source]` wiring is what makes a wrapped
+    /// contract-call failure recognizable as "L1 unreachable" instead of fatal.
+    #[test]
+    fn call_errors_expose_the_transport_source() {
+        let transport: alloy::transports::TransportError =
+            alloy::transports::TransportErrorKind::custom_str("connection refused");
+        let err = Error::Call(
+            alloy::contract::Error::TransportError(transport),
+            "getProtocolVersion".to_string(),
+        );
+        let wrapped =
+            anyhow::Error::from(err).context("Failed to fetch current protocol version from L1");
+        assert!(zksync_os_provider::is_transient_l1_error(&wrapped));
     }
 }

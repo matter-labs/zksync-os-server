@@ -92,16 +92,20 @@ impl CommittedBatchProvider {
         let last_executed = l1_state.last_executed_batch;
         let last_finalized_executed = l1_state.last_finalized_executed_batch;
         runtime.spawn_critical_task("committed batch provider init", async move {
-            provider_for_init
-                .init(
+            // Historical catch-up is idempotent (repeated inserts of the same
+            // batches), so an L1 outage mid-catch-up is waited out and the whole
+            // pass retried; consumers keep blocking in `wait_for_batch` meanwhile.
+            zksync_os_provider::until_l1_available("committed_batch_provider_init", || {
+                provider_for_init.init(
                     last_committed,
                     last_proved,
                     last_executed,
                     last_finalized_executed,
                     max_l1_blocks_to_scan,
                 )
-                .await
-                .expect("failed to initialize CommittedBatchProvider");
+            })
+            .await
+            .expect("failed to initialize CommittedBatchProvider");
         });
 
         Ok(provider)

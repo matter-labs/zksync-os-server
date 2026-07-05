@@ -170,6 +170,66 @@ async fn validator_restart_rejoins_catches_up_and_votes_again() -> anyhow::Resul
     cluster.shutdown_all().await
 }
 
+/// The whole committee must survive an L1 outage — degrade, never die. Every
+/// validator loses its L1 RPC at once (the shared-provider-outage shape, and the
+/// chaos rig's partition fault), for longer than the provider-level retry budget
+/// that used to be the only buffer before background components crashed the node.
+/// While L1 is away the chain must keep finalizing L2 traffic; when L1 returns,
+/// settlement must resume on its own. Found by the chaos rig's third soak (three
+/// distinct death mechanisms: the upgrade gatekeeper, the L1 senders, and the
+/// provider's own header pollers).
+///
+/// Four validators, deliberately: the batcher validator's pipeline intentionally
+/// pauses on its bounded runway once settlement backs up (the speculative-state
+/// cap), which makes that one node withhold votes until L1 returns — the committee
+/// must ride through that like any single-node fault, which needs n >= 4.
+#[test_log::test(tokio::test)]
+async fn committee_survives_l1_outage() -> anyhow::Result<()> {
+    let (cluster, mut l1_proxy) = MultiNodeTester::start_with_severable_l1(4).await?;
+
+    // Healthy baseline: real traffic and at least one batch committed on L1, so the
+    // L1 senders are mid-flight when the outage begins.
+    let included_at = send_transfer(&cluster, 1, Address::repeat_byte(0x81)).await?;
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+    let before_outage = wait_for_l1_state(cluster.node(0), "a batch committed on L1", |state| {
+        state.last_committed_batch >= 1
+    })
+    .await?;
+
+    // The outage: refuse every L1 connection for well past the provider's internal
+    // retry budget (~40s was enough to kill a node before the fix).
+    l1_proxy.sever().await;
+    tokio::time::sleep(Duration::from_secs(60)).await;
+
+    // Mid-outage, the committee must still be finalizing: an L2 transfer needs no
+    // L1 input and must land normally.
+    let during_outage = send_transfer(&cluster, 1, Address::repeat_byte(0x82)).await?;
+    cluster
+        .wait_for_block_on_all(during_outage, CONVERGENCE_TIMEOUT)
+        .await?;
+    cluster.assert_block_hashes_agree(during_outage).await?;
+    for index in 0..cluster.len() {
+        let status = cluster.node(index).status().await?;
+        anyhow::ensure!(
+            status.healthy,
+            "validator {index} reports unhealthy during the L1 outage"
+        );
+    }
+
+    // L1 returns: settlement must resume without any restart.
+    l1_proxy.restore().await?;
+    wait_for_l1_state(
+        cluster.node(0),
+        "batch settlement resumes after the outage",
+        |state| state.last_committed_batch > before_outage.last_committed_batch,
+    )
+    .await?;
+
+    cluster.shutdown_all().await
+}
+
 /// The batcher validator must survive a restart. Its recovery is the strictest in the
 /// committee: the batcher resumes from the last L1-*executed* batch and re-creates
 /// every batch already committed on L1, which requires the pipeline to replay blocks
