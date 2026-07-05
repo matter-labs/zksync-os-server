@@ -33,5 +33,13 @@
 
 ---
 
+- [Consensus](consensus/index.md)
+  - [What and why](consensus/intro.md)
+  - [How it is wired in](consensus/integration.md)
+  - [How it is tested](consensus/testing.md)
+  - [Running it](consensus/enabling.md)
+
+---
+
 - [Guides](guides/index.md)
   - [Updating local chains: genesis and L1 state](guides/local_setup_update.md)

@@ -6,6 +6,9 @@ develop against a consensus-enabled chain — the same tooling also powers the c
 rig (`tools/chaos`), so a devnet can be upgraded into a fault-injection soak at any
 time.
 
+For what consensus is, how it is integrated, and how real chains enable it, see the
+[Consensus](../consensus/index.md) section.
+
 ## Prerequisites
 
 - Docker (on Docker Desktop, give the VM ≥ 8 GiB of memory).
