@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.20.9](https://github.com/matter-labs/zksync-os-server/compare/v0.20.8...v0.20.9) (2026-07-03)
+
+
+### Bug Fixes
+
+* **deps:** bump anyhow to 1.0.103 ([#1424](https://github.com/matter-labs/zksync-os-server/issues/1424)) ([85d7700](https://github.com/matter-labs/zksync-os-server/commit/85d7700da4981bd5dfbfa812ad193af0a8f0103c))
+* **deps:** ignore unfixable quick-xml DoS advisories ([#1431](https://github.com/matter-labs/zksync-os-server/issues/1431)) ([477960e](https://github.com/matter-labs/zksync-os-server/commit/477960e8351cd6d18204b8c2ab4fca16cfe6cfce))
+* harden ephemeral node port handling ([#1400](https://github.com/matter-labs/zksync-os-server/issues/1400)) ([068b62d](https://github.com/matter-labs/zksync-os-server/commit/068b62da2d71e434909b7fef865002b2644870f6))
+* **sequencer:** ensure l1 revert is completed ([#1420](https://github.com/matter-labs/zksync-os-server/issues/1420)) ([7bacb33](https://github.com/matter-labs/zksync-os-server/commit/7bacb33519db1bbdd9f997f07824755e4b5b2bca))
+
 ## [0.20.8](https://github.com/matter-labs/zksync-os-server/compare/v0.20.7...v0.20.8) (2026-06-29)
 
 
