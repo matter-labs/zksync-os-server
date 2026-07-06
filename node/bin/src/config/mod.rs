@@ -757,6 +757,15 @@ pub struct ConsensusConfig {
     /// Upper bound on a consensus network message (must fit the largest block).
     #[config(default_t = 16 * 1024 * 1024)]
     pub max_message_size: usize,
+    /// A validator starting with empty consensus storage but a retained chain
+    /// (a rebuild, a promoted node) resumes from a cached finality floor instead
+    /// of backfilling from the consensus genesis — but only when that floor is
+    /// fresh (at or after the committee's last scheduled change). A stale floor
+    /// normally falls back to the full backfill; setting this accepts it anyway.
+    /// Escape hatch for chains whose peers no longer serve deep history — the
+    /// stale floor is then the best available starting point.
+    #[config(default_t = false)]
+    pub accept_stale_floor: bool,
     /// How far ahead of this validator's clock a proposed block timestamp may be
     /// before the proposal is rejected. Absorbs honest clock skew between validators;
     /// bounds how far a leader can pre-date time-dependent logic.

@@ -805,14 +805,15 @@ mod tests {
         assert!(!is_suspicious_log_line(
             "ERROR reth_tasks::runtime: Critical task `pipeline` panicked: `failed to receive deregistration`"
         ));
-        // The registered teardown wart is tolerated — both of its lines: the
-        // site-bearing first line and the message-bearing second.
-        assert!(!is_suspicious_log_line(
+        // The runtime-drop teardown wart's allowance was REMOVED after the
+        // commonware-2026.5.0 upgrade soaks showed it gone: its site line (the one
+        // carrying `panicked at`) freezes a soak again, on purpose — a workaround
+        // must not outlive its wart. (The message-bearing second line alone never
+        // matched a forbidden pattern; the two-line allowance existed for the
+        // site line.)
+        assert!(is_suspicious_log_line(
             "thread 'tokio-rt-worker' (215) panicked at /usr/local/cargo/registry/\
              src/index.crates.io-xxx/tokio-1.52.3/src/runtime/blocking/shutdown.rs:51:21:"
-        ));
-        assert!(!is_suspicious_log_line(
-            "Cannot drop a runtime in a context where blocking is not allowed"
         ));
         // ...but a *novel* critical-task panic is not.
         assert!(is_suspicious_log_line(

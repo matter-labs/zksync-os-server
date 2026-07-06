@@ -38,6 +38,24 @@ pub enum FinalityCF {
     /// Epoch transition record by epoch (u64, big-endian) — the committee custody
     /// trail (see [`EpochTransition`]).
     Transitions,
+    /// Raw consensus-library-encoded finalizations by round (epoch ‖ view, both
+    /// u64 big-endian), value = block digest (32 bytes) ‖ encoded finalization.
+    /// A LOCAL CACHE, not a sovereign format: it exists so a restart with empty
+    /// consensus storage can hand marshal a floor finalization (which the
+    /// sovereign [`FinalityCertificate`] cannot reconstruct — it deliberately
+    /// drops library-internal fields). A consensus-library upgrade may invalidate
+    /// these bytes; readers must treat decode failure as "no floor" and fall
+    /// back, never as an error. Pruned to the last two epochs.
+    FloorCache,
+}
+
+/// The floor-cache key for a round: epoch then view, both big-endian, so RocksDB's
+/// lexical key order is the round order (range-prunable, reverse-iterable).
+fn round_key(epoch: u64, view: u64) -> [u8; 16] {
+    let mut key = [0u8; 16];
+    key[..8].copy_from_slice(&epoch.to_be_bytes());
+    key[8..].copy_from_slice(&view.to_be_bytes());
+    key
 }
 
 impl NamedColumnFamily for FinalityCF {
@@ -47,6 +65,7 @@ impl NamedColumnFamily for FinalityCF {
         FinalityCF::HeightIndex,
         FinalityCF::Meta,
         FinalityCF::Transitions,
+        FinalityCF::FloorCache,
     ];
 
     fn name(&self) -> &'static str {
@@ -55,6 +74,7 @@ impl NamedColumnFamily for FinalityCF {
             FinalityCF::HeightIndex => "height_index",
             FinalityCF::Meta => "meta",
             FinalityCF::Transitions => "transitions",
+            FinalityCF::FloorCache => "floor_cache",
         }
     }
 }
@@ -272,6 +292,84 @@ impl FinalityStore {
         self.certificate_by_digest(&digest)
     }
 
+    /// Caches a consensus-library-encoded finalization for floor-started restarts
+    /// (see [`FinalityCF::FloorCache`] for the cache-not-format contract).
+    /// Idempotent; called by the consensus activity observer at every finalization.
+    pub fn put_raw_finalization(
+        &self,
+        epoch: u64,
+        view: u64,
+        digest: [u8; 32],
+        raw: &[u8],
+    ) -> anyhow::Result<()> {
+        let mut value = Vec::with_capacity(32 + raw.len());
+        value.extend_from_slice(&digest);
+        value.extend_from_slice(raw);
+        let mut batch = self.db.new_write_batch();
+        batch.put_cf(FinalityCF::FloorCache, &round_key(epoch, view), &value);
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    /// Drops cached raw finalizations below `epoch` — called when an epoch
+    /// transition is first observed, keeping the cache to roughly two epochs
+    /// (a floor older than that fails the freshness policy anyway).
+    pub fn prune_raw_finalizations_below(&self, epoch: u64) -> anyhow::Result<()> {
+        let mut batch = self.db.new_write_batch();
+        batch.delete_range_cf(
+            FinalityCF::FloorCache,
+            (&[0u8; 16][..])..(&round_key(epoch, 0)[..]),
+        );
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    /// Cached raw finalizations, newest round first: `(epoch, view, block digest,
+    /// consensus-library-encoded finalization)`. `limit` bounds the scan; the
+    /// caller matches digests against its chain to pick a floor at or below its
+    /// committed tip.
+    pub fn raw_finalizations_newest_first(
+        &self,
+        limit: usize,
+    ) -> Vec<(u64, u64, [u8; 32], Vec<u8>)> {
+        self.db
+            .to_iterator_cf(FinalityCF::FloorCache, ..=&[0xff_u8; 16][..])
+            .take(limit)
+            .filter_map(|(key, value)| {
+                if key.len() != 16 || value.len() < 32 {
+                    return None;
+                }
+                let epoch = u64::from_be_bytes(key[..8].try_into().expect("checked length"));
+                let view = u64::from_be_bytes(key[8..].try_into().expect("checked length"));
+                let digest: [u8; 32] = value[..32].try_into().expect("checked length");
+                Some((epoch, view, digest, value[32..].to_vec()))
+            })
+            .collect()
+    }
+
+    /// The newest epoch with a recorded transition (committee custody entry) —
+    /// the reference point for the floor freshness policy.
+    pub fn latest_transition_epoch(&self) -> Option<u64> {
+        self.db
+            .to_iterator_cf(FinalityCF::Transitions, ..=&[0xff_u8; 8][..])
+            .next()
+            .and_then(|(key, _)| key.as_ref().try_into().ok().map(u64::from_be_bytes))
+    }
+
+    /// The digest finalized at `height`, if the commit path has indexed it.
+    pub fn digest_at_height(&self, height: u64) -> anyhow::Result<Option<[u8; 32]>> {
+        let Some(digest) = self
+            .db
+            .get_cf(FinalityCF::HeightIndex, &height.to_be_bytes())?
+        else {
+            return Ok(None);
+        };
+        digest
+            .try_into()
+            .map(Some)
+            .map_err(|_| anyhow::anyhow!("stored height index is not a 32-byte digest"))
+    }
+
     /// The highest height H such that every height `1..=H` has a certificate (via
     /// its indexed digest). `None` before height 1 is certified.
     pub fn certified_watermark(&self) -> anyhow::Result<Option<u64>> {
@@ -475,5 +573,45 @@ mod tests {
         assert_eq!(stored.first_finalized_digest, [0xAA; 32]);
         assert_eq!(stored.committee.len(), 2);
         assert!(store.epoch_transition(4).expect("read").is_none());
+    }
+
+    #[test]
+    fn floor_cache_orders_prunes_and_survives_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let store = FinalityStore::open(dir.path()).expect("open");
+            // Rounds across two epochs, written out of order — retrieval must be
+            // newest-round-first regardless of write order.
+            store
+                .put_raw_finalization(1, 7, [1; 32], b"one-seven")
+                .expect("write");
+            store
+                .put_raw_finalization(2, 1, [2; 32], b"two-one")
+                .expect("write");
+            store
+                .put_raw_finalization(1, 9, [3; 32], b"one-nine")
+                .expect("write");
+            let newest_first = store.raw_finalizations_newest_first(10);
+            let rounds: Vec<(u64, u64)> = newest_first
+                .iter()
+                .map(|(epoch, view, _, _)| (*epoch, *view))
+                .collect();
+            assert_eq!(rounds, vec![(2, 1), (1, 9), (1, 7)]);
+            assert_eq!(newest_first[0].2, [2; 32]);
+            assert_eq!(newest_first[0].3, b"two-one");
+
+            // Pruning below epoch 2 drops both epoch-1 entries.
+            store.prune_raw_finalizations_below(2).expect("prune");
+            let remaining = store.raw_finalizations_newest_first(10);
+            assert_eq!(remaining.len(), 1);
+            assert_eq!((remaining[0].0, remaining[0].1), (2, 1));
+        }
+
+        // Cache entries are durable across reopen (a restart is exactly when the
+        // floor is needed).
+        let store = FinalityStore::open(dir.path()).expect("reopen");
+        let remaining = store.raw_finalizations_newest_first(10);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].3, b"two-one");
     }
 }

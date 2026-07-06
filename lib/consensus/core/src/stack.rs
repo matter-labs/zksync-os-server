@@ -203,6 +203,35 @@ type EngineReporters<X, TReporter> = Reporters<
     TReporter,
 >;
 
+/// Where this validator's consensus state begins when its local consensus storage
+/// is empty (a fresh validator, a promoted EN, a rebuild after an incident).
+///
+/// With *existing* archives the choice barely matters: marshal resumes from its own
+/// durable state, and a floor at or below what it already processed is ignored with
+/// a warning. The variants differ for empty storage:
+///
+/// - `Genesis`: consensus history is reconstructed from the era genesis — a full
+///   block backfill from peers, O(chain). Always correct; the only option for a
+///   chain's first start.
+/// - `Floor`: consensus starts from a finalized checkpoint — marshal fetches the
+///   floor block, delivers from it forward, and **never fetches below it**,
+///   bounding catch-up to O(chain tip − floor). The floor's epoch engine starts
+///   from the finalization itself instead of an epoch-anchor block.
+///
+/// Caller contract for `Floor`: the finalization must verify under the schedule,
+/// must not be the era genesis (height zero — use `Genesis`), and its block height
+/// must be **at or below the environment's committed tip**. A floor above the tip
+/// leaves the environment with a delivery gap it can never fill (marshal refuses
+/// to fetch below the floor); a floor at the tip is the ideal (delivery resumes
+/// with an idempotent re-commit of the tip, then new blocks).
+#[derive(Clone)]
+pub enum StackStart<D: commonware_cryptography::Digest> {
+    Genesis,
+    // Boxed for the variant-size lint: a Finalization carries a whole certificate,
+    // and StackStart values are built once per start — indirection is free here.
+    Floor(Box<commonware_consensus::simplex::types::Finalization<Scheme, D>>),
+}
+
 /// Handles to a running validator stack. Aborting all handles stops the validator;
 /// starting a fresh stack with the same `partition_prefix` over the same storage
 /// resumes it (journal replay restores consensus state without double-signing).
@@ -250,6 +279,7 @@ pub async fn start_validator<R, X, TSender, TReceiver, TBlocker, TPeers, TReport
     // Observer for raw consensus activity (votes, certificates, fault evidence) beyond
     // what marshal consumes — metrics in production, assertion recorders in tests.
     extra_reporter: TReporter,
+    start: StackStart<<X::Block as Digestible>::Digest>,
 ) -> ValidatorStack<X::Block>
 where
     R: Clock + Spawner + Metrics + Storage + BufferPooler + Rng + CryptoRng,
@@ -317,10 +347,15 @@ where
     }
 
     let epocher = FixedEpocher::new(config.epoch_length);
-    // The era anchor is consensus height zero: the environment's genesis block stands
-    // for the chain's anchor (its own genesis, or the migration cutover block), and
-    // every consensus-side height counts from it.
-    let genesis_block = env.genesis_block().await;
+    // Where marshal's chain begins. `Genesis`: the era anchor is consensus height
+    // zero — the environment's genesis block stands for the chain's anchor (its own
+    // genesis, or the migration cutover block), and every consensus-side height
+    // counts from it. `Floor`: a finalized checkpoint — marshal verifies it, fetches
+    // its block from peers, and syncs strictly above it (see [`StackStart`]).
+    let marshal_start = match &start {
+        StackStart::Genesis => marshal::Start::Genesis(env.genesis_block().await),
+        StackStart::Floor(finalization) => marshal::Start::Floor((**finalization).clone()),
+    };
     let (marshal_actor, marshal_mailbox, _marshal_height) = marshal_core::Actor::init(
         context.child("marshal"),
         finalizations,
@@ -330,7 +365,7 @@ where
             // backfill — the provider resolves each epoch to its committee's scheme.
             provider: scheme_provider.clone(),
             epocher: epocher.clone(),
-            start: marshal::Start::Genesis(genesis_block),
+            start: marshal_start,
             partition_prefix: config.partition_prefix.clone(),
             mailbox_size: config.mailbox_size,
             view_retention_timeout: config.view_retention_timeout,
@@ -485,7 +520,7 @@ where
         let scheme_provider = scheme_provider.clone();
         let marshal_mailbox = marshal_mailbox.clone();
         move |epoch: Epoch,
-              anchor: <X::Block as Digestible>::Digest,
+              floor: Floor<Scheme, <X::Block as Digestible>::Digest>,
               votes: (SubSender<TSender>, SubReceiver<TReceiver>),
               certificates: (SubSender<TSender>, SubReceiver<TReceiver>),
               certificate_backfill: (SubSender<TSender>, SubReceiver<TReceiver>)|
@@ -509,10 +544,10 @@ where
                     partition: format!("{}-engine-epoch-{}", config.partition_prefix, epoch.get()),
                     mailbox_size: config.mailbox_size,
                     epoch,
-                    // The engine starts from its epoch's anchor: the previous epoch's
-                    // final block (whose re-certification is the new epoch's first
-                    // act), or the era genesis for the first epoch.
-                    floor: Floor::Genesis(anchor),
+                    // Where this engine's chain of certificates begins — the epoch's
+                    // anchor block, or a floor finalization inside the epoch (the
+                    // rotation task decides; see `run_epoch_rotation`).
+                    floor,
                     replay_buffer: NZUsize!(1024 * 1024),
                     write_buffer: NZUsize!(1024 * 1024),
                     page_cache: page_cache.clone(),
@@ -532,6 +567,13 @@ where
 
     let engines: EngineRegistry = Arc::new(Mutex::new(BTreeMap::new()));
     let rotation_marshal = marshal_mailbox.clone();
+    // The floor rides into rotation: the floor's own epoch has no locally-known
+    // anchor block (marshal never fetches below the floor), so its engine starts
+    // from the floor finalization instead.
+    let stack_floor = match start {
+        StackStart::Genesis => None,
+        StackStart::Floor(finalization) => Some(*finalization),
+    };
     let epoch_manager = context.child("epoch_manager").spawn({
         let engines = engines.clone();
         move |context| {
@@ -541,6 +583,7 @@ where
                 scheme_provider,
                 env,
                 rotation_marshal,
+                stack_floor,
                 votes_mux,
                 certificates_mux,
                 certificate_backfill_mux,
@@ -592,6 +635,12 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
     scheme_provider: SchemeProvider,
     mut env: X,
     marshal: marshal_core::Mailbox<Scheme, Standard<X::Block>>,
+    stack_floor: Option<
+        commonware_consensus::simplex::types::Finalization<
+            Scheme,
+            <X::Block as Digestible>::Digest,
+        >,
+    >,
     mut votes_mux: MuxHandle<TSender, TReceiver>,
     mut certificates_mux: MuxHandle<TSender, TReceiver>,
     mut certificate_backfill_mux: MuxHandle<TSender, TReceiver>,
@@ -604,7 +653,7 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
     TReceiver: commonware_p2p::Receiver<PublicKey = PublicKey>,
     F: Fn(
         Epoch,
-        <X::Block as Digestible>::Digest,
+        Floor<Scheme, <X::Block as Digestible>::Digest>,
         (SubSender<TSender>, SubReceiver<TReceiver>),
         (SubSender<TSender>, SubReceiver<TReceiver>),
         (SubSender<TSender>, SubReceiver<TReceiver>),
@@ -680,13 +729,29 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
                 .first(epoch)
                 .map(|first| Height::new(first.get().saturating_sub(1)))
                 .unwrap_or_else(Height::zero);
-            let Some((_, anchor_digest)) = marshal
+            let engine_floor = match marshal
                 .get_info(marshal::Identifier::Height(anchor_height))
                 .await
-            else {
-                // The anchor is not locally available yet (e.g. a fresh validator
-                // still backfilling toward the boundary). Try again next tick.
-                continue;
+            {
+                Some((_, anchor_digest)) => Floor::Genesis(anchor_digest),
+                // A floor-started validator never obtains blocks below its floor,
+                // so the floor's own epoch has no anchor block to offer — the
+                // engine starts from the floor finalization itself. (Upstream
+                // asserts the finalization belongs to the configured epoch, hence
+                // the epoch guard.)
+                None if stack_floor
+                    .as_ref()
+                    .is_some_and(|floor| floor.round().epoch() == epoch) =>
+                {
+                    let floor = stack_floor.clone().expect("checked above");
+                    Floor::Finalized(floor)
+                }
+                None => {
+                    // The anchor is not locally available yet (e.g. a fresh
+                    // validator still backfilling toward the boundary). Try again
+                    // next tick.
+                    continue;
+                }
             };
             let votes = votes_mux.register(key).await.expect("register votes mux");
             let certificates = certificates_mux
@@ -700,7 +765,7 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
             info!(epoch = key, "starting consensus engine for epoch");
             let handle = spawn_engine(
                 epoch,
-                anchor_digest,
+                engine_floor,
                 votes,
                 certificates,
                 certificate_backfill,

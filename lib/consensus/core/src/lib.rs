@@ -38,4 +38,4 @@ pub mod types;
 
 pub use execution::{BuildContext, ExecutionEnv};
 pub use schedule::{CommitteeSchedule, ScheduleEntry, ScheduledSchemeProvider};
-pub use stack::{Channels, NullReporter, StackConfig, ValidatorStack, start_validator};
+pub use stack::{Channels, NullReporter, StackConfig, StackStart, ValidatorStack, start_validator};

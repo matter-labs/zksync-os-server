@@ -40,4 +40,6 @@ pub type ConsensusActivity =
 
 /// Re-export for reporter implementations outside this crate.
 pub use commonware_consensus::Reporter;
-pub use commonware_consensus::simplex::types::{Activity, Attributable};
+pub use commonware_consensus::simplex::types::{Activity, Attributable, Finalization};
+pub use commonware_consensus::types::Epoch;
+pub use commonware_parallel::Sequential;

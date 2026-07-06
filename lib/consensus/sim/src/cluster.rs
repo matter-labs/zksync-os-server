@@ -31,7 +31,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_consensus_core::types::{Scheme, SchemeProvider};
 use zksync_os_consensus_core::{
-    Channels, CommitteeSchedule, ScheduleEntry, StackConfig, ValidatorStack, start_validator,
+    Channels, CommitteeSchedule, ScheduleEntry, StackConfig, StackStart, ValidatorStack,
+    start_validator,
 };
 
 /// Adjusts the stack configuration every validator (and every restart) is built
@@ -136,6 +137,10 @@ pub struct SimValidator<X: SimEnv> {
     /// process with a fresh metrics registry, but in simulation the registry lives as
     /// long as the run, and registering the same metric twice is an error.
     incarnation: usize,
+    /// Where the next (re)start's consensus state begins when its storage is
+    /// empty: the era genesis (default — full backfill), or a floor finalization
+    /// (see [`zksync_os_consensus_core::StackStart`] and [`SimCluster::set_floor`]).
+    start: StackStart<Sha256Digest>,
 }
 
 impl SimCluster<MockExecution> {
@@ -291,6 +296,7 @@ where
                 // journal (double-sign protection) and archives under the same prefix.
                 partition_prefix: format!("{storage_prefix}-{index}"),
                 incarnation: 0,
+                start: StackStart::Genesis,
             };
             if !stopped.contains(&index) {
                 Self::spawn(
@@ -336,13 +342,14 @@ where
     /// sim equivalent of the operator remedy "clear the consensus state directory
     /// and restart".
     ///
-    /// Note the registered limitation: fresh consensus state over a *retained*
-    /// chain (execution environment at height H > 0, era anchored at genesis) is
-    /// not startable today — engines begin before backfill can supply the blocks
-    /// that anchor their epochs, and the marshal's `Inline` panics on the missing
-    /// starting-epoch block. Until "start consensus at a chain height without
-    /// consensus history" exists (the EN-promotion shape), a rebuilt validator
-    /// also rebuilds its chain: pair this with [`Self::reset_env`].
+    /// Fresh consensus state over a *retained* chain (execution environment at
+    /// height H > 0) is startable since commonware 2026.5.0 — the rotation
+    /// resolves each epoch's anchor from marshal before spawning its engine, so
+    /// engines can no longer outrun backfill (`tests/promotion.rs` pins this; on
+    /// 2026.4.0 it panicked in marshal's `Inline`). The catch-up cost is a full
+    /// backfill from the era genesis, though: bounding it is the floor-start
+    /// work on the EN-promotion track. A *full* rebuild (chain included) pairs
+    /// this with [`Self::reset_env`].
     pub fn clear_consensus_state(&mut self, index: usize) {
         assert!(
             self.validators[index].running.is_none(),
@@ -354,6 +361,65 @@ where
             "{}-reset-{}",
             validator.partition_prefix, validator.incarnation
         );
+    }
+
+    /// Sets where a stopped validator's next start begins when its consensus
+    /// storage is empty (pair with [`Self::clear_consensus_state`]): the floor
+    /// finalization bounds catch-up to the blocks above it, instead of a full
+    /// backfill from the era genesis. Cleared back to `Genesis` automatically
+    /// when the validator next starts with *surviving* storage — callers set it
+    /// per restart.
+    pub fn set_floor(
+        &mut self,
+        index: usize,
+        finalization: commonware_consensus::simplex::types::Finalization<Scheme, Sha256Digest>,
+    ) {
+        assert!(
+            self.validators[index].running.is_none(),
+            "set the floor only while the validator is stopped"
+        );
+        self.validators[index].start = StackStart::Floor(Box::new(finalization));
+    }
+
+    /// Picks a floor for restarting validator `index`: the newest finalization
+    /// observed by `source` (a healthy validator) whose block is part of
+    /// `index`'s own committed chain — i.e. at or below the retained tip, which
+    /// is the [`zksync_os_consensus_core::StackStart`] caller contract. The sim
+    /// equivalent of the node reading its finality store at startup.
+    pub fn floor_at_or_below(
+        &self,
+        source: usize,
+        index: usize,
+    ) -> commonware_consensus::simplex::types::Finalization<Scheme, Sha256Digest> {
+        let chain: std::collections::HashSet<Sha256Digest> = self.validators[index]
+            .env
+            .committed_chain_digests()
+            .into_iter()
+            .collect();
+        self.validators[source]
+            .activity
+            .finalizations_newest_first()
+            .into_iter()
+            .find(|finalization| chain.contains(&finalization.proposal.payload))
+            .expect("no observed finalization matches the retained chain")
+    }
+
+    /// Whether validator `index`'s marshal holds a finalized block at `height`
+    /// (test probe). A floor-started validator must answer `false` below its
+    /// floor — that absence IS the bounded-catch-up property: the history was
+    /// never fetched, not merely not needed.
+    pub async fn marshal_has_height(&mut self, index: usize, height: u64) -> bool {
+        use commonware_consensus::types::Height;
+        match &mut self.validators[index].running {
+            Some(Running::Full(stack)) => stack
+                .marshal_mailbox
+                .get_info(commonware_consensus::marshal::Identifier::Height(
+                    Height::new(height),
+                ))
+                .await
+                .is_some(),
+            _ => panic!("validator {index} is not running a full stack"),
+        }
     }
 
     /// Replaces a stopped validator's execution environment — the "rebuilt from
@@ -450,6 +516,7 @@ where
                     channels,
                     validator.env.era_anchor(),
                     validator.activity.clone(),
+                    validator.start.clone(),
                 )
                 .await;
                 Running::Full(stack)
@@ -580,6 +647,10 @@ where
             &self.stack_tuner,
         )
         .await;
+        // A floor applies to exactly the start that consumed it: the started
+        // validator's storage is no longer empty, so a later plain restart must
+        // resume from that storage, not re-install an old floor.
+        self.validators[index].start = StackStart::Genesis;
     }
 
     /// Links every pair of validators symmetrically with the given quality.

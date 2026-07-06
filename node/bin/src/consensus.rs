@@ -194,6 +194,9 @@ pub struct ConsensusSetup {
     /// namespace already baked it into the scheme provider, the p2p stack derives
     /// from it at startup.
     pub namespace: Vec<u8>,
+    /// Use a cached finality floor even when it predates the committee's last
+    /// scheduled change (`consensus.accept_stale_floor`).
+    pub accept_stale_floor: bool,
 }
 
 impl ConsensusSetup {
@@ -325,6 +328,7 @@ impl ConsensusSetup {
             epoch_length: std::num::NonZeroU64::new(config.epoch_length)
                 .context("`consensus.epoch_length` must be nonzero")?,
             era_anchor: config.genesis_height,
+            accept_stale_floor: config.accept_stale_floor,
             listen_address: config
                 .listen_address
                 .parse()
@@ -335,6 +339,108 @@ impl ConsensusSetup {
             namespace: base_namespace,
         })
     }
+}
+
+/// Where this validator's consensus state starts (see
+/// [`zksync_os_consensus_core::StackStart`]): a cached finality floor when one is
+/// usable — bounding an empty-storage start's catch-up to the blocks above it —
+/// or the era genesis (full backfill). With existing consensus storage marshal
+/// ignores a floor at or below what it already processed, so this selection only
+/// changes the empty-storage cases: a rebuild after an incident, or a node
+/// promoted into the committee with a retained chain.
+fn select_stack_start(
+    context: &mut commonware_runtime::tokio::Context,
+    finality: &zksync_os_consensus_execution::FinalityStore,
+    provider: &SchemeProvider,
+    era_anchor: u64,
+    chain_tip: u64,
+    accept_stale_floor: bool,
+) -> zksync_os_consensus_core::StackStart<commonware_cryptography::sha256::Digest> {
+    use commonware_codec::Read as _;
+    use commonware_cryptography::certificate::Scheme as _;
+    use zksync_os_consensus_core::StackStart;
+
+    // A floor must anchor at or below the chain tip (marshal re-delivers the floor
+    // block, then everything above it; a floor above the tip would leave a delivery
+    // gap the chain can never fill) and above the era anchor (the anchor itself is
+    // the Genesis start). The window bounds startup work; finalizations are dense,
+    // so the newest cached one is normally within a few heights of the tip.
+    const WINDOW: u64 = 1024;
+    const RAW_SCAN: usize = 4096;
+    let low = chain_tip.saturating_sub(WINDOW).max(era_anchor + 1);
+    if chain_tip < low {
+        return StackStart::Genesis;
+    }
+    let mut heights_by_digest = std::collections::HashMap::new();
+    for height in low..=chain_tip {
+        if let Ok(Some(digest)) = finality.digest_at_height(height) {
+            heights_by_digest.insert(digest, height);
+        }
+    }
+
+    let latest_transition = finality.latest_transition_epoch();
+    for (epoch, view, digest, raw) in finality.raw_finalizations_newest_first(RAW_SCAN) {
+        let Some(height) = heights_by_digest.get(&digest) else {
+            continue;
+        };
+        // Freshness policy (ratified in the EN-convergence design): a floor from
+        // before the committee's last scheduled change is refused — the full
+        // backfill re-derives everything instead. Entries are scanned newest
+        // first, so every later candidate is staler: stop here.
+        if let Some(latest) = latest_transition
+            && epoch < latest
+            && !accept_stale_floor
+        {
+            tracing::warn!(
+                floor_epoch = epoch,
+                latest_transition_epoch = latest,
+                "cached finality floor predates the last committee change; \
+                 falling back to a full backfill (set `consensus.accept_stale_floor` \
+                 to use it anyway)"
+            );
+            return StackStart::Genesis;
+        }
+        // Cache semantics: bytes written by a previous node version may no longer
+        // decode or verify after a consensus-library upgrade — that means "no
+        // floor", never an error.
+        let scheme = provider.scheme_for(zksync_os_consensus_core::types::Epoch::new(epoch));
+        let Ok(finalization) =
+            zksync_os_consensus_core::types::Finalization::<
+                zksync_os_consensus_core::types::Scheme,
+                commonware_cryptography::sha256::Digest,
+            >::read_cfg(&mut raw.as_slice(), &scheme.certificate_codec_config())
+        else {
+            tracing::warn!(
+                epoch,
+                view,
+                "cached finality floor no longer decodes (consensus library \
+                 upgrade?); falling back to a full backfill"
+            );
+            return StackStart::Genesis;
+        };
+        if finalization.proposal.payload.as_ref() != digest
+            || !finalization.verify(
+                context,
+                scheme.as_ref(),
+                &zksync_os_consensus_core::types::Sequential,
+            )
+        {
+            tracing::warn!(
+                epoch,
+                view,
+                "cached finality floor does not verify; falling back to a full backfill"
+            );
+            return StackStart::Genesis;
+        }
+        tracing::info!(
+            height,
+            epoch,
+            view,
+            "consensus will start from a cached finality floor if its storage is empty"
+        );
+        return StackStart::Floor(Box::new(finalization));
+    }
+    StackStart::Genesis
 }
 
 /// Spawns the consensus world. Returns the thread handle and a receiver that fires when
@@ -510,6 +616,26 @@ where
 
         use commonware_cryptography::Signer as _;
         let identity = setup.network_key.public_key();
+        let start = {
+            let mut committed_probe = env.clone();
+            let committed =
+                zksync_os_consensus_core::ExecutionEnv::committed_height(&mut committed_probe)
+                    .await
+                    .map(|height| height.get())
+                    .unwrap_or(0);
+            // `committed_height` is era-relative; the finality store's height index
+            // is chain-absolute.
+            let chain_tip = setup.era_anchor + committed;
+            let mut floor_context = context.child("floor_select");
+            select_stack_start(
+                &mut floor_context,
+                &observability.finality,
+                &setup.provider,
+                setup.era_anchor,
+                chain_tip,
+                setup.accept_stale_floor,
+            )
+        };
         let stack = start_validator(
             context.child("validator"),
             StackConfig::new("consensus").with_epoch_length(setup.epoch_length),
@@ -527,6 +653,7 @@ where
                 finality: observability.finality,
                 schedule: setup.schedule.clone(),
             },
+            start,
         )
         .await;
 
@@ -821,6 +948,22 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
                 if let Err(err) = self.finality.put_certificate(&certificate) {
                     tracing::error!(?err, "failed to persist a finality certificate");
                 }
+                // The floor cache: the same finalization in the consensus library's
+                // own encoding, so a restart with empty consensus storage can hand
+                // marshal a floor (the sovereign certificate cannot reconstruct
+                // one). Cache semantics — see `FinalityCF::FloorCache`.
+                {
+                    use commonware_codec::Encode as _;
+                    let raw = finalization.encode();
+                    if let Err(err) = self.finality.put_raw_finalization(
+                        round.epoch().get(),
+                        round.view().get(),
+                        block_digest,
+                        raw.as_ref(),
+                    ) {
+                        tracing::error!(?err, "failed to cache a raw finalization");
+                    }
+                }
                 // The custody trail: the first observed finalization of each epoch
                 // records which committee holds it (first-observed wins; replays
                 // change nothing).
@@ -850,11 +993,20 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
                     first_finalized_view: round.view().get(),
                 };
                 match self.finality.record_epoch_transition(&transition) {
-                    Ok(true) => tracing::info!(
-                        epoch = transition.epoch,
-                        committee_size,
-                        "recorded committee custody entry for epoch"
-                    ),
+                    Ok(true) => {
+                        tracing::info!(
+                            epoch = transition.epoch,
+                            committee_size,
+                            "recorded committee custody entry for epoch"
+                        );
+                        // Keep the floor cache to the current and previous epoch —
+                        // anything older fails the freshness policy anyway.
+                        if let Some(keep_from) = transition.epoch.checked_sub(1)
+                            && let Err(err) = self.finality.prune_raw_finalizations_below(keep_from)
+                        {
+                            tracing::warn!(?err, "failed to prune the floor cache");
+                        }
+                    }
                     Ok(false) => {}
                     Err(err) => {
                         tracing::error!(?err, "failed to persist an epoch transition record")

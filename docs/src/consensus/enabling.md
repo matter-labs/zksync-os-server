@@ -163,8 +163,14 @@ Two sharp edges, both loud by design:
   is a rebuild, not an in-place restart**: consensus vote journals index signers
   by committee position, so votes journaled under the wrong committee do not
   replay under the corrected one (the engine refuses, loudly). Deploy the
-  corrected config with a fresh data directory and let the node re-bootstrap and
-  backfill from its peers — the same path a brand-new validator takes.
+  corrected config with a fresh **consensus** data directory and let the node
+  re-bootstrap from its peers. The chain itself does not need rebuilding: with
+  its chain state retained, the restart resumes from a cached finality floor —
+  the node keeps a small cache of recent finalizations exactly for this — and
+  backfills only what lies above it, instead of replaying consensus history
+  from the era genesis. The floor must be recent (at or after the committee's
+  last scheduled change); an older one falls back to the full backfill with a
+  warning, unless `consensus.accept_stale_floor` says otherwise.
 - Epoch length is likewise committee-uniform. Hours-scale is the deliberate
   default: a reconfiguration deployed in the morning activates the same day,
   while boundary handoffs (one re-proposal view each) stay rare events.

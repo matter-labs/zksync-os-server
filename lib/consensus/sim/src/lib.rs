@@ -28,4 +28,4 @@ pub use activity::ActivityLog;
 pub use block::SimBlock;
 pub use cluster::{Behavior, EraOptions, ScheduleSpec, SimCluster, SimValidator, StackTuner};
 pub use execution::{DelayedEnv, MockExecution, SimEnv};
-pub use scenario::run_scenario;
+pub use scenario::{fingerprint, run_scenario};
