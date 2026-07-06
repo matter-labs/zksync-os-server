@@ -48,6 +48,7 @@ use crate::committer::FinalizedBlockCommitter;
 use crate::execution::ExecutionEnv;
 use crate::storage::{init_blocks_archive, init_finalizations_archive};
 use crate::types::{Elector, Scheme, SchemeProvider};
+use commonware_cryptography::certificate::Scheme as _;
 use commonware_broadcast::buffered;
 use commonware_consensus::marshal::standard::{Inline, Standard};
 use commonware_consensus::marshal::{self, core as marshal_core, resolver};
@@ -220,13 +221,14 @@ impl<B: commonware_consensus::Block> ValidatorStack<B> {
 }
 
 /// Builds and starts every component of one validator: broadcast, backfill, archives,
-/// marshal, the application adapter, and the simplex engine for epoch 0.
+/// marshal, the application adapter, and one simplex engine per epoch this validator
+/// is a committee member of (per `scheme_provider`'s schedule).
 #[allow(clippy::too_many_arguments)]
 pub async fn start_validator<R, X, TSender, TReceiver, TBlocker, TPeers, TReporter>(
     context: R,
     config: StackConfig,
     identity: PublicKey,
-    scheme: Scheme,
+    scheme_provider: SchemeProvider,
     mut env: X,
     blocker: TBlocker,
     peer_provider: TPeers,
@@ -307,7 +309,9 @@ where
         finalizations,
         blocks,
         marshal::Config {
-            provider: SchemeProvider::new(scheme.clone()),
+            // Marshal verifies certificates from arbitrary historical epochs during
+            // backfill — the provider resolves each epoch to its committee's scheme.
+            provider: scheme_provider.clone(),
             epocher: epocher.clone(),
             partition_prefix: config.partition_prefix.clone(),
             mailbox_size: config.mailbox_size,
@@ -409,12 +413,16 @@ where
     // engine hears nothing (peers retired that epoch), and the current epoch's
     // traffic would be dropped unheard.
     let tip_scout = context.with_label("tip_scout").spawn({
-        use commonware_cryptography::certificate::Scheme as _;
-        let scheme = scheme.clone();
+        let scheme_provider = scheme_provider.clone();
         let mut marshal_mailbox = marshal_mailbox.clone();
         let mut certificate_backup = certificate_backup;
         move |mut scout_context| async move {
-            let codec_config = scheme.certificate_codec_config();
+            // The epoch — and with it the committee whose signatures to check — is
+            // *inside* the certificate, so decoding must precede scheme selection:
+            // decode with the unbounded config, then verify against the scheme of
+            // the epoch the certificate claims. A forged epoch claim just fails
+            // verification against that epoch's real committee.
+            let codec_config = Scheme::certificate_codec_config_unbounded();
             while let Some((_tag, (_peer, bytes))) = certificate_backup.recv().await {
                 use commonware_codec::Decode as _;
                 let bytes: &[u8] = bytes.as_ref();
@@ -429,7 +437,8 @@ where
                 let Certificate::Finalization(finalization) = certificate else {
                     continue;
                 };
-                if !finalization.verify(&mut scout_context, &scheme, &Sequential) {
+                let scheme = scheme_provider.scheme_for(finalization.round().epoch());
+                if !finalization.verify(&mut scout_context, scheme.as_ref(), &Sequential) {
                     continue;
                 }
                 info!(
@@ -445,11 +454,14 @@ where
     });
 
     // Everything one engine needs, captured once; the rotation task calls this for
-    // each epoch it starts. The closure keeps `start_validator` the single place
-    // where an engine's configuration is spelled out.
+    // each epoch it starts — and only for epochs where this validator is a committee
+    // member (the rotation task checks membership before calling). The closure keeps
+    // `start_validator` the single place where an engine's configuration is spelled
+    // out.
     let spawn_engine = {
         let context = context.clone();
         let config = config.clone();
+        let scheme_provider = scheme_provider.clone();
         let marshal_mailbox = marshal_mailbox.clone();
         move |epoch: Epoch,
               votes: (SubSender<TSender>, SubReceiver<TReceiver>),
@@ -459,7 +471,7 @@ where
             let engine = Engine::new(
                 context.with_label(&format!("engine_epoch_{}", epoch.get())),
                 EngineConfig {
-                    scheme: scheme.clone(),
+                    scheme: scheme_provider.scheme_for(epoch).as_ref().clone(),
                     elector: Elector::default(),
                     blocker: blocker.clone(),
                     automaton: application.clone(),
@@ -495,6 +507,7 @@ where
             run_epoch_rotation(
                 context,
                 epocher,
+                scheme_provider,
                 env,
                 votes_mux,
                 certificates_mux,
@@ -532,10 +545,18 @@ const EPOCH_POLL: Duration = Duration::from_millis(250);
 /// engine is still finalizing its tail while the new one re-certifies the boundary
 /// block). Everything older is retired: its journal stays on disk, so nothing about
 /// double-sign protection changes if the same epoch were ever revisited on restart.
+///
+/// Engines exist only for epochs where this validator is in the committee. A
+/// validator scheduled out of epoch E simply never builds E's engine: it keeps
+/// marshal, broadcast, and the tip scout (so it can still observe and serve
+/// history), but it takes no further part in deciding blocks — the operational
+/// path for a machine that should keep following the chain is to repoint it as an
+/// external node.
 #[allow(clippy::too_many_arguments)]
 async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
     context: R,
     epocher: FixedEpocher,
+    scheme_provider: SchemeProvider,
     mut env: X,
     mut votes_mux: MuxHandle<TSender, TReceiver>,
     mut certificates_mux: MuxHandle<TSender, TReceiver>,
@@ -556,6 +577,9 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
 {
     use commonware_consensus::types::Epocher as _;
     use futures::FutureExt as _;
+    // Epochs we've already logged "not a member" for — the poll re-derives the same
+    // answer every tick, the operator needs to hear it once. Pruned with retirement.
+    let mut announced_outside = std::collections::BTreeSet::new();
     loop {
         // Every engine in the registry is one we *want* running (retirement removes
         // handles before aborting them). A resolved handle here therefore means an
@@ -591,6 +615,17 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
             if engines.lock().unwrap().contains_key(&key) {
                 continue;
             }
+            // Committee membership gates the engine: a validator outside this
+            // epoch's committee has no key in its scheme and casts no votes.
+            if scheme_provider.scheme_for(epoch).me().is_none() {
+                if announced_outside.insert(key) {
+                    info!(
+                        epoch = key,
+                        "not in the committee for this epoch; no engine will run"
+                    );
+                }
+                continue;
+            }
             let votes = votes_mux.register(key).await.expect("register votes mux");
             let certificates = certificates_mux
                 .register(key)
@@ -616,6 +651,7 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
                 true
             }
         });
+        announced_outside.retain(|&epoch| epoch >= keep_from);
 
         context.sleep(EPOCH_POLL).await;
     }

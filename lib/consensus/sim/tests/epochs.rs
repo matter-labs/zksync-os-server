@@ -12,7 +12,7 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_consensus_sim::{Behavior, MockExecution, SimCluster, links, run_scenario};
+use zksync_os_consensus_sim::{Behavior, EraOptions, MockExecution, SimCluster, links, run_scenario};
 
 const NUM_VALIDATORS: usize = 5;
 /// Short epochs so a modest chain height crosses several boundaries.
@@ -39,9 +39,10 @@ fn engines_rotate_across_epoch_boundaries() {
                 &behaviors,
                 links::healthy(),
                 |_index, _context| MockExecution::new(),
-                &[],
-                "validator",
-                short_epochs(),
+                EraOptions {
+                    stack_tuner: short_epochs(),
+                    ..EraOptions::default()
+                },
             )
             .await;
 
@@ -68,9 +69,10 @@ fn validator_restarts_across_an_epoch_boundary() {
                 &behaviors,
                 links::healthy(),
                 |_index, _context| MockExecution::new(),
-                &[],
-                "validator",
-                short_epochs(),
+                EraOptions {
+                    stack_tuner: short_epochs(),
+                    ..EraOptions::default()
+                },
             )
             .await;
 

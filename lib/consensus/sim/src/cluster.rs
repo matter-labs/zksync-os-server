@@ -13,27 +13,69 @@
 
 use crate::activity::ActivityLog;
 use crate::execution::{MockExecution, SimEnv};
-use commonware_codec::Read;
+use commonware_codec::{DecodeExt as _, Read};
 use commonware_consensus::simplex::mocks::{conflicter, nuller};
-use commonware_consensus::simplex::scheme::bls12381_multisig;
+use commonware_consensus::types::Epoch;
+use commonware_cryptography::bls12381::primitives::group;
+use commonware_cryptography::bls12381::primitives::ops::compute_public;
 use commonware_cryptography::bls12381::primitives::variant::MinPk;
-use commonware_cryptography::certificate::mocks::Fixture;
 use commonware_cryptography::ed25519::PublicKey;
 use commonware_cryptography::sha256::Digest as Sha256Digest;
-use commonware_cryptography::{Digestible, Sha256};
+use commonware_cryptography::{Digestible, Sha256, Signer as _, ed25519};
 use commonware_p2p::simulated::{Config as NetworkConfig, Link, Network, Oracle};
 use commonware_runtime::{Clock, Handle, Metrics, Quota, Spawner as _, deterministic};
-use commonware_utils::NZUsize;
+use commonware_utils::{NZUsize, TryFromIterator as _};
+use rand08::Rng as _;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_consensus_core::types::Scheme;
-use zksync_os_consensus_core::{Channels, StackConfig, ValidatorStack, start_validator};
+use zksync_os_consensus_core::types::{Scheme, SchemeProvider};
+use zksync_os_consensus_core::{
+    Channels, CommitteeSchedule, ScheduleEntry, StackConfig, ValidatorStack, start_validator,
+};
 
 /// Adjusts the stack configuration every validator (and every restart) is built
 /// with — how scenarios opt into short epochs or unusual timeouts without the
 /// cluster growing a parameter per knob.
 pub type StackTuner = Arc<dyn Fn(&mut StackConfig) + Send + Sync>;
+
+/// Committee membership per activation epoch, by validator index — the sim-side
+/// spelling of the committee schedule. An empty spec means the default: one
+/// committee of every validator, holding all epochs. Reconfiguration scenarios
+/// list explicit entries, e.g. `[(0, vec![0, 1, 2]), (2, vec![0, 1, 2, 3])]`
+/// grows the committee at epoch 2.
+pub type ScheduleSpec = Vec<(u64, Vec<usize>)>;
+
+/// The tail options of [`SimCluster::start_era`], with workable defaults — so
+/// scenarios name only what they bend.
+pub struct EraOptions {
+    /// Validators that are provisioned (keys, membership, environment) but not
+    /// started — the late-deploy case; [`SimCluster::restart`] brings one up.
+    pub stopped: Vec<usize>,
+    /// Namespaces every validator's journals/archives within the run's shared
+    /// storage. Scenarios starting a *second* cluster in one run pass a distinct
+    /// prefix, or the first era's storage would silently be reopened.
+    pub storage_prefix: String,
+    pub stack_tuner: StackTuner,
+    /// The committee schedule everyone agrees on (empty: everyone, from epoch 0).
+    pub schedule: ScheduleSpec,
+    /// Per-validator disagreements with `schedule` — the operator-error scenarios
+    /// (a validator whose config is missing the newest entry). Each listed
+    /// validator builds its scheme provider from its own spec instead.
+    pub schedule_overrides: Vec<(usize, ScheduleSpec)>,
+}
+
+impl Default for EraOptions {
+    fn default() -> Self {
+        Self {
+            stopped: Vec::new(),
+            storage_prefix: "validator".to_string(),
+            stack_tuner: Arc::new(|_| {}),
+            schedule: Vec::new(),
+            schedule_overrides: Vec::new(),
+        }
+    }
+}
 
 /// Domain-separation namespace for all consensus signatures in simulation.
 const NAMESPACE: &[u8] = b"zksync-os-consensus-sim";
@@ -70,6 +112,9 @@ pub struct SimCluster<X: SimEnv = MockExecution> {
     pub oracle: Oracle<PublicKey, deterministic::Context>,
     pub validators: Vec<SimValidator<X>>,
     stack_tuner: StackTuner,
+    /// Every validator's keys (sorted by network identity, aligned with
+    /// `validators`) — kept so schedules can be re-derived for reconfiguration.
+    keys: Vec<(ed25519::PrivateKey, group::Private)>,
 }
 
 pub struct SimValidator<X: SimEnv> {
@@ -81,7 +126,10 @@ pub struct SimValidator<X: SimEnv> {
     /// Records fault evidence this validator observed.
     pub activity: ActivityLog,
     running: Option<Running<X::Block>>,
-    scheme: Scheme,
+    /// Per-epoch schemes over the run's committee schedule, with this validator's
+    /// signing key. Shared shape with production; byzantine mocks pull their
+    /// signing scheme out of it for the epoch they attack.
+    provider: SchemeProvider,
     partition_prefix: String,
     /// How many times this validator has been started. Only used to give each
     /// incarnation a distinct metrics namespace: in production a restart is a fresh
@@ -146,33 +194,54 @@ where
             behaviors,
             link,
             env_factory,
-            stopped,
-            "validator",
-            Arc::new(|_| {}),
+            EraOptions {
+                stopped: stopped.to_vec(),
+                ..EraOptions::default()
+            },
         )
         .await
     }
 
-    /// The fullest constructor: `storage_prefix` namespaces every validator's
-    /// journals and archives within the run's shared in-memory storage. Scenarios
-    /// that start a *second* cluster in one run (the re-migration shape: a new
-    /// consensus era on deliberately fresh state) pass a distinct prefix — reusing
-    /// the default would silently reopen the first era's storage.
-    #[allow(clippy::too_many_arguments)]
+    /// The fullest constructor; see [`EraOptions`] for the knobs.
     pub async fn start_era(
         mut context: deterministic::Context,
         behaviors: &[Behavior],
         link: Link,
         env_factory: impl Fn(usize, deterministic::Context) -> X,
-        stopped: &[usize],
-        storage_prefix: &str,
-        stack_tuner: StackTuner,
+        options: EraOptions,
     ) -> Self {
-        let Fixture {
-            participants,
-            schemes,
-            ..
-        } = bls12381_multisig::fixture::<MinPk, _>(&mut context, NAMESPACE, behaviors.len() as u32);
+        let EraOptions {
+            stopped,
+            storage_prefix,
+            stack_tuner,
+            schedule: schedule_spec,
+            schedule_overrides,
+        } = options;
+        // Mint the validators' keys from the seeded runtime — deterministic per
+        // seed, and the same construction path production uses (no fixture): each
+        // validator holds an ed25519 network identity and a BLS signing key.
+        let mut keys: Vec<(ed25519::PrivateKey, group::Private)> = (0..behaviors.len())
+            .map(|_| {
+                let seed: [u8; 32] = context.r#gen();
+                let network =
+                    ed25519::PrivateKey::decode(seed.as_slice()).expect("32 bytes are a seed");
+                // BLS scalars must be canonical; retry until the bytes decode.
+                let bls = loop {
+                    let bytes: [u8; 32] = context.r#gen();
+                    if let Ok(key) = group::Private::decode(bytes.as_slice()) {
+                        break key;
+                    }
+                };
+                (network, bls)
+            })
+            .collect();
+        // Deterministic index ↔ identity mapping regardless of key values (peer
+        // registration and leader rotation see sorted committees either way).
+        keys.sort_by_key(|(network, _)| network.public_key());
+        let participants: Vec<PublicKey> =
+            keys.iter().map(|(network, _)| network.public_key()).collect();
+
+        let schedule = Self::build_schedule(&keys, &schedule_spec, behaviors.len());
 
         let (network, oracle) = Network::new_with_peers(
             context.with_label("network"),
@@ -191,17 +260,32 @@ where
             oracle,
             validators: Vec::new(),
             stack_tuner,
+            keys,
         };
         cluster.link_full_mesh_between(&participants, link).await;
 
         for (index, identity) in participants.iter().enumerate() {
+            // A validator with a schedule override runs its *own* (wrong) view of
+            // the committee history — the operator-error scenarios.
+            let spec = schedule_overrides
+                .iter()
+                .find(|(overridden, _)| *overridden == index)
+                .map(|(_, spec)| spec);
+            let provider = match spec {
+                None => SchemeProvider::new(
+                    NAMESPACE.to_vec(),
+                    schedule.clone(),
+                    Some(cluster.keys[index].1.clone()),
+                ),
+                Some(spec) => cluster.provider_for(index, spec),
+            };
             let mut validator = SimValidator {
                 identity: identity.clone(),
                 behavior: behaviors[index],
                 env: env_factory(index, cluster.context.with_label("env")),
                 activity: ActivityLog::new(),
                 running: None,
-                scheme: schemes[index].clone(),
+                provider,
                 // Stable across restarts: a restarted validator must find its own vote
                 // journal (double-sign protection) and archives under the same prefix.
                 partition_prefix: format!("{storage_prefix}-{index}"),
@@ -220,6 +304,97 @@ where
             cluster.validators.push(validator);
         }
         cluster
+    }
+
+    /// Builds one validator's scheme provider over the given spec — used for
+    /// schedule overrides at start and for fixing a validator's configuration
+    /// between [`Self::crash`] and [`Self::restart`] (the config-fix-and-rejoin
+    /// choreography).
+    fn provider_for(&self, index: usize, spec: &ScheduleSpec) -> SchemeProvider {
+        let schedule = Self::build_schedule(&self.keys, spec, self.keys.len());
+        SchemeProvider::new(
+            NAMESPACE.to_vec(),
+            schedule,
+            Some(self.keys[index].1.clone()),
+        )
+    }
+
+    /// Replaces a stopped validator's schedule (its "deployed configuration") so
+    /// the next [`Self::restart`] runs with the corrected committee history.
+    pub fn reconfigure_schedule(&mut self, index: usize, spec: &ScheduleSpec) {
+        assert!(
+            self.validators[index].running.is_none(),
+            "reconfigure a validator only while it is stopped (config changes are \
+             deploy-and-restart operations)"
+        );
+        self.validators[index].provider = self.provider_for(index, spec);
+    }
+
+    /// Orphans a stopped validator's consensus scratch state (engine journals,
+    /// marshal caches and archives) by moving it to a fresh storage prefix — the
+    /// sim equivalent of the operator remedy "clear the consensus state directory
+    /// and restart".
+    ///
+    /// Note the registered limitation: fresh consensus state over a *retained*
+    /// chain (execution environment at height H > 0, era anchored at genesis) is
+    /// not startable today — engines begin before backfill can supply the blocks
+    /// that anchor their epochs, and the marshal's `Inline` panics on the missing
+    /// starting-epoch block. Until "start consensus at a chain height without
+    /// consensus history" exists (the EN-promotion shape), a rebuilt validator
+    /// also rebuilds its chain: pair this with [`Self::reset_env`].
+    pub fn clear_consensus_state(&mut self, index: usize) {
+        assert!(
+            self.validators[index].running.is_none(),
+            "clear consensus state only while the validator is stopped"
+        );
+        let validator = &mut self.validators[index];
+        validator.incarnation += 1;
+        validator.partition_prefix = format!(
+            "{}-reset-{}",
+            validator.partition_prefix, validator.incarnation
+        );
+    }
+
+    /// Replaces a stopped validator's execution environment — the "rebuilt from
+    /// scratch" half of a full validator rebuild (fresh chain, resynced by
+    /// consensus backfill from peers on the next start).
+    pub fn reset_env(&mut self, index: usize, env: X) {
+        assert!(
+            self.validators[index].running.is_none(),
+            "reset the environment only while the validator is stopped"
+        );
+        self.validators[index].env = env;
+    }
+
+    /// Builds the run's committee schedule from an index-based spec. An empty spec
+    /// is the default single committee of every validator.
+    fn build_schedule(
+        keys: &[(ed25519::PrivateKey, group::Private)],
+        spec: &ScheduleSpec,
+        num_validators: usize,
+    ) -> CommitteeSchedule {
+        let committee_of = |indices: &[usize]| {
+            commonware_utils::ordered::BiMap::try_from_iter(indices.iter().map(|&index| {
+                let (network, bls) = &keys[index];
+                (network.public_key(), compute_public::<MinPk>(bls))
+            }))
+            .expect("committee indices are distinct")
+        };
+        let entries: Vec<ScheduleEntry> = if spec.is_empty() {
+            let everyone: Vec<usize> = (0..num_validators).collect();
+            vec![ScheduleEntry {
+                activation_epoch: 0,
+                committee: committee_of(&everyone),
+            }]
+        } else {
+            spec.iter()
+                .map(|(activation_epoch, indices)| ScheduleEntry {
+                    activation_epoch: *activation_epoch,
+                    committee: committee_of(indices),
+                })
+                .collect()
+        };
+        CommitteeSchedule::new(entries).expect("scenario schedule is valid")
     }
 
     /// Registers the five p2p channels and starts whatever this validator's behavior
@@ -264,7 +439,7 @@ where
                     context.with_label(&label),
                     stack_config,
                     validator.identity.clone(),
-                    validator.scheme.clone(),
+                    validator.provider.clone(),
                     validator.env.clone(),
                     oracle.control(validator.identity.clone()),
                     oracle.manager(),
@@ -279,14 +454,15 @@ where
             // idle. They react to observed traffic with contradictory signed votes.
             // Honest validators mux their engine channels by epoch, so the attacker
             // must frame its traffic the same way to be heard at all — these
-            // scenarios attack epoch 0.
+            // scenarios attack epoch 0, and the byzantine validator must be an
+            // epoch-0 committee member for its signatures to count as evidence.
             Behavior::Conflicter => {
                 let (votes, mux_task) =
                     Self::byzantine_votes_subchannel(context, &label, channels.votes).await;
                 let engine = conflicter::Conflicter::<_, Scheme, Sha256>::new(
                     context.with_label(&label),
                     conflicter::Config {
-                        scheme: validator.scheme.clone(),
+                        scheme: validator.provider.scheme_for(Epoch::new(0)).as_ref().clone(),
                     },
                 );
                 Running::Byzantine(vec![engine.start(votes), mux_task])
@@ -297,7 +473,7 @@ where
                 let engine = nuller::Nuller::<_, Scheme, Sha256>::new(
                     context.with_label(&label),
                     nuller::Config {
-                        scheme: validator.scheme.clone(),
+                        scheme: validator.provider.scheme_for(Epoch::new(0)).as_ref().clone(),
                     },
                 );
                 Running::Byzantine(vec![engine.start(votes), mux_task])
@@ -490,12 +666,27 @@ where
         }
     }
 
+    /// The committed height of one validator (0 when it has committed nothing).
+    pub fn committed_height(&self, index: usize) -> u64 {
+        self.validators[index].env.committed_tip().unwrap_or(0)
+    }
+
     /// The agreement property: every honest validator's committed chain (as a digest
     /// sequence) is a prefix of the longest one, and every honest validator reached at
     /// least `minimum_height`.
     pub fn assert_committed_chains_agree(&self, minimum_height: u64) {
-        let honest = self.honest_indices();
-        let chains: Vec<(usize, Vec<Sha256Digest>)> = honest
+        self.assert_committed_chains_agree_between(&self.honest_indices(), minimum_height);
+    }
+
+    /// [`Self::assert_committed_chains_agree`] over a chosen subset — for
+    /// reconfiguration scenarios, where validators scheduled out of the committee
+    /// (or still catching up) legitimately trail the members.
+    pub fn assert_committed_chains_agree_between(
+        &self,
+        indices: &[usize],
+        minimum_height: u64,
+    ) {
+        let chains: Vec<(usize, Vec<Sha256Digest>)> = indices
             .iter()
             .map(|&index| (index, self.validators[index].env.committed_chain_digests()))
             .collect();
@@ -509,7 +700,7 @@ where
         let longest = &chains
             .iter()
             .max_by_key(|(_, chain)| chain.len())
-            .expect("at least one honest validator")
+            .expect("at least one validator in the agreement set")
             .1;
         for (index, chain) in &chains {
             for (height_index, digest) in chain.iter().enumerate() {

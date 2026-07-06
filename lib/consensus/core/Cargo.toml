@@ -21,6 +21,7 @@ commonware-runtime.workspace = true
 commonware-storage.workspace = true
 commonware-utils.workspace = true
 
+anyhow.workspace = true
 futures.workspace = true
 rand08.workspace = true
 tracing.workspace = true

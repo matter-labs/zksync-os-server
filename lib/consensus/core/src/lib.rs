@@ -20,7 +20,9 @@
 //!
 //! - [`execution`]: the [`ExecutionEnv`] boundary trait.
 //! - [`types`]: the concrete cryptography choices (BLS multisig over ed25519 identities,
-//!   round-robin leaders, static single-epoch committee).
+//!   round-robin leaders).
+//! - [`schedule`]: the committee schedule — which validator set holds which epochs —
+//!   and the per-epoch scheme provider derived from it.
 //! - [`application`] / [`committer`]: adapters between consensus and [`ExecutionEnv`].
 //! - [`storage`]: the archives persisting finalized blocks and certificates.
 //! - [`stack`]: assembles one validator's full stack (see its module docs for the
@@ -29,9 +31,11 @@
 pub mod application;
 pub mod committer;
 pub mod execution;
+pub mod schedule;
 pub mod stack;
 pub mod storage;
 pub mod types;
 
 pub use execution::{BuildContext, ExecutionEnv};
+pub use schedule::{CommitteeSchedule, ScheduleEntry, ScheduledSchemeProvider};
 pub use stack::{Channels, NullReporter, StackConfig, ValidatorStack, start_validator};

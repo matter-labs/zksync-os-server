@@ -39,6 +39,16 @@ pub fn run_scenario<F, Fut>(
     F: Fn(deterministic::Context) -> Fut,
     Fut: Future<Output = ()>,
 {
+    // Debugging aid: `CONSENSUS_SIM_LOG=debug cargo test ... -- --nocapture` gets
+    // component-level logs out of a failing scenario. Logging writes to stderr
+    // outside the simulated runtime, so it cannot affect determinism (and the
+    // double-run below keeps proving that).
+    if let Ok(filter) = std::env::var("CONSENSUS_SIM_LOG") {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .without_time()
+            .try_init();
+    }
     let seeds: Vec<u64> = match std::env::var("CONSENSUS_SIM_SEEDS") {
         Ok(count) => {
             let count: u64 = count

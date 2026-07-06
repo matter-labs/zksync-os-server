@@ -35,9 +35,12 @@ commonware-codec.workspace = true
 commonware-consensus = { workspace = true, features = ["mocks"] }
 commonware-cryptography.workspace = true
 commonware-p2p.workspace = true
+rand08.workspace = true
 commonware-runtime.workspace = true
 commonware-utils.workspace = true
 
 bytes.workspace = true
 futures.workspace = true
 tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
