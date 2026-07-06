@@ -6,6 +6,7 @@ use alloy::primitives::BlockNumber;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use crate::execution::utils::parallel_producer_profile_enabled;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
@@ -60,7 +61,7 @@ where
         enum WalMode<R> {
             Inline(R),
             Pipelined {
-                queue: mpsc::Sender<(BlockNumber, Sealed<ReplayRecord>, bool)>,
+                queue: mpsc::Sender<(BlockNumber, Sealed<Arc<ReplayRecord>>, bool)>,
                 written: watch::Receiver<BlockNumber>,
             },
             Skipped,
@@ -72,7 +73,7 @@ where
         } else {
             let depth = self.config.parallel_blocks;
             let (queue, mut wal_rx) =
-                mpsc::channel::<(BlockNumber, Sealed<ReplayRecord>, bool)>(depth);
+                mpsc::channel::<(BlockNumber, Sealed<Arc<ReplayRecord>>, bool)>(depth);
             let (written_tx, written) = watch::channel(0u64);
             let replay = self.replay;
             tokio::spawn(async move {
@@ -121,7 +122,7 @@ where
         // (block_number, output, record, populate join handle), oldest at the front.
         let mut in_flight: std::collections::VecDeque<(
             u64,
-            ReplayRecord,
+            Arc<ReplayRecord>,
             Duration,
             Duration,
             tokio::task::JoinHandle<RepositoryResult<BlockOutputWithReads>>,
@@ -159,16 +160,19 @@ where
                     let (bn, rec, add_state_elapsed, populate_spawn_elapsed, _handle) =
                         in_flight.pop_front().expect("in_flight checked non-empty");
                     let out = res.context("populate task panicked")??;
+                    // Applied (state + repos visible) unblocks the executor's base-view sync
+                    // immediately; only FORWARDING downstream waits for WAL durability, so the
+                    // WAL writer's group-commit latency stays off the production round cadence.
+                    self.applied_block_number_sender.send_replace(Some(bn));
                     if !wait_wal_written(&mut wal_mode, bn).await {
                         tracing::info!("Replay WAL writer stopped, shutting down");
                         return Ok(());
                     }
-                    self.applied_block_number_sender.send_replace(Some(bn));
                     let t_output_send = Instant::now();
                     output.send_and_record(
                         AppliedBlock {
                             output: out,
-                            record: rec,
+                            record: Arc::try_unwrap(rec).unwrap_or_else(|arc| (*arc).clone()),
                         },
                         &state_reporter,
                     )?;
@@ -207,15 +211,15 @@ where
                 // Channel closed: drain the in-flight window in order, then stop.
                 while let Some((bn, rec, _, _, handle)) = in_flight.pop_front() {
                     let out = handle.await.context("populate task panicked")??;
+                    self.applied_block_number_sender.send_replace(Some(bn));
                     if !wait_wal_written(&mut wal_mode, bn).await {
                         tracing::info!("Replay WAL writer stopped, shutting down");
                         return Ok(());
                     }
-                    self.applied_block_number_sender.send_replace(Some(bn));
                     output.send_and_record(
                         AppliedBlock {
                             output: out,
-                            record: rec,
+                            record: Arc::try_unwrap(rec).unwrap_or_else(|arc| (*arc).clone()),
                         },
                         &state_reporter,
                     )?;
@@ -225,6 +229,10 @@ where
             };
 
             let block_output = block_output_with_reads.as_ref();
+            // Arc-shared from here on: the WAL queue and the in-flight window both hold the
+            // record, and a deep clone (~1,700 txs) on this serial loop is a measured
+            // pipeline-visible cost. Unwrapped (or worst-case cloned) at the forward site.
+            let executed_replay = Arc::new(executed_replay);
             let block_number = executed_replay.block_context.block_number;
             let block_hash = block_output.header.hash();
             let override_allowed = match cmd_type {
@@ -239,7 +247,7 @@ where
                 WalMode::Inline(replay) => {
                     if let Err(err) = replay
                         .write(
-                            Sealed::new_unchecked(executed_replay.clone(), block_hash),
+                            Sealed::new_unchecked((*executed_replay).clone(), block_hash),
                             override_allowed,
                         )
                         .await
@@ -321,16 +329,16 @@ where
                 let t_populate_wait = Instant::now();
                 let out = handle.await.context("populate task panicked")??;
                 let populate_wait_elapsed = t_populate_wait.elapsed();
+                self.applied_block_number_sender.send_replace(Some(bn));
                 if !wait_wal_written(&mut wal_mode, bn).await {
                     tracing::info!("Replay WAL writer stopped, shutting down");
                     return Ok(());
                 }
-                self.applied_block_number_sender.send_replace(Some(bn));
                 let t_output_send = Instant::now();
                 output.send_and_record(
                     AppliedBlock {
                         output: out,
-                        record: rec,
+                        record: Arc::try_unwrap(rec).unwrap_or_else(|arc| (*arc).clone()),
                     },
                     &state_reporter,
                 )?;

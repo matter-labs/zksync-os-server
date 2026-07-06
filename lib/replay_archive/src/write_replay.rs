@@ -3,6 +3,7 @@ use crate::metrics::REPLAY_ARCHIVE_METRICS;
 use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context;
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::Instant;
 use zksync_os_storage_api::{BlockContext, ReadReplay, ReplayRecord, WriteReplay};
 
@@ -81,15 +82,16 @@ where
 
     async fn write_many(
         &self,
-        records: Vec<(Sealed<ReplayRecord>, bool)>,
+        records: Vec<(Sealed<Arc<ReplayRecord>>, bool)>,
     ) -> anyhow::Result<()> {
-        // Archive AFTER the inner storage commits, mirroring `write`'s ordering.
+        // Archive AFTER the inner storage commits, mirroring `write`'s ordering. The archive
+        // channel needs owned records, so this clones — only when archiving is enabled.
         let to_archive: Vec<(BlockHash, ReplayRecord)> = if self.archive_sender.is_some() {
             records
                 .iter()
                 .map(|(sealed, _)| {
                     let (record, block_hash) = sealed.clone().split();
-                    (block_hash, record)
+                    (block_hash, (*record).clone())
                 })
                 .collect()
         } else {

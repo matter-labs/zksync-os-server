@@ -31,6 +31,7 @@ fn wal_profile_enabled() -> bool {
 }
 use std::convert::TryInto;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
@@ -209,7 +210,8 @@ impl BlockReplayStorage {
         is_canonical: bool,
         latest_hint: Option<BlockNumber>,
     ) -> usize {
-        let prepared = Self::serialize_replay(sealed_record, is_canonical);
+        let (record, block_hash) = sealed_record.split();
+        let prepared = Self::serialize_replay(&record, block_hash, is_canonical);
         let txs_bytes = prepared.txs_value.len();
         self.stage_prepared(batch, &prepared, latest_hint);
         txs_bytes
@@ -217,13 +219,13 @@ impl BlockReplayStorage {
 
     /// The pure-CPU half of a WAL write: serialize every column-family value for one record.
     /// Independent per record — `write_many` runs this in parallel across a batch; only
-    /// [`stage_prepared`](Self::stage_prepared) and the commit are order-sensitive.
+    /// [`stage_prepared`](Self::stage_prepared) and the commit are order-sensitive. Takes the
+    /// record by reference so `Arc`-shared records (the `write_many` path) are never cloned.
     fn serialize_replay(
-        sealed_record: Sealed<ReplayRecord>,
+        record: &ReplayRecord,
+        block_hash: BlockHash,
         is_canonical: bool,
     ) -> PreparedReplayWrite {
-        // Prepare record
-        let (record, block_hash) = sealed_record.split();
         let block_number = record.block_context.block_number;
         // TODO: We want to change the key to be block_hash for all blocks
         let db_key = if is_canonical {
@@ -232,7 +234,7 @@ impl BlockReplayStorage {
             block_hash.0.to_vec()
         };
         let context_value =
-            bincode::serde::encode_to_vec(record.block_context, bincode::config::standard())
+            bincode::serde::encode_to_vec(&record.block_context, bincode::config::standard())
                 .expect("Failed to serialize record.context");
         // TODO(RocksDB migration): BlockStartCursors fields are stored in separate column families
         // for historical reasons. A future migration should consolidate them into a single CF
@@ -248,7 +250,8 @@ impl BlockReplayStorage {
         let protocol_version_value = record.protocol_version.to_string().into_bytes();
         let force_preimages_value = bincode::encode_to_vec(
             &StorageForcePreimages {
-                preimages: record.force_preimages,
+                // Clone is fine: force preimages are empty outside upgrade blocks.
+                preimages: record.force_preimages.clone(),
             },
             bincode::config::standard(),
         )
@@ -664,7 +667,7 @@ impl WriteReplay for BlockReplayStorage {
 
     async fn write_many(
         &self,
-        records: Vec<(Sealed<ReplayRecord>, bool)>,
+        records: Vec<(Sealed<Arc<ReplayRecord>>, bool)>,
     ) -> anyhow::Result<()> {
         let profile_started = wal_profile_enabled().then(std::time::Instant::now);
         let total = records.len();
@@ -694,7 +697,8 @@ impl WriteReplay for BlockReplayStorage {
             }
             if run.is_empty() {
                 // Non-fresh record: commit what's staged (preserving order), then take the
-                // validated per-record path.
+                // validated per-record path (rare — restart replays / overrides; the deep clone
+                // to an owned record is acceptable there).
                 if staged > 0 {
                     let full = std::mem::replace(&mut batch, self.db.new_write_batch());
                     self.db
@@ -703,12 +707,18 @@ impl WriteReplay for BlockReplayStorage {
                     staged = 0;
                 }
                 let (sealed_record, override_allowed) = records.next().expect("peeked");
-                self.write(sealed_record, override_allowed).await?;
+                let (record, block_hash) = sealed_record.split();
+                let record = Arc::try_unwrap(record).unwrap_or_else(|arc| (*arc).clone());
+                self.write(Sealed::new_unchecked(record, block_hash), override_allowed)
+                    .await?;
                 latest = self.latest_record_checked();
             } else {
                 let prepared: Vec<PreparedReplayWrite> = run
                     .into_par_iter()
-                    .map(|sealed_record| Self::serialize_replay(sealed_record, true))
+                    .map(|sealed_record| {
+                        let (record, block_hash) = sealed_record.split();
+                        Self::serialize_replay(&record, block_hash, true)
+                    })
                     .collect();
                 for record in &prepared {
                     self.stage_prepared(&mut batch, record, latest);

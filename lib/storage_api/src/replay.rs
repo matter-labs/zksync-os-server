@@ -6,6 +6,7 @@ use pin_project::pin_project;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -188,8 +189,12 @@ pub trait WriteReplay: ReadReplay {
     /// atomicity requirements per record), but backends amortize the storage commit across the
     /// run where they can — the parallel-block applier's WAL writer feeds batches of blocks at
     /// rates where a per-block commit dominates the pipeline.
+    ///
+    /// Records arrive `Arc`-shared (unlike [`write`](Self::write)): serialization only needs a
+    /// borrow, and at multi-MB record sizes and hundreds of blocks/s the deep clone an owned
+    /// signature would force on the caller is itself a pipeline-visible cost.
     fn write_many(
         &self,
-        records: Vec<(Sealed<ReplayRecord>, bool)>,
+        records: Vec<(Sealed<Arc<ReplayRecord>>, bool)>,
     ) -> impl Future<Output = anyhow::Result<()>> + Send;
 }
