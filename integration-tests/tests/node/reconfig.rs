@@ -11,6 +11,9 @@ use zksync_os_integration_tests::multi_node::MultiNodeTester;
 use zksync_os_server::config::CommitteeScheduleEntryConfig;
 
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
+/// The promotion test's boundary wait spans the rolling restarts plus a dozen
+/// epochs of margin — generous on purpose.
+const PROMOTION_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// Blocks per epoch for these tests: small enough to cross several boundaries in
 /// seconds, large enough that a boundary is not every other block.
@@ -180,9 +183,30 @@ async fn misconfigured_validator_stalls_then_recovers_after_config_fix() -> anyh
          committee (applied {lagging}, members at {target}+)"
     );
 
-    // The remedy: corrected config + fresh data directory (kept alive for the
-    // test's duration), i.e. a full rebuild.
+    // The remedy, exactly as the runbook documents it: corrected config + a
+    // fresh CONSENSUS data directory — the chain, the write-ahead log, and the
+    // finality store all stay. The restart resumes from a cached finality floor
+    // (observed in this scenario: the last finalization before the committee
+    // change, one height below the boundary) instead of replaying consensus
+    // history from genesis; catch-up is bounded to the blocks above it. The
+    // floor-engagement mechanics are DST-pinned in the sim's promotion tests;
+    // this proves the wiring over a real node's finality store.
+    //
+    // `accept_stale_floor` rides along because where the stall lands varies:
+    // a validator that observed even one finalization of the epoch it stalled
+    // in has a custody record for it, and then every USABLE floor (from before
+    // the change) fails the freshness policy — the flag is the runbook's escape
+    // hatch for exactly this rebuild, harmless in the runs where the floor is
+    // fresh anyway.
+    let stalled_rocks = cluster
+        .node(1)
+        .config()
+        .general_config
+        .rocks_db_path
+        .clone();
     cluster.stop_validator(1).await?;
+    zksync_os_integration_tests::wait_for_rocksdb_locks_released(&stalled_rocks).await?;
+    std::fs::remove_dir_all(stalled_rocks.join("consensus"))?;
     let corrected_entries: Vec<CommitteeScheduleEntryConfig> = corrected
         .iter()
         .map(|(activation_epoch, indices)| CommitteeScheduleEntryConfig {
@@ -193,12 +217,10 @@ async fn misconfigured_validator_stalls_then_recovers_after_config_fix() -> anyh
                 .collect(),
         })
         .collect();
-    let rebuilt_dir = tempfile::tempdir()?;
-    let rebuilt_path = rebuilt_dir.path().to_path_buf();
     cluster
         .start_validator_with_config_overrides(1, move |config| {
             config.consensus_config.committees = corrected_entries;
-            config.general_config.rocks_db_path = rebuilt_path;
+            config.consensus_config.accept_stale_floor = true;
         })
         .await?;
 
@@ -241,4 +263,132 @@ async fn wait_for_height_on(
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+/// The full promotion choreography, live: a node that started life as a
+/// non-voting OBSERVER (no BLS key configured, admitted via the observers list)
+/// is scheduled into the committee at a future epoch and becomes a voting
+/// validator — without ever resyncing. The steps mirror the runbook exactly:
+///
+/// 1. every sitting validator restarts with the appended schedule entry (and the
+///    candidate moved out of the admission list — it is committee-listed now,
+///    which also keeps it connectable throughout: the address book spans every
+///    schedule entry);
+/// 2. the candidate restarts last, flipping `role = validator` and gaining its
+///    BLS key — over its RETAINED chain and consensus archives from observing;
+/// 3. nothing special happens at the boundary itself: the rotation starts the
+///    candidate's first-ever engine because the schedule now says "member".
+#[test_log::test(tokio::test)]
+async fn observer_promoted_to_validator_at_a_scheduled_boundary() -> anyhow::Result<()> {
+    // 4 validators (quorum 3 — each rolling restart leaves the chain live) and
+    // one observer, the candidate, at index 4.
+    let schedule = vec![(0, vec![0, 1, 2, 3])];
+    let mut cluster =
+        MultiNodeTester::start_with_schedule_and_observers(4, 1, &schedule, EPOCH_LENGTH).await?;
+    const CANDIDATE: usize = 4;
+
+    // The candidate observes: reaching a height proves it applies
+    // consensus-delivered blocks (it has no other source).
+    cluster
+        .wait_for_block_on_all(EPOCH_LENGTH / 2, CONVERGENCE_TIMEOUT)
+        .await?;
+
+    // The promotion target: far enough out for five sequential restarts. All
+    // configs must name the SAME activation epoch, so pick it before touching
+    // anyone. (If the restarts overran it, the committee would simply run one
+    // member short until the candidate arrives — late first engines are safe —
+    // but the margin keeps the test deterministic in what it asserts.)
+    let activation_epoch = cluster.max_height().await? / EPOCH_LENGTH + 12;
+    let promoted_entries: Vec<CommitteeScheduleEntryConfig> = vec![
+        CommitteeScheduleEntryConfig {
+            activation_epoch: 0,
+            validators: (0..4)
+                .map(|i| cluster.committee_entry(i).to_string())
+                .collect(),
+        },
+        CommitteeScheduleEntryConfig {
+            activation_epoch,
+            validators: (0..5)
+                .map(|i| cluster.committee_entry(i).to_string())
+                .collect(),
+        },
+    ];
+
+    // Step 1: rolling schedule deployment across the sitting committee.
+    for index in 0..4 {
+        cluster.stop_validator(index).await?;
+        let entries = promoted_entries.clone();
+        cluster
+            .start_validator_with_config_overrides(index, move |config| {
+                config.consensus_config.committees = entries;
+                // The candidate is committee-listed now; a key may not be both.
+                config.consensus_config.observers = vec![];
+            })
+            .await?;
+    }
+
+    // Step 2: the candidate flips roles — same chain, same consensus archives,
+    // plus a signing key and the schedule that makes it a member at E.
+    let bls_key = cluster.bls_key_hex(CANDIDATE).to_string();
+    cluster.stop_validator(CANDIDATE).await?;
+    let entries = promoted_entries.clone();
+    cluster
+        .start_validator_with_config_overrides(CANDIDATE, move |config| {
+            config.consensus_config.role = zksync_os_server::config::ConsensusRole::Validator;
+            config.consensus_config.bls_key = Some(bls_key);
+            config.consensus_config.committees = entries;
+            config.consensus_config.observers = vec![];
+            config.consensus_config.tx_forward_rpc_urls = vec![];
+        })
+        .await?;
+
+    // Step 3: cross the activation boundary and converge past it — everyone,
+    // the promoted member included.
+    let past_boundary = activation_epoch * EPOCH_LENGTH + 5;
+    cluster
+        .wait_for_block_on_all(past_boundary, PROMOTION_TIMEOUT)
+        .await?;
+    cluster.assert_block_hashes_agree(past_boundary).await?;
+
+    // The promoted node's own view: a validator now, finalizing in the grown
+    // committee's epoch.
+    let status = cluster.node(CANDIDATE).status().await?;
+    let consensus = status.consensus.expect("consensus section");
+    anyhow::ensure!(consensus.role == "validator", "role flip must be visible");
+    let finalized = consensus.finalized.expect("finalizing");
+    anyhow::ensure!(
+        finalized.epoch >= activation_epoch && finalized.committee_size == 5,
+        "expected the promoted committee of 5 at epoch {activation_epoch}+, got {finalized:?}"
+    );
+
+    // And it VOTES: with one original member stopped, the committee of 5
+    // (quorum 4) advances only if the promoted member signs.
+    cluster.stop_validator(1).await?;
+    let target = cluster.max_height().await? + EPOCH_LENGTH;
+    cluster
+        .wait_for_block_on_all(target, CONVERGENCE_TIMEOUT)
+        .await?;
+    cluster.assert_block_hashes_agree(target).await?;
+
+    // The custody trail records the handoff: the committee of 4 before the
+    // activation epoch, 5 from it.
+    let rocks = cluster
+        .node(0)
+        .config()
+        .general_config
+        .rocks_db_path
+        .clone();
+    cluster.stop_validator(0).await?;
+    zksync_os_integration_tests::wait_for_rocksdb_locks_released(&rocks).await?;
+    let store = zksync_os_consensus_execution::FinalityStore::open(&rocks.join("finality"))?;
+    let promoted = store
+        .epoch_transition(activation_epoch)?
+        .expect("activation epoch custody record exists");
+    anyhow::ensure!(
+        promoted.committee.len() == 5,
+        "the activation epoch is held by the promoted committee of 5"
+    );
+    drop(store);
+    cluster.shutdown_all().await?;
+    Ok(())
 }

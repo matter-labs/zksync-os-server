@@ -60,9 +60,12 @@ pub struct MultiNodeTester {
     /// Reservations for the consensus listen ports, held for the cluster's lifetime so
     /// a stopped validator can rebind the same address when it restarts.
     consensus_ports: Vec<LockedPort>,
-    /// Every validator's committee entry (`<ed25519>:<bls>@<addr>`), for tests that
-    /// rewrite committee schedules in config overrides.
+    /// Every node's committee entry (`<ed25519>:<bls>@<addr>`) — observers included,
+    /// whose entries exist for tests that *promote* them into a future committee.
     committee_entries: Vec<String>,
+    /// Every node's BLS signing key (hex). An observer's key is generated but not
+    /// configured; promotion tests hand it to the node at the role flip.
+    bls_keys: Vec<String>,
 }
 
 impl MultiNodeTester {
@@ -179,6 +182,10 @@ impl MultiNodeTester {
             validators: nodes.into_iter().map(Validator::Running).collect(),
             consensus_ports,
             committee_entries: committee,
+            bls_keys: keys
+                .iter()
+                .map(|keys| alloy::hex::encode(keys.bls.encode()))
+                .collect(),
         })
     }
 
@@ -274,6 +281,10 @@ impl MultiNodeTester {
             validators: nodes.into_iter().map(Validator::Running).collect(),
             consensus_ports,
             committee_entries: committee,
+            bls_keys: keys
+                .iter()
+                .map(|keys| alloy::hex::encode(keys.bls.encode()))
+                .collect(),
         })
     }
 
@@ -306,11 +317,15 @@ impl MultiNodeTester {
         for _ in 0..total {
             consensus_ports.push(LockedPort::acquire_unused().await?);
         }
-        let committee: Vec<String> = keys[..num_validators]
+        // Committee-style entries for EVERY node: the validators' feed the config;
+        // an observer's is the entry a future committee would list (promotion
+        // material, stored on the tester).
+        let all_entries: Vec<String> = keys
             .iter()
             .zip(&consensus_ports)
             .map(|(keys, port)| format!("{}@127.0.0.1:{}", keys.committee_entry_keys, port.port))
             .collect();
+        let committee: Vec<String> = all_entries[..num_validators].to_vec();
         // `consensus.observers` entries carry only the network identity.
         let observer_entries: Vec<String> = keys[num_validators..]
             .iter()
@@ -391,7 +406,139 @@ impl MultiNodeTester {
         Ok(Self {
             validators: nodes.into_iter().map(Validator::Running).collect(),
             consensus_ports,
-            committee_entries: committee,
+            committee_entries: all_entries,
+            bls_keys: keys
+                .iter()
+                .map(|keys| alloy::hex::encode(keys.bls.encode()))
+                .collect(),
+        })
+    }
+
+    /// [`Self::start_with_observers`] over a committee *schedule* — the promotion
+    /// shape: observers that a later schedule entry will make validators. Observer
+    /// indices follow the validator indices. `schedule` entries index into the
+    /// validators only; promoting an observer later means restarting nodes with an
+    /// appended entry that lists the observer's [`Self::committee_entry`].
+    pub async fn start_with_schedule_and_observers(
+        num_validators: usize,
+        num_observers: usize,
+        schedule: &[(u64, Vec<usize>)],
+        epoch_length: u64,
+    ) -> anyhow::Result<Self> {
+        assert!(
+            num_validators >= 2,
+            "a committee needs at least 2 validators"
+        );
+        let chain_layout = ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let l1 = crate::AnvilL1::start(chain_layout).await?;
+
+        let total = num_validators + num_observers;
+        let keys: Vec<ValidatorKeys> = (0..total).map(|_| generate_validator_keys()).collect();
+        let fee_collector = alloy::primitives::Address::random();
+        let mut consensus_ports = Vec::with_capacity(total);
+        for _ in 0..total {
+            consensus_ports.push(LockedPort::acquire_unused().await?);
+        }
+        let all_entries: Vec<String> = keys
+            .iter()
+            .zip(&consensus_ports)
+            .map(|(keys, port)| format!("{}@127.0.0.1:{}", keys.committee_entry_keys, port.port))
+            .collect();
+        let entries: Vec<CommitteeScheduleEntryConfig> = schedule
+            .iter()
+            .map(|(activation_epoch, indices)| CommitteeScheduleEntryConfig {
+                activation_epoch: *activation_epoch,
+                validators: indices.iter().map(|&i| all_entries[i].clone()).collect(),
+            })
+            .collect();
+        let observer_entries: Vec<String> = keys[num_validators..]
+            .iter()
+            .zip(&consensus_ports[num_validators..])
+            .map(|(keys, port)| {
+                let network_hex = keys
+                    .committee_entry_keys
+                    .split(':')
+                    .next()
+                    .expect("committee entry keys are `<net>:<bls>`");
+                format!("{network_hex}@127.0.0.1:{}", port.port)
+            })
+            .collect();
+
+        // Phase 1: the committee.
+        let launches = keys[..num_validators]
+            .iter()
+            .zip(&consensus_ports)
+            .enumerate()
+            .map(|(index, (keys, consensus_port))| {
+                let l1 = l1.clone();
+                let entries = entries.clone();
+                let observer_entries = observer_entries.clone();
+                let network_key = alloy::hex::encode(keys.network.encode());
+                let bls_key = alloy::hex::encode(keys.bls.encode());
+                let listen_address = format!("127.0.0.1:{}", consensus_port.port);
+                async move {
+                    let mut config = build_node_config(&l1, chain_layout, false).await?;
+                    disable_prover_input_generation(&mut config);
+                    config.general_config.node_role = NodeRole::MainNode;
+                    config.sequencer_config.fee_collector_address = fee_collector;
+                    config.batcher_config.enabled = index == 0;
+                    config.consensus_config.enabled = true;
+                    config.consensus_config.network_key = Some(network_key);
+                    config.consensus_config.bls_key = Some(bls_key);
+                    config.consensus_config.listen_address = listen_address;
+                    config.consensus_config.committees = entries;
+                    config.consensus_config.epoch_length = epoch_length;
+                    config.consensus_config.observers = observer_entries;
+                    config.consensus_config.allow_private_ips = true;
+                    Tester::launch_with_new_runtime(l1, chain_layout, config)
+                        .await
+                        .with_context(|| format!("failed to launch validator {index}"))
+                }
+            });
+        let mut nodes = try_join_all(launches).await?;
+
+        // Phase 2: the observers, forwarding to the now-live validator RPCs.
+        let forward_urls: Vec<String> = nodes
+            .iter()
+            .map(|node| node.l2_rpc_url().to_string())
+            .collect();
+        for (offset, (keys, consensus_port)) in keys[num_validators..]
+            .iter()
+            .zip(&consensus_ports[num_validators..])
+            .enumerate()
+        {
+            let network_key = alloy::hex::encode(keys.network.encode());
+            let listen_address = format!("127.0.0.1:{}", consensus_port.port);
+            let mut config = build_node_config(&l1, chain_layout, false).await?;
+            disable_prover_input_generation(&mut config);
+            config.general_config.node_role = NodeRole::MainNode;
+            config.sequencer_config.fee_collector_address = fee_collector;
+            config.batcher_config.enabled = false;
+            config.consensus_config.enabled = true;
+            config.consensus_config.role = ConsensusRole::Observer;
+            config.consensus_config.network_key = Some(network_key);
+            config.consensus_config.listen_address = listen_address;
+            config.consensus_config.committees = entries.clone();
+            config.consensus_config.epoch_length = epoch_length;
+            config.consensus_config.observers = observer_entries.clone();
+            config.consensus_config.tx_forward_rpc_urls = forward_urls.clone();
+            config.consensus_config.allow_private_ips = true;
+            let node = Tester::launch_with_new_runtime(l1.clone(), chain_layout, config)
+                .await
+                .with_context(|| format!("failed to launch observer {offset}"))?;
+            nodes.push(node);
+        }
+
+        Ok(Self {
+            validators: nodes.into_iter().map(Validator::Running).collect(),
+            consensus_ports,
+            committee_entries: all_entries,
+            bls_keys: keys
+                .iter()
+                .map(|keys| alloy::hex::encode(keys.bls.encode()))
+                .collect(),
         })
     }
 
@@ -457,12 +604,24 @@ impl MultiNodeTester {
             validators: nodes.into_iter().map(Validator::Running).collect(),
             consensus_ports,
             committee_entries: committee,
+            bls_keys: keys
+                .iter()
+                .map(|keys| alloy::hex::encode(keys.bls.encode()))
+                .collect(),
         })
     }
 
     /// One validator's committee entry string, as configured across the cluster.
+    /// For an observer this is the entry a *future* committee would list — the
+    /// promotion material.
     pub fn committee_entry(&self, index: usize) -> &str {
         &self.committee_entries[index]
+    }
+
+    /// One node's BLS signing key (hex). For an observer: generated but never
+    /// configured — promotion tests hand it to the node at the role flip.
+    pub fn bls_key_hex(&self, index: usize) -> &str {
+        &self.bls_keys[index]
     }
 
     /// The running node at `index`. Panics if that validator is currently stopped —
@@ -537,6 +696,13 @@ impl MultiNodeTester {
                 .join("consensus"),
         );
         loop {
+            // A consensus-wipe rebuild (`rm -rf <rocks>/consensus`) removes the
+            // lock's parent directory too — trivially nobody holds the storage,
+            // but the probe needs the directory to exist to create its file (the
+            // node's own startup does the same `create_dir_all` before locking).
+            if let Some(parent) = instance_lock.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             if let Ok(probe) = std::fs::File::create(&instance_lock)
                 && fs2::FileExt::try_lock_exclusive(&probe).is_ok()
             {

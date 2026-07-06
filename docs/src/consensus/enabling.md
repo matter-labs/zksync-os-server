@@ -179,9 +179,37 @@ The choreography per direction:
 - **Shrinking**: the excluded validator needs nothing at its boundary — it stops
   building consensus engines for epochs it is not scheduled into, but keeps
   following the chain as an observer (it still verifies finality certificates and
-  serves RPC from its growing history). Repoint it as an external node at
-  leisure; the `acknowledge_non_member` flag covers the tail case of restarting a
-  machine whose key has left the schedule entirely.
+  serves RPC from its growing history). For a machine that should keep following
+  deliberately, restart it as `consensus.role = observer` (with its entry moved
+  to the admission list); otherwise repoint it as an external node at leisure.
+  The `acknowledge_non_member` flag covers the tail case of restarting a machine
+  whose key has left the schedule entirely.
+- **Promoting an observer** (the growing case, starting from a node that already
+  runs — the intended path for turning a chain's follower fleet into its
+  committee):
+  1. *Keys.* The candidate generates its BLS signing keypair (`consensus-keygen`);
+     its network identity already exists. Distribute the resulting committee
+     entry (`<network_key>:<bls_key>@<host:port>`) to every operator.
+  2. *Schedule.* Every sitting validator restarts with the appended entry —
+     activation epoch comfortably in the future — and with the candidate removed
+     from `consensus.observers` (a key may not be both; the candidate stays
+     connectable throughout, because the address book spans every schedule
+     entry, future ones included).
+  3. *The flip.* The candidate restarts with `consensus.role = validator`, its
+     BLS key, and the same appended schedule — over its retained chain **and**
+     its retained consensus archives from observing; nothing is resynced.
+     Before the boundary, check readiness on its `/status`: role `validator`,
+     the finalized round advancing.
+  4. *The boundary needs nobody.* When the activation epoch arrives, the
+     rotation starts the candidate's first consensus engine because the schedule
+     now says "member" — everything special happened in steps 1–3. If the
+     candidate is late (still restarting, still catching up), the committee
+     runs one member short until it arrives; late first engines are safe.
+
+  Rolling back a promotion that hasn't activated yet is a no-op (ship a schedule
+  without the entry); after activation it is the ordinary shrinking path. If the
+  candidate ever voted under a wrong schedule, the misconfiguration remedy below
+  applies — made cheap by the finality floor.
 
 Every node records a **custody trail** as it observes consensus enter each epoch:
 which committee held it, from which block — kept in the node's own finality store
@@ -204,7 +232,10 @@ Two sharp edges, both loud by design:
   backfills only what lies above it, instead of replaying consensus history
   from the era genesis. The floor must be recent (at or after the committee's
   last scheduled change); an older one falls back to the full backfill with a
-  warning, unless `consensus.accept_stale_floor` says otherwise.
+  warning, unless `consensus.accept_stale_floor` says otherwise. A validator
+  that stalled at a committee change may be exactly that case — everything
+  *usable* it verified predates the change — so set the flag for the corrected
+  restart (harmless when the floor turns out fresh) and drop it afterwards.
 - Epoch length is likewise committee-uniform. Hours-scale is the deliberate
   default: a reconfiguration deployed in the morning activates the same day,
   while boundary handoffs (one re-proposal view each) stay rare events.

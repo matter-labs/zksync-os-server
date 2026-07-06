@@ -72,12 +72,22 @@ pub struct SetupArgs {
     /// reconfiguration hunting) pass a few hundred.
     #[arg(long, default_value_t = 600)]
     pub epoch_length: u64,
+    /// Number of non-voting observers beside the committee. Each gets a BLS key
+    /// minted (unused until then) so `chaos promote` can schedule it into the
+    /// committee later.
+    #[arg(long, default_value_t = 0)]
+    pub observers: usize,
 }
 
 /// Everything the driver (and any external monitor) needs to know about the cluster.
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
     pub validators: Vec<ValidatorEntry>,
+    /// Non-voting observers on the consensus network. The driver leaves them
+    /// alone (they carry no quorum weight); `chaos promote` moves entries from
+    /// here into `validators` and rewrites `quorum`.
+    #[serde(default)]
+    pub observers: Vec<ValidatorEntry>,
     /// The compose network faults detach containers from.
     pub network: String,
     pub quorum: usize,
@@ -98,6 +108,51 @@ pub struct ValidatorEntry {
     pub host_rpc_port: u16,
     pub host_status_port: u16,
     pub host_metrics_port: u16,
+}
+
+/// Everything `chaos promote` needs to regenerate node overlays: the cluster's
+/// key material and shared constants, written by setup as `materials.json`.
+/// (Private keys in a work directory are rig-grade security — the same keys are
+/// already in the overlays themselves.)
+#[derive(Serialize, Deserialize)]
+pub struct Materials {
+    pub nodes: Vec<NodeMaterials>,
+    /// The committee schedule as prefix sizes: the entry activating at
+    /// `activation_epoch` consists of `nodes[..validators]`. Setup writes a
+    /// single epoch-0 entry; `chaos promote` appends grown ones — promotion
+    /// always takes the next observers in index order, so prefixes describe
+    /// every committee this rig can express.
+    pub schedule: Vec<ScheduleStep>,
+    pub fee_collector: String,
+    pub epoch_length: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct ScheduleStep {
+    pub activation_epoch: u64,
+    pub validators: usize,
+}
+
+impl Materials {
+    /// Nodes that hold (or will hold) a committee seat — validator-role nodes.
+    pub fn scheduled_validators(&self) -> usize {
+        self.schedule
+            .last()
+            .expect("a schedule always has its epoch-0 entry")
+            .validators
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct NodeMaterials {
+    pub network_key_hex: String,
+    pub bls_key_hex: String,
+    /// `<network_pub>:<bls_pub>@<ip>:<port>` — this node's entry in any committee
+    /// that includes it.
+    pub committee_entry: String,
+    /// `<network_pub>@<ip>:<port>` — this node's admission-list entry while it
+    /// observes.
+    pub observer_entry: String,
 }
 
 pub fn run(args: SetupArgs) -> anyhow::Result<()> {
@@ -125,61 +180,79 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
         args.out.display(),
     );
 
-    // Committee keys, exactly as the keygen tool would mint them.
+    // Keys for every node — committee and observers alike, exactly as the keygen
+    // tool would mint them. An observer's BLS key is promotion material: unused
+    // until `chaos promote` schedules the node into the committee.
+    let total = args.validators + args.observers;
     let mut rng = rand08::rngs::OsRng;
-    let mut network_keys = Vec::new();
-    let mut bls_keys = Vec::new();
-    let mut committee = Vec::new();
-    for index in 0..args.validators {
+    let mut nodes = Vec::new();
+    for index in 0..total {
         let mut seed = [0u8; 32];
         rand08::RngCore::fill_bytes(&mut rng, &mut seed);
         let network =
             ed25519::PrivateKey::decode(seed.as_slice()).expect("32 random bytes are a valid key");
         let (bls, bls_public) = ops::keypair::<_, MinPk>(&mut rng);
-        committee.push(format!(
-            "{}:{}@{}:{CONTAINER_CONSENSUS}",
-            alloy::hex::encode(network.public_key().encode()),
-            alloy::hex::encode(bls_public.encode()),
-            validator_ip(index),
-        ));
-        network_keys.push(network);
-        bls_keys.push(bls);
+        let network_pub = alloy::hex::encode(network.public_key().encode());
+        nodes.push(NodeMaterials {
+            network_key_hex: alloy::hex::encode(network.encode()),
+            bls_key_hex: alloy::hex::encode(bls.encode()),
+            committee_entry: format!(
+                "{network_pub}:{}@{}:{CONTAINER_CONSENSUS}",
+                alloy::hex::encode(bls_public.encode()),
+                validator_ip(index),
+            ),
+            observer_entry: format!(
+                "{network_pub}@{}:{CONTAINER_CONSENSUS}",
+                validator_ip(index)
+            ),
+        });
     }
     // A committee-wide constant (verification pins it).
     let mut fee_collector_bytes = [0u8; 20];
     rand08::RngCore::fill_bytes(&mut rng, &mut fee_collector_bytes);
     let fee_collector = alloy::primitives::Address::from(fee_collector_bytes);
+    let materials = Materials {
+        nodes,
+        schedule: vec![ScheduleStep {
+            activation_epoch: 0,
+            validators: args.validators,
+        }],
+        fee_collector: format!("{fee_collector}"),
+        epoch_length: args.epoch_length,
+    };
 
     let bridgehub_address = read_bridgehub_address(&repo.join(&args.chain).join("config.yaml"))?;
     let mut manifest = Manifest {
         validators: Vec::new(),
+        observers: Vec::new(),
         network: "chaos".to_string(),
         quorum: args.validators - (args.validators - 1) / 3,
-        // First free slot after the per-validator port blocks.
-        host_l1_port: args.base_port + 10 * args.validators as u16,
+        // First free slot after the per-node port blocks.
+        host_l1_port: args.base_port + 10 * total as u16,
         bridgehub_address,
     };
 
-    for index in 0..args.validators {
+    for index in 0..total {
         let dir = args.out.join(format!("validator-{index}"));
         std::fs::create_dir_all(&dir)?;
-        let overlay = validator_overlay(
-            index,
-            &alloy::hex::encode(network_keys[index].encode()),
-            &alloy::hex::encode(bls_keys[index].encode()),
-            &committee,
-            fee_collector,
-            args.epoch_length,
-        );
-        std::fs::write(dir.join("validator.yaml"), overlay)?;
-        manifest.validators.push(ValidatorEntry {
+        std::fs::write(dir.join("validator.yaml"), node_overlay(&materials, index))?;
+        let entry = ValidatorEntry {
             name: format!("validator-{index}"),
             ip: validator_ip(index),
             host_rpc_port: args.base_port + 10 * index as u16,
             host_status_port: args.base_port + 10 * index as u16 + 1,
             host_metrics_port: args.base_port + 10 * index as u16 + 2,
-        });
+        };
+        if index < args.validators {
+            manifest.validators.push(entry);
+        } else {
+            manifest.observers.push(entry);
+        }
     }
+    std::fs::write(
+        args.out.join("materials.json"),
+        serde_json::to_string_pretty(&materials)?,
+    )?;
 
     std::fs::write(
         args.out.join("docker-compose.yaml"),
@@ -206,23 +279,65 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The per-validator configuration overlay, layered on top of the repo's
-/// `local_dev.yaml` and the chain's `config.yaml`.
-fn validator_overlay(
-    index: usize,
-    network_key_hex: &str,
-    bls_key_hex: &str,
-    committee: &[String],
-    fee_collector: alloy::primitives::Address,
-    epoch_length: u64,
-) -> String {
-    let committee_entries: String = committee
-        .iter()
-        .map(|entry| format!("    - '{entry}'\n"))
+/// One node's configuration overlay, layered on top of the repo's
+/// `local_dev.yaml` and the chain's `config.yaml` — regenerable at any time from
+/// the [`Materials`], which is how `chaos promote` rewrites the cluster.
+///
+/// The committee is expressed as a `committees` schedule (a single epoch-0 entry
+/// at setup); promotion appends entries. Observers get `role: observer`, no BLS
+/// key, and transaction forwarding to every committee member's in-network RPC.
+pub fn node_overlay(materials: &Materials, index: usize) -> String {
+    // A node is validator-role as soon as ANY schedule entry seats it: it needs
+    // its signing key deployed before its activation epoch arrives (it simply
+    // runs no engine until then).
+    let scheduled_validators = materials.scheduled_validators();
+    let is_validator = index < scheduled_validators;
+    let fee_collector = &materials.fee_collector;
+    let epoch_length = materials.epoch_length;
+    let node = &materials.nodes[index];
+    let network_key_hex = &node.network_key_hex;
+
+    let committee_lines = |members: &[NodeMaterials]| -> String {
+        members
+            .iter()
+            .map(|member| format!("        - '{}'\n", member.committee_entry))
+            .collect()
+    };
+    let committees: String = std::iter::once("  committees:\n".to_string())
+        .chain(materials.schedule.iter().map(|step| {
+            format!(
+                "    - activation_epoch: {}\n      validators:\n{}",
+                step.activation_epoch,
+                committee_lines(&materials.nodes[..step.validators])
+            )
+        }))
         .collect();
+    let observer_lines: String = materials.nodes[scheduled_validators..]
+        .iter()
+        .map(|node| format!("    - '{}'\n", node.observer_entry))
+        .collect();
+    let observers = if observer_lines.is_empty() {
+        String::new()
+    } else {
+        format!("  observers:\n{observer_lines}")
+    };
+
     // Exactly one batcher, like production; the rest are sequencing-only. The
     // paths under `/db` move config defaults off the image's read-only workdir.
     let batcher_enabled = index == 0;
+    let role_section = if is_validator {
+        format!("  bls_key: '{}'\n", node.bls_key_hex)
+    } else {
+        let forward_urls: String = (0..materials.schedule[0].validators)
+            .map(|validator| {
+                format!(
+                    "    - 'http://{}:{CONTAINER_RPC}'\n",
+                    validator_ip(validator)
+                )
+            })
+            .collect();
+        format!("  role: observer\n  tx_forward_rpc_urls:\n{forward_urls}")
+    };
     format!(
         "\
 general:
@@ -250,12 +365,10 @@ prover_input_generator:
 consensus:
   enabled: true
   network_key: '{network_key_hex}'
-  bls_key: '{bls_key_hex}'
-  listen_address: 0.0.0.0:{CONTAINER_CONSENSUS}
+{role_section}  listen_address: 0.0.0.0:{CONTAINER_CONSENSUS}
   allow_private_ips: true
   epoch_length: {epoch_length}
-  validators:
-{committee_entries}"
+{committees}{observers}"
     )
 }
 
@@ -270,6 +383,7 @@ fn compose_file(args: &SetupArgs, repo: &std::path::Path, manifest: &Manifest) -
     let validators: String = manifest
         .validators
         .iter()
+        .chain(&manifest.observers)
         .enumerate()
         .map(|(index, entry)| {
             // NET_ADMIN lets the driver inject `tc netem` degradation; the
@@ -308,7 +422,7 @@ fn compose_file(args: &SetupArgs, repo: &std::path::Path, manifest: &Manifest) -
         })
         .collect();
 
-    let volumes: String = (0..manifest.validators.len())
+    let volumes: String = (0..manifest.validators.len() + manifest.observers.len())
         .map(|index| format!("  chaos-db-{index}:\n"))
         .collect();
 
@@ -369,4 +483,74 @@ fn parent_dir(chain: &str) -> String {
         .rsplit_once('/')
         .map(|(parent, _)| parent.to_string())
         .unwrap_or_else(|| ".".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn materials(validators: usize, total: usize) -> Materials {
+        Materials {
+            nodes: (0..total)
+                .map(|index| NodeMaterials {
+                    network_key_hex: format!("net-priv-{index}"),
+                    bls_key_hex: format!("bls-priv-{index}"),
+                    committee_entry: format!(
+                        "netpub{index}:blspub{index}@172.28.0.{}:3054",
+                        10 + index
+                    ),
+                    observer_entry: format!("netpub{index}@172.28.0.{}:3054", 10 + index),
+                })
+                .collect(),
+            schedule: vec![ScheduleStep {
+                activation_epoch: 0,
+                validators,
+            }],
+            fee_collector: "0x0000000000000000000000000000000000000001".into(),
+            epoch_length: 240,
+        }
+    }
+
+    #[test]
+    fn overlays_split_roles_and_promotion_regenerates_them() {
+        let mut cluster = materials(4, 7);
+
+        // At setup: node 0 is a batcher validator, node 4 an observer.
+        let validator = node_overlay(&cluster, 0);
+        assert!(validator.contains("bls_key: 'bls-priv-0'"));
+        assert!(!validator.contains("role: observer"));
+        assert!(validator.contains("activation_epoch: 0"));
+        let observer = node_overlay(&cluster, 4);
+        assert!(observer.contains("role: observer"));
+        assert!(
+            !observer.contains("bls_key"),
+            "observers hold no signing key"
+        );
+        assert!(observer.contains("tx_forward_rpc_urls"));
+        // Everyone carries the admission list with all three observers.
+        for overlay in [&validator, &observer] {
+            assert!(overlay.contains("netpub4@"));
+            assert!(overlay.contains("netpub6@"));
+        }
+
+        // Promotion appends a schedule entry seating the next three observers;
+        // regenerated overlays flip their role and shrink the admission list.
+        cluster.schedule.push(ScheduleStep {
+            activation_epoch: 12,
+            validators: 7,
+        });
+        let promoted = node_overlay(&cluster, 4);
+        assert!(promoted.contains("bls_key: 'bls-priv-4'"));
+        assert!(!promoted.contains("role: observer"));
+        assert!(promoted.contains("activation_epoch: 0"));
+        assert!(promoted.contains("activation_epoch: 12"));
+        // The grown entry lists all seven; the epoch-0 entry keeps four.
+        assert!(promoted.contains("netpub6:blspub6@"));
+        // Nobody is on the admission list anymore.
+        assert!(!promoted.contains("observers:"));
+        // A sitting validator sees the same schedule.
+        let sitting = node_overlay(&cluster, 0);
+        assert!(sitting.contains("activation_epoch: 12"));
+        assert!(!sitting.contains("observers:"));
+    }
 }

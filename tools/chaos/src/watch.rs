@@ -48,7 +48,11 @@ pub struct Expectations {
 /// One validator, as observed during a poll.
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeObservation {
-    pub running: bool,
+    /// `None` when the docker probe itself failed (a busy daemon times out under
+    /// restart churn) — state unknown, NOT dead; a real death is confirmed by the
+    /// next successful poll. Mass false `UnexpectedDeath`s on a promoted
+    /// 7-validator cluster taught this distinction (2026-07-06).
+    pub running: Option<bool>,
     pub paused: bool,
     /// `None` when unreachable (which is fine for stopped/paused/partitioned nodes).
     /// `(epoch, view)`: views restart from zero at every epoch boundary, so only the
@@ -229,7 +233,7 @@ impl Checker {
             if !matches!(
                 expectations.conditions[index],
                 Condition::Killed | Condition::Stopped
-            ) && !node.running
+            ) && node.running == Some(false)
             {
                 findings.push(Finding::UnexpectedDeath { validator: index });
             }
@@ -371,7 +375,7 @@ impl NodeProbe {
     /// Async and bounded: the watcher used to shell out synchronously here, which
     /// parked tokio workers and — as container logs grew — eventually stalled the
     /// whole drive runtime (found by the overnight campaign).
-    async fn container_state(&self) -> (bool, bool) {
+    async fn container_state(&self) -> (Option<bool>, bool) {
         let output = docker_output(
             &[
                 "inspect",
@@ -387,9 +391,11 @@ impl NodeProbe {
                 let mut parts = text.split_whitespace();
                 let running = parts.next() == Some("true");
                 let paused = parts.next() == Some("true");
-                (running, paused)
+                (Some(running), paused)
             }
-            None => (false, false),
+            // The probe failed — the daemon was busy or the call timed out.
+            // Unknown is not dead.
+            None => (None, false),
         }
     }
 
@@ -436,7 +442,9 @@ impl NodeProbe {
             self.status(client),
             async {
                 match probe_height {
-                    Some(height) if running && !paused => self.block_hash(client, height).await,
+                    Some(height) if running == Some(true) && !paused => {
+                        self.block_hash(client, height).await
+                    }
                     _ => None,
                 }
             },
@@ -584,7 +592,7 @@ mod tests {
     /// An observation in epoch 0 — the view doubles as the applied height.
     fn observation(finalized_view: u64, hash: &str) -> NodeObservation {
         NodeObservation {
-            running: true,
+            running: Some(true),
             paused: false,
             finalized_round: Some((0, finalized_view)),
             applied_height: Some(finalized_view),
@@ -690,7 +698,7 @@ mod tests {
 
         let mut regressed = observation(4, "0x");
         regressed.evidence = 1;
-        regressed.running = false;
+        regressed.running = Some(false);
         let findings = checker.observe(
             now,
             &expectations,
@@ -713,6 +721,31 @@ mod tests {
             findings
                 .iter()
                 .any(|finding| matches!(finding, Finding::UnexpectedDeath { .. }))
+        );
+    }
+
+    #[test]
+    fn a_failed_container_probe_is_not_a_death() {
+        // A busy docker daemon times out inspects — for every container at once,
+        // under restart churn. Unknown state must never read as a death; a real
+        // one is confirmed by the next successful poll.
+        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(60));
+        let expectations = healthy_expectations(1);
+        let mut unknown = observation(0, "0x");
+        unknown.running = None;
+        let findings = checker.observe(
+            Instant::now(),
+            &expectations,
+            &Poll {
+                probe_height: None,
+                nodes: vec![unknown],
+            },
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::UnexpectedDeath { .. })),
+            "a probe failure produced a death finding: {findings:?}"
         );
     }
 
@@ -772,7 +805,7 @@ mod tests {
             &Poll {
                 probe_height: None,
                 nodes: vec![NodeObservation {
-                    running: false,
+                    running: Some(false),
                     finalized_round: None,
                     applied_height: None,
                     block_hash_at_probe: None,

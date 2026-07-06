@@ -493,9 +493,13 @@ fn select_stack_start(
             );
             return StackStart::Genesis;
         }
-        // Cache semantics: bytes written by a previous node version may no longer
-        // decode or verify after a consensus-library upgrade — that means "no
-        // floor", never an error.
+        // Cache semantics: an entry that no longer decodes or verifies is skipped,
+        // not fatal — entries fail independently. A consensus-library upgrade
+        // invalidates all of them (the scan falls through to Genesis); a corrected
+        // committee schedule invalidates only the entries a misconfigured node
+        // "verified" under its stale scheme (a stalled validator's cache really
+        // does hold stale-width certificates for the epoch it stalled in), and an
+        // older, genuinely-valid floor behind them is still worth finding.
         let scheme = provider.scheme_for(zksync_os_consensus_core::types::Epoch::new(epoch));
         let Ok(finalization) =
             zksync_os_consensus_core::types::Finalization::<
@@ -506,10 +510,10 @@ fn select_stack_start(
             tracing::warn!(
                 epoch,
                 view,
-                "cached finality floor no longer decodes (consensus library \
-                 upgrade?); falling back to a full backfill"
+                "skipping a cached finality floor that no longer decodes (library \
+                 upgrade, or a certificate recorded under a corrected-away schedule)"
             );
-            return StackStart::Genesis;
+            continue;
         };
         if finalization.proposal.payload.as_ref() != digest
             || !finalization.verify(
@@ -521,9 +525,10 @@ fn select_stack_start(
             tracing::warn!(
                 epoch,
                 view,
-                "cached finality floor does not verify; falling back to a full backfill"
+                "skipping a cached finality floor that does not verify under the \
+                 configured schedule"
             );
-            return StackStart::Genesis;
+            continue;
         }
         tracing::info!(
             height,
