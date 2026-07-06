@@ -79,7 +79,7 @@ where
                 // Drain greedily: whatever queued while the previous group committed becomes ONE
                 // multi-block commit (`write_many`), amortizing the RocksDB write — measured
                 // ~1.6ms/block committed singly, the WAL writer's own throughput ceiling.
-                const WAL_GROUP: usize = 16;
+                const WAL_GROUP: usize = 32;
                 let mut group = Vec::with_capacity(WAL_GROUP);
                 loop {
                     group.clear();

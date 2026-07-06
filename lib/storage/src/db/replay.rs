@@ -1,4 +1,24 @@
 use alloy::primitives::{B256, BlockHash, BlockNumber, Sealed};
+use rayon::prelude::*;
+
+/// Fully serialized column-family values for one replay record — see
+/// [`BlockReplayStorage::serialize_replay`].
+struct PreparedReplayWrite {
+    block_number: BlockNumber,
+    is_canonical: bool,
+    block_hash: BlockHash,
+    db_key: Vec<u8>,
+    context_value: Vec<u8>,
+    starting_l1_tx_id_value: Vec<u8>,
+    txs_value: Vec<u8>,
+    node_version_value: Vec<u8>,
+    block_output_hash: B256,
+    protocol_version_value: Vec<u8>,
+    force_preimages_value: Vec<u8>,
+    starting_interop_root_id_value: Vec<u8>,
+    starting_migration_number_value: Vec<u8>,
+    starting_interop_fee_number_value: Vec<u8>,
+}
 
 /// Bench-only (`PARALLEL_PRODUCER_PROFILE`): gates the per-write WAL profile log lines.
 fn wal_profile_enabled() -> bool {
@@ -189,11 +209,25 @@ impl BlockReplayStorage {
         is_canonical: bool,
         latest_hint: Option<BlockNumber>,
     ) -> usize {
+        let prepared = Self::serialize_replay(sealed_record, is_canonical);
+        let txs_bytes = prepared.txs_value.len();
+        self.stage_prepared(batch, &prepared, latest_hint);
+        txs_bytes
+    }
+
+    /// The pure-CPU half of a WAL write: serialize every column-family value for one record.
+    /// Independent per record — `write_many` runs this in parallel across a batch; only
+    /// [`stage_prepared`](Self::stage_prepared) and the commit are order-sensitive.
+    fn serialize_replay(
+        sealed_record: Sealed<ReplayRecord>,
+        is_canonical: bool,
+    ) -> PreparedReplayWrite {
         // Prepare record
         let (record, block_hash) = sealed_record.split();
+        let block_number = record.block_context.block_number;
         // TODO: We want to change the key to be block_hash for all blocks
         let db_key = if is_canonical {
-            record.block_context.block_number.to_be_bytes().to_vec()
+            block_number.to_be_bytes().to_vec()
         } else {
             block_hash.0.to_vec()
         };
@@ -210,41 +244,8 @@ impl BlockReplayStorage {
         .expect("Failed to serialize record.starting_cursors.l1_priority_id");
         let txs_value = bincode::encode_to_vec(&record.transactions, bincode::config::standard())
             .expect("Failed to serialize record.transactions");
-        let node_version_value = record.node_version.to_string().as_bytes().to_vec();
-
-        // Batch writes: replay entry, latest pointer and canonical hash mapping
-        if is_canonical {
-            batch.put_cf(
-                BlockReplayColumnFamily::CanonicalHash,
-                &record.block_context.block_number.to_be_bytes(),
-                &block_hash.0,
-            );
-        }
-        if latest_hint.is_none_or(|l| l < record.block_context.block_number) {
-            batch.put_cf(BlockReplayColumnFamily::Latest, Self::LATEST_KEY, &db_key);
-        }
-        batch.put_cf(BlockReplayColumnFamily::Context, &db_key, &context_value);
-        batch.put_cf(
-            BlockReplayColumnFamily::StartingL1SerialId,
-            &db_key,
-            &starting_l1_tx_id_value,
-        );
-        batch.put_cf(BlockReplayColumnFamily::Txs, &db_key, &txs_value);
-        batch.put_cf(
-            BlockReplayColumnFamily::NodeVersion,
-            &db_key,
-            &node_version_value,
-        );
-        batch.put_cf(
-            BlockReplayColumnFamily::BlockOutputHash,
-            &db_key,
-            &record.block_output_hash.0,
-        );
-        batch.put_cf(
-            BlockReplayColumnFamily::ProtocolVersion,
-            &db_key,
-            record.protocol_version.to_string().as_bytes(),
-        );
+        let node_version_value = record.node_version.to_string().into_bytes();
+        let protocol_version_value = record.protocol_version.to_string().into_bytes();
         let force_preimages_value = bincode::encode_to_vec(
             &StorageForcePreimages {
                 preimages: record.force_preimages,
@@ -252,46 +253,113 @@ impl BlockReplayStorage {
             bincode::config::standard(),
         )
         .expect("Failed to serialize record.force_preimages");
-        batch.put_cf(
-            BlockReplayColumnFamily::ForcePreimages,
-            &db_key,
-            &force_preimages_value,
-        );
-
         let starting_interop_root_id_value = bincode::serde::encode_to_vec(
             record.starting_cursors.interop_root_id,
             bincode::config::standard(),
         )
         .expect("Failed to serialize record.starting_cursors.interop_root_id");
-        batch.put_cf(
-            BlockReplayColumnFamily::StartingInteropRootId,
-            &db_key,
-            &starting_interop_root_id_value,
-        );
-
         let starting_migration_number_value = bincode::serde::encode_to_vec(
             record.starting_cursors.migration_number,
             bincode::config::standard(),
         )
         .expect("Failed to serialize record.starting_cursors.migration_number");
-        batch.put_cf(
-            BlockReplayColumnFamily::StartingMigrationNumber,
-            &db_key,
-            &starting_migration_number_value,
-        );
-
         let starting_interop_fee_number_value = bincode::serde::encode_to_vec(
             record.starting_cursors.interop_fee_number,
             bincode::config::standard(),
         )
         .expect("Failed to serialize record.starting_cursors.interop_fee_number");
+
+        PreparedReplayWrite {
+            block_number,
+            is_canonical,
+            block_hash,
+            db_key,
+            context_value,
+            starting_l1_tx_id_value,
+            txs_value,
+            node_version_value,
+            block_output_hash: record.block_output_hash,
+            protocol_version_value,
+            force_preimages_value,
+            starting_interop_root_id_value,
+            starting_migration_number_value,
+            starting_interop_fee_number_value,
+        }
+    }
+
+    /// Stages a prepared record's puts into `batch` (order-sensitive: the `Latest` pointer
+    /// depends on `latest_hint`, which must reflect records staged before this one).
+    fn stage_prepared(
+        &self,
+        batch: &mut WriteBatch<'_, BlockReplayColumnFamily>,
+        prepared: &PreparedReplayWrite,
+        latest_hint: Option<BlockNumber>,
+    ) {
+        // Batch writes: replay entry, latest pointer and canonical hash mapping
+        if prepared.is_canonical {
+            batch.put_cf(
+                BlockReplayColumnFamily::CanonicalHash,
+                &prepared.block_number.to_be_bytes(),
+                &prepared.block_hash.0,
+            );
+        }
+        if latest_hint.is_none_or(|l| l < prepared.block_number) {
+            batch.put_cf(
+                BlockReplayColumnFamily::Latest,
+                Self::LATEST_KEY,
+                &prepared.db_key,
+            );
+        }
+        batch.put_cf(
+            BlockReplayColumnFamily::Context,
+            &prepared.db_key,
+            &prepared.context_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::StartingL1SerialId,
+            &prepared.db_key,
+            &prepared.starting_l1_tx_id_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::Txs,
+            &prepared.db_key,
+            &prepared.txs_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::NodeVersion,
+            &prepared.db_key,
+            &prepared.node_version_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::BlockOutputHash,
+            &prepared.db_key,
+            &prepared.block_output_hash.0,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::ProtocolVersion,
+            &prepared.db_key,
+            &prepared.protocol_version_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::ForcePreimages,
+            &prepared.db_key,
+            &prepared.force_preimages_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::StartingInteropRootId,
+            &prepared.db_key,
+            &prepared.starting_interop_root_id_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::StartingMigrationNumber,
+            &prepared.db_key,
+            &prepared.starting_migration_number_value,
+        );
         batch.put_cf(
             BlockReplayColumnFamily::StartingInteropFeeNumber,
-            &db_key,
-            &starting_interop_fee_number_value,
+            &prepared.db_key,
+            &prepared.starting_interop_fee_number_value,
         );
-
-        txs_value.len()
     }
 
     /// Returns the greatest block number that has been appended, or `None` if empty.
@@ -600,24 +668,33 @@ impl WriteReplay for BlockReplayStorage {
     ) -> anyhow::Result<()> {
         let profile_started = wal_profile_enabled().then(std::time::Instant::now);
         let total = records.len();
-        // Fast path: contiguous fresh appends are serialized into ONE RocksDB write batch,
-        // amortizing the commit (the dominant per-block cost at parallel-bench block rates).
-        // Anything else (replays of existing blocks, overrides, gaps) falls back to the fully
-        // validated per-record `write`.
+        // Fast path: contiguous fresh appends are serialized IN PARALLEL (rayon; bincode of the
+        // txs is ~1ms/block of pure CPU and independent per record) and staged into ONE RocksDB
+        // write batch, amortizing the commit. Anything else (replays of existing blocks,
+        // overrides, gaps) falls back to the fully validated per-record `write`.
         let mut latest = self.latest_record_checked();
         let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
         let mut staged = 0usize;
-        for (sealed_record, override_allowed) in records {
-            let block_number = sealed_record.block_context.block_number;
-            let fresh_append = match latest {
-                Some(l) => block_number == l + 1,
-                None => block_number == 0,
-            };
-            if fresh_append && !override_allowed {
-                self.stage_replay_unchecked(&mut batch, sealed_record, true, latest);
-                latest = Some(block_number);
-                staged += 1;
-            } else {
+        let mut records = records.into_iter().peekable();
+        while records.peek().is_some() {
+            // Collect the maximal run of fresh appends from the current position.
+            let mut run = Vec::new();
+            let mut run_latest = latest;
+            while let Some((sealed_record, override_allowed)) = records.peek() {
+                let block_number = sealed_record.block_context.block_number;
+                let fresh_append = match run_latest {
+                    Some(l) => block_number == l + 1,
+                    None => block_number == 0,
+                };
+                if !fresh_append || *override_allowed {
+                    break;
+                }
+                run_latest = Some(block_number);
+                run.push(records.next().expect("peeked").0);
+            }
+            if run.is_empty() {
+                // Non-fresh record: commit what's staged (preserving order), then take the
+                // validated per-record path.
                 if staged > 0 {
                     let full = std::mem::replace(&mut batch, self.db.new_write_batch());
                     self.db
@@ -625,8 +702,19 @@ impl WriteReplay for BlockReplayStorage {
                         .expect("Failed to write to block replay storage");
                     staged = 0;
                 }
+                let (sealed_record, override_allowed) = records.next().expect("peeked");
                 self.write(sealed_record, override_allowed).await?;
                 latest = self.latest_record_checked();
+            } else {
+                let prepared: Vec<PreparedReplayWrite> = run
+                    .into_par_iter()
+                    .map(|sealed_record| Self::serialize_replay(sealed_record, true))
+                    .collect();
+                for record in &prepared {
+                    self.stage_prepared(&mut batch, record, latest);
+                    latest = Some(record.block_number);
+                    staged += 1;
+                }
             }
         }
         let serialized_at = profile_started.map(|_| std::time::Instant::now());
