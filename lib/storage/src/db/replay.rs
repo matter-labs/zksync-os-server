@@ -1,4 +1,14 @@
 use alloy::primitives::{B256, BlockHash, BlockNumber, Sealed};
+
+/// Bench-only (`PARALLEL_PRODUCER_PROFILE`): gates the per-write WAL profile log lines.
+fn wal_profile_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("PARALLEL_PRODUCER_PROFILE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
 use std::convert::TryInto;
 use std::path::Path;
 use std::time::Duration;
@@ -139,6 +149,46 @@ impl BlockReplayStorage {
     }
 
     fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, is_canonical: bool) {
+        // Bench-only (`PARALLEL_PRODUCER_PROFILE`): split the per-block WAL cost into
+        // serialization (bincode of all txs — CPU) vs the RocksDB batch write, to direct
+        // optimization. ERROR level so it survives `RUST_LOG=warn` bench runs.
+        let profile_started = wal_profile_enabled().then(std::time::Instant::now);
+        let profile_block_number = sealed_record.block_context.block_number;
+        let profile_tx_count = sealed_record.transactions.len();
+        let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
+        let txs_bytes = self.stage_replay_unchecked(
+            &mut batch,
+            sealed_record,
+            is_canonical,
+            self.latest_record_checked(),
+        );
+        let serialized_at = profile_started.map(|_| std::time::Instant::now());
+        self.db
+            .write(batch)
+            .expect("Failed to write to block replay storage");
+        if let (Some(t0), Some(t1)) = (profile_started, serialized_at) {
+            tracing::error!(
+                block_number = profile_block_number,
+                txs = profile_tx_count,
+                txs_bytes,
+                serialize = ?t1.duration_since(t0),
+                rocks_write = ?t1.elapsed(),
+                "replay wal write profile"
+            );
+        }
+    }
+
+    /// Serializes `sealed_record` and stages its column-family puts into `batch` WITHOUT
+    /// committing. `latest_hint` replaces the DB read for the `Latest`-pointer update so that a
+    /// multi-record batch sees its own staged-but-uncommitted records. Returns the serialized
+    /// transactions size (profiling).
+    fn stage_replay_unchecked(
+        &self,
+        batch: &mut WriteBatch<'_, BlockReplayColumnFamily>,
+        sealed_record: Sealed<ReplayRecord>,
+        is_canonical: bool,
+        latest_hint: Option<BlockNumber>,
+    ) -> usize {
         // Prepare record
         let (record, block_hash) = sealed_record.split();
         // TODO: We want to change the key to be block_hash for all blocks
@@ -163,7 +213,6 @@ impl BlockReplayStorage {
         let node_version_value = record.node_version.to_string().as_bytes().to_vec();
 
         // Batch writes: replay entry, latest pointer and canonical hash mapping
-        let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
         if is_canonical {
             batch.put_cf(
                 BlockReplayColumnFamily::CanonicalHash,
@@ -171,10 +220,7 @@ impl BlockReplayStorage {
                 &block_hash.0,
             );
         }
-        if self
-            .latest_record_checked()
-            .is_none_or(|l| l < record.block_context.block_number)
-        {
+        if latest_hint.is_none_or(|l| l < record.block_context.block_number) {
             batch.put_cf(BlockReplayColumnFamily::Latest, Self::LATEST_KEY, &db_key);
         }
         batch.put_cf(BlockReplayColumnFamily::Context, &db_key, &context_value);
@@ -245,9 +291,7 @@ impl BlockReplayStorage {
             &starting_interop_fee_number_value,
         );
 
-        self.db
-            .write(batch)
-            .expect("Failed to write to block replay storage");
+        txs_value.len()
     }
 
     /// Returns the greatest block number that has been appended, or `None` if empty.
@@ -548,6 +592,58 @@ impl WriteReplay for BlockReplayStorage {
         self.write_replay_unchecked(sealed_record, true);
         latency_observer.observe();
         Ok(true)
+    }
+
+    async fn write_many(
+        &self,
+        records: Vec<(Sealed<ReplayRecord>, bool)>,
+    ) -> anyhow::Result<()> {
+        let profile_started = wal_profile_enabled().then(std::time::Instant::now);
+        let total = records.len();
+        // Fast path: contiguous fresh appends are serialized into ONE RocksDB write batch,
+        // amortizing the commit (the dominant per-block cost at parallel-bench block rates).
+        // Anything else (replays of existing blocks, overrides, gaps) falls back to the fully
+        // validated per-record `write`.
+        let mut latest = self.latest_record_checked();
+        let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
+        let mut staged = 0usize;
+        for (sealed_record, override_allowed) in records {
+            let block_number = sealed_record.block_context.block_number;
+            let fresh_append = match latest {
+                Some(l) => block_number == l + 1,
+                None => block_number == 0,
+            };
+            if fresh_append && !override_allowed {
+                self.stage_replay_unchecked(&mut batch, sealed_record, true, latest);
+                latest = Some(block_number);
+                staged += 1;
+            } else {
+                if staged > 0 {
+                    let full = std::mem::replace(&mut batch, self.db.new_write_batch());
+                    self.db
+                        .write(full)
+                        .expect("Failed to write to block replay storage");
+                    staged = 0;
+                }
+                self.write(sealed_record, override_allowed).await?;
+                latest = self.latest_record_checked();
+            }
+        }
+        let serialized_at = profile_started.map(|_| std::time::Instant::now());
+        if staged > 0 {
+            self.db
+                .write(batch)
+                .expect("Failed to write to block replay storage");
+        }
+        if let (Some(t0), Some(t1)) = (profile_started, serialized_at) {
+            tracing::error!(
+                blocks = total,
+                serialize = ?t1.duration_since(t0),
+                rocks_write = ?t1.elapsed(),
+                "replay wal write_many profile"
+            );
+        }
+        Ok(())
     }
 }
 

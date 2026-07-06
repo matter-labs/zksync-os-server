@@ -49,6 +49,68 @@ where
         output: mpsc::Sender<Self::Output>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
+        // Replay-WAL handling. Production (`parallel_blocks == 1`) writes inline, exactly as
+        // before. Parallel mode moves the write (record clone + bincode of all txs + RocksDB
+        // batch, ~2.7ms/block measured — 70% of the applier's serial budget at 190×2k-tx blocks)
+        // onto a dedicated ordered writer task: the applier enqueues cheaply, and a watermark
+        // gates FORWARDING downstream, so a block still never leaves the applier before its
+        // replay record is durable. In-memory state/repos may transiently lead the WAL by up to
+        // `parallel_blocks` blocks; nothing durable does — state compaction and repository
+        // persistence trail by their retention windows.
+        enum WalMode<R> {
+            Inline(R),
+            Pipelined {
+                queue: mpsc::Sender<(BlockNumber, Sealed<ReplayRecord>, bool)>,
+                written: watch::Receiver<BlockNumber>,
+            },
+            Skipped,
+        }
+        let mut wal_mode = if self.config.parallel_blocks <= 1 {
+            WalMode::Inline(self.replay)
+        } else if self.config.parallel_skip_replay_wal {
+            WalMode::Skipped
+        } else {
+            let depth = self.config.parallel_blocks;
+            let (queue, mut wal_rx) =
+                mpsc::channel::<(BlockNumber, Sealed<ReplayRecord>, bool)>(depth);
+            let (written_tx, written) = watch::channel(0u64);
+            let replay = self.replay;
+            tokio::spawn(async move {
+                // Drain greedily: whatever queued while the previous group committed becomes ONE
+                // multi-block commit (`write_many`), amortizing the RocksDB write — measured
+                // ~1.6ms/block committed singly, the WAL writer's own throughput ceiling.
+                const WAL_GROUP: usize = 16;
+                let mut group = Vec::with_capacity(WAL_GROUP);
+                loop {
+                    group.clear();
+                    if wal_rx.recv_many(&mut group, WAL_GROUP).await == 0 {
+                        return; // queue closed: applier stopped
+                    }
+                    let last_block_number = group.last().expect("non-empty group").0;
+                    let records = group
+                        .drain(..)
+                        .map(|(_, sealed, override_allowed)| (sealed, override_allowed))
+                        .collect();
+                    if let Err(err) = replay.write_many(records).await {
+                        // Dropping `written_tx` errors the applier's `wait_for` -> shutdown.
+                        tracing::error!("Failed to write replay records: {err}");
+                        return;
+                    }
+                    written_tx.send_replace(last_block_number);
+                }
+            });
+            WalMode::Pipelined { queue, written }
+        };
+        // A forwarded block's replay record must be durable first (no-op for Inline/Skipped).
+        async fn wait_wal_written<R>(wal_mode: &mut WalMode<R>, block_number: BlockNumber) -> bool {
+            match wal_mode {
+                WalMode::Pipelined { written, .. } => written
+                    .wait_for(|written| *written >= block_number)
+                    .await
+                    .is_ok(),
+                WalMode::Inline(_) | WalMode::Skipped => true,
+            }
+        }
         // Sliding window: the cheap, order-sensitive work (replay write + state diff) stays
         // sequential as blocks stream in, but the expensive per-block repository `populate` (~25ms,
         // the bottleneck) is spawned without awaiting, so up to `parallel_blocks` populates run
@@ -97,6 +159,10 @@ where
                     let (bn, rec, add_state_elapsed, populate_spawn_elapsed, _handle) =
                         in_flight.pop_front().expect("in_flight checked non-empty");
                     let out = res.context("populate task panicked")??;
+                    if !wait_wal_written(&mut wal_mode, bn).await {
+                        tracing::info!("Replay WAL writer stopped, shutting down");
+                        return Ok(());
+                    }
                     self.applied_block_number_sender.send_replace(Some(bn));
                     let t_output_send = Instant::now();
                     output.send_and_record(
@@ -141,6 +207,10 @@ where
                 // Channel closed: drain the in-flight window in order, then stop.
                 while let Some((bn, rec, _, _, handle)) = in_flight.pop_front() {
                     let out = handle.await.context("populate task panicked")??;
+                    if !wait_wal_written(&mut wal_mode, bn).await {
+                        tracing::info!("Replay WAL writer stopped, shutting down");
+                        return Ok(());
+                    }
                     self.applied_block_number_sender.send_replace(Some(bn));
                     output.send_and_record(
                         AppliedBlock {
@@ -164,22 +234,46 @@ where
             };
 
             state_reporter.enter_state(BlockApplierState::AddingToStorage);
-            // Bench-only opt-in: skip the replay-record WAL write in the pure-throughput
-            // parallel benches (no restart / replay / proving needed there). The serial path
-            // (production, parallel_blocks == 1) always writes, and parallel deployments write
-            // unless `parallel_skip_replay_wal` is explicitly set.
-            if self.config.parallel_blocks <= 1 || !self.config.parallel_skip_replay_wal {
-                if let Err(err) = self
-                    .replay
-                    .write(
-                        Sealed::new_unchecked(executed_replay.clone(), block_hash),
-                        override_allowed,
-                    )
-                    .await
-                {
-                    tracing::info!("Failed to write replay record: {err}, shutting down");
-                    return Ok(());
+            let t_wal = Instant::now();
+            match &mut wal_mode {
+                WalMode::Inline(replay) => {
+                    if let Err(err) = replay
+                        .write(
+                            Sealed::new_unchecked(executed_replay.clone(), block_hash),
+                            override_allowed,
+                        )
+                        .await
+                    {
+                        tracing::info!("Failed to write replay record: {err}, shutting down");
+                        return Ok(());
+                    }
                 }
+                WalMode::Pipelined { queue, .. } => {
+                    if queue
+                        .send((
+                            block_number,
+                            Sealed::new_unchecked(executed_replay.clone(), block_hash),
+                            override_allowed,
+                        ))
+                        .await
+                        .is_err()
+                    {
+                        tracing::info!("Replay WAL writer stopped, shutting down");
+                        return Ok(());
+                    }
+                }
+                // Bench-only opt-in (`parallel_skip_replay_wal`): no restart / replay / proving
+                // needed in the pure-throughput parallel benches.
+                WalMode::Skipped => {}
+            }
+            let wal_write_elapsed = t_wal.elapsed();
+            if parallel_producer_profile_enabled() {
+                tracing::error!(
+                    block_number,
+                    txs = executed_replay.transactions.len(),
+                    ?wal_write_elapsed,
+                    "block_applier wal profile"
+                );
             }
 
             // Sequential + in order: storage-diff contiguity requires ascending block numbers.
@@ -227,6 +321,10 @@ where
                 let t_populate_wait = Instant::now();
                 let out = handle.await.context("populate task panicked")??;
                 let populate_wait_elapsed = t_populate_wait.elapsed();
+                if !wait_wal_written(&mut wal_mode, bn).await {
+                    tracing::info!("Replay WAL writer stopped, shutting down");
+                    return Ok(());
+                }
                 self.applied_block_number_sender.send_replace(Some(bn));
                 let t_output_send = Instant::now();
                 output.send_and_record(

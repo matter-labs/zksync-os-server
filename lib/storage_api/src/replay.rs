@@ -182,4 +182,14 @@ pub trait WriteReplay: ReadReplay {
         record: Sealed<ReplayRecord>,
         override_allowed: bool,
     ) -> impl Future<Output = anyhow::Result<bool>> + Send;
+
+    /// Writes a run of records in order. Semantically equivalent to calling
+    /// [`write`](Self::write) for each record in sequence (same validation, ordering, and
+    /// atomicity requirements per record), but backends amortize the storage commit across the
+    /// run where they can — the parallel-block applier's WAL writer feeds batches of blocks at
+    /// rates where a per-block commit dominates the pipeline.
+    fn write_many(
+        &self,
+        records: Vec<(Sealed<ReplayRecord>, bool)>,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send;
 }

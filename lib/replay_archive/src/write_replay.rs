@@ -1,6 +1,6 @@
 use crate::ReplayArchiveSender;
 use crate::metrics::REPLAY_ARCHIVE_METRICS;
-use alloy::primitives::{BlockNumber, Sealed};
+use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context;
 use std::fmt::Debug;
 use std::time::Instant;
@@ -77,6 +77,37 @@ where
         }
 
         Ok(written)
+    }
+
+    async fn write_many(
+        &self,
+        records: Vec<(Sealed<ReplayRecord>, bool)>,
+    ) -> anyhow::Result<()> {
+        // Archive AFTER the inner storage commits, mirroring `write`'s ordering.
+        let to_archive: Vec<(BlockHash, ReplayRecord)> = if self.archive_sender.is_some() {
+            records
+                .iter()
+                .map(|(sealed, _)| {
+                    let (record, block_hash) = sealed.clone().split();
+                    (block_hash, record)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.replay.write_many(records).await?;
+        if let Some(archive_sender) = &self.archive_sender {
+            for (block_hash, record) in to_archive {
+                archive_sender
+                    .send((block_hash, record))
+                    .await
+                    .context("archive_sender closed")?;
+            }
+            REPLAY_ARCHIVE_METRICS
+                .queue_depth
+                .set(replay_archive_queue_depth(archive_sender));
+        }
+        Ok(())
     }
 }
 

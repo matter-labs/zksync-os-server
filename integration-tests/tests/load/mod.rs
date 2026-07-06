@@ -1903,7 +1903,22 @@ async fn effective_parallel_impl(
         && eth_call_available
     {
         let token = TestERC20::new(token_addr, tester.l2_provider.clone());
-        let received = token.balanceOf(recipients[0]).call().await?;
+        // Retry briefly: `eth_call` at `latest` resolves through the replay record, and the
+        // pipelined WAL writer may trail the repository tip by up to `parallel_blocks` blocks
+        // right after the load stops.
+        let mut received = U256::ZERO;
+        for attempt in 0..40 {
+            match token.balanceOf(recipients[0]).call().await {
+                Ok(balance) => {
+                    received = balance;
+                    break;
+                }
+                Err(err) if attempt < 39 && err.to_string().contains("not found") => {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
         anyhow::ensure!(
             received > U256::ZERO,
             "recipient 0 has zero token balance after the ERC20 run"
