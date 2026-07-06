@@ -252,8 +252,7 @@ fn consensus_block_encoding_and_digest_are_pinned() {
     // reconstruct the identical identity.
     use commonware_codec::Read as _;
     let committed = read_golden("consensus_block.hex");
-    let decoded =
-        ConsensusBlock::read_cfg(&mut committed.as_slice(), &()).expect("fixture decodes");
+    let decoded = ConsensusBlock::read_cfg(&mut committed.as_slice(), &0).expect("fixture decodes");
     assert_eq!(
         decoded.digest().as_ref(),
         read_golden("consensus_block_digest.hex").as_slice(),

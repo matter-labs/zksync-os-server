@@ -65,11 +65,11 @@ pub async fn init_finalizations_archive<R, D>(
     page_cache: CacheRef,
 ) -> FinalizationsArchive<R, D>
 where
-    R: Storage + Metrics + Clock + Spawner + BufferPooler + Clone,
+    R: Storage + Metrics + Clock + Spawner + BufferPooler,
     D: Digest,
 {
     immutable::Archive::init(
-        context.with_label("finalizations_archive"),
+        context.child("finalizations_archive"),
         archive_config(
             partition_prefix,
             "finalizations",
@@ -89,11 +89,11 @@ pub async fn init_blocks_archive<R, B>(
     block_codec_config: <B as commonware_codec::Read>::Cfg,
 ) -> BlocksArchive<R, B>
 where
-    R: Storage + Metrics + Clock + Spawner + BufferPooler + Clone,
+    R: Storage + Metrics + Clock + Spawner + BufferPooler,
     B: Block,
 {
     immutable::Archive::init(
-        context.with_label("blocks_archive"),
+        context.child("blocks_archive"),
         archive_config(partition_prefix, "blocks", page_cache, block_codec_config),
     )
     .await

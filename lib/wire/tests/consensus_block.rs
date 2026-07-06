@@ -58,7 +58,7 @@ fn digest_and_reserialization_follow_the_received_bytes() {
     let encoded = encode_block(&block);
 
     let decoded =
-        ConsensusBlock::read_cfg(&mut encoded.as_slice(), &()).expect("valid block decodes");
+        ConsensusBlock::read_cfg(&mut encoded.as_slice(), &0).expect("valid block decodes");
     assert_eq!(decoded.digest(), block.digest());
     assert_eq!(
         encode_block(&decoded),
@@ -87,7 +87,7 @@ fn record_frames_with_trailing_garbage_are_rejected() {
     encoded.push(0x00);
 
     assert!(
-        ConsensusBlock::read_cfg(&mut encoded.as_slice(), &()).is_err(),
+        ConsensusBlock::read_cfg(&mut encoded.as_slice(), &0).is_err(),
         "a record frame with trailing bytes must not decode",
     );
 }
@@ -110,7 +110,7 @@ fn future_record_versions_are_rejected_cleanly() {
     encoded.extend_from_slice(&(fake_record.len() as u64).to_be_bytes());
     encoded.extend_from_slice(&fake_record);
 
-    let result = ConsensusBlock::read_cfg(&mut encoded.as_slice(), &());
+    let result = ConsensusBlock::read_cfg(&mut encoded.as_slice(), &0);
     assert!(
         result.is_err(),
         "an unknown record wire version must not decode",

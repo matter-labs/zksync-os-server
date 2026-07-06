@@ -11,7 +11,7 @@
 //! blocks; what they prove is that nothing in the stack — engine, marshal delivery,
 //! backfill, journals — silently assumes the chain root sits at height zero.
 
-use commonware_runtime::Metrics as _;
+use commonware_runtime::Supervisor as _;
 use std::time::Duration;
 use zksync_os_consensus_sim::{
     Behavior, EraOptions, MockExecution, SimCluster, links, run_scenario,
@@ -74,7 +74,7 @@ fn chain_migrates_again_after_a_rollback() {
             // First era: consensus anchored at 20, runs for a while, then the whole
             // committee is stopped (the operational shape of a rollback: validators
             // halt, the single sequencer resumes from the same durable chain).
-            let second_era_context = context.with_label("second_era");
+            let second_era_context = context.child("second_era");
             let behaviors = vec![Behavior::Honest; NUM_VALIDATORS];
             let mut cluster = SimCluster::start_with_env(
                 context,

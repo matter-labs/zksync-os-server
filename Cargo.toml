@@ -222,17 +222,18 @@ pin-project = "1.1.10"
 # Commonware — the BFT consensus stack (simplex, deterministic runtime, simulated p2p).
 # Pin EXACTLY: commonware ships monthly CalVer releases with breaking changes; upgrades
 # are a deliberate chore, never accidental.
-commonware-broadcast = "=2026.4.0"
-commonware-codec = "=2026.4.0"
-commonware-consensus = "=2026.4.0"
-commonware-cryptography = "=2026.4.0"
-commonware-macros = "=2026.4.0"
-commonware-p2p = "=2026.4.0"
-commonware-parallel = "=2026.4.0"
-commonware-resolver = "=2026.4.0"
-commonware-runtime = "=2026.4.0"
-commonware-storage = "=2026.4.0"
-commonware-utils = "=2026.4.0"
+commonware-actor = "=2026.5.0"
+commonware-broadcast = "=2026.5.0"
+commonware-codec = "=2026.5.0"
+commonware-consensus = "=2026.5.0"
+commonware-cryptography = "=2026.5.0"
+commonware-macros = "=2026.5.0"
+commonware-p2p = "=2026.5.0"
+commonware-parallel = "=2026.5.0"
+commonware-resolver = "=2026.5.0"
+commonware-runtime = "=2026.5.0"
+commonware-storage = "=2026.5.0"
+commonware-utils = "=2026.5.0"
 # Commonware's trait bounds use rand 0.8 (the workspace `rand` is 0.9) — alias the old
 # major so consensus code can name the traits commonware expects.
 rand08 = { package = "rand", version = "0.8" }

@@ -16,10 +16,12 @@
 //! The real integration (full blocks, verification, dissemination, ordered delivery)
 //! lives in the crate itself and is exercised by the simulation crate's cluster tests.
 
+use commonware_actor::Feedback;
 use commonware_consensus::simplex::scheme::bls12381_multisig;
 use commonware_consensus::simplex::types::{Activity, Context};
 use commonware_consensus::simplex::{
-    Engine, Plan, config::Config as EngineConfig, config::ForwardingPolicy, elector::RoundRobin,
+    Engine, Plan, config::Config as EngineConfig, config::Floor, config::ForwardingPolicy,
+    elector::RoundRobin,
 };
 use commonware_consensus::types::{Epoch, View, ViewDelta};
 use commonware_consensus::{Automaton, CertifiableAutomaton, Relay, Reporter, Viewable};
@@ -31,7 +33,7 @@ use commonware_cryptography::{Hasher, Sha256};
 use commonware_p2p::simulated::{Config as NetworkConfig, Link, Network, Oracle};
 use commonware_parallel::Sequential;
 use commonware_runtime::buffer::paged::CacheRef;
-use commonware_runtime::{Clock, Metrics, Quota, Runner, deterministic};
+use commonware_runtime::{Clock, Quota, Runner, Supervisor as _, deterministic};
 use commonware_utils::channel::oneshot;
 use commonware_utils::{NZU16, NZUsize};
 use std::collections::BTreeMap;
@@ -57,25 +59,11 @@ const NAMESPACE: &[u8] = b"zksync-os-simplex-smoke";
 /// Consensus itself never sees more than this digest — full payload dissemination is the
 /// application's job (marshal + buffered broadcast in the real integration).
 #[derive(Clone)]
-struct TrivialAutomaton {
-    genesis: Sha256Digest,
-}
-
-impl TrivialAutomaton {
-    fn new() -> Self {
-        Self {
-            genesis: Sha256::hash(b"smoke-genesis"),
-        }
-    }
-}
+struct TrivialAutomaton;
 
 impl Automaton for TrivialAutomaton {
     type Context = Context<Sha256Digest, PublicKey>;
     type Digest = Sha256Digest;
-
-    async fn genesis(&mut self, _epoch: Epoch) -> Self::Digest {
-        self.genesis
-    }
 
     async fn propose(&mut self, context: Self::Context) -> oneshot::Receiver<Self::Digest> {
         // The engine consumes the digest through a oneshot so a slow application can never
@@ -111,8 +99,9 @@ impl Relay for TrivialAutomaton {
     type PublicKey = PublicKey;
     type Plan = Plan<PublicKey>;
 
-    async fn broadcast(&mut self, _payload: Self::Digest, _plan: Self::Plan) {
+    fn broadcast(&mut self, _payload: Self::Digest, _plan: Self::Plan) -> Feedback {
         // No payload bodies exist in this test, so there is nothing to disseminate.
+        Feedback::Ok
     }
 }
 
@@ -156,7 +145,7 @@ impl ActivityLog {
 impl Reporter for ActivityLog {
     type Activity = Activity<MultisigScheme, Sha256Digest>;
 
-    async fn report(&mut self, activity: Self::Activity) {
+    fn report(&mut self, activity: Self::Activity) -> Feedback {
         let mut inner = self.inner.lock().unwrap();
         match activity {
             Activity::Finalization(finalization) => {
@@ -173,6 +162,7 @@ impl Reporter for ActivityLog {
             // assertions (the real integration feeds them to marshal and metrics).
             _ => {}
         }
+        Feedback::Ok
     }
 }
 
@@ -199,7 +189,7 @@ fn run_cluster(seed: u64) -> String {
         // Simulated p2p network. The oracle is the test's god-handle: it registers
         // per-validator channels and controls link quality between peers.
         let (network, mut oracle) = Network::new_with_peers(
-            context.with_label("network"),
+            context.child("network"),
             NetworkConfig {
                 max_size: 1024 * 1024,
                 disconnect_on_block: true,
@@ -222,11 +212,16 @@ fn run_cluster(seed: u64) -> String {
         )
         .await;
 
-        // One engine per validator, all in the same (only) epoch.
+        // One engine per validator, all in the same (only) epoch. Every engine starts
+        // from the same agreed genesis digest — the engine's `floor` (since 2026.5.0
+        // the starting payload lives in the config, not on the `Automaton`).
         let epoch = Epoch::new(1);
+        let genesis = Sha256::hash(b"smoke-genesis");
         let mut logs = Vec::new();
         for (index, validator) in participants.iter().enumerate() {
-            let context = context.with_label(&format!("validator_{index}"));
+            let context = context
+                .child("validator")
+                .with_attribute("index", index.to_string());
 
             // The engine talks to peers over three dedicated channels:
             // 0 = individual votes, 1 = recovered certificates, 2 = certificate backfill.
@@ -239,7 +234,7 @@ fn run_cluster(seed: u64) -> String {
             let log = ActivityLog::default();
             logs.push(log.clone());
 
-            let automaton = TrivialAutomaton::new();
+            let automaton = TrivialAutomaton;
             let engine_config = EngineConfig {
                 scheme: schemes[index].clone(),
                 elector: RoundRobin::<Sha256>::default(),
@@ -252,8 +247,12 @@ fn run_cluster(seed: u64) -> String {
                 // we run more than one): it is where the engine fsyncs every vote before
                 // broadcasting it, which is what prevents double-signing after a crash.
                 partition: format!("validator_{index}"),
-                mailbox_size: 1024,
+                mailbox_size: NZUsize!(1024),
                 epoch,
+                // Where this epoch's chain starts: the genesis payload every validator
+                // derives identically. (The production stack passes the epoch's anchor
+                // block digest here.)
+                floor: Floor::Genesis(genesis),
                 replay_buffer: NZUsize!(1024 * 1024),
                 write_buffer: NZUsize!(1024 * 1024),
                 page_cache: CacheRef::from_pooler(&context, NZU16!(1024), NZUsize!(10)),
@@ -263,10 +262,10 @@ fn run_cluster(seed: u64) -> String {
                 activity_timeout: ViewDelta::new(10),
                 skip_timeout: ViewDelta::new(5),
                 fetch_timeout: Duration::from_secs(1),
-                fetch_concurrent: 4,
+                fetch_concurrent: NZUsize!(4),
                 forwarding: ForwardingPolicy::Disabled,
             };
-            let engine = Engine::new(context.with_label("engine"), engine_config);
+            let engine = Engine::new(context.child("engine"), engine_config);
             engine.start(votes, certificates, resolver);
         }
 

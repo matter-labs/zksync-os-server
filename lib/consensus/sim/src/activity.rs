@@ -1,5 +1,6 @@
 //! Records raw consensus activity for test assertions.
 
+use commonware_actor::Feedback;
 use commonware_consensus::Reporter;
 use commonware_consensus::simplex::types::Activity;
 use commonware_consensus::simplex::types::Attributable;
@@ -45,7 +46,7 @@ impl ActivityLog {
 impl Reporter for ActivityLog {
     type Activity = Activity<Scheme, Digest>;
 
-    async fn report(&mut self, activity: Self::Activity) {
+    fn report(&mut self, activity: Self::Activity) -> Feedback {
         let culprit = match &activity {
             Activity::ConflictingNotarize(evidence) => Some(evidence.signer()),
             Activity::ConflictingFinalize(evidence) => Some(evidence.signer()),
@@ -59,5 +60,6 @@ impl Reporter for ActivityLog {
             inner.faults += 1;
             inner.culprits.insert(culprit.get());
         }
+        Feedback::Ok
     }
 }

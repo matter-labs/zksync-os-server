@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+commonware-actor.workspace = true
 commonware-broadcast.workspace = true
 commonware-codec.workspace = true
 commonware-consensus.workspace = true

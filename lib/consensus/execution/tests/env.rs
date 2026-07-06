@@ -7,7 +7,7 @@
 //! the replay semantics — is the production code path.
 
 use alloy::primitives::{B256, U256};
-use commonware_codec::{Encode, ReadExt};
+use commonware_codec::{Encode, Read as _};
 use commonware_cryptography::Digestible;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -442,7 +442,8 @@ async fn commit_reexecutes_when_the_block_was_never_verified_locally() {
 fn consensus_block_codec_roundtrips() {
     let genesis = ConsensusBlock::genesis(B256::repeat_byte(7));
     let encoded = genesis.encode().to_vec();
-    let decoded = ConsensusBlock::read(&mut encoded.as_slice()).expect("decode genesis");
+    // The codec config is the era anchor (0 here: consensus-from-genesis chain).
+    let decoded = ConsensusBlock::read_cfg(&mut encoded.as_slice(), &0).expect("decode genesis");
     assert_eq!(decoded.digest(), genesis.digest());
     assert_eq!(decoded.height_u64(), 0);
     assert!(decoded.record().is_none());

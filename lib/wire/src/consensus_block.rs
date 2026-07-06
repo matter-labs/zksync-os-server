@@ -35,6 +35,14 @@ use zksync_os_storage_api::ReplayRecord;
 #[derive(Debug, Clone)]
 pub struct ConsensusBlock {
     height: u64,
+    /// The chain height consensus counts from in this era (0 for a chain that runs
+    /// consensus from genesis, the cutover height for a migrated one). NOT part of
+    /// the wire encoding or the digest — consensus-side bookkeeping only, injected
+    /// at construction (and, for blocks received from the wire, via the codec
+    /// config): the consensus library requires its genesis at height zero, so the
+    /// heights this block reports to it are era-relative (`height - era_anchor`)
+    /// while the encoded record keeps the chain-absolute height.
+    era_anchor: u64,
     parent: Digest,
     /// The full replayable block. `None` exactly at height 0: the genesis block stands
     /// for the genesis state itself, which every validator derives locally from the
@@ -61,21 +69,32 @@ impl ConsensusBlock {
     /// migrations of the same chain at different heights are different consensus
     /// identities.
     pub fn genesis_at(height: u64, anchored_block_hash: alloy::primitives::B256) -> Self {
-        Self::from_parts(height, Digest::from(anchored_block_hash.0), None)
+        Self::from_parts(height, height, Digest::from(anchored_block_hash.0), None)
     }
 
-    /// Envelope a produced/replayed record as the child of `parent`.
+    /// Envelope a produced/replayed record as the child of `parent`. The era anchor
+    /// is inherited: every block of an era shares its genesis' anchor.
     pub fn from_record(parent: &ConsensusBlock, record: ReplayRecord) -> Self {
         assert_eq!(
             record.block_context.block_number,
             parent.height + 1,
             "record block number must directly follow its parent"
         );
-        Self::from_parts(parent.height + 1, parent.digest, Some(record))
+        Self::from_parts(
+            parent.height + 1,
+            parent.era_anchor,
+            parent.digest,
+            Some(record),
+        )
     }
 
-    fn from_parts(height: u64, parent: Digest, record: Option<ReplayRecord>) -> Self {
-        Self::assemble(height, parent, record, OnceLock::new())
+    fn from_parts(
+        height: u64,
+        era_anchor: u64,
+        parent: Digest,
+        record: Option<ReplayRecord>,
+    ) -> Self {
+        Self::assemble(height, era_anchor, parent, record, OnceLock::new())
     }
 
     /// Reconstruction from the wire: the record's *received* bytes seed the encoding
@@ -83,20 +102,28 @@ impl ConsensusBlock {
     /// traveled, independent of how this node would encode the record itself. That
     /// independence is what allows the committee to ever speak more than one record
     /// wire version: identity follows the bytes, not the local encoder.
-    fn from_wire(height: u64, parent: Digest, record: ReplayRecord, encoded: Vec<u8>) -> Self {
+    fn from_wire(
+        height: u64,
+        era_anchor: u64,
+        parent: Digest,
+        record: ReplayRecord,
+        encoded: Vec<u8>,
+    ) -> Self {
         let cache = OnceLock::new();
         cache.set(encoded).expect("a fresh cache accepts a value");
-        Self::assemble(height, parent, Some(record), cache)
+        Self::assemble(height, era_anchor, parent, Some(record), cache)
     }
 
     fn assemble(
         height: u64,
+        era_anchor: u64,
         parent: Digest,
         record: Option<ReplayRecord>,
         encoded_record: OnceLock<Vec<u8>>,
     ) -> Self {
         let mut block = Self {
             height,
+            era_anchor,
             parent,
             record,
             digest: Digest::from([0u8; 32]),
@@ -213,9 +240,12 @@ impl EncodeSize for ConsensusBlock {
 }
 
 impl Read for ConsensusBlock {
-    type Cfg = ();
+    /// The era anchor height (0 outside migrations). Not on the wire: it is local
+    /// era knowledge every validator already holds, injected into decoded blocks so
+    /// their consensus-side heights are era-relative.
+    type Cfg = u64;
 
-    fn read_cfg(buf: &mut impl Buf, _cfg: &Self::Cfg) -> Result<Self, Error> {
+    fn read_cfg(buf: &mut impl Buf, era_anchor: &Self::Cfg) -> Result<Self, Error> {
         if buf.remaining() < 8 {
             return Err(Error::EndOfBuffer);
         }
@@ -225,7 +255,7 @@ impl Read for ConsensusBlock {
             return Err(Error::EndOfBuffer);
         }
         match buf.get_u8() {
-            0 => Ok(Self::from_parts(height, parent, None)),
+            0 => Ok(Self::from_parts(height, *era_anchor, parent, None)),
             1 => {
                 if buf.remaining() < 8 {
                     return Err(Error::EndOfBuffer);
@@ -237,7 +267,13 @@ impl Read for ConsensusBlock {
                 let mut encoded = vec![0u8; length];
                 buf.copy_to_slice(&mut encoded);
                 let record = decode_record(&encoded)?;
-                Ok(Self::from_wire(height, parent, record, encoded))
+                Ok(Self::from_wire(
+                    height,
+                    *era_anchor,
+                    parent,
+                    record,
+                    encoded,
+                ))
             }
             _ => Err(Error::Invalid("ConsensusBlock", "bad record flag")),
         }
@@ -253,8 +289,15 @@ impl Digestible for ConsensusBlock {
 }
 
 impl commonware_consensus::Heightable for ConsensusBlock {
+    /// The height consensus sees: era-relative, so the era anchor is height zero
+    /// (the consensus library's genesis convention). The chain-absolute height
+    /// stays available as [`Self::height_u64`].
     fn height(&self) -> Height {
-        Height::new(self.height)
+        debug_assert!(
+            self.height >= self.era_anchor,
+            "a block below its era anchor cannot exist"
+        );
+        Height::new(self.height - self.era_anchor)
     }
 }
 

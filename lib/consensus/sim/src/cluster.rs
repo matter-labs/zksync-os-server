@@ -23,7 +23,7 @@ use commonware_cryptography::ed25519::PublicKey;
 use commonware_cryptography::sha256::Digest as Sha256Digest;
 use commonware_cryptography::{Digestible, Sha256, Signer as _, ed25519};
 use commonware_p2p::simulated::{Config as NetworkConfig, Link, Network, Oracle};
-use commonware_runtime::{Clock, Handle, Metrics, Quota, Spawner as _, deterministic};
+use commonware_runtime::{Clock, Handle, Quota, Spawner as _, Supervisor as _, deterministic};
 use commonware_utils::{NZUsize, TryFromIterator as _};
 use rand08::Rng as _;
 use std::num::NonZeroU32;
@@ -161,8 +161,7 @@ impl SimCluster<MockExecution> {
 impl<X> SimCluster<X>
 where
     X: SimEnv,
-    X::Block: Digestible<Digest = Sha256Digest>,
-    <X::Block as Read>::Cfg: Default + Clone + Send + Sync + 'static,
+    X::Block: Digestible<Digest = Sha256Digest> + Read<Cfg = u64>,
 {
     /// Starts one validator per entry in `behaviors`, fully linked, each with the
     /// execution environment `env_factory` builds for it. Byzantine validators join the
@@ -246,7 +245,7 @@ where
         let schedule = Self::build_schedule(&keys, &schedule_spec, behaviors.len());
 
         let (network, oracle) = Network::new_with_peers(
-            context.with_label("network"),
+            context.child("network"),
             NetworkConfig {
                 max_size: 1024 * 1024,
                 disconnect_on_block: true,
@@ -284,7 +283,7 @@ where
             let mut validator = SimValidator {
                 identity: identity.clone(),
                 behavior: behaviors[index],
-                env: env_factory(index, cluster.context.with_label("env")),
+                env: env_factory(index, cluster.context.child("env")),
                 activity: ActivityLog::new(),
                 running: None,
                 provider,
@@ -438,7 +437,10 @@ where
                 let mut stack_config = StackConfig::new(validator.partition_prefix.clone());
                 stack_tuner(&mut stack_config);
                 let stack = start_validator(
-                    context.with_label(&label),
+                    context
+                        .child("validator")
+                        .with_attribute("index", index.to_string())
+                        .with_attribute("run", incarnation.to_string()),
                     stack_config,
                     validator.identity.clone(),
                     validator.provider.clone(),
@@ -446,7 +448,7 @@ where
                     oracle.control(validator.identity.clone()),
                     oracle.manager(),
                     channels,
-                    Default::default(),
+                    validator.env.era_anchor(),
                     validator.activity.clone(),
                 )
                 .await;
@@ -462,7 +464,10 @@ where
                 let (votes, mux_task) =
                     Self::byzantine_votes_subchannel(context, &label, channels.votes).await;
                 let engine = conflicter::Conflicter::<_, Scheme, Sha256>::new(
-                    context.with_label(&label),
+                    context
+                        .child("validator")
+                        .with_attribute("index", index.to_string())
+                        .with_attribute("run", incarnation.to_string()),
                     conflicter::Config {
                         scheme: validator
                             .provider
@@ -477,7 +482,10 @@ where
                 let (votes, mux_task) =
                     Self::byzantine_votes_subchannel(context, &label, channels.votes).await;
                 let engine = nuller::Nuller::<_, Scheme, Sha256>::new(
-                    context.with_label(&label),
+                    context
+                        .child("validator")
+                        .with_attribute("index", index.to_string())
+                        .with_attribute("run", incarnation.to_string()),
                     nuller::Config {
                         scheme: validator
                             .provider
@@ -510,13 +518,16 @@ where
         TReceiver: commonware_p2p::Receiver<PublicKey = PublicKey>,
     {
         let (muxer, mut mux) = commonware_p2p::utils::mux::Muxer::new(
-            context.with_label(&format!("{label}_votes_mux")),
+            context
+                .child("byzantine_votes_mux")
+                .with_attribute("label", label.to_string()),
             votes.0,
             votes.1,
             1024,
         );
         let mux_task = context
-            .with_label(&format!("{label}_votes_mux_task"))
+            .child("byzantine_votes_mux_task")
+            .with_attribute("label", label.to_string())
             .spawn(|_| async move {
                 let _ = muxer.run().await;
             });

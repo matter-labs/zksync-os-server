@@ -141,6 +141,7 @@ impl ExecutionEnv for LyingStfExecution {
         corrupted_hash.0[0] ^= 0xff;
         Some(StfBlock::assemble(
             block.height_u64(),
+            block.era_anchor(),
             commonware_consensus::Block::parent(&block),
             block.timestamp(),
             block.txs().to_vec(),

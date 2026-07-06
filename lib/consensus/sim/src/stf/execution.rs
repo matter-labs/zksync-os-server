@@ -357,6 +357,7 @@ impl ExecutionEnv for RealStfExecution {
             };
         let block = StfBlock::assemble(
             parent.height_u64() + 1,
+            parent.era_anchor(),
             parent.digest(),
             timestamp,
             vec![transfer],
@@ -409,9 +410,10 @@ impl ExecutionEnv for RealStfExecution {
     }
 
     async fn committed_height(&mut self) -> Option<Height> {
+        // Consensus counts heights from the era anchor; the ledger counts the chain.
         let inner = self.inner.lock().unwrap();
-        let tip = inner.anchor_height + inner.committed.len() as u64;
-        (tip > 0).then(|| Height::new(tip))
+        let tip = inner.committed.len() as u64;
+        (inner.anchor_height + tip > 0).then(|| Height::new(tip))
     }
 
     async fn commit(&mut self, block: StfBlock) {
@@ -468,6 +470,10 @@ impl ExecutionEnv for RealStfExecution {
 }
 
 impl SimEnv for RealStfExecution {
+    fn era_anchor(&self) -> u64 {
+        self.inner.lock().unwrap().anchor_height
+    }
+
     fn committed_tip(&self) -> Option<u64> {
         let inner = self.inner.lock().unwrap();
         let tip = inner.anchor_height + inner.committed.len() as u64;

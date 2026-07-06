@@ -48,10 +48,11 @@ use crate::committer::FinalizedBlockCommitter;
 use crate::execution::ExecutionEnv;
 use crate::storage::{init_blocks_archive, init_finalizations_archive};
 use crate::types::{Elector, Scheme, SchemeProvider};
+use commonware_actor::Feedback;
 use commonware_broadcast::buffered;
 use commonware_consensus::marshal::standard::{Inline, Standard};
 use commonware_consensus::marshal::{self, core as marshal_core, resolver};
-use commonware_consensus::simplex::config::ForwardingPolicy;
+use commonware_consensus::simplex::config::{Floor, ForwardingPolicy};
 use commonware_consensus::simplex::types::{Activity, Certificate};
 use commonware_consensus::simplex::{Engine, config::Config as EngineConfig};
 use commonware_consensus::types::{Epoch, FixedEpocher, Height, ViewDelta};
@@ -95,7 +96,7 @@ pub struct StackConfig {
     /// Skip the leader wait entirely if the elected leader was silent for this many views.
     pub skip_timeout: ViewDelta,
     /// Bound on internal actor mailboxes (backpressure).
-    pub mailbox_size: usize,
+    pub mailbox_size: NonZeroUsize,
     /// How many recently-gossiped blocks the broadcast cache keeps per peer.
     pub deque_size: usize,
     /// How many finalized blocks may be in flight to the committer before marshal stops
@@ -121,7 +122,7 @@ impl StackConfig {
             fetch_timeout: Duration::from_secs(1),
             activity_timeout: ViewDelta::new(10),
             skip_timeout: ViewDelta::new(5),
-            mailbox_size: 1024,
+            mailbox_size: NZUsize!(1024),
             deque_size: 16,
             max_pending_acks: NonZeroUsize::new(4).expect("nonzero"),
             view_retention_timeout: ViewDelta::new(100),
@@ -182,13 +183,25 @@ impl<A> Clone for NullReporter<A> {
 impl<A: Send + 'static> Reporter for NullReporter<A> {
     type Activity = A;
 
-    async fn report(&mut self, _activity: Self::Activity) {}
+    fn report(&mut self, _activity: Self::Activity) -> Feedback {
+        Feedback::Ok
+    }
 }
 
 /// The engines currently running, one per live epoch — shared between the epoch
 /// rotation task (which starts and retires them) and [`ValidatorStack::abort`]
 /// (which must kill whatever is alive when the whole validator stops).
 pub type EngineRegistry = Arc<Mutex<BTreeMap<u64, Handle<()>>>>;
+
+/// What every engine reports to: marshal first (finalizations drive ordered delivery
+/// and backfill), then the node's extra reporter (metrics, observers). Named so the
+/// `Reporters::from` call site can state its target type — the tuple `From` impls
+/// are ambiguous without an annotation.
+type EngineReporters<X, TReporter> = Reporters<
+    Activity<Scheme, <<X as ExecutionEnv>::Block as Digestible>::Digest>,
+    marshal_core::Mailbox<Scheme, Standard<<X as ExecutionEnv>::Block>>,
+    TReporter,
+>;
 
 /// Handles to a running validator stack. Aborting all handles stops the validator;
 /// starting a fresh stack with the same `partition_prefix` over the same storage
@@ -239,7 +252,7 @@ pub async fn start_validator<R, X, TSender, TReceiver, TBlocker, TPeers, TReport
     extra_reporter: TReporter,
 ) -> ValidatorStack<X::Block>
 where
-    R: Clock + Spawner + Metrics + Storage + BufferPooler + Rng + CryptoRng + Clone,
+    R: Clock + Spawner + Metrics + Storage + BufferPooler + Rng + CryptoRng,
     X: ExecutionEnv,
     <X::Block as commonware_codec::Read>::Cfg: Clone + Send + Sync + 'static,
     TSender: commonware_p2p::Sender<PublicKey = PublicKey>,
@@ -253,7 +266,7 @@ where
     // Block gossip: every proposed block is pushed to all peers and cached, so followers
     // can resolve a digest to the full block without asking the leader.
     let (broadcast_engine, broadcast_mailbox) = buffered::Engine::new(
-        context.with_label("block_broadcast"),
+        context.child("block_broadcast"),
         buffered::Config {
             public_key: identity.clone(),
             mailbox_size: config.mailbox_size,
@@ -268,7 +281,7 @@ where
     // Block backfill: how a node that missed gossip (offline, partitioned, late-joining)
     // pulls finalized blocks and certificates from its peers.
     let block_resolver = resolver::p2p::init(
-        &context,
+        context.child("block_backfill"),
         resolver::p2p::Config {
             public_key: identity.clone(),
             peer_provider: peer_provider.clone(),
@@ -304,8 +317,12 @@ where
     }
 
     let epocher = FixedEpocher::new(config.epoch_length);
-    let (marshal_actor, marshal_mailbox, marshal_height) = marshal_core::Actor::init(
-        context.with_label("marshal"),
+    // The era anchor is consensus height zero: the environment's genesis block stands
+    // for the chain's anchor (its own genesis, or the migration cutover block), and
+    // every consensus-side height counts from it.
+    let genesis_block = env.genesis_block().await;
+    let (marshal_actor, marshal_mailbox, _marshal_height) = marshal_core::Actor::init(
+        context.child("marshal"),
         finalizations,
         blocks,
         marshal::Config {
@@ -313,6 +330,7 @@ where
             // backfill — the provider resolves each epoch to its committee's scheme.
             provider: scheme_provider.clone(),
             epocher: epocher.clone(),
+            start: marshal::Start::Genesis(genesis_block),
             partition_prefix: config.partition_prefix.clone(),
             mailbox_size: config.mailbox_size,
             view_retention_timeout: config.view_retention_timeout,
@@ -328,23 +346,19 @@ where
         },
     )
     .await;
+    // (A node whose archives trail its chain re-delivers old blocks on startup;
+    // `commit` absorbs the replays as no-ops. The explicit floor-skip that existed
+    // before the upgrade required a finalization we may not hold — correctness never
+    // depended on it.)
 
-    // If the node has already durably applied blocks beyond what the archives hold
-    // (e.g. the archives were pruned or lost while the node state survived), start
-    // delivery from the node's height instead of replaying ancient history.
-    if let Some(committed) = env.committed_height().await
-        && committed > marshal_height
-    {
-        marshal_mailbox.set_floor(committed).await;
-    }
-
-    let committer = FinalizedBlockCommitter::new(env.clone());
+    let (committer, commit_worker) =
+        FinalizedBlockCommitter::spawn(context.child("committer"), env.clone());
     let marshal = marshal_actor.start(committer, broadcast_mailbox, block_resolver);
 
     // The application half: judge and build blocks. `Inline` = full verification happens
     // before this validator votes, never after.
     let application = Inline::new(
-        context.with_label("application"),
+        context.child("application"),
         ExecutionApplication::new(env.clone()),
         marshal_mailbox.clone(),
         epocher.clone(),
@@ -355,46 +369,46 @@ where
     // one re-certifying the boundary block), and each must see only its own epoch's
     // traffic. Messages for epochs nobody runs anymore are dropped by the muxer.
     let (votes_muxer, votes_mux) = Muxer::new(
-        context.with_label("votes_mux"),
+        context.child("votes_mux"),
         channels.votes.0,
         channels.votes.1,
-        config.mailbox_size,
+        config.mailbox_size.get(),
     );
     let (certificates_muxer, certificates_mux, certificate_backup) = {
         use commonware_p2p::utils::mux::Builder as _;
         Muxer::builder(
-            context.with_label("certificates_mux"),
+            context.child("certificates_mux"),
             channels.certificates.0,
             channels.certificates.1,
-            config.mailbox_size,
+            config.mailbox_size.get(),
         )
         .with_backup()
         .build()
     };
     let (certificate_backfill_muxer, certificate_backfill_mux) = Muxer::new(
-        context.with_label("certificate_backfill_mux"),
+        context.child("certificate_backfill_mux"),
         channels.certificate_backfill.0,
         channels.certificate_backfill.1,
-        config.mailbox_size,
+        config.mailbox_size.get(),
     );
     let mut support_tasks = vec![
         // A mux only exits when its underlying channel dies, which means the p2p
         // network died — the node watches the network task itself, so these only
         // need to leave a trace.
-        context.with_label("votes_mux_task").spawn(|_| async move {
+        context.child("votes_mux_task").spawn(|_| async move {
             if let Err(err) = votes_muxer.run().await {
                 tracing::error!(?err, "votes mux exited");
             }
         }),
         context
-            .with_label("certificates_mux_task")
+            .child("certificates_mux_task")
             .spawn(|_| async move {
                 if let Err(err) = certificates_muxer.run().await {
                     tracing::error!(?err, "certificates mux exited");
                 }
             }),
         context
-            .with_label("certificate_backfill_mux_task")
+            .child("certificate_backfill_mux_task")
             .spawn(|_| async move {
                 if let Err(err) = certificate_backfill_muxer.run().await {
                     tracing::error!(?err, "certificate backfill mux exited");
@@ -412,7 +426,7 @@ where
     // this, a validator more than one epoch behind would wait forever: its old
     // engine hears nothing (peers retired that epoch), and the current epoch's
     // traffic would be dropped unheard.
-    let tip_scout = context.with_label("tip_scout").spawn({
+    let tip_scout = context.child("tip_scout").spawn({
         let scheme_provider = scheme_provider.clone();
         let mut marshal_mailbox = marshal_mailbox.clone();
         let mut scout_reporter = extra_reporter.clone();
@@ -452,12 +466,8 @@ where
                 // scout-verified finalizations are its only view of finality — they
                 // keep `/status` truthful and the sovereign certificate/custody
                 // trail complete.
-                scout_reporter
-                    .report(Activity::Finalization(finalization.clone()))
-                    .await;
-                marshal_mailbox
-                    .report(Activity::Finalization(finalization))
-                    .await;
+                let _ = scout_reporter.report(Activity::Finalization(finalization.clone()));
+                let _ = marshal_mailbox.report(Activity::Finalization(finalization));
             }
         }
     });
@@ -468,17 +478,24 @@ where
     // `start_validator` the single place where an engine's configuration is spelled
     // out.
     let spawn_engine = {
-        let context = context.clone();
+        // Engines are children of one supervision node; the epoch rides as a metric
+        // attribute (dynamic values stay out of metric names).
+        let context = context.child("engines");
         let config = config.clone();
         let scheme_provider = scheme_provider.clone();
         let marshal_mailbox = marshal_mailbox.clone();
         move |epoch: Epoch,
+              anchor: <X::Block as Digestible>::Digest,
               votes: (SubSender<TSender>, SubReceiver<TReceiver>),
               certificates: (SubSender<TSender>, SubReceiver<TReceiver>),
               certificate_backfill: (SubSender<TSender>, SubReceiver<TReceiver>)|
               -> Handle<()> {
+            let reporter: EngineReporters<X, TReporter> =
+                Reporters::from((marshal_mailbox.clone(), extra_reporter.clone()));
             let engine = Engine::new(
-                context.with_label(&format!("engine_epoch_{}", epoch.get())),
+                context
+                    .child("engine")
+                    .with_attribute("epoch", epoch.get().to_string()),
                 EngineConfig {
                     scheme: scheme_provider.scheme_for(epoch).as_ref().clone(),
                     elector: Elector::default(),
@@ -487,11 +504,15 @@ where
                     relay: application.clone(),
                     // Marshal consumes consensus outcomes (certificates drive
                     // finalization); the extra reporter observes alongside it.
-                    reporter: Reporters::from((marshal_mailbox.clone(), extra_reporter.clone())),
+                    reporter,
                     strategy: Sequential,
                     partition: format!("{}-engine-epoch-{}", config.partition_prefix, epoch.get()),
                     mailbox_size: config.mailbox_size,
                     epoch,
+                    // The engine starts from its epoch's anchor: the previous epoch's
+                    // final block (whose re-certification is the new epoch's first
+                    // act), or the era genesis for the first epoch.
+                    floor: Floor::Genesis(anchor),
                     replay_buffer: NZUsize!(1024 * 1024),
                     write_buffer: NZUsize!(1024 * 1024),
                     page_cache: page_cache.clone(),
@@ -501,7 +522,7 @@ where
                     activity_timeout: config.activity_timeout,
                     skip_timeout: config.skip_timeout,
                     fetch_timeout: config.fetch_timeout,
-                    fetch_concurrent: 4,
+                    fetch_concurrent: NZUsize!(4),
                     forwarding: ForwardingPolicy::Disabled,
                 },
             );
@@ -510,7 +531,8 @@ where
     };
 
     let engines: EngineRegistry = Arc::new(Mutex::new(BTreeMap::new()));
-    let epoch_manager = context.with_label("epoch_manager").spawn({
+    let rotation_marshal = marshal_mailbox.clone();
+    let epoch_manager = context.child("epoch_manager").spawn({
         let engines = engines.clone();
         move |context| {
             run_epoch_rotation(
@@ -518,6 +540,7 @@ where
                 epocher,
                 scheme_provider,
                 env,
+                rotation_marshal,
                 votes_mux,
                 certificates_mux,
                 certificate_backfill_mux,
@@ -528,6 +551,7 @@ where
     });
 
     support_tasks.push(tip_scout);
+    support_tasks.push(commit_worker);
 
     ValidatorStack {
         epoch_manager,
@@ -567,18 +591,20 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
     epocher: FixedEpocher,
     scheme_provider: SchemeProvider,
     mut env: X,
+    marshal: marshal_core::Mailbox<Scheme, Standard<X::Block>>,
     mut votes_mux: MuxHandle<TSender, TReceiver>,
     mut certificates_mux: MuxHandle<TSender, TReceiver>,
     mut certificate_backfill_mux: MuxHandle<TSender, TReceiver>,
     engines: EngineRegistry,
     spawn_engine: F,
 ) where
-    R: Clock + Spawner + Metrics + Clone,
+    R: Clock + Spawner + Metrics,
     X: ExecutionEnv,
     TSender: commonware_p2p::Sender<PublicKey = PublicKey>,
     TReceiver: commonware_p2p::Receiver<PublicKey = PublicKey>,
     F: Fn(
         Epoch,
+        <X::Block as Digestible>::Digest,
         (SubSender<TSender>, SubReceiver<TReceiver>),
         (SubSender<TSender>, SubReceiver<TReceiver>),
         (SubSender<TSender>, SubReceiver<TReceiver>),
@@ -646,6 +672,22 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
                 }
                 continue;
             }
+            // The engine starts from its epoch's anchor block: the last block of
+            // the previous epoch (already committed by the time this epoch becomes
+            // wanted — the rotation is committed-height-driven), or the era genesis
+            // for epoch 0. Marshal holds both.
+            let anchor_height = epocher
+                .first(epoch)
+                .map(|first| Height::new(first.get().saturating_sub(1)))
+                .unwrap_or_else(Height::zero);
+            let Some((_, anchor_digest)) = marshal
+                .get_info(marshal::Identifier::Height(anchor_height))
+                .await
+            else {
+                // The anchor is not locally available yet (e.g. a fresh validator
+                // still backfilling toward the boundary). Try again next tick.
+                continue;
+            };
             let votes = votes_mux.register(key).await.expect("register votes mux");
             let certificates = certificates_mux
                 .register(key)
@@ -656,7 +698,13 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
                 .await
                 .expect("register certificate backfill mux");
             info!(epoch = key, "starting consensus engine for epoch");
-            let handle = spawn_engine(epoch, votes, certificates, certificate_backfill);
+            let handle = spawn_engine(
+                epoch,
+                anchor_digest,
+                votes,
+                certificates,
+                certificate_backfill,
+            );
             engines.lock().unwrap().insert(key, handle);
         }
 

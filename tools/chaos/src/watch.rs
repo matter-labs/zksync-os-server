@@ -287,19 +287,17 @@ const FORBIDDEN_LOG_PATTERNS: [&str; 2] = ["panicked at", " ERROR "];
 /// errors, and the runtime-drop panic is a registered shutdown wart (tracked in
 /// the shortcut register; harmless but not yet eliminated). Deliberately narrow —
 /// a *novel* critical-task panic must still surface.
-const ALLOWED_LOG_PATTERNS: [&str; 5] = [
+// Two long-standing allowances were REMOVED after the commonware-2026.5.0
+// upgrade soaks showed them gone (they fired routinely on 2026.4.0):
+// the runtime-drop teardown wart ("Cannot drop a runtime" +
+// "runtime/blocking/shutdown.rs") and marshal's empty-archive destroy panic
+// ("failed to destroy", BlobMissing on follower-shaped per-epoch caches;
+// dormant issue draft in consensus_planning/upstream-issues.md). If either
+// resurfaces, the watcher now freezes on it — deliberate: a workaround must
+// not outlive its wart.
+const ALLOWED_LOG_PATTERNS: [&str; 2] = [
     "pipeline segment failed",
     "failed to receive deregistration",
-    // The known runtime-drop teardown wart panics across two log lines; the
-    // second carries the message, the first only the site. Both are allowed by
-    // their most specific identifying text.
-    "Cannot drop a runtime",
-    "runtime/blocking/shutdown.rs",
-    // Registered upstream wart: marshal's teardown destroys per-epoch cache
-    // archives and panics on ones that were opened but never written (the
-    // follower shape) — BlobMissing on `...-verified-key`. Harmless to the
-    // chain; on the commonware-upgrade discussion list.
-    "failed to destroy",
 ];
 
 pub fn is_suspicious_log_line(line: &str) -> bool {

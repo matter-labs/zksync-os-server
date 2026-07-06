@@ -39,6 +39,7 @@
   - [What happens, in order](consensus/lifecycle.md)
   - [How it is tested](consensus/testing.md)
   - [Running it](consensus/enabling.md)
+  - [Upgrading commonware](consensus/upgrading.md)
 
 ---
 

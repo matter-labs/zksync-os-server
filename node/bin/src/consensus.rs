@@ -22,7 +22,7 @@ use commonware_cryptography::bls12381::primitives::variant::{MinPk, Variant};
 use commonware_cryptography::ed25519;
 use commonware_p2p::authenticated::lookup;
 use commonware_p2p::{Address, AddressableManager as _, Ingress, Receiver, Sender};
-use commonware_runtime::{Metrics as _, Quota, Runner as _, Spawner as _};
+use commonware_runtime::{Metrics as _, Quota, Runner as _, Spawner as _, Supervisor as _};
 use commonware_utils::TryCollect as _;
 use commonware_utils::ordered::{BiMap, Map};
 use commonware_utils::union_unique;
@@ -182,6 +182,10 @@ pub struct ConsensusSetup {
     /// (the activity observer's custody records, the status surface).
     pub schedule: std::sync::Arc<CommitteeSchedule>,
     pub epoch_length: std::num::NonZeroU64,
+    /// The chain height consensus is anchored at (`consensus.genesis_height`):
+    /// consensus heights count from it, and decoded blocks learn it via the block
+    /// codec config.
+    pub era_anchor: u64,
     pub listen_address: SocketAddr,
     pub allow_private_ips: bool,
     pub max_message_size: usize,
@@ -320,6 +324,7 @@ impl ConsensusSetup {
             schedule: std::sync::Arc::new(schedule),
             epoch_length: std::num::NonZeroU64::new(config.epoch_length)
                 .context("`consensus.epoch_length` must be nonzero")?,
+            era_anchor: config.genesis_height,
             listen_address: config
                 .listen_address
                 .parse()
@@ -415,12 +420,12 @@ where
     let metrics_encoder = observability.metrics_encoder;
     let metrics_encoder_in_runtime = metrics_encoder.clone();
     let result = runner.start(|context| async move {
-        let _ = context_anchor_sender.send(context.clone());
+        let _ = context_anchor_sender.send(context.child("teardown_anchor"));
         // From here on the consensus runtime's own registry (engine, marshal, p2p) is
         // live; hand the node a way to scrape it.
         let _ = metrics_encoder_in_runtime.send(Some(std::sync::Arc::new({
-            let context = context.clone();
-            move || context.encode()
+            let encoder_context = context.child("metrics_encoder");
+            move || encoder_context.encode()
         })));
 
         let quota = Quota::per_second(NonZeroU32::new(128).expect("nonzero"));
@@ -437,7 +442,7 @@ where
             crypto: setup.network_key.clone(),
             listen: setup.listen_address,
             max_message_size: setup.max_message_size as u32,
-            mailbox_size: BACKLOG,
+            mailbox_size: commonware_utils::NZUsize!(16_384),
             send_batch_size: commonware_utils::NZUsize!(8),
             bypass_ip_check: false,
             allow_private_ips: setup.allow_private_ips,
@@ -463,7 +468,7 @@ where
                 NonZeroU32::new(64).expect("nonzero"),
             ),
         };
-        let (mut network, mut oracle) = lookup::Network::new(context.with_label("p2p"), p2p_config);
+        let (mut network, mut oracle) = lookup::Network::new(context.child("p2p"), p2p_config);
 
         // The static committee is peer set 0; validator-set changes later mean
         // tracking new sets under new indices.
@@ -482,7 +487,7 @@ where
             .try_collect()
             .expect("duplicate validator network identity");
         let peers: commonware_p2p::AddressableTrackedPeers<ed25519::PublicKey> = peers.into();
-        oracle.track(0, peers).await;
+        let _ = oracle.track(0, peers);
 
         // Channels must all be registered before the network starts.
         let channels = Channels {
@@ -506,7 +511,7 @@ where
         use commonware_cryptography::Signer as _;
         let identity = setup.network_key.public_key();
         let stack = start_validator(
-            context.with_label("validator"),
+            context.child("validator"),
             StackConfig::new("consensus").with_epoch_length(setup.epoch_length),
             identity,
             setup.provider.clone(),
@@ -514,7 +519,9 @@ where
             oracle.clone(),
             oracle,
             channels,
-            (),
+            // Decoded blocks learn the era anchor through the codec config: consensus
+            // heights are era-relative (the anchor is consensus height zero).
+            setup.era_anchor,
             ActivityObserver {
                 finalized: std::sync::Arc::new(observability.finalized),
                 finality: observability.finality,
@@ -531,7 +538,6 @@ where
             _ = shutdown => {
                 tracing::info!("node is shutting down; stopping consensus");
                 context
-                    .clone()
                     .stop(0, Some(std::time::Duration::from_secs(10)))
                     .await
                     .context("consensus tasks did not stop in time")?;
@@ -588,7 +594,7 @@ fn start_tx_gossip<C, P, TxSender, TxReceiver>(
 
     let gossip_pool = pool.clone();
     context
-        .with_label("tx_gossip_out")
+        .child("tx_gossip_out")
         .spawn(move |task_context| async move {
             // The pool's listener never closes on consensus shutdown (the pool lives
             // node-side), so this task must watch the stop signal itself — a parked
@@ -618,18 +624,15 @@ fn start_tx_gossip<C, P, TxSender, TxReceiver>(
                     }
                 }
                 let message = alloy_rlp::encode(&batch);
-                if sender
-                    .send(commonware_p2p::Recipients::All, message, false)
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
+                // `send` is now synchronous and returns the delivery list; gossip is
+                // best-effort, so an empty delivery is not an error (network teardown
+                // is caught by the stop signal above).
+                let _ = sender.send(commonware_p2p::Recipients::All, message, false);
             }
         });
 
     context
-        .with_label("tx_gossip_in")
+        .child("tx_gossip_in")
         .spawn(move |task_context| async move {
             // `recv` errors once the network tears down, but watch the stop signal
             // too so this task never outlives the runtime with its pool handle.
@@ -724,7 +727,7 @@ struct ActivityObserver {
 impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
     type Activity = ConsensusActivity;
 
-    async fn report(&mut self, activity: Self::Activity) {
+    fn report(&mut self, activity: Self::Activity) -> commonware_actor::Feedback {
         // Every vote or certificate names its round; the highest one ever seen is
         // persisted as the recovery floor for journal-loss restarts (see
         // `FinalityStore::note_observed_round`). Fault-evidence kinds are skipped —
@@ -761,12 +764,31 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
                 let round = finalization.round();
                 let entry = self.schedule.entry_for(round.epoch());
                 let committee_size = entry.committee.len() as u32;
-                let _ = self.finalized.send(Some(FinalizedObservation {
-                    epoch: round.epoch().get(),
-                    view: round.view().get(),
-                    committee_size,
-                    observed_unix: unix_now(),
-                }));
+                // Finality is monotone, so the published observation must be too.
+                // Finalizations do NOT arrive in round order here: the tip scout
+                // re-hears certificates for already-retired epochs (a lagging peer
+                // catching up re-broadcasts them, and with no engine registered for
+                // that epoch they fall through to the scout), and marshal replays
+                // finalizations during backfill. Rig finding (2026-07-06): without
+                // this clamp, `/status.finalized` briefly regressed a whole epoch on
+                // four healthy validators when a fifth reconnected after lagging
+                // across a boundary. The durable observed-round floor clamps
+                // internally already (`FinalityStore::note_observed_round`).
+                let _ = self.finalized.send_if_modified(|current| {
+                    let observed = (round.epoch().get(), round.view().get());
+                    let advances = current
+                        .as_ref()
+                        .is_none_or(|seen| observed > (seen.epoch, seen.view));
+                    if advances {
+                        *current = Some(FinalizedObservation {
+                            epoch: round.epoch().get(),
+                            view: round.view().get(),
+                            committee_size,
+                            observed_unix: unix_now(),
+                        });
+                    }
+                    advances
+                });
                 let block_digest: [u8; 32] = finalization
                     .proposal
                     .payload
@@ -863,6 +885,7 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
             }
         };
         CONSENSUS_METRICS.activity[&kind].inc();
+        commonware_actor::Feedback::Ok
     }
 }
 

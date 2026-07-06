@@ -31,6 +31,7 @@ anyhow.workspace = true
 # The `mocks` feature provides scheme fixtures (test keys/committees) and, later,
 # byzantine engine mocks. This crate is itself test infrastructure, so mocks belong
 # in its regular dependencies.
+commonware-actor.workspace = true
 commonware-codec.workspace = true
 commonware-consensus = { workspace = true, features = ["mocks"] }
 commonware-cryptography.workspace = true

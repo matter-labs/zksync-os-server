@@ -19,6 +19,9 @@ use zksync_os_types::{L2Envelope, L2Transaction};
 #[derive(Debug, Clone)]
 pub struct StfBlock {
     height: u64,
+    /// The chain height consensus counts from (see the wire block's field of the
+    /// same name): [`commonware_consensus::Heightable`] reports `height - era_anchor`.
+    era_anchor: u64,
     parent: Digest,
     /// Chosen by the proposer; also what makes two proposals on the same parent in
     /// different views distinct blocks.
@@ -40,6 +43,7 @@ impl StfBlock {
     pub fn genesis(genesis_header_hash: B256) -> Self {
         Self::assemble(
             0,
+            0,
             Sha256::hash(b"stf-genesis-parent"),
             0,
             Vec::new(),
@@ -55,6 +59,7 @@ impl StfBlock {
     pub fn anchor(height: u64, timestamp: u64, tip_header_hash: B256) -> Self {
         Self::assemble(
             height,
+            height,
             Sha256::hash(b"stf-anchor-parent"),
             timestamp,
             Vec::new(),
@@ -63,8 +68,13 @@ impl StfBlock {
         )
     }
 
+    pub fn era_anchor(&self) -> u64 {
+        self.era_anchor
+    }
+
     pub fn assemble(
         height: u64,
+        era_anchor: u64,
         parent: Digest,
         timestamp: u64,
         txs: Vec<L2Transaction>,
@@ -73,6 +83,7 @@ impl StfBlock {
     ) -> Self {
         let mut block = Self {
             height,
+            era_anchor,
             parent,
             timestamp,
             txs,
@@ -138,9 +149,10 @@ impl EncodeSize for StfBlock {
 }
 
 impl Read for StfBlock {
-    type Cfg = ();
+    /// The era anchor (see the field): local era knowledge, not wire bytes.
+    type Cfg = u64;
 
-    fn read_cfg(buf: &mut impl Buf, _cfg: &Self::Cfg) -> Result<Self, Error> {
+    fn read_cfg(buf: &mut impl Buf, era_anchor: &Self::Cfg) -> Result<Self, Error> {
         fn take_u64(buf: &mut impl Buf) -> Result<u64, Error> {
             if buf.remaining() < 8 {
                 return Err(Error::EndOfBuffer);
@@ -183,6 +195,7 @@ impl Read for StfBlock {
         let block_output_hash = B256::from_slice(&take_bytes(buf, 32)?);
         Ok(Self::assemble(
             height,
+            *era_anchor,
             parent,
             timestamp,
             txs,
@@ -201,8 +214,9 @@ impl Digestible for StfBlock {
 }
 
 impl commonware_consensus::Heightable for StfBlock {
+    /// Era-relative, mirroring the production wire block: the anchor is height zero.
     fn height(&self) -> Height {
-        Height::new(self.height)
+        Height::new(self.height - self.era_anchor)
     }
 }
 

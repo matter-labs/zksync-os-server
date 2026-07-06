@@ -9,9 +9,9 @@
 
 use crate::execution::{BuildContext, ExecutionEnv};
 use crate::types::Scheme;
-use commonware_consensus::marshal::ancestry::{AncestorStream, BlockProvider};
+use commonware_consensus::Application;
+use commonware_consensus::marshal::ancestry::Ancestry;
 use commonware_consensus::simplex::types::Context;
-use commonware_consensus::{Application, VerifyingApplication};
 use commonware_cryptography::Digestible;
 use commonware_cryptography::ed25519::PublicKey;
 use commonware_runtime::{Clock, Metrics, Spawner};
@@ -33,25 +33,21 @@ impl<X: ExecutionEnv> ExecutionApplication<X> {
 
 type Digest<X> = <<X as ExecutionEnv>::Block as Digestible>::Digest;
 
-impl<R, X> Application<R> for ExecutionApplication<X>
+impl<E, X> Application<E> for ExecutionApplication<X>
 where
-    R: Rng + Spawner + Metrics + Clock,
+    E: Rng + Spawner + Metrics + Clock,
     X: ExecutionEnv,
 {
     type SigningScheme = Scheme;
     type Context = Context<Digest<X>, PublicKey>;
     type Block = X::Block;
 
-    async fn genesis(&mut self) -> Self::Block {
-        self.env.genesis_block().await
-    }
-
-    /// Leader path. The ancestry stream yields the parent first (deeper ancestors on
+    /// Leader path. The ancestry yields the parent first (deeper ancestors on
     /// further pulls, fetched on demand — we only need the parent).
-    async fn propose<P: BlockProvider<Block = Self::Block>>(
+    async fn propose(
         &mut self,
-        (_runtime, context): (R, Self::Context),
-        mut ancestry: AncestorStream<P, Self::Block>,
+        (_runtime, context): (E, Self::Context),
+        mut ancestry: impl Ancestry<Self::Block>,
     ) -> Option<Self::Block> {
         let Some(parent) = ancestry.next().await else {
             // The parent became unavailable (e.g. the view ended and consensus tore the
@@ -65,15 +61,9 @@ where
         };
         self.env.build(parent, build_context).await
     }
-}
 
-impl<R, X> VerifyingApplication<R> for ExecutionApplication<X>
-where
-    R: Rng + Spawner + Metrics + Clock,
-    X: ExecutionEnv,
-{
     /// Follower path, called before this validator votes for the block. The ancestry
-    /// stream yields the block under verification first, then its parent, then deeper
+    /// yields the block under verification first, then its parent, then deeper
     /// ancestors on demand. Structural linkage (parent digest, height contiguity) is
     /// already checked by the caller; the execution environment judges content
     /// validity.
@@ -84,10 +74,15 @@ where
     /// everyone now builds on). Walk the ancestry down to the first block whose state
     /// this environment holds, then verify forward — each step re-executes one
     /// ancestor and rebuilds its speculative state.
-    async fn verify<P: BlockProvider<Block = Self::Block>>(
+    ///
+    /// Returning `false` is reserved for permanent invalidity; upstream treats an
+    /// unresolved future as abstention. Our negative verdicts are all "invalid for
+    /// this round as observed" and a fresh proposal is judged fresh, so resolving
+    /// `false` (rather than hanging the vote) remains the right mapping.
+    async fn verify(
         &mut self,
-        (_runtime, _context): (R, Self::Context),
-        mut ancestry: AncestorStream<P, Self::Block>,
+        (_runtime, _context): (E, Self::Context),
+        mut ancestry: impl Ancestry<Self::Block>,
     ) -> bool {
         // Deeper than any healthy unfinalized window; a walk this long means state is
         // unrecoverable through ancestry and the vote should be withheld.

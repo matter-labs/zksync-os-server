@@ -17,6 +17,13 @@ use zksync_os_consensus_core::{BuildContext, ExecutionEnv};
 /// durably committed? Any execution backend (mock or real) implements this so the same
 /// cluster harness and assertions work over both.
 pub trait SimEnv: ExecutionEnv {
+    /// The chain height this environment's era is anchored at (0 unless the
+    /// scenario models a migration). Decoded blocks carry it via the codec config
+    /// so their consensus-side heights are era-relative.
+    fn era_anchor(&self) -> u64 {
+        0
+    }
+
     /// Height of the last committed block, if any.
     fn committed_tip(&self) -> Option<u64>;
 
@@ -76,6 +83,10 @@ impl MockExecution {
 }
 
 impl SimEnv for MockExecution {
+    fn era_anchor(&self) -> u64 {
+        self.inner.lock().unwrap().anchor_height
+    }
+
     fn committed_tip(&self) -> Option<u64> {
         MockExecution::committed_tip(self)
     }
@@ -116,13 +127,16 @@ impl ExecutionEnv for MockExecution {
     }
 
     async fn committed_height(&mut self) -> Option<Height> {
-        self.committed_tip().map(Height::new)
+        // Consensus counts heights from the era anchor; the mock's ledger counts
+        // the chain. Translate at the boundary.
+        let anchor = self.inner.lock().unwrap().anchor_height;
+        self.committed_tip()
+            .map(|tip| Height::new(tip.saturating_sub(anchor)))
     }
 
     async fn commit(&mut self, block: SimBlock) {
-        use commonware_consensus::Heightable;
         let mut inner = self.inner.lock().unwrap();
-        let height = block.height().get();
+        let height = block.height_u64();
         assert!(
             height > inner.anchor_height,
             "consensus committed height {height} at or below the anchor {}",
@@ -155,13 +169,14 @@ impl ExecutionEnv for MockExecution {
 #[derive(Clone)]
 pub struct DelayedEnv<X> {
     inner: X,
-    context: deterministic::Context,
+    context: std::sync::Arc<deterministic::Context>,
     verify_delay: Duration,
     commit_delay: Duration,
 }
 
 impl<X: SimEnv> DelayedEnv<X> {
     pub fn slow_verify(inner: X, context: deterministic::Context, delay: Duration) -> Self {
+        let context = std::sync::Arc::new(context);
         Self {
             inner,
             context,
@@ -171,6 +186,7 @@ impl<X: SimEnv> DelayedEnv<X> {
     }
 
     pub fn slow_commit(inner: X, context: deterministic::Context, delay: Duration) -> Self {
+        let context = std::sync::Arc::new(context);
         Self {
             inner,
             context,
@@ -219,6 +235,10 @@ impl<X: SimEnv> ExecutionEnv for DelayedEnv<X> {
 }
 
 impl<X: SimEnv> SimEnv for DelayedEnv<X> {
+    fn era_anchor(&self) -> u64 {
+        self.inner.era_anchor()
+    }
+
     fn committed_tip(&self) -> Option<u64> {
         self.inner.committed_tip()
     }
