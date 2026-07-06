@@ -33,10 +33,15 @@
 //! - [`ExecutionApplication`] + [`FinalizedBlockCommitter`] adapt all of the above to the
 //!   node's [`ExecutionEnv`].
 //!
-//! One stack instance = one validator in one epoch. With the static validator set there
-//! is a single epoch (number 0) whose length is effectively unbounded; committee rotation
-//! later means starting a new engine per epoch while marshal and the broadcast layer keep
-//! running.
+//! One stack instance = one validator. Within it, **one simplex engine exists per
+//! epoch**: as the chain crosses an epoch boundary, the stack starts the next epoch's
+//! engine (journaling under its own partition) and retires the previous one once its
+//! tail is finalized — while marshal, the broadcast layer, and the application keep
+//! running across boundaries. The engine channels are multiplexed by epoch id, so two
+//! engines can coexist during the handoff without seeing each other's traffic. The
+//! handoff itself is protocol-level and upstream: the new epoch's first proposal
+//! re-proposes the previous epoch's boundary block, so the new committee begins by
+//! re-certifying where the old one stopped.
 
 use crate::application::ExecutionApplication;
 use crate::committer::FinalizedBlockCommitter;
@@ -47,20 +52,24 @@ use commonware_broadcast::buffered;
 use commonware_consensus::marshal::standard::{Inline, Standard};
 use commonware_consensus::marshal::{self, core as marshal_core, resolver};
 use commonware_consensus::simplex::config::ForwardingPolicy;
-use commonware_consensus::simplex::types::Activity;
+use commonware_consensus::simplex::types::{Activity, Certificate};
 use commonware_consensus::simplex::{Engine, config::Config as EngineConfig};
-use commonware_consensus::types::{Epoch, FixedEpocher, ViewDelta};
+use commonware_consensus::types::{Epoch, FixedEpocher, Height, ViewDelta};
 use commonware_consensus::{Reporter, Reporters};
 use commonware_cryptography::Digestible;
 use commonware_cryptography::ed25519::PublicKey;
+use commonware_p2p::utils::mux::{MuxHandle, Muxer, SubReceiver, SubSender};
 use commonware_parallel::Sequential;
 use commonware_runtime::buffer::paged::CacheRef;
 use commonware_runtime::{BufferPooler, Clock, Handle, Metrics, Spawner, Storage};
 use commonware_storage::archive::{Archive as _, Identifier};
 use commonware_utils::{NZU16, NZUsize};
 use rand08::{CryptoRng, Rng};
+use std::collections::BTreeMap;
 use std::num::{NonZeroU64, NonZeroUsize};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tracing::info;
 
 /// Tuning knobs for one validator stack. `new` gives values suitable for tests and local
 /// networks; production profiles adjust the timeouts to real network latencies.
@@ -101,11 +110,9 @@ impl StackConfig {
     pub fn new(partition_prefix: impl Into<String>) -> Self {
         Self {
             partition_prefix: partition_prefix.into(),
-            // A single effectively-unbounded epoch: one billion blocks is decades of
-            // production at sub-second block times, while staying far from any overflow.
-            // TODO(consensus): real epoch rotation is the mechanism for validator-set
-            // changes and for bounding consensus-archive growth — measure storage churn
-            // in staging and revisit before long-lived deployments.
+            // Effectively one unbounded epoch by default; deployments choose a real
+            // length via configuration. Engine rotation works at any length — tests
+            // run epochs of a few blocks.
             epoch_length: NonZeroU64::new(1_000_000_000).expect("nonzero"),
             leader_timeout: Duration::from_secs(1),
             certification_timeout: Duration::from_secs(2),
@@ -119,6 +126,14 @@ impl StackConfig {
             view_retention_timeout: ViewDelta::new(100),
             max_repair: NonZeroUsize::new(16).expect("nonzero"),
         }
+    }
+}
+
+impl StackConfig {
+    /// Overrides the epoch length (tests run short epochs to cross boundaries fast).
+    pub fn with_epoch_length(mut self, length: NonZeroU64) -> Self {
+        self.epoch_length = length;
+        self
     }
 }
 
@@ -169,11 +184,20 @@ impl<A: Send + 'static> Reporter for NullReporter<A> {
     async fn report(&mut self, _activity: Self::Activity) {}
 }
 
+/// The engines currently running, one per live epoch — shared between the epoch
+/// rotation task (which starts and retires them) and [`ValidatorStack::abort`]
+/// (which must kill whatever is alive when the whole validator stops).
+pub type EngineRegistry = Arc<Mutex<BTreeMap<u64, Handle<()>>>>;
+
 /// Handles to a running validator stack. Aborting all handles stops the validator;
 /// starting a fresh stack with the same `partition_prefix` over the same storage
 /// resumes it (journal replay restores consensus state without double-signing).
 pub struct ValidatorStack<B: commonware_consensus::Block> {
-    pub engine: Handle<()>,
+    pub epoch_manager: Handle<()>,
+    pub engines: EngineRegistry,
+    /// Channel muxes and the tip scout — support tasks that live as long as the
+    /// validator.
+    pub support_tasks: Vec<Handle<()>>,
     pub marshal: Handle<()>,
     pub broadcast: Handle<()>,
     /// Query surface into marshal (finalized tip, blocks by height/digest).
@@ -183,7 +207,13 @@ pub struct ValidatorStack<B: commonware_consensus::Block> {
 impl<B: commonware_consensus::Block> ValidatorStack<B> {
     /// Stops all components. The stack can be started again over the same storage.
     pub fn abort(&self) {
-        self.engine.abort();
+        self.epoch_manager.abort();
+        for engine in self.engines.lock().unwrap().values() {
+            engine.abort();
+        }
+        for task in &self.support_tasks {
+            task.abort();
+        }
         self.marshal.abort();
         self.broadcast.abort();
     }
@@ -311,50 +341,282 @@ where
     // before this validator votes, never after.
     let application = Inline::new(
         context.with_label("application"),
-        ExecutionApplication::new(env),
+        ExecutionApplication::new(env.clone()),
         marshal_mailbox.clone(),
-        epocher,
+        epocher.clone(),
     );
 
-    let epoch = Epoch::new(0);
-    let engine = Engine::new(
-        context.with_label("engine"),
-        EngineConfig {
-            scheme,
-            elector: Elector::default(),
-            blocker,
-            automaton: application.clone(),
-            relay: application,
-            // Marshal consumes consensus outcomes (certificates drive finalization);
-            // the extra reporter observes alongside it.
-            reporter: Reporters::from((marshal_mailbox.clone(), extra_reporter)),
-            strategy: Sequential,
-            partition: format!("{}-engine-epoch-{}", config.partition_prefix, epoch.get()),
-            mailbox_size: config.mailbox_size,
-            epoch,
-            replay_buffer: NZUsize!(1024 * 1024),
-            write_buffer: NZUsize!(1024 * 1024),
-            page_cache,
-            leader_timeout: config.leader_timeout,
-            certification_timeout: config.certification_timeout,
-            timeout_retry: config.timeout_retry,
-            activity_timeout: config.activity_timeout,
-            skip_timeout: config.skip_timeout,
-            fetch_timeout: config.fetch_timeout,
-            fetch_concurrent: 4,
-            forwarding: ForwardingPolicy::Disabled,
-        },
+    // The engine channels are multiplexed by epoch id: during an epoch handoff two
+    // engines are briefly alive at once (the old one finalizing its tail, the new
+    // one re-certifying the boundary block), and each must see only its own epoch's
+    // traffic. Messages for epochs nobody runs anymore are dropped by the muxer.
+    let (votes_muxer, votes_mux) = Muxer::new(
+        context.with_label("votes_mux"),
+        channels.votes.0,
+        channels.votes.1,
+        config.mailbox_size,
     );
-    let engine = engine.start(
-        channels.votes,
-        channels.certificates,
-        channels.certificate_backfill,
+    let (certificates_muxer, certificates_mux, certificate_backup) = {
+        use commonware_p2p::utils::mux::Builder as _;
+        Muxer::builder(
+            context.with_label("certificates_mux"),
+            channels.certificates.0,
+            channels.certificates.1,
+            config.mailbox_size,
+        )
+        .with_backup()
+        .build()
+    };
+    let (certificate_backfill_muxer, certificate_backfill_mux) = Muxer::new(
+        context.with_label("certificate_backfill_mux"),
+        channels.certificate_backfill.0,
+        channels.certificate_backfill.1,
+        config.mailbox_size,
     );
+    let mut support_tasks = vec![
+        // A mux only exits when its underlying channel dies, which means the p2p
+        // network died — the node watches the network task itself, so these only
+        // need to leave a trace.
+        context.with_label("votes_mux_task").spawn(|_| async move {
+            if let Err(err) = votes_muxer.run().await {
+                tracing::error!(?err, "votes mux exited");
+            }
+        }),
+        context
+            .with_label("certificates_mux_task")
+            .spawn(|_| async move {
+                if let Err(err) = certificates_muxer.run().await {
+                    tracing::error!(?err, "certificates mux exited");
+                }
+            }),
+        context
+            .with_label("certificate_backfill_mux_task")
+            .spawn(|_| async move {
+                if let Err(err) = certificate_backfill_muxer.run().await {
+                    tracing::error!(?err, "certificate backfill mux exited");
+                }
+            }),
+    ];
+
+    // Certificates for epochs this validator runs flow to their engines through the
+    // mux; certificates for epochs it does NOT run land on the backup lane. One of
+    // them is exactly how a validator that slept through epoch boundaries discovers
+    // the chain moved on: a *valid* finalization from a later epoch is self-proving
+    // evidence of the real tip, no matter which peer sent it or what its message was
+    // tagged with. Verify it, hand it to marshal — marshal backfills the gap, the
+    // committed height advances, and the epoch rotation follows it forward. Without
+    // this, a validator more than one epoch behind would wait forever: its old
+    // engine hears nothing (peers retired that epoch), and the current epoch's
+    // traffic would be dropped unheard.
+    let tip_scout = context.with_label("tip_scout").spawn({
+        use commonware_cryptography::certificate::Scheme as _;
+        let scheme = scheme.clone();
+        let mut marshal_mailbox = marshal_mailbox.clone();
+        let mut certificate_backup = certificate_backup;
+        move |mut scout_context| async move {
+            let codec_config = scheme.certificate_codec_config();
+            while let Some((_tag, (_peer, bytes))) = certificate_backup.recv().await {
+                use commonware_codec::Decode as _;
+                let bytes: &[u8] = bytes.as_ref();
+                let Ok(certificate) =
+                    Certificate::<Scheme, <X::Block as Digestible>::Digest>::decode_cfg(
+                        bytes,
+                        &codec_config,
+                    )
+                else {
+                    continue;
+                };
+                let Certificate::Finalization(finalization) = certificate else {
+                    continue;
+                };
+                if !finalization.verify(&mut scout_context, &scheme, &Sequential) {
+                    continue;
+                }
+                info!(
+                    round = ?finalization.round(),
+                    "verified a finalization from an epoch this validator is not running; \
+                     handing it to marshal for catch-up"
+                );
+                marshal_mailbox
+                    .report(Activity::Finalization(finalization))
+                    .await;
+            }
+        }
+    });
+
+    // Everything one engine needs, captured once; the rotation task calls this for
+    // each epoch it starts. The closure keeps `start_validator` the single place
+    // where an engine's configuration is spelled out.
+    let spawn_engine = {
+        let context = context.clone();
+        let config = config.clone();
+        let marshal_mailbox = marshal_mailbox.clone();
+        move |epoch: Epoch,
+              votes: (SubSender<TSender>, SubReceiver<TReceiver>),
+              certificates: (SubSender<TSender>, SubReceiver<TReceiver>),
+              certificate_backfill: (SubSender<TSender>, SubReceiver<TReceiver>)|
+              -> Handle<()> {
+            let engine = Engine::new(
+                context.with_label(&format!("engine_epoch_{}", epoch.get())),
+                EngineConfig {
+                    scheme: scheme.clone(),
+                    elector: Elector::default(),
+                    blocker: blocker.clone(),
+                    automaton: application.clone(),
+                    relay: application.clone(),
+                    // Marshal consumes consensus outcomes (certificates drive
+                    // finalization); the extra reporter observes alongside it.
+                    reporter: Reporters::from((marshal_mailbox.clone(), extra_reporter.clone())),
+                    strategy: Sequential,
+                    partition: format!("{}-engine-epoch-{}", config.partition_prefix, epoch.get()),
+                    mailbox_size: config.mailbox_size,
+                    epoch,
+                    replay_buffer: NZUsize!(1024 * 1024),
+                    write_buffer: NZUsize!(1024 * 1024),
+                    page_cache: page_cache.clone(),
+                    leader_timeout: config.leader_timeout,
+                    certification_timeout: config.certification_timeout,
+                    timeout_retry: config.timeout_retry,
+                    activity_timeout: config.activity_timeout,
+                    skip_timeout: config.skip_timeout,
+                    fetch_timeout: config.fetch_timeout,
+                    fetch_concurrent: 4,
+                    forwarding: ForwardingPolicy::Disabled,
+                },
+            );
+            engine.start(votes, certificates, certificate_backfill)
+        }
+    };
+
+    let engines: EngineRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    let epoch_manager = context.with_label("epoch_manager").spawn({
+        let engines = engines.clone();
+        move |context| {
+            run_epoch_rotation(
+                context,
+                epocher,
+                env,
+                votes_mux,
+                certificates_mux,
+                certificate_backfill_mux,
+                engines,
+                spawn_engine,
+            )
+        }
+    });
+
+    support_tasks.push(tip_scout);
 
     ValidatorStack {
-        engine,
+        epoch_manager,
+        engines,
+        support_tasks,
         marshal,
         broadcast,
         marshal_mailbox,
+    }
+}
+
+/// How often the rotation task re-derives which epochs should be running. Boundary
+/// crossings are rare (epochs are hours in production), so a cheap periodic check
+/// beats wiring the task into the finalization stream; the interval only bounds how
+/// long after a boundary the next engine appears, and one extra view timeout at a
+/// boundary is routine.
+const EPOCH_POLL: Duration = Duration::from_millis(250);
+
+/// Keeps exactly the right engines alive as the chain crosses epoch boundaries.
+///
+/// The invariant: the engine for the epoch of the *next block to decide* is always
+/// running, and the engine for the epoch of the *committed tip* stays alive until the
+/// tip moves past its epoch (during a handoff those are different epochs — the old
+/// engine is still finalizing its tail while the new one re-certifies the boundary
+/// block). Everything older is retired: its journal stays on disk, so nothing about
+/// double-sign protection changes if the same epoch were ever revisited on restart.
+#[allow(clippy::too_many_arguments)]
+async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
+    context: R,
+    epocher: FixedEpocher,
+    mut env: X,
+    mut votes_mux: MuxHandle<TSender, TReceiver>,
+    mut certificates_mux: MuxHandle<TSender, TReceiver>,
+    mut certificate_backfill_mux: MuxHandle<TSender, TReceiver>,
+    engines: EngineRegistry,
+    spawn_engine: F,
+) where
+    R: Clock + Spawner + Metrics + Clone,
+    X: ExecutionEnv,
+    TSender: commonware_p2p::Sender<PublicKey = PublicKey>,
+    TReceiver: commonware_p2p::Receiver<PublicKey = PublicKey>,
+    F: Fn(
+        Epoch,
+        (SubSender<TSender>, SubReceiver<TReceiver>),
+        (SubSender<TSender>, SubReceiver<TReceiver>),
+        (SubSender<TSender>, SubReceiver<TReceiver>),
+    ) -> Handle<()>,
+{
+    use commonware_consensus::types::Epocher as _;
+    use futures::FutureExt as _;
+    loop {
+        // Every engine in the registry is one we *want* running (retirement removes
+        // handles before aborting them). A resolved handle here therefore means an
+        // engine died on its own — make that as loud as the pre-rotation stack did,
+        // by taking the whole rotation task (watched by the node) down with it.
+        {
+            let mut engines = engines.lock().unwrap();
+            for (epoch, handle) in engines.iter_mut() {
+                if handle.now_or_never().is_some() {
+                    panic!("consensus engine for epoch {epoch} exited unexpectedly");
+                }
+            }
+        }
+
+        let committed = env
+            .committed_height()
+            .await
+            .map(|height| height.get())
+            .unwrap_or(0);
+
+        // The epoch that must decide the next block, and the epoch the committed tip
+        // still lives in. Distinct exactly during a handoff.
+        let Some(active) = epocher.containing(Height::new(committed + 1)) else {
+            context.sleep(EPOCH_POLL).await;
+            continue;
+        };
+        let tail = epocher
+            .containing(Height::new(committed.max(1)))
+            .unwrap_or(active);
+
+        for epoch in [tail.epoch(), active.epoch()] {
+            let key = epoch.get();
+            if engines.lock().unwrap().contains_key(&key) {
+                continue;
+            }
+            let votes = votes_mux.register(key).await.expect("register votes mux");
+            let certificates = certificates_mux
+                .register(key)
+                .await
+                .expect("register certificates mux");
+            let certificate_backfill = certificate_backfill_mux
+                .register(key)
+                .await
+                .expect("register certificate backfill mux");
+            info!(epoch = key, "starting consensus engine for epoch");
+            let handle = spawn_engine(epoch, votes, certificates, certificate_backfill);
+            engines.lock().unwrap().insert(key, handle);
+        }
+
+        // Retire engines whose epoch the committed tip has fully moved past.
+        let keep_from = tail.epoch().get();
+        engines.lock().unwrap().retain(|&epoch, handle| {
+            if epoch < keep_from {
+                info!(epoch, "retiring consensus engine for finished epoch");
+                handle.abort();
+                false
+            } else {
+                true
+            }
+        });
+
+        context.sleep(EPOCH_POLL).await;
     }
 }

@@ -100,6 +100,7 @@ fn chain_migrates_again_after_a_rollback() {
                 |_index, _context| MockExecution::anchored(second_anchor),
                 &[],
                 "second-era-validator",
+                std::sync::Arc::new(|_| {}),
             )
             .await;
             cluster

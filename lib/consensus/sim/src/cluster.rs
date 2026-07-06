@@ -22,12 +22,18 @@ use commonware_cryptography::ed25519::PublicKey;
 use commonware_cryptography::sha256::Digest as Sha256Digest;
 use commonware_cryptography::{Digestible, Sha256};
 use commonware_p2p::simulated::{Config as NetworkConfig, Link, Network, Oracle};
-use commonware_runtime::{Clock, Handle, Metrics, Quota, deterministic};
+use commonware_runtime::{Clock, Handle, Metrics, Quota, Spawner as _, deterministic};
 use commonware_utils::NZUsize;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_consensus_core::types::Scheme;
 use zksync_os_consensus_core::{Channels, StackConfig, ValidatorStack, start_validator};
+
+/// Adjusts the stack configuration every validator (and every restart) is built
+/// with — how scenarios opt into short epochs or unusual timeouts without the
+/// cluster growing a parameter per knob.
+pub type StackTuner = Arc<dyn Fn(&mut StackConfig) + Send + Sync>;
 
 /// Domain-separation namespace for all consensus signatures in simulation.
 const NAMESPACE: &[u8] = b"zksync-os-consensus-sim";
@@ -55,13 +61,15 @@ pub enum Behavior {
 /// What is currently running for a validator.
 enum Running<B: commonware_consensus::Block> {
     Full(ValidatorStack<B>),
-    Byzantine(Handle<()>),
+    /// The byzantine engine plus the channel mux it attacks through.
+    Byzantine(Vec<Handle<()>>),
 }
 
 pub struct SimCluster<X: SimEnv = MockExecution> {
     context: deterministic::Context,
     pub oracle: Oracle<PublicKey, deterministic::Context>,
     pub validators: Vec<SimValidator<X>>,
+    stack_tuner: StackTuner,
 }
 
 pub struct SimValidator<X: SimEnv> {
@@ -133,7 +141,16 @@ where
         env_factory: impl Fn(usize, deterministic::Context) -> X,
         stopped: &[usize],
     ) -> Self {
-        Self::start_era(context, behaviors, link, env_factory, stopped, "validator").await
+        Self::start_era(
+            context,
+            behaviors,
+            link,
+            env_factory,
+            stopped,
+            "validator",
+            Arc::new(|_| {}),
+        )
+        .await
     }
 
     /// The fullest constructor: `storage_prefix` namespaces every validator's
@@ -141,6 +158,7 @@ where
     /// that start a *second* cluster in one run (the re-migration shape: a new
     /// consensus era on deliberately fresh state) pass a distinct prefix — reusing
     /// the default would silently reopen the first era's storage.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_era(
         mut context: deterministic::Context,
         behaviors: &[Behavior],
@@ -148,6 +166,7 @@ where
         env_factory: impl Fn(usize, deterministic::Context) -> X,
         stopped: &[usize],
         storage_prefix: &str,
+        stack_tuner: StackTuner,
     ) -> Self {
         let Fixture {
             participants,
@@ -171,6 +190,7 @@ where
             context,
             oracle,
             validators: Vec::new(),
+            stack_tuner,
         };
         cluster.link_full_mesh_between(&participants, link).await;
 
@@ -188,7 +208,14 @@ where
                 incarnation: 0,
             };
             if !stopped.contains(&index) {
-                Self::spawn(&cluster.context, &mut cluster.oracle, index, &mut validator).await;
+                Self::spawn(
+                    &cluster.context,
+                    &mut cluster.oracle,
+                    index,
+                    &mut validator,
+                    &cluster.stack_tuner,
+                )
+                .await;
             }
             cluster.validators.push(validator);
         }
@@ -202,6 +229,7 @@ where
         oracle: &mut Oracle<PublicKey, deterministic::Context>,
         index: usize,
         validator: &mut SimValidator<X>,
+        stack_tuner: &StackTuner,
     ) {
         let quota = Quota::per_second(NonZeroU32::MAX);
         let control = oracle.control(validator.identity.clone());
@@ -230,9 +258,11 @@ where
         let label = format!("validator_{index}_run_{incarnation}");
         let running = match validator.behavior {
             Behavior::Honest => {
+                let mut stack_config = StackConfig::new(validator.partition_prefix.clone());
+                stack_tuner(&mut stack_config);
                 let stack = start_validator(
                     context.with_label(&label),
-                    StackConfig::new(validator.partition_prefix.clone()),
+                    stack_config,
                     validator.identity.clone(),
                     validator.scheme.clone(),
                     validator.env.clone(),
@@ -247,26 +277,68 @@ where
             }
             // The byzantine engines only speak the vote channel; the other channels sit
             // idle. They react to observed traffic with contradictory signed votes.
+            // Honest validators mux their engine channels by epoch, so the attacker
+            // must frame its traffic the same way to be heard at all — these
+            // scenarios attack epoch 0.
             Behavior::Conflicter => {
+                let (votes, mux_task) =
+                    Self::byzantine_votes_subchannel(context, &label, channels.votes).await;
                 let engine = conflicter::Conflicter::<_, Scheme, Sha256>::new(
                     context.with_label(&label),
                     conflicter::Config {
                         scheme: validator.scheme.clone(),
                     },
                 );
-                Running::Byzantine(engine.start(channels.votes))
+                Running::Byzantine(vec![engine.start(votes), mux_task])
             }
             Behavior::Nuller => {
+                let (votes, mux_task) =
+                    Self::byzantine_votes_subchannel(context, &label, channels.votes).await;
                 let engine = nuller::Nuller::<_, Scheme, Sha256>::new(
                     context.with_label(&label),
                     nuller::Config {
                         scheme: validator.scheme.clone(),
                     },
                 );
-                Running::Byzantine(engine.start(channels.votes))
+                Running::Byzantine(vec![engine.start(votes), mux_task])
             }
         };
         validator.running = Some(running);
+    }
+
+    /// Wraps a byzantine validator's votes channel in the same per-epoch mux honest
+    /// engines use, registered for epoch 0 (the epoch these attacks target).
+    async fn byzantine_votes_subchannel<TSender, TReceiver>(
+        context: &deterministic::Context,
+        label: &str,
+        votes: (TSender, TReceiver),
+    ) -> (
+        (
+            commonware_p2p::utils::mux::SubSender<TSender>,
+            commonware_p2p::utils::mux::SubReceiver<TReceiver>,
+        ),
+        Handle<()>,
+    )
+    where
+        TSender: commonware_p2p::Sender<PublicKey = PublicKey>,
+        TReceiver: commonware_p2p::Receiver<PublicKey = PublicKey>,
+    {
+        let (muxer, mut mux) = commonware_p2p::utils::mux::Muxer::new(
+            context.with_label(&format!("{label}_votes_mux")),
+            votes.0,
+            votes.1,
+            1024,
+        );
+        let mux_task = context
+            .with_label(&format!("{label}_votes_mux_task"))
+            .spawn(|_| async move {
+                let _ = muxer.run().await;
+            });
+        let sub = mux
+            .register(0)
+            .await
+            .expect("register byzantine subchannel");
+        (sub, mux_task)
     }
 
     /// Indices of the honest validators (assertions about committed chains and health
@@ -284,7 +356,11 @@ where
     pub fn crash(&mut self, index: usize) {
         match self.validators[index].running.take() {
             Some(Running::Full(stack)) => stack.abort(),
-            Some(Running::Byzantine(handle)) => handle.abort(),
+            Some(Running::Byzantine(handles)) => {
+                for handle in handles {
+                    handle.abort();
+                }
+            }
             None => {}
         }
     }
@@ -304,6 +380,7 @@ where
             &mut self.oracle,
             index,
             &mut self.validators[index],
+            &self.stack_tuner,
         )
         .await;
     }

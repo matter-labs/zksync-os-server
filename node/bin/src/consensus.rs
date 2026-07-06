@@ -453,7 +453,9 @@ where
                 Ok(())
             }
             _ = network_handle => anyhow::bail!("consensus networking exited unexpectedly"),
-            _ = stack.engine => anyhow::bail!("consensus engine exited unexpectedly"),
+            _ = stack.epoch_manager => {
+                anyhow::bail!("consensus epoch rotation exited unexpectedly")
+            }
             _ = stack.marshal => anyhow::bail!("consensus marshal exited unexpectedly"),
             _ = stack.broadcast => anyhow::bail!("consensus broadcast exited unexpectedly"),
         }

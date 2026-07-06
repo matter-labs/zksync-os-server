@@ -26,6 +26,6 @@ pub mod stf;
 
 pub use activity::ActivityLog;
 pub use block::SimBlock;
-pub use cluster::{Behavior, SimCluster, SimValidator};
+pub use cluster::{Behavior, SimCluster, SimValidator, StackTuner};
 pub use execution::{DelayedEnv, MockExecution, SimEnv};
 pub use scenario::run_scenario;

@@ -6,8 +6,9 @@
 //!
 //! - *agreement*: every reachable validator serves the identical block hash at the
 //!   highest height they all have;
-//! - *finality is monotone*: no validator's finalized view or applied height ever
-//!   goes backwards;
+//! - *finality is monotone*: no validator's finalized `(epoch, view)` or applied
+//!   height ever goes backwards (views restart at epoch boundaries — only the pair
+//!   is monotone);
 //! - *no progress without quorum*: while the driver holds the healthy set below
 //!   quorum, no new finalization may appear (beyond a settle margin for certificates
 //!   already in flight when quorum was lost) — progress there would mean finality
@@ -50,7 +51,10 @@ pub struct NodeObservation {
     pub running: bool,
     pub paused: bool,
     /// `None` when unreachable (which is fine for stopped/paused/partitioned nodes).
-    pub finalized_view: Option<u64>,
+    /// `(epoch, view)`: views restart from zero at every epoch boundary, so only the
+    /// pair is monotone — comparing bare views across a boundary reads a healthy
+    /// handoff as a finality regression.
+    pub finalized_round: Option<(u64, u64)>,
     pub applied_height: Option<u64>,
     pub block_hash_at_probe: Option<String>,
     /// Sum of the consensus fault-evidence counters.
@@ -74,17 +78,24 @@ pub enum Finding {
         height: u64,
         hashes: Vec<(usize, String)>,
     },
-    /// A validator's finalized view or applied height went backwards.
+    /// A validator's applied height went backwards.
     FinalityRegression {
         validator: usize,
         what: &'static str,
         from: u64,
         to: u64,
     },
+    /// A validator's finalized `(epoch, view)` went backwards. Tracked as the pair
+    /// because views restart at epoch boundaries.
+    RoundRegression {
+        validator: usize,
+        from: (u64, u64),
+        to: (u64, u64),
+    },
     /// A new finalization appeared while the driver held the committee below quorum.
     ProgressWithoutQuorum {
-        baseline_view: u64,
-        observed_view: u64,
+        baseline_round: (u64, u64),
+        observed_round: (u64, u64),
     },
     /// A consensus fault-evidence counter ticked on an honest committee.
     FaultEvidence { validator: usize, count: u64 },
@@ -94,24 +105,27 @@ pub enum Finding {
     SuspiciousLog { validator: usize, line: String },
     /// The committee was expected live for the whole window but no new finalization
     /// appeared.
-    LivenessStall { window: Duration, at_view: u64 },
+    LivenessStall {
+        window: Duration,
+        at_round: (u64, u64),
+    },
 }
 
 /// The pure check engine: state carried between polls, no I/O. The shell feeds it
 /// observations; it returns findings.
 pub struct Checker {
-    /// Highest finalized view / applied height ever seen per validator.
-    finalized_views: Vec<u64>,
+    /// Highest finalized `(epoch, view)` / applied height ever seen per validator.
+    finalized_rounds: Vec<(u64, u64)>,
     applied_heights: Vec<u64>,
     evidence: Vec<u64>,
     /// The driver's beliefs at the previous poll, for spotting heal transitions.
     previous_conditions: Vec<Condition>,
-    /// Highest finalized view seen anywhere, and when it last advanced.
-    tip_view: u64,
-    tip_view_advanced_at: Instant,
-    /// The finalized-view baseline captured when liveness expectation was lost, once
+    /// Highest finalized `(epoch, view)` seen anywhere, and when it last advanced.
+    tip_round: (u64, u64),
+    tip_advanced_at: Instant,
+    /// The finalized-round baseline captured when liveness expectation was lost, once
     /// the settle margin passed. `None` while liveness is expected.
-    forbidden_baseline: Option<u64>,
+    forbidden_baseline: Option<(u64, u64)>,
     settle_margin: Duration,
     liveness_window: Duration,
 }
@@ -119,12 +133,12 @@ pub struct Checker {
 impl Checker {
     pub fn new(validators: usize, settle_margin: Duration, liveness_window: Duration) -> Self {
         Self {
-            finalized_views: vec![0; validators],
+            finalized_rounds: vec![(0, 0); validators],
             applied_heights: vec![0; validators],
             evidence: vec![0; validators],
             previous_conditions: vec![Condition::Healthy; validators],
-            tip_view: 0,
-            tip_view_advanced_at: Instant::now(),
+            tip_round: (0, 0),
+            tip_advanced_at: Instant::now(),
             forbidden_baseline: None,
             settle_margin,
             liveness_window,
@@ -172,20 +186,20 @@ impl Checker {
         }
 
         for (index, node) in poll.nodes.iter().enumerate() {
-            // Monotone finality per validator.
-            if let Some(view) = node.finalized_view {
-                if view < self.finalized_views[index] {
-                    findings.push(Finding::FinalityRegression {
+            // Monotone finality per validator. Tuples compare lexicographically, so a
+            // view restarting under a higher epoch is progress, not regression.
+            if let Some(round) = node.finalized_round {
+                if round < self.finalized_rounds[index] {
+                    findings.push(Finding::RoundRegression {
                         validator: index,
-                        what: "finalized view",
-                        from: self.finalized_views[index],
-                        to: view,
+                        from: self.finalized_rounds[index],
+                        to: round,
                     });
                 }
-                self.finalized_views[index] = self.finalized_views[index].max(view);
-                if view > self.tip_view {
-                    self.tip_view = view;
-                    self.tip_view_advanced_at = now;
+                self.finalized_rounds[index] = self.finalized_rounds[index].max(round);
+                if round > self.tip_round {
+                    self.tip_round = round;
+                    self.tip_advanced_at = now;
                 }
             }
             if let Some(height) = node.applied_height {
@@ -236,12 +250,12 @@ impl Checker {
             self.forbidden_baseline = None;
         } else if now.duration_since(expectations.since) >= self.settle_margin {
             match self.forbidden_baseline {
-                None => self.forbidden_baseline = Some(self.tip_view),
+                None => self.forbidden_baseline = Some(self.tip_round),
                 Some(baseline) => {
-                    if self.tip_view > baseline {
+                    if self.tip_round > baseline {
                         findings.push(Finding::ProgressWithoutQuorum {
-                            baseline_view: baseline,
-                            observed_view: self.tip_view,
+                            baseline_round: baseline,
+                            observed_round: self.tip_round,
                         });
                     }
                 }
@@ -251,15 +265,15 @@ impl Checker {
         // Liveness: expected live for a whole window, yet the tip never advanced.
         if expectations.expect_liveness
             && now.duration_since(expectations.since) >= self.liveness_window
-            && now.duration_since(self.tip_view_advanced_at) >= self.liveness_window
+            && now.duration_since(self.tip_advanced_at) >= self.liveness_window
         {
             findings.push(Finding::LivenessStall {
                 window: self.liveness_window,
-                at_view: self.tip_view,
+                at_round: self.tip_round,
             });
             // Re-arm so a genuinely stuck cluster produces one finding per window,
             // not one per poll.
-            self.tip_view_advanced_at = now;
+            self.tip_advanced_at = now;
         }
 
         findings
@@ -427,9 +441,9 @@ impl NodeProbe {
             self.suspicious_logs(logs_since, now),
         );
         let consensus = status.and_then(|status| status.consensus);
-        let finalized_view = consensus
+        let finalized_round = consensus
             .as_ref()
-            .and_then(|consensus| consensus.finalized.as_ref().map(|tip| tip.view));
+            .and_then(|consensus| consensus.finalized.as_ref().map(|tip| (tip.epoch, tip.view)));
         let applied_height = consensus
             .as_ref()
             .and_then(|consensus| consensus.applied_height);
@@ -437,7 +451,7 @@ impl NodeProbe {
         NodeObservation {
             running,
             paused,
-            finalized_view,
+            finalized_round,
             applied_height,
             block_hash_at_probe,
             evidence,
@@ -561,11 +575,12 @@ mod tests {
         }
     }
 
+    /// An observation in epoch 0 — the view doubles as the applied height.
     fn observation(finalized_view: u64, hash: &str) -> NodeObservation {
         NodeObservation {
             running: true,
             paused: false,
-            finalized_view: Some(finalized_view),
+            finalized_round: Some((0, finalized_view)),
             applied_height: Some(finalized_view),
             block_hash_at_probe: Some(hash.to_string()),
             evidence: 0,
@@ -620,8 +635,8 @@ mod tests {
         assert!(matches!(
             findings[0],
             Finding::ProgressWithoutQuorum {
-                baseline_view: 21,
-                observed_view: 25
+                baseline_round: (0, 21),
+                observed_round: (0, 25)
             }
         ));
     }
@@ -681,7 +696,7 @@ mod tests {
         assert!(
             findings
                 .iter()
-                .any(|finding| matches!(finding, Finding::FinalityRegression { .. }))
+                .any(|finding| matches!(finding, Finding::RoundRegression { .. }))
         );
         assert!(
             findings
@@ -693,6 +708,37 @@ mod tests {
                 .iter()
                 .any(|finding| matches!(finding, Finding::UnexpectedDeath { .. }))
         );
+    }
+
+    #[test]
+    fn view_restart_at_an_epoch_boundary_is_not_a_regression() {
+        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(60));
+        let expectations = healthy_expectations(1);
+        let now = Instant::now();
+        let poll = |epoch, view| Poll {
+            probe_height: None,
+            nodes: vec![NodeObservation {
+                finalized_round: Some((epoch, view)),
+                ..observation(0, "0x")
+            }],
+        };
+
+        // Late in epoch 1 the committee finalizes at view 703; the first
+        // finalizations of epoch 2 carry tiny views. That is a handoff, not a
+        // rollback — exactly what an epoch-blind view comparison misreads.
+        checker.observe(now, &expectations, &poll(1, 703));
+        assert!(checker.observe(now, &expectations, &poll(2, 3)).is_empty());
+
+        // Within one epoch, a lower view is still a real regression.
+        let findings = checker.observe(now, &expectations, &poll(2, 1));
+        assert!(matches!(
+            findings[0],
+            Finding::RoundRegression {
+                from: (2, 3),
+                to: (2, 1),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -721,7 +767,7 @@ mod tests {
                 probe_height: None,
                 nodes: vec![NodeObservation {
                     running: false,
-                    finalized_view: None,
+                    finalized_round: None,
                     applied_height: None,
                     block_hash_at_probe: None,
                     ..observation(0, "0x")
