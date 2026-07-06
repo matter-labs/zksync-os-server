@@ -1049,7 +1049,7 @@ fn copy_dir_recursively(from: &std::path::Path, to: &std::path::Path) -> anyhow:
 /// node startup gets, the more often the relaunch wins, so the gate belongs here
 /// rather than in sleeps sprinkled over tests. (The multi-node consensus harness
 /// gates the same way on the consensus instance lock.)
-pub(crate) async fn wait_for_rocksdb_locks_released(
+pub async fn wait_for_rocksdb_locks_released(
     rocks_db_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     use fs2::FileExt as _;

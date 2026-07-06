@@ -13,7 +13,9 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_consensus_sim::{Behavior, EraOptions, MockExecution, SimCluster, links, run_scenario};
+use zksync_os_consensus_sim::{
+    Behavior, EraOptions, MockExecution, SimCluster, links, run_scenario,
+};
 
 /// Short epochs so scenarios cross boundaries fast.
 const EPOCH_LENGTH: u64 = 8;
@@ -55,7 +57,9 @@ fn committee_grows_at_a_boundary() {
             // Cross the activation boundary (epoch 2 starts after height 16) with
             // everyone healthy; all four must agree — including the joiner, which
             // followed epochs 0–1 without an engine.
-            cluster.wait_for_committed_height_all(2 * EPOCH_LENGTH + 4).await;
+            cluster
+                .wait_for_committed_height_all(2 * EPOCH_LENGTH + 4)
+                .await;
             cluster.assert_committed_chains_agree(2 * EPOCH_LENGTH + 4);
 
             // Prove the joiner *votes*: the epoch-2 committee is 4 (quorum 3), so
@@ -235,7 +239,9 @@ fn missing_schedule_entry_stalls_safely() {
 
             // Before the activation epoch the stale entry is the right one — the
             // misconfigured validator participates normally.
-            cluster.wait_for_committed_height_all(EPOCH_LENGTH + 4).await;
+            cluster
+                .wait_for_committed_height_all(EPOCH_LENGTH + 4)
+                .await;
 
             // Across the boundary, the correctly-configured members (3 of the new
             // committee of 4 — a quorum) keep the chain growing.
@@ -388,6 +394,73 @@ fn boundary_crash_determinism_gap() {
             cluster
                 .wait_for_committed_height(&[1, 2, 4], 4 * EPOCH_LENGTH)
                 .await;
+        },
+    );
+}
+
+/// The grow scenario over real execution: the committee changes at a boundary
+/// while the production VM executes real transactions, and every validator —
+/// the joiner included — carries byte-identical state across it. Transfer
+/// amounts encode absolute heights, so a validator that skipped or re-executed
+/// history differently cannot produce the expected balance.
+#[test]
+fn committee_grows_with_real_execution() {
+    use alloy::primitives::U256;
+    use zksync_os_consensus_sim::stf::{RealStfExecution, TEST_RECIPIENT, test_sender_address};
+
+    run_scenario(
+        "reconfig_grow_real_stf",
+        0..2,
+        Duration::from_secs(600),
+        |context| async move {
+            let behaviors = vec![Behavior::Honest; 4];
+            // Validator 3 joins the committee at epoch 2, following real blocks
+            // it cannot vote on until then.
+            let schedule = vec![(0, vec![0, 1, 2]), (2, vec![0, 1, 2, 3])];
+            let mut cluster = SimCluster::start_era(
+                context,
+                &behaviors,
+                links::healthy(),
+                |_index, _context| RealStfExecution::new(),
+                EraOptions {
+                    stack_tuner: short_epochs(),
+                    schedule,
+                    ..EraOptions::default()
+                },
+            )
+            .await;
+
+            cluster
+                .wait_for_committed_height_all(2 * EPOCH_LENGTH + 4)
+                .await;
+
+            // State equality across the committee change, joiner included.
+            for &index in &cluster.honest_indices() {
+                let env = &cluster.validators[index].env;
+                let nonce = env
+                    .committed_nonce(test_sender_address())
+                    .expect("sender exists");
+                assert!(
+                    nonce >= 2 * EPOCH_LENGTH + 4,
+                    "validator {index} is behind: {nonce}"
+                );
+                assert_eq!(
+                    env.committed_balance(TEST_RECIPIENT),
+                    U256::from(nonce * (nonce + 1) / 2),
+                    "validator {index} diverged across the committee change",
+                );
+            }
+            cluster.assert_committed_chains_agree(2 * EPOCH_LENGTH + 4);
+
+            // The joiner votes: epoch-2 committee of 4 (quorum 3) minus one
+            // original member requires validator 3's signatures.
+            cluster.crash(1);
+            let with_joiner: Vec<usize> = vec![0, 2, 3];
+            cluster
+                .wait_for_committed_height(&with_joiner, 3 * EPOCH_LENGTH)
+                .await;
+            cluster.assert_no_faults();
+            cluster.assert_no_blocked_peers().await;
         },
     );
 }

@@ -287,7 +287,7 @@ const FORBIDDEN_LOG_PATTERNS: [&str; 2] = ["panicked at", " ERROR "];
 /// errors, and the runtime-drop panic is a registered shutdown wart (tracked in
 /// the shortcut register; harmless but not yet eliminated). Deliberately narrow —
 /// a *novel* critical-task panic must still surface.
-const ALLOWED_LOG_PATTERNS: [&str; 4] = [
+const ALLOWED_LOG_PATTERNS: [&str; 5] = [
     "pipeline segment failed",
     "failed to receive deregistration",
     // The known runtime-drop teardown wart panics across two log lines; the
@@ -295,6 +295,11 @@ const ALLOWED_LOG_PATTERNS: [&str; 4] = [
     // their most specific identifying text.
     "Cannot drop a runtime",
     "runtime/blocking/shutdown.rs",
+    // Registered upstream wart: marshal's teardown destroys per-epoch cache
+    // archives and panics on ones that were opened but never written (the
+    // follower shape) — BlobMissing on `...-verified-key`. Harmless to the
+    // chain; on the commonware-upgrade discussion list.
+    "failed to destroy",
 ];
 
 pub fn is_suspicious_log_line(line: &str) -> bool {
@@ -441,9 +446,12 @@ impl NodeProbe {
             self.suspicious_logs(logs_since, now),
         );
         let consensus = status.and_then(|status| status.consensus);
-        let finalized_round = consensus
-            .as_ref()
-            .and_then(|consensus| consensus.finalized.as_ref().map(|tip| (tip.epoch, tip.view)));
+        let finalized_round = consensus.as_ref().and_then(|consensus| {
+            consensus
+                .finalized
+                .as_ref()
+                .map(|tip| (tip.epoch, tip.view))
+        });
         let applied_height = consensus
             .as_ref()
             .and_then(|consensus| consensus.applied_height);

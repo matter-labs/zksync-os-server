@@ -29,3 +29,8 @@ pub use consensus_block::ConsensusBlock;
 mod finality_certificate;
 #[cfg(feature = "consensus")]
 pub use finality_certificate::{FinalityCertificate, SignatureScheme};
+
+#[cfg(feature = "consensus")]
+mod epoch_transition;
+#[cfg(feature = "consensus")]
+pub use epoch_transition::{CommitteeMemberKeys, EpochTransition};

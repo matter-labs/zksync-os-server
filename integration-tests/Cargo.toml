@@ -13,6 +13,7 @@ build = "build.rs"
 
 [dependencies]
 zksync_os_server.workspace = true
+zksync_os_consensus_execution.workspace = true
 zksync_os_operator_signer.workspace = true
 zksync_os_alloy_ext.workspace = true
 zksync_os_provider.workspace = true

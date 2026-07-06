@@ -16,6 +16,7 @@ use commonware_cryptography::bls12381::primitives::ops;
 use commonware_cryptography::bls12381::primitives::variant::MinPk;
 use commonware_cryptography::ed25519;
 use futures::future::try_join_all;
+use zksync_os_server::config::CommitteeScheduleEntryConfig;
 use zksync_os_types::NodeRole;
 
 /// One validator's key set, generated fresh per cluster.
@@ -59,6 +60,9 @@ pub struct MultiNodeTester {
     /// Reservations for the consensus listen ports, held for the cluster's lifetime so
     /// a stopped validator can rebind the same address when it restarts.
     consensus_ports: Vec<LockedPort>,
+    /// Every validator's committee entry (`<ed25519>:<bls>@<addr>`), for tests that
+    /// rewrite committee schedules in config overrides.
+    committee_entries: Vec<String>,
 }
 
 impl MultiNodeTester {
@@ -174,6 +178,102 @@ impl MultiNodeTester {
         Ok(Self {
             validators: nodes.into_iter().map(Validator::Running).collect(),
             consensus_ports,
+            committee_entries: committee,
+        })
+    }
+
+    /// Starts `num_validators` nodes over a committee *schedule*: every node runs
+    /// from genesis, but only the validators scheduled into an epoch's committee
+    /// vote in it — the rest follow (the deploy-first-activate-later order of a
+    /// real committee change). `schedule` entries are `(activation_epoch,
+    /// validator indices)`; `epoch_length` is in blocks and should be small enough
+    /// for the test to cross boundaries quickly.
+    pub async fn start_with_schedule(
+        num_validators: usize,
+        schedule: &[(u64, Vec<usize>)],
+        epoch_length: u64,
+    ) -> anyhow::Result<Self> {
+        Self::start_with_schedule_and_overrides(num_validators, schedule, epoch_length, &[]).await
+    }
+
+    /// Like [`Self::start_with_schedule`], but the listed validators run their own
+    /// (wrong) view of the schedule — the operator-error scenarios: a validator
+    /// whose deployed config is missing the newest committee entry.
+    pub async fn start_with_schedule_and_overrides(
+        num_validators: usize,
+        schedule: &[(u64, Vec<usize>)],
+        epoch_length: u64,
+        schedule_overrides: &[(usize, Vec<(u64, Vec<usize>)>)],
+    ) -> anyhow::Result<Self> {
+        assert!(
+            num_validators >= 2,
+            "a committee needs at least 2 validators"
+        );
+        let chain_layout = ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let l1 = crate::AnvilL1::start(chain_layout).await?;
+
+        let keys: Vec<ValidatorKeys> = (0..num_validators)
+            .map(|_| generate_validator_keys())
+            .collect();
+        let fee_collector = alloy::primitives::Address::random();
+        let mut consensus_ports = Vec::with_capacity(num_validators);
+        for _ in 0..num_validators {
+            consensus_ports.push(LockedPort::acquire_unused().await?);
+        }
+        let committee: Vec<String> = keys
+            .iter()
+            .zip(&consensus_ports)
+            .map(|(keys, port)| format!("{}@127.0.0.1:{}", keys.committee_entry_keys, port.port))
+            .collect();
+        let to_entries = |spec: &[(u64, Vec<usize>)]| -> Vec<CommitteeScheduleEntryConfig> {
+            spec.iter()
+                .map(|(activation_epoch, indices)| CommitteeScheduleEntryConfig {
+                    activation_epoch: *activation_epoch,
+                    validators: indices.iter().map(|&i| committee[i].clone()).collect(),
+                })
+                .collect()
+        };
+        let shared_entries = to_entries(schedule);
+
+        let launches =
+            keys.iter()
+                .zip(&consensus_ports)
+                .enumerate()
+                .map(|(index, (keys, consensus_port))| {
+                    let l1 = l1.clone();
+                    let entries = schedule_overrides
+                        .iter()
+                        .find(|(overridden, _)| *overridden == index)
+                        .map(|(_, spec)| to_entries(spec))
+                        .unwrap_or_else(|| shared_entries.clone());
+                    let network_key = alloy::hex::encode(keys.network.encode());
+                    let bls_key = alloy::hex::encode(keys.bls.encode());
+                    let listen_address = format!("127.0.0.1:{}", consensus_port.port);
+                    async move {
+                        let mut config = build_node_config(&l1, chain_layout, false).await?;
+                        disable_prover_input_generation(&mut config);
+                        config.general_config.node_role = NodeRole::MainNode;
+                        config.sequencer_config.fee_collector_address = fee_collector;
+                        config.batcher_config.enabled = index == 0;
+                        config.consensus_config.enabled = true;
+                        config.consensus_config.network_key = Some(network_key);
+                        config.consensus_config.bls_key = Some(bls_key);
+                        config.consensus_config.listen_address = listen_address;
+                        config.consensus_config.committees = entries;
+                        config.consensus_config.epoch_length = epoch_length;
+                        config.consensus_config.allow_private_ips = true;
+                        Tester::launch_with_new_runtime(l1, chain_layout, config)
+                            .await
+                            .with_context(|| format!("failed to launch validator {index}"))
+                    }
+                });
+        let nodes = try_join_all(launches).await?;
+        Ok(Self {
+            validators: nodes.into_iter().map(Validator::Running).collect(),
+            consensus_ports,
+            committee_entries: committee,
         })
     }
 
@@ -238,7 +338,13 @@ impl MultiNodeTester {
         Ok(Self {
             validators: nodes.into_iter().map(Validator::Running).collect(),
             consensus_ports,
+            committee_entries: committee,
         })
+    }
+
+    /// One validator's committee entry string, as configured across the cluster.
+    pub fn committee_entry(&self, index: usize) -> &str {
+        &self.committee_entries[index]
     }
 
     /// The running node at `index`. Panics if that validator is currently stopped —

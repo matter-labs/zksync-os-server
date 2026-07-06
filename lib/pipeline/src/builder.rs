@@ -99,14 +99,22 @@ impl<Output: Send + 'static> Pipeline<Output> {
         let shutdown_sender = self.shutdown_sender.clone();
         self.runtime
             .spawn_critical_with_graceful_shutdown_signal(name, |shutdown| async move {
+                // `biased` + shutdown polled first: once the shutdown signal is set,
+                // segments exit in arbitrary order, and an upstream exiting first
+                // closes this segment's input — making `run` return an error that
+                // is *normal wind-down*, not a failure. The signal is always set
+                // before any segment can react to it, so polling it first is
+                // enough to never mistake one for the other; a segment error while
+                // the node is actually running still panics loudly below.
                 tokio::select! {
+                    biased;
+                    _guard = shutdown => {
+                        tracing::debug!(name, "segment shutting down");
+                        shutdown_sender.send(name).await.expect("failed to send shutdown status");
+                    }
                     res = component.run(input_receiver, output_sender, reporter) => {
                         res.expect("pipeline segment failed");
                         tracing::debug!(name, "segment finished running");
-                        shutdown_sender.send(name).await.expect("failed to send shutdown status");
-                    }
-                    _guard = shutdown => {
-                        tracing::debug!(name, "segment shutting down");
                         shutdown_sender.send(name).await.expect("failed to send shutdown status");
                     }
                 }

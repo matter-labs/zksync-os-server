@@ -287,3 +287,33 @@ fn finality_certificate_encoding_is_pinned() {
         FinalityCertificate::read_cfg(&mut committed.as_slice(), &()).expect("fixture decodes");
     assert_eq!(decoded, certificate);
 }
+
+/// The epoch-transition encoding is the chain's committee custody trail — pinned
+/// like every other released format.
+#[cfg(feature = "consensus")]
+#[test]
+fn epoch_transition_encoding_is_pinned() {
+    use commonware_codec::{EncodeSize, Read as _, Write};
+    use zksync_os_wire::{CommitteeMemberKeys, EpochTransition, SignatureScheme};
+
+    let transition = EpochTransition {
+        epoch: 9,
+        scheme: SignatureScheme::Bls12381Multisig,
+        committee: (0u8..4)
+            .map(|i| CommitteeMemberKeys {
+                network_key: [i; 32],
+                bls_key: [0x40 + i; 48],
+            })
+            .collect(),
+        first_finalized_digest: [0xB0; 32],
+        first_finalized_view: 1,
+    };
+    let mut encoded = Vec::with_capacity(transition.encode_size());
+    transition.write(&mut encoded);
+    check_golden("epoch_transition_v1.hex", &encoded);
+
+    let committed = read_golden("epoch_transition_v1.hex");
+    let decoded =
+        EpochTransition::read_cfg(&mut committed.as_slice(), &()).expect("fixture decodes");
+    assert_eq!(decoded, transition);
+}

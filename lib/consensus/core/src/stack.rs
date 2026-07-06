@@ -48,7 +48,6 @@ use crate::committer::FinalizedBlockCommitter;
 use crate::execution::ExecutionEnv;
 use crate::storage::{init_blocks_archive, init_finalizations_archive};
 use crate::types::{Elector, Scheme, SchemeProvider};
-use commonware_cryptography::certificate::Scheme as _;
 use commonware_broadcast::buffered;
 use commonware_consensus::marshal::standard::{Inline, Standard};
 use commonware_consensus::marshal::{self, core as marshal_core, resolver};
@@ -58,6 +57,7 @@ use commonware_consensus::simplex::{Engine, config::Config as EngineConfig};
 use commonware_consensus::types::{Epoch, FixedEpocher, Height, ViewDelta};
 use commonware_consensus::{Reporter, Reporters};
 use commonware_cryptography::Digestible;
+use commonware_cryptography::certificate::Scheme as _;
 use commonware_cryptography::ed25519::PublicKey;
 use commonware_p2p::utils::mux::{MuxHandle, Muxer, SubReceiver, SubSender};
 use commonware_parallel::Sequential;
@@ -415,6 +415,7 @@ where
     let tip_scout = context.with_label("tip_scout").spawn({
         let scheme_provider = scheme_provider.clone();
         let mut marshal_mailbox = marshal_mailbox.clone();
+        let mut scout_reporter = extra_reporter.clone();
         let mut certificate_backup = certificate_backup;
         move |mut scout_context| async move {
             // The epoch — and with it the committee whose signatures to check — is
@@ -446,6 +447,14 @@ where
                     "verified a finalization from an epoch this validator is not running; \
                      handing it to marshal for catch-up"
                 );
+                // The observer hears it too: for a validator following epochs it is
+                // not a member of (scheduled out, or catching up from far behind),
+                // scout-verified finalizations are its only view of finality — they
+                // keep `/status` truthful and the sovereign certificate/custody
+                // trail complete.
+                scout_reporter
+                    .report(Activity::Finalization(finalization.clone()))
+                    .await;
                 marshal_mailbox
                     .report(Activity::Finalization(finalization))
                     .await;
@@ -580,7 +589,18 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
     // Epochs we've already logged "not a member" for — the poll re-derives the same
     // answer every tick, the operator needs to hear it once. Pruned with retirement.
     let mut announced_outside = std::collections::BTreeSet::new();
+    let mut stopped = context.stopped();
     loop {
+        // A graceful stop makes engines exit on purpose (they watch the same
+        // signal), and the signal is set before any of them can react to it — so
+        // checking it first each tick keeps the death-check below from reading a
+        // planned shutdown as an engine crash. Found the hard way: on the real
+        // runtime a node stop could land between an engine's exit and this task's
+        // abort, panicking a perfectly healthy shutdown.
+        if (&mut stopped).now_or_never().is_some() {
+            return;
+        }
+
         // Every engine in the registry is one we *want* running (retirement removes
         // handles before aborting them). A resolved handle here therefore means an
         // engine died on its own — make that as loud as the pre-rotation stack did,

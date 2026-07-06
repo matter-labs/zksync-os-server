@@ -24,6 +24,9 @@ Conceptually, four steps:
 2. **The committee list.** One entry per validator —
    `<network_key>:<bls_key>@<host:port>` — identical on every node
    (`consensus.validators`). The committee *is* this list; there is no discovery.
+   (`validators` is shorthand for a single-entry committee *schedule*; a set that
+   will change over time uses `consensus.committees` — see
+   [changing the committee](#changing-the-committee).)
 3. **Committee-uniform configuration.** Verification pins chain-level constants,
    so they must be configured identically everywhere — most notably the **fee
    collector address** (a proposal paying fees anywhere else is invalid; this is
@@ -107,6 +110,65 @@ The batcher moves to exactly one validator (conventionally the ex-sequencer's
 machine); settlement pauses during the gap and reconciles on startup through the
 same recovery machinery every restart uses.
 
+## Changing the committee
+
+The validator set is fixed within an **epoch** (a fixed number of blocks —
+`consensus.epoch_length`, hours-scale by default) and changes only at epoch
+boundaries, driven by the **committee schedule**:
+
+```yaml
+consensus:
+  committees:
+    - activation_epoch: 0
+      validators: [ <entry>, <entry>, <entry> ]
+    - activation_epoch: 120
+      validators: [ <entry>, <entry>, <entry>, <entry> ]
+```
+
+Each entry holds from its activation epoch until a later entry supersedes it; the
+first entry must activate at epoch 0 so every epoch in history resolves to a
+committee (backfilled certificates stay verifiable forever). Reconfiguration is an
+**append**: every operator deploys a config with the new entry *before* its
+activation epoch arrives — pick an activation comfortably in the future, roll the
+config out validator by validator (a restart per validator; the committee rides
+through each as one tolerated fault), and the chain crosses the boundary into the
+new committee with no further coordination. The handoff itself is protocol-level:
+the new committee's first act is re-certifying the old committee's final block.
+
+The choreography per direction:
+
+- **Growing**: start the new validator's node *first* (deploy-then-activate). Its
+  key is in a future entry, so from day one it is in every member's address book,
+  follows the chain as an observer, and simply starts voting when its epoch
+  arrives. Startup on the new machine follows the same distribute-state paths as
+  a migration (snapshot copy, or sync from genesis for a young chain).
+- **Shrinking**: the excluded validator needs nothing at its boundary — it stops
+  building consensus engines for epochs it is not scheduled into, but keeps
+  following the chain as an observer (it still verifies finality certificates and
+  serves RPC from its growing history). Repoint it as an external node at
+  leisure; the `acknowledge_non_member` flag covers the tail case of restarting a
+  machine whose key has left the schedule entirely.
+
+Every node records a **custody trail** as it observes consensus enter each epoch:
+which committee held it, from which block — kept in the node's own finality store
+next to the certificates, so the chain's committee history is reconstructible
+from durable data alone, independent of any config file's current contents.
+
+Two sharp edges, both loud by design:
+
+- The schedule is a committee-wide constant. A validator whose config is missing
+  the newest entry crosses the boundary on the old committee: it cannot verify
+  the real committee's certificates, falls behind, and (over real p2p) bans the
+  peers it can no longer understand — disrupting nobody but itself. **The remedy
+  is a rebuild, not an in-place restart**: consensus vote journals index signers
+  by committee position, so votes journaled under the wrong committee do not
+  replay under the corrected one (the engine refuses, loudly). Deploy the
+  corrected config with a fresh data directory and let the node re-bootstrap and
+  backfill from its peers — the same path a brand-new validator takes.
+- Epoch length is likewise committee-uniform. Hours-scale is the deliberate
+  default: a reconfiguration deployed in the morning activates the same day,
+  while boundary handoffs (one re-proposal view each) stay rare events.
+
 ## Rolling back
 
 Rollback — returning a committee-run chain to single-sequencer operation — is
@@ -141,13 +203,14 @@ height.
 
 ## Current assumptions
 
-Stated here so the page survives its own future: the validator set is **static**,
-configured out of band, and changes arrive as coordinated configuration (per-epoch
-committee rotation is the designed evolution and the machinery is shaped for it);
-migration choreography is **manual with guards** — correctness never depends on
-orchestration, which is exactly what makes automating it later a convenience
-rather than a safety project; finality certificates are recorded and durable,
-while *externally verifiable* finality (light clients checking certificates
-without trusting a node) is the designed-for future the certificate and committee
-formats already accommodate; and settlement remains a single-node concern —
-consensus makes sequencing highly available, not (yet) the batcher.
+Stated here so the page survives its own future: the validator set changes by
+**configured schedule** — operators deploy matching schedules out of band, and no
+on-chain registry or in-band vote authorizes a change (the custody records make
+the history auditable; a registry is the designed evolution); migration and
+reconfiguration choreography is **manual with guards** — correctness never
+depends on orchestration, which is exactly what makes automating it later a
+convenience rather than a safety project; finality certificates are recorded and
+durable, while *externally verifiable* finality (light clients checking
+certificates without trusting a node) is the designed-for future the certificate
+and committee formats already accommodate; and settlement remains a single-node
+concern — consensus makes sequencing highly available, not (yet) the batcher.

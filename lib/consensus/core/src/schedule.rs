@@ -104,7 +104,10 @@ impl CommitteeSchedule {
 
     /// Is this network identity a committee member for `epoch`?
     pub fn is_member(&self, epoch: Epoch, identity: &PublicKey) -> bool {
-        self.entry_for(epoch).committee.get_value(identity).is_some()
+        self.entry_for(epoch)
+            .committee
+            .get_value(identity)
+            .is_some()
     }
 
     /// Does this network identity appear in *any* entry? A node whose key is in no
@@ -266,7 +269,10 @@ mod tests {
         assert_eq!(schedule.entry_for(Epoch::new(0)).activation_epoch, 0);
         assert_eq!(schedule.entry_for(Epoch::new(4)).activation_epoch, 0);
         assert_eq!(schedule.entry_for(Epoch::new(5)).activation_epoch, 5);
-        assert_eq!(schedule.entry_for(Epoch::new(1_000_000)).activation_epoch, 5);
+        assert_eq!(
+            schedule.entry_for(Epoch::new(1_000_000)).activation_epoch,
+            5
+        );
     }
 
     #[test]

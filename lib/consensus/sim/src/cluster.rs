@@ -238,8 +238,10 @@ where
         // Deterministic index ↔ identity mapping regardless of key values (peer
         // registration and leader rotation see sorted committees either way).
         keys.sort_by_key(|(network, _)| network.public_key());
-        let participants: Vec<PublicKey> =
-            keys.iter().map(|(network, _)| network.public_key()).collect();
+        let participants: Vec<PublicKey> = keys
+            .iter()
+            .map(|(network, _)| network.public_key())
+            .collect();
 
         let schedule = Self::build_schedule(&keys, &schedule_spec, behaviors.len());
 
@@ -462,7 +464,11 @@ where
                 let engine = conflicter::Conflicter::<_, Scheme, Sha256>::new(
                     context.with_label(&label),
                     conflicter::Config {
-                        scheme: validator.provider.scheme_for(Epoch::new(0)).as_ref().clone(),
+                        scheme: validator
+                            .provider
+                            .scheme_for(Epoch::new(0))
+                            .as_ref()
+                            .clone(),
                     },
                 );
                 Running::Byzantine(vec![engine.start(votes), mux_task])
@@ -473,7 +479,11 @@ where
                 let engine = nuller::Nuller::<_, Scheme, Sha256>::new(
                     context.with_label(&label),
                     nuller::Config {
-                        scheme: validator.provider.scheme_for(Epoch::new(0)).as_ref().clone(),
+                        scheme: validator
+                            .provider
+                            .scheme_for(Epoch::new(0))
+                            .as_ref()
+                            .clone(),
                     },
                 );
                 Running::Byzantine(vec![engine.start(votes), mux_task])
@@ -681,11 +691,7 @@ where
     /// [`Self::assert_committed_chains_agree`] over a chosen subset — for
     /// reconfiguration scenarios, where validators scheduled out of the committee
     /// (or still catching up) legitimately trail the members.
-    pub fn assert_committed_chains_agree_between(
-        &self,
-        indices: &[usize],
-        minimum_height: u64,
-    ) {
+    pub fn assert_committed_chains_agree_between(&self, indices: &[usize], minimum_height: u64) {
         let chains: Vec<(usize, Vec<Sha256Digest>)> = indices
             .iter()
             .map(|&index| (index, self.validators[index].env.committed_chain_digests()))

@@ -679,12 +679,55 @@ pub struct ConsensusConfig {
     /// The validator committee, one entry per validator (including this one), all
     /// validators configured identically. Entry format:
     /// `<ed25519_public_hex>:<bls_public_hex>@<host:port>`.
+    ///
+    /// Shorthand for a single-entry `committees` schedule activating at epoch 0 —
+    /// the static-set deployment. Configure exactly one of the two.
     #[config(default, with = Serde![*])]
     #[config_validate(custom(
-        |root: &Config, value: &Vec<String>| !root.consensus_config.enabled || value.len() >= 2,
-        "needs at least 2 validators when `consensus.enabled=true`"
+        |root: &Config, value: &Vec<String>| {
+            !root.consensus_config.enabled
+                || !root.consensus_config.committees.is_empty()
+                || value.len() >= 2
+        },
+        "needs at least 2 validators when `consensus.enabled=true` (or a `committees` schedule)"
     ))]
     pub validators: Vec<String>,
+    /// The committee schedule: which validator set holds which epochs. Each entry
+    /// activates at its epoch and holds until a later entry supersedes it; the first
+    /// entry must activate at epoch 0 so every epoch in history resolves to a
+    /// committee. Reconfiguration is an append: every operator deploys a config with
+    /// the new entry *before* its activation epoch arrives. A committee-wide fact:
+    /// schedules must be identical across validators (a mismatch fails loudly —
+    /// certificates stop verifying). Validator entry format as in `validators`.
+    #[config(default, with = Serde![*])]
+    #[config_validate(custom(
+        |root: &Config, value: &Vec<CommitteeScheduleEntryConfig>| {
+            !root.consensus_config.enabled
+                || value.is_empty()
+                || root.consensus_config.validators.is_empty()
+        },
+        "configure either `consensus.validators` or `consensus.committees`, not both"
+    ))]
+    pub committees: Vec<CommitteeScheduleEntryConfig>,
+    /// Number of blocks per epoch. The validator set is fixed within an epoch, so
+    /// this bounds how fast a scheduled committee change can activate; it is also
+    /// the granularity of per-epoch consensus storage (journals and caches are
+    /// partitioned by epoch, which is what future retention/pruning works over).
+    /// The boundary itself costs one re-proposal view — negligible — so the
+    /// trade-off is activation latency and storage granularity vs. handoff churn.
+    /// Hours-scale is deliberate: a reconfiguration deployed in the morning
+    /// activates the same day, while handoffs stay rare events. At 250 ms blocks
+    /// the default (43,200 blocks) is one epoch every ~3 hours. A committee-wide
+    /// constant: every validator must run the same value.
+    #[config(default_t = 43_200)]
+    pub epoch_length: u64,
+    /// A node whose network key appears in no `committees` entry refuses to start
+    /// with consensus enabled — a validator that cannot ever vote is usually a
+    /// misconfiguration. Setting this acknowledges the state as deliberate (e.g. a
+    /// machine freshly scheduled out of the committee, kept up while being
+    /// repointed as an external node).
+    #[config(default_t = false)]
+    pub acknowledge_non_member: bool,
     /// Allow validator connections to private IPs (local and containerized networks).
     #[config(default_t = false)]
     pub allow_private_ips: bool,
@@ -719,6 +762,16 @@ pub struct ConsensusConfig {
     /// bounds how far a leader can pre-date time-dependent logic.
     #[config(default_t = Duration::from_secs(10))]
     pub max_timestamp_skew: Duration,
+}
+
+/// One entry of the committee schedule (`consensus.committees`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommitteeScheduleEntryConfig {
+    /// The epoch this committee takes over at (its first epoch).
+    pub activation_epoch: u64,
+    /// The committee, in agreed order (certificate signer bitmaps index into it);
+    /// same entry format as `consensus.validators`.
+    pub validators: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

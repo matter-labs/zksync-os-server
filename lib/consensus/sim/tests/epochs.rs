@@ -12,7 +12,9 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
-use zksync_os_consensus_sim::{Behavior, EraOptions, MockExecution, SimCluster, links, run_scenario};
+use zksync_os_consensus_sim::{
+    Behavior, EraOptions, MockExecution, SimCluster, links, run_scenario,
+};
 
 const NUM_VALIDATORS: usize = 5;
 /// Short epochs so a modest chain height crosses several boundaries.

@@ -25,7 +25,7 @@ use std::sync::Mutex;
 use tokio::sync::watch;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::NamedColumnFamily;
-use zksync_os_wire::FinalityCertificate;
+use zksync_os_wire::{EpochTransition, FinalityCertificate};
 
 #[derive(Clone, Copy, Debug)]
 pub enum FinalityCF {
@@ -35,6 +35,9 @@ pub enum FinalityCF {
     HeightIndex,
     /// Small bookkeeping values; currently only the certified watermark.
     Meta,
+    /// Epoch transition record by epoch (u64, big-endian) — the committee custody
+    /// trail (see [`EpochTransition`]).
+    Transitions,
 }
 
 impl NamedColumnFamily for FinalityCF {
@@ -43,6 +46,7 @@ impl NamedColumnFamily for FinalityCF {
         FinalityCF::Certificates,
         FinalityCF::HeightIndex,
         FinalityCF::Meta,
+        FinalityCF::Transitions,
     ];
 
     fn name(&self) -> &'static str {
@@ -50,6 +54,7 @@ impl NamedColumnFamily for FinalityCF {
             FinalityCF::Certificates => "certificates",
             FinalityCF::HeightIndex => "height_index",
             FinalityCF::Meta => "meta",
+            FinalityCF::Transitions => "transitions",
         }
     }
 }
@@ -199,6 +204,43 @@ impl FinalityStore {
         let epoch = u64::from_be_bytes(bytes[..8].try_into().expect("checked length"));
         let view = u64::from_be_bytes(bytes[8..].try_into().expect("checked length"));
         Ok(Some((epoch, view)))
+    }
+
+    /// Records the committee custody trail entry for an epoch, at the *first
+    /// observed* finalization of that epoch. First-observed wins: replays and
+    /// backfills that re-report the epoch leave the original record untouched — an
+    /// audit trail that could be rewritten would not be one. Returns whether the
+    /// record was written (false: one already existed).
+    pub fn record_epoch_transition(&self, transition: &EpochTransition) -> anyhow::Result<bool> {
+        use commonware_codec::{EncodeSize, Write as _};
+        // The lock doubles as the writer serializer for check-then-put (both
+        // observer threads route through the same store instance).
+        let _guard = self.watermark_lock.lock().unwrap();
+        let key = transition.epoch.to_be_bytes();
+        if self.db.get_cf(FinalityCF::Transitions, &key)?.is_some() {
+            return Ok(false);
+        }
+        let mut encoded = Vec::with_capacity(transition.encode_size());
+        transition.write(&mut encoded);
+        let mut batch = self.db.new_write_batch();
+        batch.put_cf(FinalityCF::Transitions, &key, &encoded);
+        self.db.write(batch)?;
+        Ok(true)
+    }
+
+    /// The custody trail entry for `epoch`, if consensus has been observed entering
+    /// it on this node.
+    pub fn epoch_transition(&self, epoch: u64) -> anyhow::Result<Option<EpochTransition>> {
+        use commonware_codec::Read as _;
+        let Some(bytes) = self
+            .db
+            .get_cf(FinalityCF::Transitions, &epoch.to_be_bytes())?
+        else {
+            return Ok(None);
+        };
+        let transition = EpochTransition::read_cfg(&mut bytes.as_slice(), &())
+            .map_err(|err| anyhow::anyhow!("stored epoch transition does not decode: {err}"))?;
+        Ok(Some(transition))
     }
 
     pub fn certificate_by_digest(
@@ -386,5 +428,52 @@ mod tests {
             7
         );
         assert_eq!(*store.watermark_subscription().borrow(), Some(1));
+    }
+    #[test]
+    fn epoch_transitions_are_first_observed_wins_and_survive_reopen() {
+        use zksync_os_wire::{CommitteeMemberKeys, EpochTransition};
+
+        let transition = |epoch: u64, digest: [u8; 32]| EpochTransition {
+            epoch,
+            scheme: SignatureScheme::Bls12381Multisig,
+            committee: vec![
+                CommitteeMemberKeys {
+                    network_key: [1; 32],
+                    bls_key: [2; 48],
+                },
+                CommitteeMemberKeys {
+                    network_key: [3; 32],
+                    bls_key: [4; 48],
+                },
+            ],
+            first_finalized_digest: digest,
+            first_finalized_view: 1,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let store = FinalityStore::open(dir.path()).expect("open");
+            assert!(store.epoch_transition(3).expect("read").is_none());
+            assert!(
+                store
+                    .record_epoch_transition(&transition(3, [0xAA; 32]))
+                    .expect("write"),
+                "first record for the epoch is written"
+            );
+            // A replayed observation with different content must not rewrite the
+            // custody trail.
+            assert!(
+                !store
+                    .record_epoch_transition(&transition(3, [0xBB; 32]))
+                    .expect("write"),
+                "re-observation leaves the original untouched"
+            );
+        }
+
+        let store = FinalityStore::open(dir.path()).expect("reopen");
+        let stored = store.epoch_transition(3).expect("read").expect("present");
+        assert_eq!(stored.first_finalized_digest, [0xAA; 32]);
+        assert_eq!(stored.committee.len(), 2);
+        assert!(store.epoch_transition(4).expect("read").is_none());
     }
 }

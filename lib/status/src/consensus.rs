@@ -16,6 +16,8 @@ use tokio::sync::watch;
 pub struct FinalizedObservation {
     pub epoch: u64,
     pub view: u64,
+    /// Size of the committee holding `epoch` (committees may change per epoch).
+    pub committee_size: u32,
     pub observed_unix: u64,
 }
 

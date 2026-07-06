@@ -29,8 +29,12 @@ use commonware_utils::union_unique;
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use zksync_os_consensus_core::types::{Activity, Attributable as _, ConsensusActivity, Scheme};
-use zksync_os_consensus_core::{Channels, StackConfig, start_validator};
+use zksync_os_consensus_core::types::{
+    Activity, Attributable as _, ConsensusActivity, SchemeProvider,
+};
+use zksync_os_consensus_core::{
+    Channels, CommitteeSchedule, ScheduleEntry, StackConfig, start_validator,
+};
 use zksync_os_consensus_execution::NodeExecutionEnv;
 use zksync_os_consensus_execution::metrics::CONSENSUS_METRICS;
 use zksync_os_mempool::subpools::l2::L2Subpool;
@@ -167,33 +171,96 @@ pub fn check_rollback_acknowledged(
 /// before the thread spawns (so misconfiguration fails startup, not a background
 /// thread).
 pub struct ConsensusSetup {
+    /// The p2p address book: every member of every schedule entry, deduplicated —
+    /// future committee members must be dialable before their activation epoch.
     pub committee: Vec<CommitteeMember>,
     pub network_key: ed25519::PrivateKey,
-    pub scheme: Scheme,
+    /// Per-epoch schemes over the committee schedule (signer where this validator
+    /// is a member, verifier elsewhere).
+    pub provider: SchemeProvider,
+    /// The schedule itself, for consumers that need committees rather than schemes
+    /// (the activity observer's custody records, the status surface).
+    pub schedule: std::sync::Arc<CommitteeSchedule>,
+    pub epoch_length: std::num::NonZeroU64,
     pub listen_address: SocketAddr,
     pub allow_private_ips: bool,
     pub max_message_size: usize,
     pub storage_directory: PathBuf,
     /// The protocol-versioned base namespace (see [`namespace`]); the signing
-    /// namespace already baked it into `scheme`, the p2p stack derives from it at
-    /// startup.
+    /// namespace already baked it into the scheme provider, the p2p stack derives
+    /// from it at startup.
     pub namespace: Vec<u8>,
 }
 
 impl ConsensusSetup {
-    /// Resolves keys and the committee from configuration.
+    /// Resolves keys and the committee schedule from configuration.
     pub fn from_config(
         config: &ConsensusConfig,
         storage_directory: PathBuf,
     ) -> anyhow::Result<Self> {
-        let committee: Vec<CommitteeMember> = config
-            .validators
-            .iter()
-            .map(|entry| {
-                parse_committee_member(entry)
-                    .with_context(|| format!("bad `consensus.validators` entry: {entry}"))
-            })
-            .collect::<anyhow::Result<_>>()?;
+        // The schedule's entries: an explicit `committees` schedule, or the
+        // `validators` shorthand (one committee, activating at epoch 0).
+        let configured: Vec<(u64, &Vec<String>)> = if config.committees.is_empty() {
+            vec![(0, &config.validators)]
+        } else {
+            config
+                .committees
+                .iter()
+                .map(|entry| (entry.activation_epoch, &entry.validators))
+                .collect()
+        };
+
+        // Parse every entry, building the schedule and the address-book union. A
+        // validator may appear in any number of entries, but always with the same
+        // keys and address — a mismatch means two operators disagree about who a
+        // validator *is*, which no amount of consensus can reconcile.
+        let mut address_book: Vec<CommitteeMember> = Vec::new();
+        let mut entries = Vec::new();
+        for (activation_epoch, validators) in configured {
+            anyhow::ensure!(
+                validators.len() >= 2,
+                "the committee activating at epoch {activation_epoch} has fewer than 2 \
+                 validators"
+            );
+            let members: Vec<CommitteeMember> = validators
+                .iter()
+                .map(|entry| {
+                    parse_committee_member(entry).with_context(|| {
+                        format!("bad committee entry (epoch {activation_epoch}): {entry}")
+                    })
+                })
+                .collect::<anyhow::Result<_>>()?;
+            for member in &members {
+                match address_book
+                    .iter()
+                    .find(|known| known.network_key == member.network_key)
+                {
+                    None => address_book.push(member.clone()),
+                    Some(known) => anyhow::ensure!(
+                        known.bls_key == member.bls_key && known.address == member.address,
+                        "validator {} appears with a different BLS key or address in the \
+                         committee activating at epoch {activation_epoch}",
+                        member.network_key,
+                    ),
+                }
+            }
+            let committee: BiMap<ed25519::PublicKey, <MinPk as Variant>::Public> = members
+                .iter()
+                .map(|member| (member.network_key.clone(), member.bls_key))
+                .try_collect()
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "duplicate member in the committee activating at epoch \
+                         {activation_epoch}: {err:?}"
+                    )
+                })?;
+            entries.push(ScheduleEntry {
+                activation_epoch,
+                committee,
+            });
+        }
+        let schedule = CommitteeSchedule::new(entries)
+            .context("invalid committee schedule (`consensus.committees`)")?;
 
         let network_key = decode_hex_key::<ed25519::PrivateKey>(
             config
@@ -210,31 +277,49 @@ impl ConsensusSetup {
         )
         .context("invalid `consensus.bls_key`")?;
 
-        // The scheme is the committee: the ordered (network identity → consensus key)
-        // map every validator must agree on, plus this validator's own signing key.
-        let participants: BiMap<ed25519::PublicKey, <MinPk as Variant>::Public> = committee
-            .iter()
-            .map(|member| (member.network_key.clone(), member.bls_key))
-            .try_collect()
-            .map_err(|err| anyhow::anyhow!("duplicate committee member: {err:?}"))?;
-        let base_namespace = namespace(config.protocol_version);
-        let signing_namespace = union_unique(&base_namespace, b"_CONSENSUS");
-        let scheme = Scheme::signer(&signing_namespace, participants, bls_key).context(
-            "this validator's BLS key does not belong to any configured committee member",
-        )?;
-
+        // Key guards, both loud on purpose. A schedule that lists this validator's
+        // network key against a *different* BLS key would make every scheme build in
+        // verifier mode: the node would run, follow, and simply never vote — the
+        // kind of quiet failure that costs a committee its liveness margin with no
+        // error anywhere. And a key in no committee at all is usually a
+        // misconfiguration, unless the operator says otherwise.
         use commonware_cryptography::Signer as _;
+        let our_network_key = network_key.public_key();
+        let our_bls_public =
+            commonware_cryptography::bls12381::primitives::ops::compute_public::<MinPk>(&bls_key);
+        let mut member_anywhere = false;
+        for entry in schedule.entries() {
+            if let Some(listed) = entry.committee.get_value(&our_network_key) {
+                member_anywhere = true;
+                anyhow::ensure!(
+                    listed == &our_bls_public,
+                    "the committee activating at epoch {} pairs this validator's network \
+                     key with a BLS public key that `consensus.bls_key` does not derive — \
+                     the validator would verify but never vote; fix the schedule entry or \
+                     the signing key",
+                    entry.activation_epoch,
+                );
+            }
+        }
         anyhow::ensure!(
-            committee
-                .iter()
-                .any(|member| member.network_key == network_key.public_key()),
-            "this validator's network key does not appear in `consensus.validators`",
+            member_anywhere || config.acknowledge_non_member,
+            "this validator's network key appears in no configured committee. If it is \
+             deliberately running as a non-voting follower (e.g. freshly scheduled out \
+             of the committee), set `consensus.acknowledge_non_member: true`; otherwise \
+             fix `consensus.validators` / `consensus.committees`",
         );
 
+        let base_namespace = namespace(config.protocol_version);
+        let signing_namespace = union_unique(&base_namespace, b"_CONSENSUS");
+        let provider = SchemeProvider::new(signing_namespace, schedule.clone(), Some(bls_key));
+
         Ok(Self {
-            committee,
+            committee: address_book,
             network_key,
-            scheme,
+            provider,
+            schedule: std::sync::Arc::new(schedule),
+            epoch_length: std::num::NonZeroU64::new(config.epoch_length)
+                .context("`consensus.epoch_length` must be nonzero")?,
             listen_address: config
                 .listen_address
                 .parse()
@@ -422,9 +507,9 @@ where
         let identity = setup.network_key.public_key();
         let stack = start_validator(
             context.with_label("validator"),
-            StackConfig::new("consensus"),
+            StackConfig::new("consensus").with_epoch_length(setup.epoch_length),
             identity,
-            setup.scheme.clone(),
+            setup.provider.clone(),
             env,
             oracle.clone(),
             oracle,
@@ -433,7 +518,7 @@ where
             ActivityObserver {
                 finalized: std::sync::Arc::new(observability.finalized),
                 finality: observability.finality,
-                committee_size: setup.committee.len() as u32,
+                schedule: setup.schedule.clone(),
             },
         )
         .await;
@@ -631,7 +716,9 @@ pub struct ConsensusObservability {
 struct ActivityObserver {
     finalized: std::sync::Arc<tokio::sync::watch::Sender<Option<FinalizedObservation>>>,
     finality: std::sync::Arc<zksync_os_consensus_execution::FinalityStore>,
-    committee_size: u32,
+    /// Certificates carry per-epoch signer bitmaps, and the custody records name
+    /// per-epoch committees — both resolve through the schedule.
+    schedule: std::sync::Arc<CommitteeSchedule>,
 }
 
 impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
@@ -672,11 +759,20 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
             Activity::Finalize(_) => "finalize",
             Activity::Finalization(finalization) => {
                 let round = finalization.round();
+                let entry = self.schedule.entry_for(round.epoch());
+                let committee_size = entry.committee.len() as u32;
                 let _ = self.finalized.send(Some(FinalizedObservation {
                     epoch: round.epoch().get(),
                     view: round.view().get(),
+                    committee_size,
                     observed_unix: unix_now(),
                 }));
+                let block_digest: [u8; 32] = finalization
+                    .proposal
+                    .payload
+                    .as_ref()
+                    .try_into()
+                    .expect("consensus digests are 32 bytes");
                 // The sovereign copy: convert the certificate out of the consensus
                 // library's types the moment it exists, so the durable record never
                 // depends on the library's encoding staying stable.
@@ -692,21 +788,55 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
                     scheme: zksync_os_wire::SignatureScheme::Bls12381Multisig,
                     epoch: round.epoch().get(),
                     view: round.view().get(),
-                    block_digest: finalization
-                        .proposal
-                        .payload
-                        .as_ref()
-                        .try_into()
-                        .expect("consensus digests are 32 bytes"),
-                    committee_size: self.committee_size,
+                    block_digest,
+                    committee_size,
                     signers: zksync_os_wire::FinalityCertificate::bitmap_from_positions(
-                        self.committee_size,
+                        committee_size,
                         &signers,
                     ),
                     signature,
                 };
                 if let Err(err) = self.finality.put_certificate(&certificate) {
                     tracing::error!(?err, "failed to persist a finality certificate");
+                }
+                // The custody trail: the first observed finalization of each epoch
+                // records which committee holds it (first-observed wins; replays
+                // change nothing).
+                let transition = zksync_os_wire::EpochTransition {
+                    epoch: round.epoch().get(),
+                    scheme: zksync_os_wire::SignatureScheme::Bls12381Multisig,
+                    committee: entry
+                        .committee
+                        .iter_pairs()
+                        .map(|(network_key, bls_key)| {
+                            use commonware_codec::Encode as _;
+                            zksync_os_wire::CommitteeMemberKeys {
+                                network_key: network_key
+                                    .encode()
+                                    .as_ref()
+                                    .try_into()
+                                    .expect("ed25519 public keys encode to 32 bytes"),
+                                bls_key: bls_key
+                                    .encode()
+                                    .as_ref()
+                                    .try_into()
+                                    .expect("BLS12-381 MinPk public keys encode to 48 bytes"),
+                            }
+                        })
+                        .collect(),
+                    first_finalized_digest: block_digest,
+                    first_finalized_view: round.view().get(),
+                };
+                match self.finality.record_epoch_transition(&transition) {
+                    Ok(true) => tracing::info!(
+                        epoch = transition.epoch,
+                        committee_size,
+                        "recorded committee custody entry for epoch"
+                    ),
+                    Ok(false) => {}
+                    Err(err) => {
+                        tracing::error!(?err, "failed to persist an epoch transition record")
+                    }
                 }
                 "finalization"
             }
@@ -792,5 +922,198 @@ mod tests {
         check_rollback_acknowledged(true, true).unwrap();
         check_rollback_acknowledged(false, false).unwrap();
         check_rollback_acknowledged(false, true).unwrap();
+    }
+    /// Deterministic key material for configuration tests, in the config's own hex
+    /// entry format.
+    fn test_validator(seed: u8, port: u16) -> (String, String, String) {
+        use commonware_codec::{DecodeExt as _, Encode as _};
+        use commonware_cryptography::Signer as _;
+        let network = ed25519::PrivateKey::decode([seed; 32].as_slice()).expect("seed");
+        // Scalars must be canonical; small seed bytes are.
+        let bls = group::Private::decode(
+            [
+                0u8,
+                seed.max(1),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+            ]
+            .as_slice(),
+        )
+        .expect("canonical scalar");
+        let bls_public =
+            commonware_cryptography::bls12381::primitives::ops::compute_public::<MinPk>(&bls);
+        let entry = format!(
+            "{}:{}@127.0.0.1:{port}",
+            alloy::hex::encode(network.public_key().encode()),
+            alloy::hex::encode(bls_public.encode()),
+        );
+        (
+            entry,
+            alloy::hex::encode(network.encode()),
+            alloy::hex::encode(bls.encode()),
+        )
+    }
+
+    fn config_with(
+        validators: Vec<String>,
+        committees: Vec<crate::config::CommitteeScheduleEntryConfig>,
+        network_key: String,
+        bls_key: String,
+    ) -> ConsensusConfig {
+        ConsensusConfig {
+            enabled: true,
+            network_key: Some(network_key),
+            bls_key: Some(bls_key),
+            validators,
+            committees,
+            ..ConsensusConfig::default()
+        }
+    }
+
+    #[test]
+    fn validators_shorthand_is_a_single_epoch_zero_committee() {
+        let (a, a_net, a_bls) = test_validator(1, 4001);
+        let (b, _, _) = test_validator(2, 4002);
+        let setup = ConsensusSetup::from_config(
+            &config_with(vec![a, b], vec![], a_net, a_bls),
+            std::env::temp_dir(),
+        )
+        .expect("valid config");
+        assert_eq!(setup.schedule.entries().len(), 1);
+        assert_eq!(setup.schedule.entries()[0].activation_epoch, 0);
+        assert_eq!(setup.committee.len(), 2);
+    }
+
+    #[test]
+    fn schedule_entries_resolve_and_union_the_address_book() {
+        let (a, a_net, a_bls) = test_validator(1, 4001);
+        let (b, _, _) = test_validator(2, 4002);
+        let (c, _, _) = test_validator(3, 4003);
+        let committees = vec![
+            crate::config::CommitteeScheduleEntryConfig {
+                activation_epoch: 0,
+                validators: vec![a.clone(), b.clone()],
+            },
+            crate::config::CommitteeScheduleEntryConfig {
+                activation_epoch: 2,
+                validators: vec![a.clone(), b.clone(), c.clone()],
+            },
+        ];
+        let setup = ConsensusSetup::from_config(
+            &config_with(vec![], committees, a_net, a_bls),
+            std::env::temp_dir(),
+        )
+        .expect("valid config");
+        assert_eq!(setup.schedule.entries().len(), 2);
+        // The address book carries the epoch-2 joiner so it is dialable early.
+        assert_eq!(setup.committee.len(), 3);
+    }
+
+    #[test]
+    fn a_key_in_no_committee_requires_acknowledgment() {
+        let (a, _, _) = test_validator(1, 4001);
+        let (b, _, _) = test_validator(2, 4002);
+        // Validator 3 is configured with its own keys but appears in no committee.
+        let (_, outsider_net, outsider_bls) = test_validator(3, 4003);
+        let config = config_with(vec![a, b], vec![], outsider_net, outsider_bls);
+        let err = ConsensusSetup::from_config(&config, std::env::temp_dir())
+            .map(|_| ())
+            .expect_err("must refuse a non-member without acknowledgment");
+        assert!(err.to_string().contains("acknowledge_non_member"));
+
+        let acknowledged = ConsensusConfig {
+            acknowledge_non_member: true,
+            ..config
+        };
+        ConsensusSetup::from_config(&acknowledged, std::env::temp_dir())
+            .map(|_| ())
+            .expect("acknowledged follower mode starts");
+    }
+
+    #[test]
+    fn a_mismatched_bls_pairing_is_refused_loudly() {
+        let (a, a_net, _) = test_validator(1, 4001);
+        let (b, _, _) = test_validator(2, 4002);
+        // The schedule lists validator 1's network key with validator 1's BLS key,
+        // but this node is (mis)configured with validator 3's signing key.
+        let (_, _, wrong_bls) = test_validator(3, 4003);
+        let err = ConsensusSetup::from_config(
+            &config_with(vec![a, b], vec![], a_net, wrong_bls),
+            std::env::temp_dir(),
+        )
+        .map(|_| ())
+        .expect_err("a BLS pairing mismatch would silently never vote");
+        assert!(err.to_string().contains("never vote"), "got: {err}");
+    }
+
+    #[test]
+    fn conflicting_member_identities_across_entries_are_refused() {
+        let (a, a_net, a_bls) = test_validator(1, 4001);
+        let (b, _, _) = test_validator(2, 4002);
+        // Same network key as `b`, different port — two entries disagree about who
+        // the validator is.
+        let (b_moved, _, _) = test_validator(2, 5002);
+        let committees = vec![
+            crate::config::CommitteeScheduleEntryConfig {
+                activation_epoch: 0,
+                validators: vec![a.clone(), b],
+            },
+            crate::config::CommitteeScheduleEntryConfig {
+                activation_epoch: 2,
+                validators: vec![a, b_moved],
+            },
+        ];
+        let err = ConsensusSetup::from_config(
+            &config_with(vec![], committees, a_net, a_bls),
+            std::env::temp_dir(),
+        )
+        .map(|_| ())
+        .expect_err("conflicting identities must be refused");
+        assert!(err.to_string().contains("different BLS key or address"));
+    }
+
+    #[test]
+    fn the_first_schedule_entry_must_activate_at_epoch_zero() {
+        let (a, a_net, a_bls) = test_validator(1, 4001);
+        let (b, _, _) = test_validator(2, 4002);
+        let committees = vec![crate::config::CommitteeScheduleEntryConfig {
+            activation_epoch: 3,
+            validators: vec![a, b],
+        }];
+        let err = ConsensusSetup::from_config(
+            &config_with(vec![], committees, a_net, a_bls),
+            std::env::temp_dir(),
+        )
+        .map(|_| ())
+        .expect_err("a schedule with a hole before its first entry must be refused");
+        assert!(err.to_string().contains("committee schedule"), "got: {err}");
     }
 }

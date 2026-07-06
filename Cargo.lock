@@ -16327,6 +16327,7 @@ dependencies = [
  "tracing",
  "zksync_os_alloy_ext",
  "zksync_os_api",
+ "zksync_os_consensus_execution",
  "zksync_os_contract_interface",
  "zksync_os_integration_tests_macros",
  "zksync_os_l1_watcher",

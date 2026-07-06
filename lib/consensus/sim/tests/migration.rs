@@ -13,7 +13,9 @@
 
 use commonware_runtime::Metrics as _;
 use std::time::Duration;
-use zksync_os_consensus_sim::{Behavior, EraOptions, MockExecution, SimCluster, links, run_scenario};
+use zksync_os_consensus_sim::{
+    Behavior, EraOptions, MockExecution, SimCluster, links, run_scenario,
+};
 
 const NUM_VALIDATORS: usize = 5;
 /// The agreed cutover height: the chain's pre-consensus era is this many blocks.

@@ -67,6 +67,11 @@ pub struct SetupArgs {
     /// Repository root (for mounting `local-chains` into the containers).
     #[arg(long, default_value = ".")]
     pub repo: PathBuf,
+    /// Consensus epoch length in blocks for the cluster. The node's default is
+    /// hours-scale; soaks that should cross many epoch boundaries (rotation and
+    /// reconfiguration hunting) pass a few hundred.
+    #[arg(long, default_value_t = 600)]
+    pub epoch_length: u64,
 }
 
 /// Everything the driver (and any external monitor) needs to know about the cluster.
@@ -164,6 +169,7 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
             &alloy::hex::encode(bls_keys[index].encode()),
             &committee,
             fee_collector,
+            args.epoch_length,
         );
         std::fs::write(dir.join("validator.yaml"), overlay)?;
         manifest.validators.push(ValidatorEntry {
@@ -208,6 +214,7 @@ fn validator_overlay(
     bls_key_hex: &str,
     committee: &[String],
     fee_collector: alloy::primitives::Address,
+    epoch_length: u64,
 ) -> String {
     let committee_entries: String = committee
         .iter()
@@ -246,6 +253,7 @@ consensus:
   bls_key: '{bls_key_hex}'
   listen_address: 0.0.0.0:{CONTAINER_CONSENSUS}
   allow_private_ips: true
+  epoch_length: {epoch_length}
   validators:
 {committee_entries}"
     )
