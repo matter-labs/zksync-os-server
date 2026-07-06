@@ -48,8 +48,8 @@ pub struct ZksProtocolConnectionHandler<P: ZksProtocolVersionSpec, Replay: Clone
     state: HandlerSharedState,
     connection_registry: ConnectionRegistry,
     remote_addr: SocketAddr,
-    /// Owned permit that corresponds to a taken active connection slot.
-    permit: OwnedSemaphorePermit,
+    /// Owned permit for a taken active connection slot, or `None` for a trusted peer that bypasses the cap.
+    permit: Option<OwnedSemaphorePermit>,
     _phantom: PhantomData<P>,
 }
 
@@ -85,7 +85,7 @@ impl<P: ZksProtocolVersionSpec, Replay: Clone> ZksProtocolHandler<P, Replay> {
     fn establish_connection(
         &self,
         remote_addr: SocketAddr,
-        permit: OwnedSemaphorePermit,
+        permit: Option<OwnedSemaphorePermit>,
     ) -> ZksProtocolConnectionHandler<P, Replay> {
         ZksProtocolConnectionHandler {
             role: self.role.clone(),
@@ -102,8 +102,15 @@ impl<P: ZksProtocolVersionSpec, Replay: Clone> ZksProtocolHandler<P, Replay> {
         socket_addr: SocketAddr,
         peer_id: Option<PeerId>,
     ) -> Option<ZksProtocolConnectionHandler<P, Replay>> {
+        // Trusted peers (identified on outgoing dials) bypass the cap, so a pinned serving node is
+        // never locked out by other peers already filling the pool.
+        if let Some(peer_id) = peer_id
+            && self.state.is_trusted(&peer_id)
+        {
+            return Some(self.establish_connection(socket_addr, None));
+        }
         match self.state.try_acquire_connection_slot() {
-            Ok(permit) => Some(self.establish_connection(socket_addr, permit)),
+            Ok(permit) => Some(self.establish_connection(socket_addr, Some(permit))),
             Err(_) => {
                 match peer_id {
                     Some(peer_id) => tracing::warn!(
