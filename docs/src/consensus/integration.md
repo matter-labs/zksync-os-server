@@ -164,6 +164,10 @@ chain. The rules file is the authoritative, tested list.
 
 ## The life of a block
 
+The component-level version, start to finish. (The same journey told
+chronologically — with the vote orderings, the failure scenarios, and epoch
+turnover — is [the lifecycle chapter](lifecycle.md).)
+
 1. A transaction reaches **any** validator's RPC and lands in its mempool. The
    committee gossips pending transactions to each other, so it does not matter
    which validator will lead next.

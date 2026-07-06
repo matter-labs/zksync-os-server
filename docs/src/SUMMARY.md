@@ -36,6 +36,7 @@
 - [Consensus](consensus/index.md)
   - [What and why](consensus/intro.md)
   - [How it is wired in](consensus/integration.md)
+  - [What happens, in order](consensus/lifecycle.md)
   - [How it is tested](consensus/testing.md)
   - [Running it](consensus/enabling.md)
 

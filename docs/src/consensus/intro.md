@@ -75,6 +75,8 @@ votes; the names below are the ones you will meet in the code and metrics:
 On the happy path a block goes propose → notarization → finalization: two vote
 rounds. On a bad view, nullify votes let the committee skip forward without
 waiting out cascading timeouts — a dead leader costs one view, not an escalation.
+(The blow-by-blow ordering — who waits for what, and every scenario that ends in
+a nullify — is walked through in [the lifecycle chapter](lifecycle.md).)
 
 Simplex belongs to the same family as Tendermint and HotStuff — rotating leaders,
 quorum votes, a couple of phases to finality — and a fair protocol comparison is a
