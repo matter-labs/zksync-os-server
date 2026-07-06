@@ -1307,6 +1307,19 @@ async fn run_main_node_pipeline(
             let components = pipeline.components();
             pipeline.spawn();
             components
+        } else if config.sequencer_config.parallel_blocks > 1
+            && config.sequencer_config.parallel_tree_lag_buffer
+        {
+            tracing::warn!(
+                "parallel-blocks bench mode — Merkle tree behind a lag buffer (backpressure detached)"
+            );
+            let pipeline = pipeline
+                .pipe(tree_manager::TreeLagBuffer { tree: tree.clone() })
+                .pipe(TreeManager { tree: tree.clone() })
+                .pipe(NoOpSink::new());
+            let components = pipeline.components();
+            pipeline.spawn();
+            components
         } else {
             let pipeline = pipeline
                 .pipe(TreeManager { tree: tree.clone() })

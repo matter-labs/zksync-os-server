@@ -2,6 +2,8 @@ use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use async_trait::async_trait;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
@@ -17,6 +19,81 @@ use zksync_os_sequencer::model::blocks::AppliedBlock;
 use zksync_os_storage_api::TreeBlock;
 
 const MAX_BLOCKS_PER_ITERATION: usize = 32;
+
+/// Bench-only (`parallel_tree_lag_buffer`): decouples the Merkle tree from pipeline
+/// backpressure. Inter-component channels are small and `send_and_record` ERRORS when full
+/// ("consumer catastrophically behind"), so a tree slower than parallel block production would
+/// kill the run within seconds. This relay forwards `AppliedBlock`s into a deep channel the
+/// tree drains at its own pace, and reports the tree's exact position vs the pipeline tip every
+/// 5s plus once at shutdown (WARN level, visible under `RUST_LOG=warn` bench runs).
+pub(crate) struct TreeLagBuffer {
+    pub tree: MerkleTree<RocksDBWrapper>,
+}
+
+#[async_trait]
+impl PipelineComponent for TreeLagBuffer {
+    type Input = AppliedBlock;
+    type Output = AppliedBlock;
+
+    const COMPONENT_ID: zksync_os_pipeline::ComponentId =
+        zksync_os_pipeline::ComponentId::TreeLagBuffer;
+    /// The whole point: deep enough that the tree never backpressures the pipeline
+    /// (~30 minutes of blocks at bench rates).
+    const OUTPUT_CHANNEL_CAPACITY: usize = 1 << 20;
+
+    async fn run(
+        self,
+        mut input: PeekableReceiver<Self::Input>,
+        output: mpsc::Sender<Self::Output>,
+        state_reporter: ComponentStateReporter,
+    ) -> anyhow::Result<()> {
+        let tip = Arc::new(AtomicU64::new(0));
+        let stats_tip = tip.clone();
+        let stats_tree = self.tree.clone();
+        let stats = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let tip_block = stats_tip.load(Ordering::Relaxed);
+                if tip_block == 0 {
+                    continue;
+                }
+                let tree_block = stats_tree.latest_version().ok().flatten().unwrap_or(0);
+                tracing::warn!(
+                    tip_block,
+                    tree_block,
+                    lag_blocks = tip_block.saturating_sub(tree_block),
+                    "merkle tree lag"
+                );
+            }
+        });
+        loop {
+            state_reporter.enter_state(GenericComponentState::Idle);
+            let Some(block) = input.recv_and_record_picked(&state_reporter).await else {
+                break;
+            };
+            state_reporter.enter_state(GenericComponentState::Active);
+            tip.store(block.block_number(), Ordering::Relaxed);
+            if let Err(err) = output.send_and_record(block, &state_reporter) {
+                stats.abort();
+                anyhow::bail!(
+                    "tree lag buffer cannot forward ({err}) — tree stopped or >2^20 blocks behind"
+                );
+            }
+        }
+        stats.abort();
+        // Input closed (load stopped / shutdown): report the final position once.
+        let tip_block = tip.load(Ordering::Relaxed);
+        let tree_block = self.tree.latest_version().ok().flatten().unwrap_or(0);
+        tracing::warn!(
+            tip_block,
+            tree_block,
+            lag_blocks = tip_block.saturating_sub(tree_block),
+            "merkle tree lag at shutdown"
+        );
+        tracing::info!("inbound channel closed");
+        Ok(())
+    }
+}
 
 pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,

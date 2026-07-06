@@ -68,6 +68,8 @@ impl BackpressureConfig {
             | ComponentId::Batcher
             | ComponentId::BatchSink
             | ComponentId::NoopSink
+            // Bench-only relay in front of the tree; forwards instantly, never trails.
+            | ComponentId::TreeLagBuffer
             | ComponentId::BatchVerificationResponder => PipelineCondition::default(),
         }
     }

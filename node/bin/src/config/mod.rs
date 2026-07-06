@@ -951,6 +951,15 @@ pub struct SequencerConfig {
     #[config(default_t = false)]
     pub parallel_elide_tree_manager: bool,
 
+    /// Bench-only: with `parallel_blocks > 1` and the batcher disabled, run the Merkle tree
+    /// behind a deep lag buffer instead of the regular pipeline channel — the tree trails block
+    /// production at its own pace instead of backpressuring (or killing) the run, and its
+    /// position vs the pipeline tip is logged every 5s plus at shutdown ("merkle tree lag").
+    /// Ignored when `parallel_elide_tree_manager` is set. `false` (default) keeps the
+    /// production backpressure.
+    #[config(default_t = false)]
+    pub parallel_tree_lag_buffer: bool,
+
     /// Bench-only: with `parallel_blocks > 1`, skip the replay-record WAL write in the applier
     /// (no restart/replay/proving in the pure-throughput benches). `false` (default) keeps the
     /// production WAL. NOTE: without replay records, `eth_call` / `eth_estimateGas` fail — they
@@ -1974,6 +1983,13 @@ impl Config {
         }
         if let Some(v) = self.batch_verification_config.max_batch_diff_to_upstream {
             cfg.set(ComponentId::BatchVerification, condition(Some(v)));
+        }
+        // Bench-only (`parallel_tree_lag_buffer`): the tree runs behind a deep lag buffer and is
+        // MEANT to trail block production freely — exempt it from the block-diff condition that
+        // would otherwise pause transaction acceptance once it fell 256 blocks behind.
+        if self.sequencer_config.parallel_blocks > 1 && self.sequencer_config.parallel_tree_lag_buffer
+        {
+            cfg.set(ComponentId::TreeManager, PipelineCondition::default());
         }
         if let Some(v) = self.l1_sender_config.max_batch_diff_to_upstream {
             for id in [
