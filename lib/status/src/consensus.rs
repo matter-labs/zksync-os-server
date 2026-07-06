@@ -27,6 +27,8 @@ pub type ConsensusMetricsEncoder = Arc<dyn Fn() -> String + Send + Sync>;
 
 /// Where the status server reads consensus facts from.
 pub struct ConsensusStatusSource {
+    /// `"validator"` or `"observer"` — whether this node votes or only follows.
+    pub role: &'static str,
     pub committee_size: usize,
     /// This validator's network identity (ed25519 public key, hex).
     pub validator: String,
@@ -42,6 +44,9 @@ pub struct ConsensusStatusSource {
 /// The consensus section of a `/status` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsensusStatus {
+    /// `"validator"` or `"observer"`.
+    #[serde(default)]
+    pub role: String,
     pub committee_size: usize,
     pub validator: String,
     /// Consensus-side progress: the latest finalized round observed.
@@ -57,6 +62,7 @@ pub struct ConsensusStatus {
 impl ConsensusStatusSource {
     pub(crate) fn snapshot(&self) -> ConsensusStatus {
         ConsensusStatus {
+            role: self.role.to_string(),
             committee_size: self.committee_size,
             validator: self.validator.clone(),
             finalized: *self.finalized.borrow(),

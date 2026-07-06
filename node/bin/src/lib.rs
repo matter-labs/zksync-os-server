@@ -32,7 +32,7 @@ use crate::config::{
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
-use crate::init_tx_forwarder::build_static_tx_forwarder;
+use crate::init_tx_forwarder::{build_round_robin_tx_forwarder, build_static_tx_forwarder};
 use crate::l1_revert::revert_l1_on_startup;
 use crate::main_node_client::MainNodeClient;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -666,6 +666,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let tx_forwarder = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
         Some(build_static_tx_forwarder(url).await)
+    } else if config.consensus_config.enabled && config.consensus_config.role.is_observer() {
+        // A consensus observer includes nothing itself: its RPC keeps a local
+        // mirror (pending views stay coherent) and forwards to the validators.
+        Some(build_round_robin_tx_forwarder(&config.consensus_config.tx_forward_rpc_urls).await)
     } else {
         None
     };
@@ -968,6 +972,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let (finalized_sender, finalized_receiver) = tokio::sync::watch::channel(None);
         let (metrics_encoder_sender, metrics_encoder_receiver) = tokio::sync::watch::channel(None);
         let status_source = zksync_os_status_server::ConsensusStatusSource {
+            role: setup.role.as_str(),
             committee_size: setup.committee.len(),
             validator: {
                 use commonware_codec::Encode as _;

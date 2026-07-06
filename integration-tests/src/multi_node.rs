@@ -16,7 +16,7 @@ use commonware_cryptography::bls12381::primitives::ops;
 use commonware_cryptography::bls12381::primitives::variant::MinPk;
 use commonware_cryptography::ed25519;
 use futures::future::try_join_all;
-use zksync_os_server::config::CommitteeScheduleEntryConfig;
+use zksync_os_server::config::{CommitteeScheduleEntryConfig, ConsensusRole};
 use zksync_os_types::NodeRole;
 
 /// One validator's key set, generated fresh per cluster.
@@ -270,6 +270,124 @@ impl MultiNodeTester {
                     }
                 });
         let nodes = try_join_all(launches).await?;
+        Ok(Self {
+            validators: nodes.into_iter().map(Validator::Running).collect(),
+            consensus_ports,
+            committee_entries: committee,
+        })
+    }
+
+    /// Starts `num_validators` validators plus `num_observers` non-voting
+    /// observers on the same consensus network. Observers take the indices after
+    /// the validators (`node(num_validators)` is the first observer) and slot into
+    /// the same lifecycle machinery (`node`, waits, stop/start). Launch is
+    /// two-phase on purpose: an observer forwards its RPC-received transactions to
+    /// the validators' RPCs and connects to them at startup, so the validators
+    /// must be up first.
+    pub async fn start_with_observers(
+        num_validators: usize,
+        num_observers: usize,
+    ) -> anyhow::Result<Self> {
+        assert!(
+            num_validators >= 2,
+            "a committee needs at least 2 validators"
+        );
+        let chain_layout = ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let l1 = crate::AnvilL1::start(chain_layout).await?;
+
+        let total = num_validators + num_observers;
+        // Observers reuse the key generator; their BLS half is simply never
+        // configured (an observer holds no signing key).
+        let keys: Vec<ValidatorKeys> = (0..total).map(|_| generate_validator_keys()).collect();
+        let fee_collector = alloy::primitives::Address::random();
+        let mut consensus_ports = Vec::with_capacity(total);
+        for _ in 0..total {
+            consensus_ports.push(LockedPort::acquire_unused().await?);
+        }
+        let committee: Vec<String> = keys[..num_validators]
+            .iter()
+            .zip(&consensus_ports)
+            .map(|(keys, port)| format!("{}@127.0.0.1:{}", keys.committee_entry_keys, port.port))
+            .collect();
+        // `consensus.observers` entries carry only the network identity.
+        let observer_entries: Vec<String> = keys[num_validators..]
+            .iter()
+            .zip(&consensus_ports[num_validators..])
+            .map(|(keys, port)| {
+                let network_hex = keys
+                    .committee_entry_keys
+                    .split(':')
+                    .next()
+                    .expect("committee entry keys are `<net>:<bls>`");
+                format!("{network_hex}@127.0.0.1:{}", port.port)
+            })
+            .collect();
+
+        // Phase 1: the committee.
+        let launches = keys[..num_validators]
+            .iter()
+            .zip(&consensus_ports)
+            .enumerate()
+            .map(|(index, (keys, consensus_port))| {
+                let l1 = l1.clone();
+                let committee = committee.clone();
+                let observer_entries = observer_entries.clone();
+                let network_key = alloy::hex::encode(keys.network.encode());
+                let bls_key = alloy::hex::encode(keys.bls.encode());
+                let listen_address = format!("127.0.0.1:{}", consensus_port.port);
+                async move {
+                    let mut config = build_node_config(&l1, chain_layout, false).await?;
+                    disable_prover_input_generation(&mut config);
+                    config.general_config.node_role = NodeRole::MainNode;
+                    config.sequencer_config.fee_collector_address = fee_collector;
+                    config.batcher_config.enabled = index == 0;
+                    config.consensus_config.enabled = true;
+                    config.consensus_config.network_key = Some(network_key);
+                    config.consensus_config.bls_key = Some(bls_key);
+                    config.consensus_config.listen_address = listen_address;
+                    config.consensus_config.validators = committee;
+                    config.consensus_config.observers = observer_entries;
+                    config.consensus_config.allow_private_ips = true;
+                    Tester::launch_with_new_runtime(l1, chain_layout, config)
+                        .await
+                        .with_context(|| format!("failed to launch validator {index}"))
+                }
+            });
+        let mut nodes = try_join_all(launches).await?;
+
+        // Phase 2: the observers, forwarding to the now-live validator RPCs.
+        let forward_urls: Vec<String> = nodes
+            .iter()
+            .map(|node| node.l2_rpc_url().to_string())
+            .collect();
+        for (offset, (keys, consensus_port)) in keys[num_validators..]
+            .iter()
+            .zip(&consensus_ports[num_validators..])
+            .enumerate()
+        {
+            let network_key = alloy::hex::encode(keys.network.encode());
+            let listen_address = format!("127.0.0.1:{}", consensus_port.port);
+            let mut config = build_node_config(&l1, chain_layout, false).await?;
+            disable_prover_input_generation(&mut config);
+            config.general_config.node_role = NodeRole::MainNode;
+            config.sequencer_config.fee_collector_address = fee_collector;
+            config.batcher_config.enabled = false;
+            config.consensus_config.enabled = true;
+            config.consensus_config.role = ConsensusRole::Observer;
+            config.consensus_config.network_key = Some(network_key);
+            config.consensus_config.listen_address = listen_address;
+            config.consensus_config.validators = committee.clone();
+            config.consensus_config.observers = observer_entries.clone();
+            config.consensus_config.tx_forward_rpc_urls = forward_urls.clone();
+            config.consensus_config.allow_private_ips = true;
+            let node = Tester::launch_with_new_runtime(l1.clone(), chain_layout, config)
+                .await
+                .with_context(|| format!("failed to launch observer {offset}"))?;
+            nodes.push(node);
+        }
+
         Ok(Self {
             validators: nodes.into_iter().map(Validator::Running).collect(),
             consensus_ports,

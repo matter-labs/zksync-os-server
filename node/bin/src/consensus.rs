@@ -96,6 +96,28 @@ pub fn parse_committee_member(entry: &str) -> anyhow::Result<CommitteeMember> {
     })
 }
 
+/// One observer as configured: a network identity and where to reach it. No BLS
+/// key — observers never sign.
+#[derive(Debug, Clone)]
+pub struct ObserverPeer {
+    pub network_key: ed25519::PublicKey,
+    pub address: SocketAddr,
+}
+
+/// Parses one `consensus.observers` entry: `<ed25519_hex>@<host:port>`.
+pub fn parse_observer_peer(entry: &str) -> anyhow::Result<ObserverPeer> {
+    let (network_hex, address) = entry
+        .split_once('@')
+        .context("expected `<ed25519_hex>@<host:port>`")?;
+    let network_key =
+        decode_hex_key::<ed25519::PublicKey>(network_hex).context("invalid ed25519 public key")?;
+    let address: SocketAddr = address.parse().context("invalid observer address")?;
+    Ok(ObserverPeer {
+        network_key,
+        address,
+    })
+}
+
 fn decode_hex_key<T: commonware_codec::DecodeExt<()>>(hex: &str) -> anyhow::Result<T> {
     let bytes = alloy::hex::decode(hex.trim()).context("invalid hex")?;
     T::decode(bytes.as_slice()).map_err(|err| anyhow::anyhow!("invalid key encoding: {err}"))
@@ -197,6 +219,14 @@ pub struct ConsensusSetup {
     /// Use a cached finality floor even when it predates the committee's last
     /// scheduled change (`consensus.accept_stale_floor`).
     pub accept_stale_floor: bool,
+    /// Whether this node votes or only follows (`consensus.role`).
+    pub role: crate::config::ConsensusRole,
+    /// Admitted non-voting observers (`consensus.observers`) — tracked as the
+    /// committee peer set's *secondary* tier: authorized to connect, but skipped
+    /// by primary-only policies (block-broadcast caching treats only primary
+    /// peers as potential proposers). Includes this node itself when it runs as
+    /// an observer.
+    pub observers: Vec<ObserverPeer>,
 }
 
 impl ConsensusSetup {
@@ -269,6 +299,32 @@ impl ConsensusSetup {
         let schedule = CommitteeSchedule::new(entries)
             .context("invalid committee schedule (`consensus.committees`)")?;
 
+        // The observers' admission list: shared verbatim by every node — validators
+        // authorize observer connections from it; an observer finds itself in it.
+        // Identities must be unique and disjoint from the committee's (a scheduled
+        // member's key doubling as an observer would make "who is this connection"
+        // ambiguous at the network layer).
+        let mut observers: Vec<ObserverPeer> = Vec::new();
+        for entry in &config.observers {
+            let peer = parse_observer_peer(entry)
+                .with_context(|| format!("bad `consensus.observers` entry: {entry}"))?;
+            anyhow::ensure!(
+                !observers
+                    .iter()
+                    .any(|known| known.network_key == peer.network_key),
+                "observer {} is listed twice in `consensus.observers`",
+                peer.network_key,
+            );
+            anyhow::ensure!(
+                !address_book
+                    .iter()
+                    .any(|member| member.network_key == peer.network_key),
+                "observer {} is also a committee member; a node is one or the other",
+                peer.network_key,
+            );
+            observers.push(peer);
+        }
+
         let network_key = decode_hex_key::<ed25519::PrivateKey>(
             config
                 .network_key
@@ -276,49 +332,84 @@ impl ConsensusSetup {
                 .context("`consensus.network_key` is required")?,
         )
         .context("invalid `consensus.network_key`")?;
-        let bls_key = decode_hex_key::<group::Private>(
-            config
-                .bls_key
-                .as_ref()
-                .context("`consensus.bls_key` is required")?,
-        )
-        .context("invalid `consensus.bls_key`")?;
-
-        // Key guards, both loud on purpose. A schedule that lists this validator's
-        // network key against a *different* BLS key would make every scheme build in
-        // verifier mode: the node would run, follow, and simply never vote — the
-        // kind of quiet failure that costs a committee its liveness margin with no
-        // error anywhere. And a key in no committee at all is usually a
-        // misconfiguration, unless the operator says otherwise.
         use commonware_cryptography::Signer as _;
         let our_network_key = network_key.public_key();
-        let our_bls_public =
-            commonware_cryptography::bls12381::primitives::ops::compute_public::<MinPk>(&bls_key);
-        let mut member_anywhere = false;
-        for entry in schedule.entries() {
-            if let Some(listed) = entry.committee.get_value(&our_network_key) {
-                member_anywhere = true;
+
+        // Role-dependent keys and guards, all loud on purpose: every quiet failure
+        // shape here (a validator that follows but never votes, an observer the
+        // committee expects votes from) costs the committee liveness margin with
+        // no error anywhere.
+        let signing_key = match config.role {
+            crate::config::ConsensusRole::Validator => {
+                let bls_key = decode_hex_key::<group::Private>(
+                    config
+                        .bls_key
+                        .as_ref()
+                        .context("`consensus.bls_key` is required for validators")?,
+                )
+                .context("invalid `consensus.bls_key`")?;
+
+                // A schedule that lists this validator's network key against a
+                // *different* BLS key would make every scheme build in verifier
+                // mode: the node would run, follow, and simply never vote. And a
+                // key in no committee at all is usually a misconfiguration, unless
+                // the operator says otherwise.
+                let our_bls_public =
+                    commonware_cryptography::bls12381::primitives::ops::compute_public::<MinPk>(
+                        &bls_key,
+                    );
+                let mut member_anywhere = false;
+                for entry in schedule.entries() {
+                    if let Some(listed) = entry.committee.get_value(&our_network_key) {
+                        member_anywhere = true;
+                        anyhow::ensure!(
+                            listed == &our_bls_public,
+                            "the committee activating at epoch {} pairs this validator's network \
+                             key with a BLS public key that `consensus.bls_key` does not derive — \
+                             the validator would verify but never vote; fix the schedule entry or \
+                             the signing key",
+                            entry.activation_epoch,
+                        );
+                    }
+                }
                 anyhow::ensure!(
-                    listed == &our_bls_public,
-                    "the committee activating at epoch {} pairs this validator's network \
-                     key with a BLS public key that `consensus.bls_key` does not derive — \
-                     the validator would verify but never vote; fix the schedule entry or \
-                     the signing key",
-                    entry.activation_epoch,
+                    member_anywhere || config.acknowledge_non_member,
+                    "this validator's network key appears in no configured committee. If it is \
+                     deliberately running as a non-voting follower (e.g. freshly scheduled out \
+                     of the committee), set `consensus.acknowledge_non_member: true`; otherwise \
+                     fix `consensus.validators` / `consensus.committees` — or run it as \
+                     `consensus.role=observer`",
                 );
+                Some(bls_key)
             }
-        }
-        anyhow::ensure!(
-            member_anywhere || config.acknowledge_non_member,
-            "this validator's network key appears in no configured committee. If it is \
-             deliberately running as a non-voting follower (e.g. freshly scheduled out \
-             of the committee), set `consensus.acknowledge_non_member: true`; otherwise \
-             fix `consensus.validators` / `consensus.committees`",
-        );
+            crate::config::ConsensusRole::Observer => {
+                // The inverse guards: the committee must not be counting on this
+                // node's votes, and it must be in the admission list or nobody
+                // will accept its connections.
+                for entry in schedule.entries() {
+                    anyhow::ensure!(
+                        entry.committee.get_value(&our_network_key).is_none(),
+                        "this node's network key is scheduled into the committee activating \
+                         at epoch {}, but `consensus.role` is `observer` — the committee \
+                         would wait for votes that never come; run it as a validator or fix \
+                         the schedule",
+                        entry.activation_epoch,
+                    );
+                }
+                anyhow::ensure!(
+                    observers
+                        .iter()
+                        .any(|peer| peer.network_key == our_network_key),
+                    "this observer's network key is missing from `consensus.observers` — \
+                     validators only accept connections from identities on that list",
+                );
+                None
+            }
+        };
 
         let base_namespace = namespace(config.protocol_version);
         let signing_namespace = union_unique(&base_namespace, b"_CONSENSUS");
-        let provider = SchemeProvider::new(signing_namespace, schedule.clone(), Some(bls_key));
+        let provider = SchemeProvider::new(signing_namespace, schedule.clone(), signing_key);
 
         Ok(Self {
             committee: address_book,
@@ -329,6 +420,8 @@ impl ConsensusSetup {
                 .context("`consensus.epoch_length` must be nonzero")?,
             era_anchor: config.genesis_height,
             accept_stale_floor: config.accept_stale_floor,
+            role: config.role,
+            observers,
             listen_address: config
                 .listen_address
                 .parse()
@@ -592,7 +685,30 @@ where
             })
             .try_collect()
             .expect("duplicate validator network identity");
-        let peers: commonware_p2p::AddressableTrackedPeers<ed25519::PublicKey> = peers.into();
+        // Observers ride in the SAME tracked set as the committee, as its
+        // *secondary* tier: tracked identities complete handshakes (this is the
+        // observers' admission perimeter — see `consensus.observers`), but
+        // primary-only policies skip them — notably the block-broadcast cache,
+        // which only accepts blocks from primary peers, i.e. potential proposers.
+        // Deliberately NOT a second peer-set index: set indexes are generations
+        // (the committee-transition overlap mechanism), and components treat the
+        // latest generation as *the* network — a separate observers set would
+        // supersede the committee and stall block dissemination.
+        let observer_peers: Map<ed25519::PublicKey, Address> = setup
+            .observers
+            .iter()
+            .map(|peer| {
+                (
+                    peer.network_key.clone(),
+                    Address::Asymmetric {
+                        ingress: Ingress::Socket(peer.address),
+                        egress: SocketAddr::from((peer.address.ip(), 0)),
+                    },
+                )
+            })
+            .try_collect()
+            .expect("duplicate observer identity");
+        let peers = commonware_p2p::AddressableTrackedPeers::new(peers, observer_peers);
         let _ = oracle.track(0, peers);
 
         // Channels must all be registered before the network starts.
@@ -612,6 +728,7 @@ where
             tx_gossip_sender,
             tx_gossip_receiver,
             setup.max_message_size,
+            setup.role,
         );
 
         use commonware_cryptography::Signer as _;
@@ -706,9 +823,10 @@ where
 fn start_tx_gossip<C, P, TxSender, TxReceiver>(
     context: &C,
     pool: P,
-    mut sender: TxSender,
+    sender: TxSender,
     mut receiver: TxReceiver,
     max_message_size: usize,
+    role: crate::config::ConsensusRole,
 ) where
     C: commonware_runtime::Spawner + commonware_runtime::Metrics,
     P: L2Subpool + Clone,
@@ -719,44 +837,14 @@ fn start_tx_gossip<C, P, TxSender, TxReceiver>(
     // when it grows past this.
     let byte_budget = max_message_size / 2;
 
-    let gossip_pool = pool.clone();
-    context
-        .child("tx_gossip_out")
-        .spawn(move |task_context| async move {
-            // The pool's listener never closes on consensus shutdown (the pool lives
-            // node-side), so this task must watch the stop signal itself — a parked
-            // task would hold pool handles (and the databases under them) past the
-            // runtime's shutdown deadline.
-            let mut stopped = task_context.stopped();
-            let mut new_txs = gossip_pool.new_transactions_listener();
-            loop {
-                let event = tokio::select! {
-                    _ = &mut stopped => return,
-                    event = new_txs.recv() => match event {
-                        Some(event) => event,
-                        None => return,
-                    },
-                };
-                // Greedily drain whatever else is already queued into one message.
-                let mut batch = vec![encode_gossiped_tx(&event)];
-                let mut batch_bytes = batch[0].len();
-                while batch.len() < MAX_TXS_PER_GOSSIP && batch_bytes < byte_budget {
-                    match new_txs.try_recv() {
-                        Ok(event) => {
-                            let encoded = encode_gossiped_tx(&event);
-                            batch_bytes += encoded.len();
-                            batch.push(encoded);
-                        }
-                        Err(_) => break,
-                    }
-                }
-                let message = alloy_rlp::encode(&batch);
-                // `send` is now synchronous and returns the delivery list; gossip is
-                // best-effort, so an empty delivery is not an error (network teardown
-                // is caught by the stop signal above).
-                let _ = sender.send(commonware_p2p::Recipients::All, message, false);
-            }
-        });
+    // Observers receive gossip (the channel is registered either way — an
+    // unrecognized channel would get the *sender* banned) but do not broadcast:
+    // their transactions travel to validators over RPC forwarding instead. Gossip
+    // injection from observers is the ratified later step, not this one.
+    if role.is_validator() {
+        let gossip_pool = pool.clone();
+        start_tx_gossip_out(context, gossip_pool, sender, byte_budget);
+    }
 
     context
         .child("tx_gossip_in")
@@ -806,6 +894,57 @@ fn start_tx_gossip<C, P, TxSender, TxReceiver>(
                         }
                     }
                 }
+            }
+        });
+}
+
+/// The outbound half of transaction gossip: drains the pool's new-transaction
+/// stream into batched broadcasts. Validators only (see [`start_tx_gossip`]).
+fn start_tx_gossip_out<C, P, TxSender>(
+    context: &C,
+    pool: P,
+    mut sender: TxSender,
+    byte_budget: usize,
+) where
+    C: commonware_runtime::Spawner + commonware_runtime::Metrics,
+    P: L2Subpool + Clone,
+    TxSender: Sender<PublicKey = ed25519::PublicKey>,
+{
+    context
+        .child("tx_gossip_out")
+        .spawn(move |task_context| async move {
+            // The pool's listener never closes on consensus shutdown (the pool lives
+            // node-side), so this task must watch the stop signal itself — a parked
+            // task would hold pool handles (and the databases under them) past the
+            // runtime's shutdown deadline.
+            let mut stopped = task_context.stopped();
+            let mut new_txs = pool.new_transactions_listener();
+            loop {
+                let event = tokio::select! {
+                    _ = &mut stopped => return,
+                    event = new_txs.recv() => match event {
+                        Some(event) => event,
+                        None => return,
+                    },
+                };
+                // Greedily drain whatever else is already queued into one message.
+                let mut batch = vec![encode_gossiped_tx(&event)];
+                let mut batch_bytes = batch[0].len();
+                while batch.len() < MAX_TXS_PER_GOSSIP && batch_bytes < byte_budget {
+                    match new_txs.try_recv() {
+                        Ok(event) => {
+                            let encoded = encode_gossiped_tx(&event);
+                            batch_bytes += encoded.len();
+                            batch.push(encoded);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let message = alloy_rlp::encode(&batch);
+                // `send` is synchronous and returns the delivery list; gossip is
+                // best-effort, so an empty delivery is not an error (network teardown
+                // is caught by the stop signal above).
+                let _ = sender.send(commonware_p2p::Recipients::All, message, false);
             }
         });
 }

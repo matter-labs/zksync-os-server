@@ -604,3 +604,50 @@ async fn validator_on_a_different_protocol_version_cannot_pair() -> anyhow::Resu
 
     cluster.shutdown_all().await
 }
+
+/// A non-voting observer on the consensus network: it holds no BLS key, appears in
+/// no committee, and has no serving node configured (`main_node_rpc_url` unset) —
+/// everything it believes arrives as gossiped blocks with finality certificates it
+/// verifies against the committee schedule. Its RPC must still be fully usable:
+/// a transaction submitted to the observer is forwarded to a validator, gossiped
+/// to the leader, included, finalized — and the observer serves the receipt from
+/// its own (consensus-verified) chain.
+#[test_log::test(tokio::test)]
+async fn observer_follows_the_committee_and_serves_transactions() -> anyhow::Result<()> {
+    let cluster = MultiNodeTester::start_with_observers(3, 1).await?;
+    const OBSERVER: usize = 3;
+
+    // The observer's whole startup already proves following: reaching here means it
+    // applied the initial-deposit block it could only have received via consensus.
+    // Now the RPC path: submit through the OBSERVER, get the receipt FROM it.
+    let included_at = send_transfer(&cluster, OBSERVER, Address::repeat_byte(0x51)).await?;
+
+    // Everyone — observer included — converges on the block, byte-identical.
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+    cluster.assert_block_hashes_agree(included_at).await?;
+
+    // The status surface tells the roles apart, and the observer's view of
+    // finality is live (its scout verifies certificates for epochs it runs no
+    // engine in — that observation is what keeps this field advancing).
+    let observer_status = cluster.node(OBSERVER).status().await?;
+    let consensus = observer_status
+        .consensus
+        .expect("observer serves a consensus status section");
+    assert_eq!(consensus.role, "observer");
+    assert!(
+        consensus.finalized.is_some(),
+        "observer never observed a finalization"
+    );
+    let validator_status = cluster.node(0).status().await?;
+    assert_eq!(
+        validator_status
+            .consensus
+            .expect("validator serves a consensus status section")
+            .role,
+        "validator"
+    );
+
+    Ok(())
+}

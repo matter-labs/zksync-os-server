@@ -3,12 +3,14 @@
 ## The two modes
 
 `consensus.enabled = false` (the default) is the single-sequencer node, unchanged.
-`consensus.enabled = true` makes the node one validator of a committee: block
-production is driven by consensus leadership instead of a local loop, every block
-is verified by re-execution before this node votes for it, and only finalized
-blocks reach the write-ahead log. In either mode, exactly one node per chain runs
-the batcher (settlement); every validator serves RPC and the external-node replay
-stream.
+`consensus.enabled = true` puts the node on the consensus network, in one of two
+roles (`consensus.role`): a **validator** — block production is driven by
+consensus leadership instead of a local loop, every block is verified by
+re-execution before this node votes for it, and only finalized blocks reach the
+write-ahead log — or an **observer**, which follows the same chain through the
+same machinery without ever voting (see "Observers" below). In either mode,
+exactly one node per chain runs the batcher (settlement); every consensus node
+serves RPC and the external-node replay stream.
 
 Startup **guards** protect every transition described on this page: each one
 refuses to start into a state that could mix chain histories, and each failure
@@ -109,6 +111,38 @@ The procedure:
 The batcher moves to exactly one validator (conventionally the ex-sequencer's
 machine); settlement pauses during the gap and reconciles on startup through the
 same recovery machinery every restart uses.
+
+## Observers
+
+An observer is a node on the consensus network that never votes: it holds no BLS
+key, appears in no committee schedule, and runs no consensus engines — but it
+receives gossiped blocks, verifies every finality certificate against the
+committee schedule, and applies finalized blocks through the same commit path a
+validator uses. The trust improvement over a replay-fetching external node is the
+point: an observer accepts a block because a quorum of the committee signed it,
+not because one serving node said so. Its operator pins the committee schedule,
+not a URL.
+
+Configuration, on top of the committee schedule every consensus node carries:
+
+- `consensus.role = observer`, a network key, and **no** `consensus.bls_key`
+  (configuring one is refused — a key that exists but never signs invites the
+  wrong conclusions).
+- `consensus.observers`: the admission list — `<ed25519_hex>@<host:port>` per
+  observer, configured identically on **every** node. The consensus network only
+  completes handshakes with explicitly listed identities, so this list is the
+  observers' admission perimeter; an observer must find its own identity in it.
+  Observers hold no committee power — the worst an admitted one can do is consume
+  resources, which the network's rate quotas bound.
+- `consensus.tx_forward_rpc_urls`: validator RPC urls. An observer has no leader
+  turns, so a transaction submitted to its RPC is kept as a local mirror (pending
+  views stay coherent) and forwarded round-robin to a validator, which gossips it
+  to whoever leads next.
+
+Two guards keep the roles honest: an observer whose network key is scheduled into
+a committee refuses to start (the committee would wait for votes that never
+come), and a validator missing its signing key fails loudly instead of silently
+downgrading to following. `/status` reports the role.
 
 ## Changing the committee
 

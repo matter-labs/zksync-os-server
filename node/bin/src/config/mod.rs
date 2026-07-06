@@ -641,6 +641,44 @@ impl NetworkConfig {
     }
 }
 
+/// A consensus-enabled node's role: does it vote, or only follow?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsensusRole {
+    /// A committee member: runs consensus engines for epochs it is scheduled in,
+    /// proposes and votes. Needs a BLS signing key and a schedule entry.
+    #[serde(rename = "validator")]
+    Validator,
+    /// A non-voting follower on the consensus network: receives gossiped blocks,
+    /// verifies finality certificates against the committee schedule, and applies
+    /// finalized blocks — trust comes from the committee's quorum, not from any
+    /// single serving node. Holds no BLS key and must not appear in the schedule.
+    #[serde(rename = "observer")]
+    Observer,
+}
+
+impl ConsensusRole {
+    pub fn is_validator(&self) -> bool {
+        *self == ConsensusRole::Validator
+    }
+
+    pub fn is_observer(&self) -> bool {
+        *self == ConsensusRole::Observer
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConsensusRole::Validator => "validator",
+            ConsensusRole::Observer => "observer",
+        }
+    }
+}
+
+impl std::fmt::Display for ConsensusRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// BFT consensus over block sequencing. When enabled, this node is one validator of a
 /// committee: block production is driven by consensus leadership instead of a local
 /// loop, every block is verified by re-execution before this node votes for it, and
@@ -655,8 +693,13 @@ pub struct ConsensusConfig {
         "requires `general.node_role=main`"
     ))]
     pub enabled: bool,
-    /// This validator's ed25519 network identity key (hex of the 32-byte seed).
-    /// Also authenticates all validator-to-validator connections.
+    /// Whether this node votes (`validator`) or only follows (`observer`) — see
+    /// [`ConsensusRole`]. Explicit on purpose: a validator missing its signing key
+    /// must be a loud error, never a silent downgrade to following.
+    #[config(default_t = ConsensusRole::Validator, with = Serde![str])]
+    pub role: ConsensusRole,
+    /// This node's ed25519 network identity key (hex of the 32-byte seed).
+    /// Also authenticates all connections on the consensus network.
     #[config(secret)]
     #[config(default)]
     #[config_validate(custom(
@@ -665,12 +708,17 @@ pub struct ConsensusConfig {
     ))]
     pub network_key: Option<String>,
     /// This validator's BLS12-381 consensus signing key (hex). Signs votes and
-    /// certificates; distinct from the network identity.
+    /// certificates; distinct from the network identity. Validators only —
+    /// an observer holds no signing key, and configuring one for it is refused
+    /// (a key that exists but never signs invites the wrong conclusions).
     #[config(secret)]
     #[config(default)]
     #[config_validate(custom(
-        |root: &Config, value: &Option<String>| !root.consensus_config.enabled || value.is_some(),
-        "is required when `consensus.enabled=true`"
+        |root: &Config, value: &Option<String>| {
+            let consensus = &root.consensus_config;
+            !consensus.enabled || (consensus.role.is_validator() == value.is_some())
+        },
+        "is required for `consensus.role=validator` and must be absent for `consensus.role=observer`"
     ))]
     pub bls_key: Option<String>,
     /// Address the consensus p2p stack listens on.
@@ -728,6 +776,27 @@ pub struct ConsensusConfig {
     /// repointed as an external node).
     #[config(default_t = false)]
     pub acknowledge_non_member: bool,
+    /// Non-voting observers admitted to the consensus network, one entry per
+    /// observer: `<ed25519_public_hex>@<host:port>`. The consensus network only
+    /// completes handshakes with explicitly listed identities, so this list IS the
+    /// observers' admission perimeter. Configure it identically on every node —
+    /// validators authorize observer connections from it, and an observer finds
+    /// its own identity in it. Observers hold no committee power: worst case is
+    /// resource use, bounded by the network's rate quotas.
+    #[config(default, with = Serde![*])]
+    pub observers: Vec<String>,
+    /// Where an observer forwards transactions received over its RPC (round-robin
+    /// over the list): validator RPC urls. Observers hold no leader turns, so a
+    /// transaction submitted to one must travel to a validator to be included.
+    #[config(default, with = Serde![*])]
+    #[config_validate(custom(
+        |root: &Config, value: &Vec<String>| {
+            let consensus = &root.consensus_config;
+            !(consensus.enabled && consensus.role.is_observer() && value.is_empty())
+        },
+        "is required when `consensus.role=observer` (an observer cannot include transactions itself)"
+    ))]
+    pub tx_forward_rpc_urls: Vec<String>,
     /// Allow validator connections to private IPs (local and containerized networks).
     #[config(default_t = false)]
     pub allow_private_ips: bool,
