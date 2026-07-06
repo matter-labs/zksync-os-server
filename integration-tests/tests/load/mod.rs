@@ -2,7 +2,7 @@ use alloy::consensus::transaction::Recovered;
 use alloy::consensus::{SignableTransaction, TxEip1559};
 use alloy::eips::eip2718::{Decodable2718, Encodable2718};
 use alloy::network::{ReceiptResponse, TransactionBuilder};
-use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U128, U256, keccak256};
+use alloy::primitives::{Address, B256, Signature, TxKind, U128, U256, keccak256};
 use alloy::providers::{DynProvider, PendingTransactionBuilder, Provider, ProviderBuilder};
 use alloy::rpc::client::ClientBuilder;
 use alloy::rpc::types::TransactionRequest;
@@ -1548,18 +1548,29 @@ async fn effective_parallel_impl(
         .iter()
         .map(|p| corpus::CorpusReader::open(p))
         .collect::<anyhow::Result<_>>()?;
-    // Reads one nonce round (one tx per wallet, wallet order preserved), pre-chunked for the
-    // submit pipelines so the hot path never re-copies raw txs — the chunks are MOVED into
-    // their tasks. Returns `None` once any wallet's corpus is exhausted.
+    // Pre-serialized `eth_sendRawTransaction` params (`["0x…"]`). Built on the reader threads
+    // (which sit mostly idle) so the submit tasks hand serde a passthrough value instead of
+    // hex-encoding ~640 bytes per tx on the runtime at ~1M tx/s.
+    fn encode_send_raw_params(raw: &[u8]) -> Box<serde_json::value::RawValue> {
+        let mut s = String::with_capacity(raw.len() * 2 + 6);
+        s.push_str("[\"0x");
+        s.push_str(&alloy::hex::encode(raw));
+        s.push_str("\"]");
+        serde_json::value::RawValue::from_string(s).expect("hex params are valid JSON")
+    }
+    // Reads one nonce round (one tx per wallet, wallet order preserved), pre-encoded and
+    // pre-chunked for the submit pipelines so the hot path never re-copies or re-serializes
+    // txs — the chunks are MOVED into their tasks. Returns `None` once any wallet's corpus is
+    // exhausted.
     fn read_round(
         readers: &mut [corpus::CorpusReader],
         chunk_size: usize,
-    ) -> anyhow::Result<Option<Vec<Vec<Vec<u8>>>>> {
+    ) -> anyhow::Result<Option<Vec<Vec<Box<serde_json::value::RawValue>>>>> {
         let mut chunks = Vec::with_capacity(readers.len().div_ceil(chunk_size));
-        let mut current: Vec<Vec<u8>> = Vec::with_capacity(chunk_size);
+        let mut current: Vec<Box<serde_json::value::RawValue>> = Vec::with_capacity(chunk_size);
         for reader in readers.iter_mut() {
             match reader.next_record()? {
-                Some(raw) => current.push(raw),
+                Some(raw) => current.push(encode_send_raw_params(&raw)),
                 None => return Ok(None),
             }
             if current.len() == chunk_size {
@@ -1592,7 +1603,7 @@ async fn effective_parallel_impl(
     // (max observed RTT / avg RTT rounds), or raise `LOAD_TEST_READER_THREADS` to shrink
     // groups.
     let chunk_queue_depth: usize = env_or("LOAD_TEST_CHUNK_QUEUE_DEPTH", 32);
-    let mut chunk_queues: Vec<tokio::sync::mpsc::Receiver<Vec<Vec<u8>>>> =
+    let mut chunk_queues: Vec<tokio::sync::mpsc::Receiver<Vec<Box<serde_json::value::RawValue>>>> =
         Vec::with_capacity(chunks_total);
     {
         let mut readers = readers;
@@ -1602,8 +1613,9 @@ async fn effective_parallel_impl(
             let group_chunks = group.len().div_ceil(submit_pipeline);
             let mut senders = Vec::with_capacity(group_chunks);
             for _ in 0..group_chunks {
-                let (chunk_tx, chunk_rx) =
-                    tokio::sync::mpsc::channel::<Vec<Vec<u8>>>(chunk_queue_depth);
+                let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<
+                    Vec<Box<serde_json::value::RawValue>>,
+                >(chunk_queue_depth);
                 senders.push(chunk_tx);
                 chunk_queues.push(chunk_rx);
             }
@@ -1679,10 +1691,7 @@ async fn effective_parallel_impl(
                     let mut batch = client.new_batch();
                     let mut waiters = Vec::with_capacity(remaining.len());
                     for raw in &remaining {
-                        waiters.push(batch.add_call::<_, B256>(
-                            "eth_sendRawTransaction",
-                            &(Bytes::copy_from_slice(raw),),
-                        )?);
+                        waiters.push(batch.add_call::<_, B256>("eth_sendRawTransaction", raw)?);
                     }
                     batch.send().await?;
                     let mut rejected = Vec::with_capacity(remaining.len());
