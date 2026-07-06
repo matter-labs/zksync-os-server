@@ -116,7 +116,7 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 /// generator runs its CPU-bound task on a blocking thread it can significantly slow down graceful
 /// shutdown. We put 60s here until zksync-os v0.4.0 which will get rid of RISC-V simulator and
 /// allow async/abortable prover input generation.
-const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
+const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
 const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
