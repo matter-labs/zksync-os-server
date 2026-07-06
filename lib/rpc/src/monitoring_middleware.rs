@@ -47,6 +47,36 @@ fn call_metrics_sampled() -> bool {
     })
 }
 
+/// Bench-only (`RPC_ADMISSION_PROFILE`): sample 1-in-N batches (`RPC_BATCH_PROFILE_STRIDE`,
+/// default 2048) for a phase-timing log line, splitting the server-side batch turnaround into
+/// entry spawn vs join. Thread-local stride — same contention-free pattern as
+/// `call_metrics_sampled`.
+fn batch_profile_sampled() -> bool {
+    static STRIDE: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let Some(stride) = *STRIDE.get_or_init(|| {
+        let enabled = std::env::var("RPC_ADMISSION_PROFILE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
+        enabled.then(|| {
+            std::env::var("RPC_BATCH_PROFILE_STRIDE")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|stride| *stride > 0)
+                .unwrap_or(2048)
+        })
+    }) else {
+        return false;
+    };
+    thread_local! {
+        static COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    COUNTER.with(|counter| {
+        let value = counter.get().wrapping_add(1);
+        counter.set(value);
+        value % stride == 0
+    })
+}
+
 #[derive(Clone)]
 pub struct Monitoring<S = RpcService> {
     inner: S,
@@ -265,6 +295,7 @@ where
         async move {
             let mut guard = BatchGuard::new(batch_input_size, request_counts);
             let mut got_notification = false;
+            let profile_started = batch_profile_sampled().then(Instant::now);
 
             // Run the batch's calls in PARALLEL: each is spawned onto the runtime so CPU-heavy
             // handlers (e.g. `eth_sendRawTransaction`'s ECDSA recovery) spread across worker
@@ -309,6 +340,8 @@ where
                     }
                 }
             }
+            let spawned_at = profile_started.map(|_| Instant::now());
+            let entry_count = entries.len();
             for entry in entries {
                 let rp = match entry {
                     PendingEntry::Spawned(id, handle) => match handle.await {
@@ -330,6 +363,16 @@ where
             } else {
                 MethodResponse::from_batch(batch_rp.finish())
             };
+
+            if let (Some(t0), Some(t1)) = (profile_started, spawned_at) {
+                tracing::error!(
+                    entries = entry_count,
+                    spawn = ?t1.duration_since(t0),
+                    join = ?t1.elapsed(),
+                    total = ?t0.elapsed(),
+                    "rpc batch profile"
+                );
+            }
 
             guard.completed = Some(response.as_json().get().len());
             response

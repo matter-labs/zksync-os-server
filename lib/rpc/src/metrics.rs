@@ -240,3 +240,31 @@ pub fn register_task_monitor() {
         })
         .ok();
 }
+
+/// Bench-only (`RPC_ADMISSION_PROFILE`): the in-process test node has no Prometheus exporter, so
+/// periodically log the task-monitor decomposition of RPC handler latency (ERROR level to survive
+/// `RUST_LOG=warn` bench runs). `mean_scheduled` is scheduler-queue wait — the worker-saturation
+/// signal; `mean_poll` is actual on-CPU handler time.
+pub fn spawn_task_monitor_logger() {
+    let enabled = std::env::var("RPC_ADMISSION_PROFILE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+    if !enabled {
+        return;
+    }
+    let mut intervals = RPC_TASK_MONITOR.intervals();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let Some(m) = intervals.next() else { return };
+            tracing::error!(
+                mean_scheduled = ?m.mean_scheduled_duration(),
+                mean_poll = ?m.mean_poll_duration(),
+                mean_idle = ?m.mean_idle_duration(),
+                slow_polls = m.total_slow_poll_count,
+                instrumented = m.instrumented_count,
+                "rpc task monitor sample"
+            );
+        }
+    });
+}

@@ -41,6 +41,20 @@ fn env_or<T: FromStr>(key: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
+/// Boolean env flag accepting `1/0/true/false/yes/no`. NOT `env_or::<bool>`: `bool::FromStr`
+/// rejects "1", so `FLAG=1` would silently parse as the default — which is exactly how every
+/// `LOAD_TEST_HTTP=1` run in the 1M-TPS campaign actually ran over WebSocket.
+fn env_flag(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Some(true),
+            "0" | "false" | "no" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
 /// Default per-signer corpus size (env `LOADTEST_TXS_PER_FILE`). 100M is ample for sustained
 /// multi-million-TPS runs without exhausting a signer mid-test. Lower it (and/or the signer count)
 /// for `effective_tps`, whose real-signed corpus is far more expensive to generate + store.
@@ -1041,7 +1055,7 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
     // Warm up so the channel fills and the pipeline reaches steady state, then measure the rate.
     tokio::time::sleep(warmup).await;
 
-    if env_or("DIRECT_TX_STOP_PUSHERS_AFTER_WARMUP", false) {
+    if env_flag("DIRECT_TX_STOP_PUSHERS_AFTER_WARMUP", false) {
         stop.store(true, Ordering::Relaxed);
     }
 
@@ -1347,15 +1361,15 @@ async fn effective_parallel_impl(
     let num_wallets: usize = env_or("LOAD_TEST_WALLETS", 128);
     let concurrency: usize = env_or("LOAD_TEST_CONCURRENCY", 16384);
     let submit_pipeline: usize = env_or("LOAD_TEST_SUBMIT_PIPELINE", 1);
-    let wait_for_receipts = env_or("LOAD_TEST_WAIT_FOR_RECEIPTS", true);
-    let wait_for_final_receipts = !wait_for_receipts && env_or("LOAD_TEST_FINAL_RECEIPTS", false);
+    let wait_for_receipts = env_flag("LOAD_TEST_WAIT_FOR_RECEIPTS", true);
+    let wait_for_final_receipts = !wait_for_receipts && env_flag("LOAD_TEST_FINAL_RECEIPTS", false);
     let mut rpc_urls = tester.l2_rpc_ws_urls();
     // Real JSON-RPC batch frames only exist over HTTP: the alloy ws transport flattens
     // `new_batch()` into individual messages, so over ws every tx pays its own frame decode +
     // parse + spawn + response frame, and the server-side batch fan-out never runs. Over HTTP a
     // chunk is ONE array frame (jsonrpsee serves both protocols on the same port), parsed once
     // and fanned out across the runtime by the Monitoring middleware.
-    if env_or("LOAD_TEST_HTTP", false) {
+    if env_flag("LOAD_TEST_HTTP", false) {
         for url in &mut rpc_urls {
             *url = url.replace("ws://", "http://");
         }
