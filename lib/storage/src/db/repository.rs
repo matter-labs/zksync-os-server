@@ -6,13 +6,17 @@ use alloy::{
     primitives::{Address, BlockHash, BlockNumber, TxHash, TxNonce},
     rlp::{Decodable, Encodable},
 };
-use log_index::{BitmapCache, deindex_logs, index_logs, rollback_coverage, update_coverage};
+use log_index::{
+    BitmapCache, deindex_logs, index_logs, rollback_coverage, update_coverage,
+    update_coverage_range,
+};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
 use zksync_os_genesis::Genesis;
-use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
+use zksync_os_rocksdb::{RocksDB, RocksDBOptions, StalledWritesRetries};
 use zksync_os_storage_api::{
     ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
 };
@@ -34,6 +38,10 @@ pub enum RepositoryCF {
     TxMeta,
     // (initiator address, nonce) => tx hash
     InitiatorAndNonceToHash,
+    // BENCHMARK BRANCH: block number => blob of the block's txs (len-prefixed
+    // [tx_2718, receipt_2718, meta] triples). The bulk-persist path writes THIS instead of the
+    // per-tx CFs above — see `write_blocks`.
+    BlockTxs,
     // meta fields: latest block number, log index first/last block
     Meta,
     // (address[20] ++ chunk_start[8]) => roaring bitmap of block numbers containing logs from that address
@@ -65,6 +73,7 @@ impl NamedColumnFamily for RepositoryCF {
         RepositoryCF::TxReceipt,
         RepositoryCF::TxMeta,
         RepositoryCF::InitiatorAndNonceToHash,
+        RepositoryCF::BlockTxs,
         RepositoryCF::Meta,
         RepositoryCF::LogBlocksByAddress,
         RepositoryCF::LogBlocksByTopic,
@@ -78,6 +87,7 @@ impl NamedColumnFamily for RepositoryCF {
             RepositoryCF::TxReceipt => "tx_receipt",
             RepositoryCF::TxMeta => "tx_meta",
             RepositoryCF::InitiatorAndNonceToHash => "initiator_and_nonce_to_hash",
+            RepositoryCF::BlockTxs => "block_txs",
             RepositoryCF::Meta => "meta",
             RepositoryCF::LogBlocksByAddress => "log_blocks_by_address",
             RepositoryCF::LogBlocksByTopic => "log_blocks_by_topic",
@@ -93,6 +103,21 @@ impl NamedColumnFamily for RepositoryCF {
             _ => None,
         }
     }
+
+    fn requires_tuning(&self) -> bool {
+        // The per-transaction CFs ingest ~100MB/s at benchmark rates; default-sized memtables
+        // flush every couple of seconds and the resulting L0 pressure stalls ALL writers
+        // (write throughput was measured parallelism-immune — the stall signature).
+        matches!(
+            self,
+            RepositoryCF::BlockData
+                | RepositoryCF::Tx
+                | RepositoryCF::TxReceipt
+                | RepositoryCF::TxMeta
+                | RepositoryCF::InitiatorAndNonceToHash
+                | RepositoryCF::BlockTxs
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -105,7 +130,19 @@ pub struct RepositoryDb {
 
 impl RepositoryDb {
     pub async fn new(db_path: &Path, genesis: &Genesis) -> Self {
-        let db = RocksDB::<RepositoryCF>::new(db_path).expect("Failed to open db");
+        let db = RocksDB::<RepositoryCF>::with_options(
+            db_path,
+            RocksDBOptions {
+                block_cache_capacity: Some(512 << 20),
+                include_indices_and_filters_in_block_cache: false,
+                // Large memtables for the per-tx CFs (see `requires_tuning`): fewer flushes,
+                // less L0 pressure, fewer write stalls at benchmark ingest rates.
+                large_memtable_capacity: Some(512 << 20),
+                stalled_writes_retries: StalledWritesRetries::new(Duration::from_secs(300)),
+                max_open_files: None,
+            },
+        )
+        .expect("Failed to open db");
         let db_block_number = db
             .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())
             .unwrap()
@@ -146,8 +183,12 @@ impl RepositoryDb {
             .unwrap()
     }
 
-    fn write_block_inner(
+    /// Stages one block's puts (block data + per-tx entries) into `batch` WITHOUT the Meta /
+    /// coverage pointers and WITHOUT committing — shared by the single-block and batched writes.
+    fn stage_block(
         db: &RocksDB<RepositoryCF>,
+        batch: &mut WriteBatch<RepositoryCF>,
+        bitmap_cache: &mut BitmapCache,
         block: &Sealed<Block<TxHash>>,
         txs: &[Arc<StoredTxData>],
     ) {
@@ -156,7 +197,6 @@ impl RepositoryDb {
         let block_number_bytes = block_number.to_be_bytes();
         let block_hash_bytes = block_hash.to_vec();
 
-        let mut batch = db.new_write_batch();
         batch.put_cf(
             RepositoryCF::BlockNumberToHash,
             &block_number_bytes,
@@ -167,13 +207,23 @@ impl RepositoryDb {
         block.encode(&mut block_bytes);
         batch.put_cf(RepositoryCF::BlockData, block_hash.as_slice(), &block_bytes);
 
-        let mut bitmap_cache = BitmapCache::default();
         for tx in txs {
-            Self::add_tx_to_write_batch(db, &mut batch, &mut bitmap_cache, tx, block_number)
+            Self::add_tx_to_write_batch(db, batch, bitmap_cache, tx, block_number)
                 .expect("write batch failed");
         }
+    }
+
+    fn write_block_inner(
+        db: &RocksDB<RepositoryCF>,
+        block: &Sealed<Block<TxHash>>,
+        txs: &[Arc<StoredTxData>],
+    ) {
+        let mut batch = db.new_write_batch();
+        let mut bitmap_cache = BitmapCache::default();
+        Self::stage_block(db, &mut batch, &mut bitmap_cache, block, txs);
         bitmap_cache.flush(&mut batch);
 
+        let block_number_bytes = block.number.to_be_bytes();
         let block_number_key = RepositoryCF::block_number_key();
         batch.put_cf(RepositoryCF::Meta, block_number_key, &block_number_bytes);
         update_coverage(db, &mut batch, &block_number_bytes);
@@ -190,6 +240,70 @@ impl RepositoryDb {
     pub fn write_block(&self, block: &Sealed<Block<TxHash>>, txs: &[Arc<StoredTxData>]) {
         Self::write_block_inner(&self.db, block, txs);
         self.latest_block_number.send_replace(block.number);
+    }
+
+    /// BENCHMARK BRANCH: persists a contiguous ascending run of blocks as HEADERS ONLY — two
+    /// keys per block (number→hash, block data) instead of the production per-tx layout (4+
+    /// keys per tx). Two measured walls motivate this: the per-tx layout needs ~7M random-keyed
+    /// memtable inserts/s at benchmark rates (RocksDB sustains well under 1M/s no matter how
+    /// writes are batched/parallelized/tuned), and even blob-shaped tx data is ~700MB/s of LSM
+    /// ingest whose compaction cost ~3x of end-to-end throughput — all REDUNDANT, because the
+    /// replay WAL already durably stores every transaction.
+    ///
+    /// The trade: transactions PRUNED from the in-memory window are no longer queryable BY HASH
+    /// through this DB (`get_transaction`/`get_transaction_receipt`/... fall back to `None`);
+    /// tx durability lives in the replay WAL. The Meta / coverage pointers advance only AFTER
+    /// the whole run landed.
+    pub fn write_blocks(&self, blocks: &[Sealed<Block<TxHash>>]) {
+        use rayon::prelude::*;
+        let (Some(first_block), Some(last_block)) = (blocks.first(), blocks.last()) else {
+            return;
+        };
+        blocks.par_iter().for_each(|block| {
+            let block_number_bytes = block.number.to_be_bytes();
+            let block_hash = block.hash();
+
+            let mut batch = self.db.new_write_batch();
+            batch.put_cf(
+                RepositoryCF::BlockNumberToHash,
+                &block_number_bytes,
+                block_hash.as_slice(),
+            );
+            let mut block_bytes = Vec::new();
+            block.encode(&mut block_bytes);
+            batch.put_cf(RepositoryCF::BlockData, block_hash.as_slice(), &block_bytes);
+
+            // Transaction data is NOT written here at all: the replay WAL already durably
+            // stores every transaction (writing it again as repo blobs measured ~700MB/s of
+            // redundant LSM ingest whose compaction/compression cost ~3x of end-to-end
+            // throughput). Tx-by-hash queries are served from the in-memory window.
+
+            REPOSITORIES_METRICS
+                .block_data_size
+                .observe(batch.size_in_bytes());
+            REPOSITORIES_METRICS
+                .block_data_size_per_tx
+                .observe(batch.size_in_bytes() / block.body.transactions.len().max(1));
+            // No RocksDB WAL: the repository rebuilds from the REPLAY WAL on restart (the Meta
+            // pointer below only advances after the whole run landed).
+            self.db.write_without_wal(batch).unwrap();
+        });
+
+        let mut batch = self.db.new_write_batch();
+        let last_number_bytes = last_block.number.to_be_bytes();
+        batch.put_cf(
+            RepositoryCF::Meta,
+            RepositoryCF::block_number_key(),
+            &last_number_bytes,
+        );
+        update_coverage_range(
+            &self.db,
+            &mut batch,
+            &first_block.number.to_be_bytes(),
+            &last_number_bytes,
+        );
+        self.db.write(batch).unwrap();
+        self.latest_block_number.send_replace(last_block.number);
     }
 
     fn add_tx_to_write_batch(

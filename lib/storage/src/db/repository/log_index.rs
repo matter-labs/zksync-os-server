@@ -127,6 +127,31 @@ pub(super) fn update_coverage(
     );
 }
 
+/// Batched variant of [`update_coverage`] for a contiguous ascending run of blocks staged into
+/// one write batch: the first-block marker (only unset on a fresh DB) records the run's FIRST
+/// block — per-block `update_coverage` calls would leave the LAST one there, since later puts
+/// win within a batch — and the last-block marker advances to the run's end.
+pub(super) fn update_coverage_range(
+    db: &RocksDB<RepositoryCF>,
+    batch: &mut WriteBatch<RepositoryCF>,
+    first_block_number_bytes: &[u8],
+    last_block_number_bytes: &[u8],
+) {
+    let first_block_key = RepositoryCF::log_index_first_block_key();
+    if db
+        .get_cf(RepositoryCF::Meta, first_block_key)
+        .unwrap()
+        .is_none()
+    {
+        batch.put_cf(RepositoryCF::Meta, first_block_key, first_block_number_bytes);
+    }
+    batch.put_cf(
+        RepositoryCF::Meta,
+        RepositoryCF::log_index_last_block_key(),
+        last_block_number_bytes,
+    );
+}
+
 /// Rolls back the log index last-block marker to `block_number_bytes`.
 pub(super) fn rollback_coverage(batch: &mut WriteBatch<RepositoryCF>, block_number_bytes: &[u8]) {
     batch.put_cf(

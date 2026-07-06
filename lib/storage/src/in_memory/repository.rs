@@ -16,7 +16,7 @@ use zksync_os_storage_api::{
     LogIndex, ReadRepository, RepositoryBlock, RepositoryResult, StoredTxData, TxMeta,
     WriteRepository,
 };
-use zksync_os_types::{BlockOutput, L2ToL1Log, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
+use zksync_os_types::{BlockOutput, ZkReceipt, ZkReceiptEnvelope, ZkTransaction};
 
 /// Size of the broadcast channel used to notify RPC subscribers about new blocks (mirrors
 /// `RepositoryManager`).
@@ -515,25 +515,17 @@ fn transaction_to_api_data(
 ) -> StoredTxData {
     let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
 
-    let l2_to_l1_logs = tx_output
-        .l2_to_l1_logs
-        .iter()
-        .map(|l2_to_l1_log| L2ToL1Log {
-            l2_shard_id: l2_to_l1_log.log.l2_shard_id,
-            is_service: l2_to_l1_log.log.is_service,
-            tx_number_in_block: l2_to_l1_log.log.tx_number_in_block,
-            sender: l2_to_l1_log.log.sender,
-            key: l2_to_l1_log.log.key,
-            value: l2_to_l1_log.log.value,
-        })
-        .collect();
+    // BENCHMARK BRANCH: receipts are stored lean — no event logs, no L2->L1 logs (and therefore
+    // zero blooms), cutting the dominant per-tx receipt cost in RAM and in the repository DB.
+    // Status / cumulative gas / contract_address survive, so receipt-status checks and contract
+    // deploys still work; `eth_getLogs` and log subscriptions return nothing.
     let receipt = ZkReceiptEnvelope::from_typed(
         tx.tx_type(),
         ZkReceipt {
             status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
             cumulative_gas_used: cumulative_gas_used_before_this_tx + tx_output.gas_used,
-            logs: tx_output.logs.clone(),
-            l2_to_l1_logs,
+            logs: Vec::new(),
+            l2_to_l1_logs: Vec::new(),
         },
     );
     let meta = TxMeta {

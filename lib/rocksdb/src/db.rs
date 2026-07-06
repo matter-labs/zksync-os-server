@@ -556,6 +556,23 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
     }
 
     pub fn write<'a>(&'a self, batch: WriteBatch<'a, CF>) -> Result<(), rocksdb::Error> {
+        self.write_with(batch, false)
+    }
+
+    /// Writes the batch WITHOUT the RocksDB WAL: on a crash the un-flushed memtable tail is
+    /// lost, so this is only sound for data rebuildable from another durability source (the
+    /// repository DB rebuilds from the replay WAL on restart). Skips the WAL append — a
+    /// SERIAL memcpy+CRC section that becomes the write-path bottleneck at benchmark ingest
+    /// rates — and halves the disk write amplification.
+    pub fn write_without_wal<'a>(&'a self, batch: WriteBatch<'a, CF>) -> Result<(), rocksdb::Error> {
+        self.write_with(batch, true)
+    }
+
+    fn write_with<'a>(
+        &'a self,
+        batch: WriteBatch<'a, CF>,
+        disable_wal: bool,
+    ) -> Result<(), rocksdb::Error> {
         let retries = &self.stalled_writes_retries;
         let mut raw_batch = batch.inner;
         let metrics = &METRICS[&DbLabel::from(CF::DB_NAME)];
@@ -563,7 +580,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
 
         if raw_batch.size_in_bytes() > retries.max_batch_size {
             // The write batch is too large to duplicate in RAM.
-            return self.write_inner(raw_batch);
+            return self.write_inner(raw_batch, disable_wal);
         }
 
         let raw_batch_bytes = raw_batch.data().to_vec();
@@ -571,7 +588,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         let mut stalled_write_reported = false;
         let started_at = Instant::now();
         loop {
-            match self.write_inner(raw_batch) {
+            match self.write_inner(raw_batch, disable_wal) {
                 Ok(()) => {
                     if stalled_write_reported {
                         metrics.stalled_write_duration.observe(started_at.elapsed());
@@ -603,10 +620,15 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         }
     }
 
-    fn write_inner(&self, raw_batch: rocksdb::WriteBatch) -> Result<(), rocksdb::Error> {
-        if self.sync_writes {
+    fn write_inner(
+        &self,
+        raw_batch: rocksdb::WriteBatch,
+        disable_wal: bool,
+    ) -> Result<(), rocksdb::Error> {
+        if self.sync_writes || disable_wal {
             let mut options = WriteOptions::new();
-            options.set_sync(true);
+            options.set_sync(self.sync_writes);
+            options.disable_wal(disable_wal);
             self.inner.db.write_opt(raw_batch, &options)
         } else {
             self.inner.db.write(raw_batch)

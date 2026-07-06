@@ -14881,6 +14881,7 @@ dependencies = [
  "tar",
  "tempfile",
  "test-log",
+ "tikv-jemallocator",
  "tokio",
  "tracing",
  "zksync_os_alloy_ext",
