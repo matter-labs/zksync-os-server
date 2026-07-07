@@ -651,3 +651,49 @@ async fn observer_follows_the_committee_and_serves_transactions() -> anyhow::Res
 
     Ok(())
 }
+
+/// The idle policy end to end on real nodes: a quiet chain stops producing
+/// blocks, one heartbeat bounds the silence, and a transaction wakes the chain
+/// promptly. (Other consensus tests pin the legacy always-build behavior via
+/// the test config; this one opts into heartbeats explicitly.)
+#[test_log::test(tokio::test)]
+async fn an_idle_chain_heartbeats_and_wakes_on_work() -> anyhow::Result<()> {
+    const HEARTBEAT: Duration = Duration::from_secs(4);
+    let cluster = MultiNodeTester::start_with_config_overrides(2, |config| {
+        config.consensus_config.idle_heartbeat = HEARTBEAT;
+    })
+    .await?;
+
+    // Real work makes a block promptly.
+    send_transfer(&cluster, 0, Address::repeat_byte(0x61)).await?;
+    let after_work = cluster.node(0).l2_provider.get_block_number().await?;
+
+    // Quiet: well inside the heartbeat interval the chain must not grow by
+    // more than the one heartbeat that may have been mid-flight. (The legacy
+    // behavior would add ~4 blocks per second here.)
+    tokio::time::sleep(HEARTBEAT / 2).await;
+    let mid_quiet = cluster.node(0).l2_provider.get_block_number().await?;
+    assert!(
+        mid_quiet <= after_work + 1,
+        "an idle chain kept producing: {after_work} -> {mid_quiet} within half a heartbeat",
+    );
+
+    // Across a couple of intervals the chain grows by heartbeats, not cadence:
+    // strictly more than zero, far fewer than the legacy flood.
+    tokio::time::sleep(HEARTBEAT * 2).await;
+    let after_quiet = cluster.node(0).l2_provider.get_block_number().await?;
+    assert!(
+        after_quiet > mid_quiet,
+        "no heartbeat inside {HEARTBEAT:?} x2 of quiet",
+    );
+    assert!(
+        after_quiet <= mid_quiet + 3,
+        "too many blocks for a heartbeated quiet window: {mid_quiet} -> {after_quiet}",
+    );
+
+    // Work still wakes the chain immediately.
+    let woke_at = send_transfer(&cluster, 1, Address::repeat_byte(0x62)).await?;
+    assert!(woke_at > after_quiet);
+
+    Ok(())
+}

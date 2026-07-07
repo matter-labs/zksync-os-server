@@ -49,6 +49,59 @@ struct Inner {
     anchor_height: u64,
     /// The committed consensus-era chain: entry `i` has height `anchor_height + i + 1`.
     committed: Vec<SimBlock>,
+    /// Idle behavior, when a scenario opts in; `None` = the mock always builds
+    /// (every leader turn produces a block, the pre-idle-policy behavior).
+    idle: Option<IdleWork>,
+}
+
+/// The mock's mempool stand-in for exercising [`IdlePolicy`] against real stack
+/// dynamics: one *shared* pool of pending "work" units per cluster (transactions
+/// gossip everywhere, so all real mempools converge on the same content). A
+/// leader turn consumes a unit when it builds — the moment a real builder would
+/// stream the transaction into its block — and with none pending consults the
+/// policy exactly like the node builder's idle branch does.
+#[derive(Clone)]
+pub struct IdleWork(Arc<Mutex<IdleShared>>);
+
+struct IdleShared {
+    policy: zksync_os_consensus_core::idle_policy::IdlePolicy,
+    /// Units of pending work; each built block consumes one.
+    pending_work: u64,
+    /// Virtual-clock seconds each height was first built at. The production
+    /// policy reads the *parent block's timestamp* — chain data, so a freshly
+    /// built (even not-yet-committed) parent already reads as fresh and the
+    /// next pipelined view declines. SimBlock carries no timestamp (its
+    /// encoding is fingerprint-pinned), so this map stands in for it.
+    built_at: std::collections::HashMap<u64, u64>,
+    /// Fallback for heights this pool never saw built (the anchor, or blocks
+    /// learned via backfill): the pool's construction time, then bumped at
+    /// commits.
+    last_progress: u64,
+    /// The deterministic runtime's clock, captured as a closure so the mock
+    /// stays non-generic.
+    now: Arc<dyn Fn() -> u64 + Send + Sync>,
+}
+
+impl IdleWork {
+    pub fn new(
+        policy: zksync_os_consensus_core::idle_policy::IdlePolicy,
+        now: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
+        let start = now();
+        Self(Arc::new(Mutex::new(IdleShared {
+            policy,
+            pending_work: 0,
+            built_at: std::collections::HashMap::new(),
+            last_progress: start,
+            now,
+        })))
+    }
+
+    /// Enqueues `n` units of work (the cluster's transactions); each unit makes
+    /// one leader turn build a block.
+    pub fn enqueue(&self, n: u64) {
+        self.0.lock().unwrap().pending_work += n;
+    }
 }
 
 impl MockExecution {
@@ -63,8 +116,15 @@ impl MockExecution {
             inner: Arc::new(Mutex::new(Inner {
                 anchor_height,
                 committed: Vec::new(),
+                idle: None,
             })),
         }
+    }
+
+    /// Opts this environment into the cluster's shared idle-work pool; attach
+    /// the same [`IdleWork`] to every validator's environment.
+    pub fn attach_idle(&self, work: IdleWork) {
+        self.inner.lock().unwrap().idle = Some(work);
     }
 
     /// The committed chain so far (test probe).
@@ -112,6 +172,31 @@ impl ExecutionEnv for MockExecution {
     }
 
     async fn build(&mut self, parent: SimBlock, context: BuildContext) -> Option<SimBlock> {
+        {
+            let inner = self.inner.lock().unwrap();
+            if let Some(work) = &inner.idle {
+                let mut shared = work.0.lock().unwrap();
+                let now = (shared.now)();
+                if shared.pending_work > 0 {
+                    shared.pending_work -= 1;
+                } else {
+                    use zksync_os_consensus_core::idle_policy::IdleDecision;
+                    let parent_number = parent.height_u64();
+                    let parent_time = shared
+                        .built_at
+                        .get(&parent_number)
+                        .copied()
+                        .unwrap_or(shared.last_progress);
+                    match shared.policy.decide(parent_number, parent_time, now) {
+                        IdleDecision::Decline => return None,
+                        IdleDecision::BuildEmpty(_) => {}
+                    }
+                }
+                // This turn builds: stamp the child the way a real block's
+                // header would carry its timestamp.
+                shared.built_at.insert(parent.height_u64() + 1, now);
+            }
+        }
         // Seeding content with the view makes re-proposals distinguishable: if the block
         // built in view 7 is abandoned and a new leader builds on the same parent in
         // view 8, the two blocks differ — like real blocks built at different times.
@@ -160,6 +245,10 @@ impl ExecutionEnv for MockExecution {
             "commit out of order: got height {height}, expected {next_height}",
         );
         inner.committed.push(block);
+        if let Some(work) = &inner.idle {
+            let mut shared = work.0.lock().unwrap();
+            shared.last_progress = (shared.now)();
+        }
     }
 }
 

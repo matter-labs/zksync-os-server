@@ -769,6 +769,19 @@ pub struct ConsensusConfig {
     /// constant: every validator must run the same value.
     #[config(default_t = 43_200)]
     pub epoch_length: u64,
+    /// What an idle chain does. Non-zero: an idle leader passes its turn unless
+    /// the parent block is older than this interval (one empty "heartbeat" block
+    /// then bounds journal growth, fee staleness, and the settlement cadence, and
+    /// doubles as the liveness probe) — except while a scheduled committee change
+    /// awaits its epoch boundary, when idle leaders keep building at full cadence
+    /// so the change activates without traffic ("sprint"). Zero: the pre-policy
+    /// behavior — idle leaders always build, so a quiet chain seals empty blocks
+    /// around the clock. Leader-local policy: mixed values across validators are
+    /// safe (blocks and passed turns both verify); configure it uniformly anyway
+    /// so block cadence is predictable. See `idle_policy` in the consensus
+    /// execution crate.
+    #[config(default_t = Duration::from_secs(600))]
+    pub idle_heartbeat: Duration,
     /// A node whose network key appears in no `committees` entry refuses to start
     /// with consensus enabled — a validator that cannot ever vote is usually a
     /// misconfiguration. Setting this acknowledges the state as deliberate (e.g. a

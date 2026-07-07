@@ -822,6 +822,25 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // pool moves into the builder.
         let l1_inputs_view = pool.l1_inputs_view();
 
+        // The idle policy is the deliberate strategy for quiet chains — see the
+        // `idle_policy` module for the full story. Sprint targets come from the
+        // schedule: an entry still waiting for its boundary keeps idle leaders
+        // producing so it activates without traffic.
+        let idle_policy = if config.consensus_config.idle_heartbeat.is_zero() {
+            zksync_os_consensus_execution::idle_policy::IdlePolicy::legacy()
+        } else {
+            zksync_os_consensus_execution::idle_policy::IdlePolicy::heartbeat(
+                config.consensus_config.idle_heartbeat,
+                std::num::NonZeroU64::new(config.consensus_config.epoch_length)
+                    .expect("validated: epoch_length is nonzero"),
+                config
+                    .consensus_config
+                    .committees
+                    .iter()
+                    .map(|entry| entry.activation_epoch)
+                    .collect(),
+            )
+        };
         let builder = zksync_os_consensus_execution::ConsensusBlockBuilder::new(
             pool,
             fee_provider,
@@ -838,6 +857,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
                 interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
             },
+            idle_policy,
         );
 
         // The consensus anchor: the block the consensus genesis stands for — the

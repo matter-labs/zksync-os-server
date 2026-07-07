@@ -384,6 +384,10 @@ consensus:
   allow_private_ips: true
   epoch_length: {epoch_length}
   epoch_retention: {epoch_retention}
+  # Rig clusters pin the legacy idle behavior (constant empty blocks): the
+  # watcher's liveness window and the soak metrics assume steady progress.
+  # Idle-policy experiments override this deliberately.
+  idle_heartbeat: 0s
 {committees}{observers}"
     )
 }

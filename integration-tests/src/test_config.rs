@@ -39,6 +39,10 @@ pub(crate) async fn build_node_config(
     with_proofs: bool,
 ) -> anyhow::Result<Config> {
     let mut config = load_chain_config(chain_layout).await;
+    // Tests pin the legacy idle behavior (an idle chain keeps sealing empty
+    // blocks): existing scenarios time their waits around continuous block
+    // production. Dedicated idle-policy tests opt into heartbeats explicitly.
+    config.consensus_config.idle_heartbeat = std::time::Duration::ZERO;
     config.l1_provider_config =
         ProviderConfig::new(l1.address.clone(), TEST_PROVIDER_POLL_INTERVAL);
     if let Some(gateway_provider_config) = &mut config.gateway_provider_config {

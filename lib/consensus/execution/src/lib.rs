@@ -18,6 +18,10 @@
 pub mod builder;
 pub mod env;
 pub mod finality_store;
+/// Re-exported from the core crate: what an idle leader turn does. The builder
+/// consults it; the policy itself is pure chain math and lives beside the
+/// schedule/epoch types.
+pub use zksync_os_consensus_core::idle_policy;
 pub mod metrics;
 pub mod pending_state;
 pub mod rules;

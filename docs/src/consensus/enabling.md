@@ -260,6 +260,41 @@ start from are gone. The floor comes from the node's own finality store, which
 is exactly why that store is never pruned: certificates there are the permanent
 proof trail, and the floors for every future rebuild.
 
+## Idle chains
+
+A quiet chain does not fill with empty blocks. With `consensus.idle_heartbeat`
+set (the default is 10 minutes), a leader whose mempool is empty passes its
+turn — consensus nullifies the view and rotates, and no block is made — until
+one of two things happens:
+
+- **Work arrives.** A transaction (or an L1 priority operation picked up by
+  the L1 watcher) produces a block within a leader timeout or two. Idle never
+  delays real traffic.
+- **The heartbeat interval passes.** The leader seals one empty block. This
+  pulse bounds everything that anchors to chain progress — consensus journal
+  pruning, fee-clamp staleness, the batcher's settlement cadence — and gives
+  monitoring a clean rule: on a healthy chain, *no block for longer than the
+  heartbeat interval plus a margin is always an alarm*.
+
+The exception is a pending committee change: while a `consensus.committees`
+entry has not reached its activation epoch, idle leaders keep producing empty
+blocks at full cadence ("sprint") so the change activates without traffic —
+epochs are height-driven, and a scheduled rotation must not wait for
+transactions. The sprint stops at the boundary. This bounds committee-change
+latency on an idle chain by `epoch_length × block time`, which is one of the
+inputs to choosing `epoch_length`: on chains expected to idle, a smaller
+epoch length (with a correspondingly larger `consensus.epoch_retention`, since
+retention windows are epoch-denominated) keeps emergency rotations fast.
+
+Setting `idle_heartbeat: 0s` disables the policy: idle leaders always build,
+and a quiet chain seals empty blocks around the clock at the block time.
+
+The policy is leader-local — blocks and passed turns both verify, so
+validators with differing settings interoperate — but configure it uniformly
+so the chain's cadence is predictable. The heartbeat also sets the floor on
+settlement activity: each pulse eventually rides to L1 through the batcher,
+which is the deliberate cost of keeping the pipeline warm and observable.
+
 ## Rolling back
 
 Rollback — returning a committee-run chain to single-sequencer operation — is

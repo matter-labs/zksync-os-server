@@ -22,6 +22,7 @@
 use commonware_cryptography::sha256::Digest;
 use futures::StreamExt as _;
 use tokio::time::Instant;
+use zksync_os_consensus_core::idle_policy::{IdleDecision, IdlePolicy};
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool, StreamOutcome};
 use zksync_os_observability::ComponentStateReporter;
@@ -92,6 +93,8 @@ pub struct ConsensusBlockBuilder<Subpool> {
     pool: Pool<Subpool>,
     fee_provider: FeeProvider,
     config: BuilderConfig,
+    /// What an idle leader turn does — see [`crate::idle_policy`].
+    idle_policy: IdlePolicy,
     reporter: ComponentStateReporter,
 }
 
@@ -103,11 +106,17 @@ pub struct BuiltBlock {
 }
 
 impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
-    pub fn new(pool: Pool<Subpool>, fee_provider: FeeProvider, config: BuilderConfig) -> Self {
+    pub fn new(
+        pool: Pool<Subpool>,
+        fee_provider: FeeProvider,
+        config: BuilderConfig,
+        idle_policy: IdlePolicy,
+    ) -> Self {
         Self {
             pool,
             fee_provider,
             config,
+            idle_policy,
             reporter: ComponentStateReporter::new("consensus_builder").0,
         }
     }
@@ -119,14 +128,19 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
 
     /// Builds and executes one block on top of `parent`, reading state through `view`
     /// (the parent branch's speculative view). Returns `None` when nothing can be
-    /// built — the caller passes its leader turn and consensus moves on.
+    /// built — the caller passes its leader turn and consensus moves on: either the
+    /// idle policy declined the turn (routine on a quiet chain), or building failed.
     pub async fn build<V: ViewState + 'static>(
         &mut self,
         parent: &ParentInfo,
         view: V,
     ) -> Option<BuiltBlock> {
         match self.try_build(parent, view).await {
-            Ok(built) => Some(built),
+            Ok(Some(built)) => Some(built),
+            Ok(None) => {
+                tracing::debug!(parent = parent.number, "idle: passing the leader turn");
+                None
+            }
             Err(error) => {
                 tracing::warn!(?error, parent = parent.number, "block building failed");
                 None
@@ -138,7 +152,7 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
         &mut self,
         parent: &ParentInfo,
         view: V,
-    ) -> anyhow::Result<BuiltBlock> {
+    ) -> anyhow::Result<Option<BuiltBlock>> {
         let block_number = parent.number + 1;
         let fee_params = self
             .fee_provider
@@ -155,8 +169,11 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
         let far_future = Instant::now() + std::time::Duration::from_secs(60 * 60 * 24 * 365);
         // The pool hands out a transaction stream only once it has something to offer —
         // an await that never resolves while the chain is idle. A leader turn must not
-        // hang on that: past the idle deadline, proceed with a stream that never yields
-        // and let the seal policy close the block empty at its own deadline.
+        // hang on that: past the idle deadline, the chain is idle and the idle policy
+        // decides whether this turn still builds an empty block (heartbeat, sprint to
+        // a scheduled activation, legacy cadence) or passes. When it builds, a stream
+        // that never yields lets the seal policy close the block empty at its own
+        // deadline.
         let best_txs = match tokio::time::timeout(
             self.config.idle_block_deadline,
             self.pool.best_transactions_stream(far_future, false),
@@ -164,12 +181,27 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
         .await
         {
             Ok(available) => available.ok_or_else(|| anyhow::anyhow!("mempool is closed"))?,
-            Err(_idle) => StreamOutcome {
-                // No upgrade can be pending: the pool reports upgrades through the same
-                // call, and it would have resolved immediately with one.
-                upgrade_metadata: None,
-                stream: MarkingTxStream::unmarkable(futures::stream::pending()),
-            },
+            Err(_idle) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("time went backwards")
+                    .as_secs();
+                match self
+                    .idle_policy
+                    .decide(parent.number, parent.timestamp, now)
+                {
+                    IdleDecision::Decline => return Ok(None),
+                    IdleDecision::BuildEmpty(reason) => {
+                        tracing::debug!(?reason, parent = parent.number, "building empty block");
+                    }
+                }
+                StreamOutcome {
+                    // No upgrade can be pending: the pool reports upgrades through the
+                    // same call, and it would have resolved immediately with one.
+                    upgrade_metadata: None,
+                    stream: MarkingTxStream::unmarkable(futures::stream::pending()),
+                }
+            }
         };
 
         // Proposer-chosen timestamp: wall clock, but never behind the parent (virtual
@@ -332,11 +364,11 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
             transactions = record.transactions.len(),
             "built block proposal"
         );
-        Ok(BuiltBlock {
+        Ok(Some(BuiltBlock {
             record,
             output,
             next_cursors,
-        })
+        }))
     }
 }
 

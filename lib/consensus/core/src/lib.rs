@@ -31,6 +31,7 @@
 pub mod application;
 pub mod committer;
 pub mod execution;
+pub mod idle_policy;
 pub mod schedule;
 pub mod stack;
 pub mod storage;

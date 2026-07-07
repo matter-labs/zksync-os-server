@@ -16,7 +16,7 @@ use commonware_cryptography::bls12381::primitives::ops;
 use commonware_cryptography::bls12381::primitives::variant::MinPk;
 use commonware_cryptography::ed25519;
 use futures::future::try_join_all;
-use zksync_os_server::config::{CommitteeScheduleEntryConfig, ConsensusRole};
+use zksync_os_server::config::{CommitteeScheduleEntryConfig, Config, ConsensusRole};
 use zksync_os_types::NodeRole;
 
 /// One validator's key set, generated fresh per cluster.
@@ -71,6 +71,20 @@ pub struct MultiNodeTester {
 impl MultiNodeTester {
     /// Starts `num_validators` validators as one committee. Exactly one node (the first)
     /// runs the batcher; all serve RPC.
+    /// Like [`Self::start`], with one shared mutation applied to every
+    /// validator's config after the standard committee wiring (chain-level
+    /// constants must stay identical across the committee).
+    pub async fn start_with_config_overrides(
+        num_validators: usize,
+        overrides: impl Fn(&mut Config) + Clone + Send + 'static,
+    ) -> anyhow::Result<Self> {
+        let chain_layout = ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let l1 = crate::AnvilL1::start(chain_layout).await?;
+        Self::start_inner_with(num_validators, chain_layout, l1, overrides).await
+    }
+
     pub async fn start(num_validators: usize) -> anyhow::Result<Self> {
         let chain_layout = ChainLayout::Default {
             protocol_version: PROTOCOL_VERSION,
@@ -547,6 +561,15 @@ impl MultiNodeTester {
         chain_layout: ChainLayout<'static>,
         l1: crate::AnvilL1,
     ) -> anyhow::Result<Self> {
+        Self::start_inner_with(num_validators, chain_layout, l1, |_| {}).await
+    }
+
+    async fn start_inner_with(
+        num_validators: usize,
+        chain_layout: ChainLayout<'static>,
+        l1: crate::AnvilL1,
+        overrides: impl Fn(&mut Config) + Clone + Send + 'static,
+    ) -> anyhow::Result<Self> {
         assert!(
             num_validators >= 2,
             "a committee needs at least 2 validators"
@@ -577,6 +600,7 @@ impl MultiNodeTester {
                 .map(|(index, (keys, consensus_port))| {
                     let l1 = l1.clone();
                     let committee = committee.clone();
+                    let overrides = overrides.clone();
                     let network_key = alloy::hex::encode(keys.network.encode());
                     let bls_key = alloy::hex::encode(keys.bls.encode());
                     let listen_address = format!("127.0.0.1:{}", consensus_port.port);
@@ -594,6 +618,7 @@ impl MultiNodeTester {
                         config.consensus_config.validators = committee;
                         // Everything runs on localhost.
                         config.consensus_config.allow_private_ips = true;
+                        overrides(&mut config);
                         Tester::launch_with_new_runtime(l1, chain_layout, config)
                             .await
                             .with_context(|| format!("failed to launch validator {index}"))
