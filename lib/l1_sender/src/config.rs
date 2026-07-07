@@ -46,8 +46,7 @@ pub struct L1SenderConfig<Input> {
     pub nonce_error_max_attempts: usize,
 
     /// Backoff before retrying after a nonce-class rejection. Gives the node time to settle
-    /// its pool/state view after a block import; the provider re-fills the nonce from a fresh
-    /// pending-count on every attempt.
+    /// its pool/state view after a block import; the retry re-sends the same nonce.
     pub nonce_error_retry_backoff: Duration,
 
     pub phantom_data: PhantomData<Input>,

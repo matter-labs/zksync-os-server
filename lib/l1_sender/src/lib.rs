@@ -236,11 +236,19 @@ where
             L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
 
             let operator_address = self.operator_address().await?;
+            // One pending-count read per cycle. The account is quiescent here (prior cycle's txs
+            // are confirmed), so this baseline is race-free; used for both simulation and sends.
+            let base_nonce = self
+                .provider
+                .get_transaction_count(operator_address)
+                .pending()
+                .await
+                .context("get pending nonce for L1 sender cycle")?;
             let sim_fee_params = self
                 .resolve_fee_params(fee_config, force_transaction_resubmission)
                 .await?;
             let gas_limits = self
-                .estimate_gas_limits(&commands, operator_address, sim_fee_params)
+                .estimate_gas_limits(&commands, operator_address, sim_fee_params, base_nonce)
                 .await?;
             tracing::info!(
                 command_name,
@@ -254,8 +262,8 @@ where
             // This holds true because l1 transactions are included in the order of sender nonce.
             // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
             let pending_txs: Vec<PendingTx<Input>> =
-            futures::stream::iter(commands.into_iter().zip(gas_limits))
-                .then(|(mut cmd, gas_limit)| {
+            futures::stream::iter(commands.into_iter().zip(gas_limits).enumerate())
+                .then(|(nonce_offset, (mut cmd, gas_limit))| {
                     let range = range.clone();
                     async move {
                     let fee_params = self
@@ -266,6 +274,7 @@ where
                     .await?;
                     let mut tx_request = TransactionRequest::default()
                         .with_from(operator_address)
+                        .with_nonce(base_nonce + nonce_offset as u64)
                         .with_max_fee_per_gas(fee_params.max_fee_per_gas)
                         .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
                         .with_gas_limit(gas_limit)
@@ -314,9 +323,9 @@ where
                     L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()]
                         .set(balance_required);
 
-                    // A nonce-class rejection is a definitive refusal (the tx was not admitted to the pool).
-                    // Each retry re-runs the nonce filler against a fresh pending-count, so bounded retries
-                    // self-heal instead of crashing the node.
+                    // A nonce-class rejection is a definitive refusal (tx not admitted), typically a
+                    // transient pool/state view inconsistency around a block import. The nonce is
+                    // fixed for this cycle, so re-sending it unchanged after a backoff self-heals.
                     let mut send_attempt = 1;
                     let pending_tx = loop {
                         match self.provider.send_transaction(tx_request.clone()).await {
@@ -704,15 +713,10 @@ where
         commands: &[Input],
         operator_address: Address,
         fee_params: FeeParams,
+        // Sequential nonces start here — anvil's EIP-4844 parsing requires `nonce` and
+        // `gas_limit` even with `validation=false`. Matches the send nonces.
+        starting_nonce: u64,
     ) -> anyhow::Result<Vec<u64>> {
-        // Sequential nonces from the operator's pending count — anvil's EIP-4844 parsing
-        // requires `nonce` and `gas_limit` even with `validation=false`.
-        let starting_nonce = self
-            .provider
-            .get_transaction_count(operator_address)
-            .pending()
-            .await
-            .context("get pending nonce for L1 sender gas estimation")?;
         // Some L1 providers check sender balance even with `validation=false`; override
         // to bypass.
         let balance_override = StateOverridesBuilder::default()
