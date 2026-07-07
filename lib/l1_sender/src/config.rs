@@ -9,6 +9,11 @@ pub const DEFAULT_REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// Kept low because a Gateway with a single connected chain may not produce enough blocks to reach
 /// the L1 default.
 pub const DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
+/// Default max submission attempts per L1 transaction when the node rejects it with a
+/// nonce-class error.
+pub const DEFAULT_NONCE_ERROR_MAX_ATTEMPTS: usize = 5;
+/// Default backoff between attempts after a nonce-class rejection.
+pub const DEFAULT_NONCE_ERROR_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 
 /// Configuration of L1 sender.
 #[derive(Clone, Debug)]
@@ -35,6 +40,15 @@ pub struct L1SenderConfig<Input> {
 
     /// Settlement-layer blocks (inclusive of the inclusion block) before a transaction is confirmed.
     pub required_confirmations: u64,
+
+    /// Max submission attempts per L1 transaction when the node rejects it with a nonce-class
+    /// error.
+    pub nonce_error_max_attempts: usize,
+
+    /// Backoff before retrying after a nonce-class rejection. Gives the node time to settle
+    /// its pool/state view after a block import; the provider re-fills the nonce from a fresh
+    /// pending-count on every attempt.
+    pub nonce_error_retry_backoff: Duration,
 
     pub phantom_data: PhantomData<Input>,
 }

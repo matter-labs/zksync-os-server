@@ -314,7 +314,30 @@ where
                     L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()]
                         .set(balance_required);
 
-                    let pending_tx = self.provider.send_transaction(tx_request).await?;
+                    // A nonce-class rejection is a definitive refusal (the tx was not admitted to the pool).
+                    // Each retry re-runs the nonce filler against a fresh pending-count, so bounded retries
+                    // self-heal instead of crashing the node.
+                    let mut send_attempt = 1;
+                    let pending_tx = loop {
+                        match self.provider.send_transaction(tx_request.clone()).await {
+                            Ok(pending_tx) => break pending_tx,
+                            Err(err)
+                                if is_nonce_error(&err)
+                                    && send_attempt < self.config.nonce_error_max_attempts =>
+                            {
+                                tracing::warn!(
+                                    command_name,
+                                    range,
+                                    send_attempt,
+                                    %err,
+                                    "L1 node rejected the transaction with a nonce error; retrying"
+                                );
+                                tokio::time::sleep(self.config.nonce_error_retry_backoff).await;
+                                send_attempt += 1;
+                            }
+                            Err(err) => return Err(err.into()),
+                        }
+                    };
                     let submitted_at = Instant::now();
                     let tx_hash = *pending_tx.tx_hash();
                     let receipt_fut = self.wait_for_confirmed_receipt(tx_hash);
@@ -923,6 +946,19 @@ where
     }
 }
 
+/// Nonce-class `eth_sendRawTransaction` rejections.
+fn is_nonce_error(err: &TransportError) -> bool {
+    match err {
+        TransportError::ErrorResp(payload) => {
+            let message = payload.message.to_lowercase();
+            message.contains("nonce too low")
+                || message.contains("nonce too high")
+                || message.contains("nonce gap")
+        }
+        _ => false,
+    }
+}
+
 /// Combines operator-configured fee caps with the network's EIP-1559 estimate.
 ///
 /// `max_fee_per_gas` and `max_fee_per_blob_gas` are taken verbatim from
@@ -990,6 +1026,45 @@ impl L1SenderFeeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonce_error_classification() {
+        use alloy::rpc::json_rpc::ErrorPayload;
+        use alloy::transports::TransportErrorKind;
+
+        let resp = |message: &str| {
+            TransportError::ErrorResp(ErrorPayload {
+                code: -32000,
+                message: message.to_string().into(),
+                data: None,
+            })
+        };
+
+        // reth rejects a nonce-gapped blob transaction with exactly "nonce too high"; geth
+        // appends details after the same prefix; some clients capitalize.
+        assert!(is_nonce_error(&resp("nonce too high")));
+        assert!(is_nonce_error(&resp(
+            "nonce too high: tx nonce 7, gapped nonce 5"
+        )));
+        assert!(is_nonce_error(&resp(
+            "nonce too low: next nonce 5, tx nonce 3"
+        )));
+        assert!(is_nonce_error(&resp("Nonce too high")));
+        assert!(is_nonce_error(&resp("nonce gap for sender")));
+
+        // Non-nonce rejections and transport-level failures are not retryable here: a
+        // transport failure is ambiguous (the tx may have been admitted), so it must
+        // propagate rather than trigger a re-send.
+        assert!(!is_nonce_error(&resp(
+            "insufficient funds for gas * price + value"
+        )));
+        assert!(!is_nonce_error(&resp(
+            "replacement transaction underpriced"
+        )));
+        assert!(!is_nonce_error(&TransportErrorKind::custom_str(
+            "error sending request"
+        )));
+    }
 
     #[test]
     fn blob_simulation_request_is_buildable_only_with_sidecar() {
