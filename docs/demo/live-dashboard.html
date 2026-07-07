@@ -424,23 +424,30 @@
       document.getElementById("height").textContent = fmt(bn);
       if (state !== "done") setTimeout(poll, POLL_MS);
     }).catch(function () {
-      if (state !== "done") {
-        if (everConnected) {
-          setPhase("lost", "connection lost — retrying");
-        } else {
-          // Never connected yet: normal before the benchmark starts — stay calm.
-          setPhase("waiting", "waiting for node");
-        }
-        gateStatus();
-        setTimeout(poll, 700);
+      if (state === "done") return;
+      var now = performance.now();
+      // Near or past the planned end of a live run, the node going away IS the ending:
+      // the benchmark finishes, confirms receipts, and shuts the node down — often faster
+      // than the rate-collapse grace period. Cut to the finale instead of a red badge.
+      if (state === "live" && now - liveStartAt > (DURATION_S - 5) * 1000) {
+        finish(now, lastBlock || 0);
+        return;
       }
+      if (everConnected) {
+        setPhase("lost", "connection lost — retrying");
+      } else {
+        // Never connected yet: normal before the benchmark starts — stay calm.
+        setPhase("waiting", "waiting for node");
+      }
+      gateStatus();
+      setTimeout(poll, 700);
     });
   }
 
   function finish(now, bn) {
     state = "done";
     document.body.classList.remove("live");
-    var secs = (now - liveStartAt) / 1000;
+    var secs = Math.min((now - liveStartAt) / 1000, DURATION_S);
     var avg = cumTxs / secs;
     setPhase("done", "run complete");
     document.getElementById("f-num").textContent = fmt(cumTxs);
