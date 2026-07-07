@@ -61,8 +61,6 @@ impl L1TxWatcher {
             Ok((next_l1_block, processor))
         };
 
-        // Priority transactions become consensus block content; the boundary choice is
-        // a chain-safety decision made in the node wiring (`finalized_ingestion`).
         if config.finalized_ingestion {
             Ok(StartResolver::new_finalized(
                 config,

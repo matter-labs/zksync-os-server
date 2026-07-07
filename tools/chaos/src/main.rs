@@ -22,6 +22,7 @@
 mod drive;
 mod load;
 mod promote;
+mod promote_settler;
 mod setup;
 mod watch;
 
@@ -43,6 +44,10 @@ enum Command {
     /// Promote observers into the committee, live (config rewrite + rolling
     /// restarts + manifest update). Run faults/load after it exits.
     Promote(promote::PromoteArgs),
+    /// Move the settler (batcher) role to another committee member: demote the
+    /// old settler's config first, then restart the new one — the failover
+    /// runbook as one command.
+    PromoteSettler(promote_settler::PromoteSettlerArgs),
     /// Put transaction load on a running cluster (fund + spam + report).
     Load(load::LoadArgs),
 }
@@ -53,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Setup(args) => setup::run(args),
         Command::Drive(args) => drive::run(args).await,
         Command::Promote(args) => promote::run(args).await,
+        Command::PromoteSettler(args) => promote_settler::run(args).await,
         Command::Load(args) => load::run(args).await,
     }
 }

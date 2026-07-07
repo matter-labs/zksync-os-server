@@ -1621,14 +1621,26 @@ pub struct MempoolTxValidatorConfig {
 }
 
 /// Only used on the Main Node.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct BatcherConfig {
     /// Whether to run the batcher subsystem and all downstream components (prover input
     /// generation, L1 settlement, priority tree, etc.). Defaults to `true`.
     /// Set to `false` to run the node without committing batches to L1 — useful for
     /// testing or operating a read-only / replay-only node.
+    ///
+    /// In a committee, exactly one node runs with this enabled — the settler; the
+    /// others keep a full batcher configuration staged with `enabled = false`, so
+    /// promoting a standby is flipping this flag and restarting (see the failover
+    /// runbook in the consensus operating guide).
     #[config(default_t = true)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| {
+            !(*value && root.consensus_config.enabled && root.consensus_config.role.is_observer())
+        },
+        "cannot be enabled on a consensus observer: only committee validators may settle \
+         (set `batcher.enabled=false`, or make this node a validator)"
+    ))]
     pub enabled: bool,
 
     /// Maximum time a batch stays open before being sealed.
@@ -2428,8 +2440,8 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
         Self {
             max_blocks_to_process: c.max_blocks_to_process,
             confirmations: c.confirmations,
-            // Not operator-facing: the node wiring flips this for the watchers whose
-            // events become consensus block content (see the mempool assembly in lib.rs).
+            // Not operator-facing: the node wiring flips this based on the
+            // consensus mode.
             finalized_ingestion: false,
             poll_interval: c.poll_interval,
             finalized_poll_interval: c.finalized_poll_interval,
@@ -2862,6 +2874,18 @@ mod tests {
         config.external_price_api_client_config = None;
 
         config.validate().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn observers_cannot_settle() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.consensus_config.enabled = true;
+        config.consensus_config.role = ConsensusRole::Observer;
+        config.batcher_config.enabled = true;
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(err.contains("cannot be enabled on a consensus observer"));
     }
 
     #[tokio::test]

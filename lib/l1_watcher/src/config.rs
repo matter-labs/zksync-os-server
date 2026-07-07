@@ -11,8 +11,9 @@ pub struct L1WatcherConfig {
 
     /// Ingest block-content events (priority transactions, protocol upgrades) only once
     /// their L1 block is finalized, instead of `confirmations` blocks behind the tip.
-    /// Set by the node wiring, not by operators — see the decision note where the
-    /// mempool's watcher config is assembled in `node/bin`.
+    /// Consensus-enabled nodes require this: these events end up inside finalized L2
+    /// blocks, which cannot be rolled back if the L1 event reorgs away. Set by the node
+    /// wiring based on the consensus mode, not by operators.
     pub finalized_ingestion: bool,
 
     /// How often to poll L1 for the latest block.

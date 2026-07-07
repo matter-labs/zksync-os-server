@@ -7,3 +7,4 @@ mod rebuild;
 mod reconfig;
 mod replay_archive;
 mod restart;
+mod settlement_ha;

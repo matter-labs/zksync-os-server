@@ -349,7 +349,9 @@ pub enum L1WatcherError {
     #[error(transparent)]
     Other(anyhow::Error),
     #[error(
-        "batch {0} was committed on L1 but not submitted by this session; likely a pending tx from a prior crash"
+        "batch {0} was committed on L1 but not submitted by this session — either another \
+         settler is active (exactly one node may run with `batcher.enabled`; fix the configs, \
+         then restart this node to reconcile from L1) or a pending tx from a prior crash landed"
     )]
     UnexpectedCommit(u64),
     #[error(

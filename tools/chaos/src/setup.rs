@@ -106,6 +106,13 @@ pub struct Manifest {
     pub host_l1_port: u16,
     /// The chain's bridgehub on L1, for deposits.
     pub bridgehub_address: String,
+    /// The chain's diamond proxy on L1 — the watcher reads settlement progress
+    /// (committed/executed batch counts) from it, independent of any node.
+    #[serde(default)]
+    pub diamond_address: String,
+    /// Index (into `validators`) of the node currently running the batcher.
+    #[serde(default)]
+    pub settler: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -138,6 +145,10 @@ pub struct Materials {
     /// Retired epochs of consensus storage each node keeps (0 = keep everything).
     #[serde(default)]
     pub epoch_retention: u64,
+    /// Which node runs the batcher (settles to L1). Exactly one; `chaos
+    /// promote-settler` moves it and regenerates the overlays.
+    #[serde(default)]
+    pub settler: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -233,9 +244,14 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
         fee_collector: format!("{fee_collector}"),
         epoch_length: args.epoch_length,
         epoch_retention: args.epoch_retention,
+        settler: 0,
     };
 
     let bridgehub_address = read_bridgehub_address(&repo.join(&args.chain).join("config.yaml"))?;
+    let diamond_address = read_yaml_address(
+        &repo.join(&args.chain).join("contracts.yaml"),
+        "diamond_proxy_addr:",
+    )?;
     let mut manifest = Manifest {
         validators: Vec::new(),
         observers: Vec::new(),
@@ -244,6 +260,8 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
         // First free slot after the per-node port blocks.
         host_l1_port: args.base_port + 10 * total as u16,
         bridgehub_address,
+        diamond_address,
+        settler: 0,
     };
 
     for index in 0..total {
@@ -339,7 +357,7 @@ pub fn node_overlay(materials: &Materials, index: usize) -> String {
 
     // Exactly one batcher, like production; the rest are sequencing-only. The
     // paths under `/db` move config defaults off the image's read-only workdir.
-    let batcher_enabled = index == 0;
+    let batcher_enabled = index == materials.settler;
     let role_section = if is_validator {
         format!("  bls_key: '{}'\n", node.bls_key_hex)
     } else {
@@ -490,12 +508,18 @@ volumes:
 /// Pulls `l1.bridgehub_address` out of the chain's `config.yaml` without dragging
 /// in a YAML parser: the in-repo format is stable and the key is unique.
 fn read_bridgehub_address(config_path: &std::path::Path) -> anyhow::Result<String> {
+    read_yaml_address(config_path, "bridgehub_address:")
+}
+
+/// Pulls one `key: 0x...` line out of a chain yaml file (same no-parser rationale
+/// as [`read_bridgehub_address`]; the keys used are unique within their files).
+fn read_yaml_address(config_path: &std::path::Path, key: &str) -> anyhow::Result<String> {
     let config = std::fs::read_to_string(config_path)?;
     config
         .lines()
         .find_map(|line| {
             let trimmed = line.trim();
-            trimmed.strip_prefix("bridgehub_address:").map(|value| {
+            trimmed.strip_prefix(key).map(|value| {
                 value
                     .trim()
                     .trim_matches('\'')
@@ -504,7 +528,7 @@ fn read_bridgehub_address(config_path: &std::path::Path) -> anyhow::Result<Strin
             })
         })
         .filter(|address| !address.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("no bridgehub_address found in {}", config_path.display()))
+        .ok_or_else(|| anyhow::anyhow!("no `{key}` found in {}", config_path.display()))
 }
 
 /// The chain directory's parent (where `l1-state.json.gz` lives), e.g.
@@ -540,6 +564,24 @@ mod tests {
             fee_collector: "0x0000000000000000000000000000000000000001".into(),
             epoch_length: 240,
             epoch_retention: 0,
+            settler: 0,
+        }
+    }
+
+    #[test]
+    fn moving_the_settler_regenerates_exactly_one_enabled_batcher() {
+        // Match the batcher section specifically — `consensus:` has an
+        // `enabled:` line of its own on every overlay.
+        let settles = |overlay: &str| overlay.contains("batcher:\n  enabled: true");
+        let mut cluster = materials(4, 4);
+        assert!(settles(&node_overlay(&cluster, 0)));
+        assert!(!settles(&node_overlay(&cluster, 2)));
+
+        // `chaos promote-settler` flips the materials and regenerates overlays:
+        // the old settler demotes, the new one is the only enabled batcher.
+        cluster.settler = 2;
+        for index in 0..4 {
+            assert_eq!(settles(&node_overlay(&cluster, index)), index == 2);
         }
     }
 

@@ -39,7 +39,7 @@ releases. Our policy, pre-launch: **cross-version journal compatibility is not
 required.** A validator can always be rebuilt — fresh consensus storage, state
 restored from the chain itself — using the recovery runbook in
 [Running it](enabling.md); a committee of `n ≥ 3f+1` tolerates each member being
-rebuilt in turn. What the procedure does require is *knowing*, and knowing is now
+rebuilt in turn. What the procedure does require is *knowing*, and knowing is
 executable: the **consensus-storage replay gate**
 (`lib/consensus/sim/tests/replay_gate.rs`) reopens a committed fixture of a full
 cluster's consensus storage — vote journals, block and finalization archives,

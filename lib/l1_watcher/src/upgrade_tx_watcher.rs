@@ -130,8 +130,6 @@ impl L1UpgradeTxWatcher {
             Ok((last_l1_block, processor))
         };
 
-        // Upgrade transactions become consensus block content; the boundary choice is
-        // a chain-safety decision made in the node wiring (`finalized_ingestion`).
         if config.finalized_ingestion {
             Ok(StartResolver::new_finalized(
                 config,

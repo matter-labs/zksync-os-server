@@ -658,6 +658,15 @@ impl MultiNodeTester {
         }
     }
 
+    /// Mutable access to a running validator — for observers that consume node
+    /// state, e.g. waiting on the fatal-error handle of a node expected to die.
+    pub fn node_mut(&mut self, index: usize) -> &mut Tester {
+        match &mut self.validators[index] {
+            Validator::Running(node) => node,
+            _ => panic!("validator {index} is not running"),
+        }
+    }
+
     fn running(&self) -> impl Iterator<Item = (usize, &Tester)> {
         self.validators
             .iter()

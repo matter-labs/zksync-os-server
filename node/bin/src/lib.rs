@@ -776,15 +776,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             l1_watcher_config: {
                 let mut watcher_config: zksync_os_l1_watcher::L1WatcherConfig =
                     config.l1_watcher_config.clone().into();
-                // Decision (2026-07): under consensus, deposits and protocol upgrades
-                // are ingested at the *finalized* L1 boundary, not `confirmations`
-                // blocks behind the tip. These events become block content that every
-                // validator verifies against its own L1 view before voting, and a BFT
-                // finalized block is irrevocable — the deep-reorg remedy that made a
-                // shallow boundary tolerable for a single sequencer (roll the chain
-                // back and re-sequence) no longer exists. The cost is deposit latency
-                // (~13 min on Ethereum); the alternative is a finalized L2 block
-                // referencing an L1 event that no longer exists.
+                // Under consensus, deposits and protocol upgrades are ingested at
+                // the *finalized* L1 boundary rather than `confirmations` blocks
+                // behind the tip: they become block content that every validator
+                // verifies against its own L1 view before voting, and a finalized
+                // block is irrevocable — the deep-reorg remedy a single sequencer
+                // had (roll the chain back and re-sequence) does not exist here.
+                // The cost is deposit latency (L1 finality, ~13 min on Ethereum);
+                // the alternative is a finalized L2 block referencing an L1 event
+                // that no longer exists.
                 watcher_config.finalized_ingestion = config.consensus_config.enabled;
                 watcher_config
             },
@@ -1025,9 +1025,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // world.
         let (finalized_sender, finalized_receiver) = tokio::sync::watch::channel(None);
         let (metrics_encoder_sender, metrics_encoder_receiver) = tokio::sync::watch::channel(None);
-        // Committee-uniform config surface, hashed: every healthy member logs
-        // and serves the same value; a mismatch is drift caught before it
-        // becomes a boundary stall or a false byzantine alarm.
         let chain_fingerprint = chain_fingerprint::chain_fingerprint(&config);
         tracing::info!(
             chain_fingerprint,
@@ -1550,6 +1547,34 @@ async fn run_main_node_pipeline(
         } else {
             config.l1_sender_config.clone().into()
         };
+
+    // The settler's on-chain identity. A committee runs exactly one settler at a
+    // time, and a promoted standby settles with *its own* pre-authorized operator
+    // addresses — so "who signs settlement right now" is the first question of
+    // any settlement incident, answered here and by this node being the one with
+    // the batcher running.
+    let commit_operator = commit_sender_config
+        .operator_signer
+        .address()
+        .await
+        .expect("commit operator signer must resolve");
+    let prove_operator = prove_sender_config
+        .operator_signer
+        .address()
+        .await
+        .expect("prove operator signer must resolve");
+    let execute_operator = execute_sender_config
+        .operator_signer
+        .address()
+        .await
+        .expect("execute operator signer must resolve");
+    tracing::info!(
+        %commit_operator,
+        %prove_operator,
+        %execute_operator,
+        settles_on_gateway,
+        "this node is the settler; settlement operator identities"
+    );
 
     let pipeline = pipeline
         .pipe(ProverInputGenerator {

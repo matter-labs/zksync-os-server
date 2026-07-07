@@ -101,6 +101,17 @@ pub struct ExecutionFingerprint {
 pub struct Poll {
     pub probe_height: Option<u64>,
     pub nodes: Vec<NodeObservation>,
+    /// Settlement progress read from L1 itself (the diamond's batch counters) —
+    /// deliberately not from any node, so the reading survives the settler.
+    /// `None` when the L1 probe failed (blackouts, busy anvil).
+    pub settlement: Option<SettlementObservation>,
+}
+
+/// The chain's settlement counters as L1 reports them.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SettlementObservation {
+    pub committed_batches: u64,
+    pub executed_batches: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,6 +163,15 @@ pub enum Finding {
     /// config drift, caught before an epoch boundary or upgrade makes it
     /// expensive.
     ConfigDrift { fingerprints: Vec<(usize, String)> },
+    /// The chain kept finalizing blocks but L1 settlement did not advance for the
+    /// whole window, with the settler believed healthy — a dead-but-running
+    /// settler, a wedged sender, or a prover pipeline stall. (A *down* settler
+    /// is sanctioned fault territory; this fires only when nobody is touching it.)
+    SettlementStall {
+        counter: &'static str,
+        stuck_at: u64,
+        window: Duration,
+    },
     /// The committee was expected live for the whole window but no new finalization
     /// appeared.
     LivenessStall {
@@ -181,10 +201,25 @@ pub struct Checker {
     forbidden_baseline: Option<(u64, u64)>,
     settle_margin: Duration,
     liveness_window: Duration,
+    /// Which validator runs the batcher — settlement lag is only that node's
+    /// fault while the driver believes it healthy.
+    settler: usize,
+    settlement_lag_window: Duration,
+    /// Highest (committed, executed) batch counts seen on L1, and when each
+    /// last advanced (or was last excused by a sanctioned condition).
+    settlement_counters: (u64, u64),
+    committed_advanced_at: Instant,
+    executed_advanced_at: Instant,
 }
 
 impl Checker {
-    pub fn new(validators: usize, settle_margin: Duration, liveness_window: Duration) -> Self {
+    pub fn new(
+        validators: usize,
+        settle_margin: Duration,
+        liveness_window: Duration,
+        settler: usize,
+        settlement_lag_window: Duration,
+    ) -> Self {
         Self {
             finalized_rounds: vec![(0, 0); validators],
             applied_heights: vec![0; validators],
@@ -196,6 +231,11 @@ impl Checker {
             forbidden_baseline: None,
             settle_margin,
             liveness_window,
+            settler,
+            settlement_lag_window,
+            settlement_counters: (0, 0),
+            committed_advanced_at: Instant::now(),
+            executed_advanced_at: Instant::now(),
         }
     }
 
@@ -345,8 +385,7 @@ impl Checker {
             }
         }
 
-        // Committee-uniform config must be uniform: any two served
-        // fingerprints that differ are drift.
+        // Any two nodes serving different chain fingerprints are config drift.
         let fingerprints: Vec<(usize, String)> = poll
             .nodes
             .iter()
@@ -401,6 +440,51 @@ impl Checker {
             // Re-arm so a genuinely stuck cluster produces one finding per window,
             // not one per poll.
             self.tip_advanced_at = now;
+        }
+
+        // Settlement: the chain finalizes but L1 batch counters stand still, with
+        // the settler believed healthy. Any sanctioned condition on the settler,
+        // an L1 blackout, or a failed L1 probe excuses the lag (and restarts the
+        // clocks, so a healed settler gets a full window to catch up).
+        match &poll.settlement {
+            Some(observed)
+                if expectations.conditions[self.settler] == Condition::Healthy
+                    && !expectations.l1_blackout =>
+            {
+                if observed.committed_batches > self.settlement_counters.0 {
+                    self.settlement_counters.0 = observed.committed_batches;
+                    self.committed_advanced_at = now;
+                }
+                if observed.executed_batches > self.settlement_counters.1 {
+                    self.settlement_counters.1 = observed.executed_batches;
+                    self.executed_advanced_at = now;
+                }
+                let chain_moved_since = |stuck_since: Instant| self.tip_advanced_at > stuck_since;
+                if now.duration_since(self.committed_advanced_at) >= self.settlement_lag_window
+                    && chain_moved_since(self.committed_advanced_at)
+                {
+                    findings.push(Finding::SettlementStall {
+                        counter: "committed",
+                        stuck_at: self.settlement_counters.0,
+                        window: self.settlement_lag_window,
+                    });
+                    self.committed_advanced_at = now;
+                }
+                if now.duration_since(self.executed_advanced_at) >= self.settlement_lag_window
+                    && chain_moved_since(self.executed_advanced_at)
+                {
+                    findings.push(Finding::SettlementStall {
+                        counter: "executed",
+                        stuck_at: self.settlement_counters.1,
+                        window: self.settlement_lag_window,
+                    });
+                    self.executed_advanced_at = now;
+                }
+            }
+            _ => {
+                self.committed_advanced_at = now;
+                self.executed_advanced_at = now;
+            }
         }
 
         findings
@@ -744,6 +828,52 @@ impl NodeProbe {
     }
 }
 
+/// Reads the chain's settlement counters straight from L1 — the reading must
+/// not depend on any node, least of all the settler it is judging.
+pub struct SettlementProbe {
+    pub l1_url: String,
+    pub diamond: String,
+}
+
+/// Everything the watcher needs to judge settlement: where to read L1, who the
+/// settler is, and how long the counters may stand still.
+pub struct SettlementWatch {
+    pub probe: SettlementProbe,
+    pub settler: usize,
+    pub lag_window: Duration,
+}
+
+impl SettlementProbe {
+    pub async fn observe(&self, client: &reqwest::Client) -> Option<SettlementObservation> {
+        // IZKChain selectors: getTotalBatchesCommitted / getTotalBatchesExecuted.
+        let committed = self.counter(client, "0xb8c2f66f").await?;
+        let executed = self.counter(client, "0xdb1f0bf9").await?;
+        Some(SettlementObservation {
+            committed_batches: committed,
+            executed_batches: executed,
+        })
+    }
+
+    async fn counter(&self, client: &reqwest::Client, selector: &str) -> Option<u64> {
+        let response: serde_json::Value = client
+            .post(&self.l1_url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+                "params": [{"to": self.diamond, "data": selector}, "latest"],
+            }))
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        let hex = response.get("result")?.as_str()?;
+        u64::from_str_radix(hex.trim_start_matches("0x").trim_start_matches('0'), 16)
+            .ok()
+            .or(Some(0))
+    }
+}
+
 /// How often the watcher polls the cluster.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Receipts fetched per node per poll for the execution fingerprint.
@@ -755,6 +885,7 @@ const RECEIPT_SAMPLE: usize = 3;
 /// experiment on the first finding, so there is nothing left to watch.
 pub async fn watch(
     probes: Vec<NodeProbe>,
+    settlement: Option<SettlementWatch>,
     expectations: tokio::sync::watch::Receiver<Expectations>,
     findings: tokio::sync::mpsc::Sender<(Poll, Vec<Finding>)>,
     settle_margin: Duration,
@@ -764,7 +895,17 @@ pub async fn watch(
         .timeout(Duration::from_secs(1))
         .build()
         .expect("default reqwest client");
-    let mut checker = Checker::new(probes.len(), settle_margin, liveness_window);
+    let mut checker = Checker::new(
+        probes.len(),
+        settle_margin,
+        liveness_window,
+        settlement.as_ref().map(|watch| watch.settler).unwrap_or(0),
+        settlement
+            .as_ref()
+            .map(|watch| watch.lag_window)
+            .unwrap_or(Duration::from_secs(120)),
+    );
+    let settlement_probe = settlement.map(|watch| watch.probe);
     // The height probed for agreement: the lowest applied height reported in the
     // *previous* poll, so every reachable validator has the block by now.
     let mut probe_height: Option<u64> = None;
@@ -782,15 +923,23 @@ pub async fn watch(
         }
         let tolerate_l1_outage = current_expectations.l1_blackout || now < l1_tolerance_until;
 
-        let observations = futures::future::join_all(probes.iter().map(|probe| {
-            probe.observe(&client, probe_height, logs_since, now, tolerate_l1_outage)
-        }))
-        .await;
+        let (observations, settlement) = tokio::join!(
+            futures::future::join_all(probes.iter().map(|probe| {
+                probe.observe(&client, probe_height, logs_since, now, tolerate_l1_outage)
+            })),
+            async {
+                match &settlement_probe {
+                    Some(probe) => probe.observe(&client).await,
+                    None => None,
+                }
+            },
+        );
         logs_since = now;
 
         let poll = Poll {
             probe_height,
             nodes: observations,
+            settlement,
         };
         probe_height = poll
             .nodes
@@ -837,8 +986,15 @@ mod tests {
 
     #[test]
     fn agreement_violation_is_a_finding() {
-        let mut checker = Checker::new(2, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let poll = Poll {
+            settlement: None,
             probe_height: Some(7),
             nodes: vec![observation(10, "0xaaaa"), observation(10, "0xbbbb")],
         };
@@ -851,10 +1007,17 @@ mod tests {
 
     #[test]
     fn progress_without_quorum_is_a_finding_after_the_settle_margin() {
-        let mut checker = Checker::new(3, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            3,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let now = Instant::now();
         let mut expectations = healthy_expectations(3);
         let poll = |view| Poll {
+            settlement: None,
             probe_height: None,
             nodes: vec![observation(view, "0x"); 3],
         };
@@ -890,10 +1053,17 @@ mod tests {
 
     #[test]
     fn liveness_stall_fires_once_per_window() {
-        let mut checker = Checker::new(2, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let start = Instant::now();
         let expectations = healthy_expectations(2);
         let poll = Poll {
+            settlement: None,
             probe_height: None,
             nodes: vec![observation(5, "0x"); 2],
         };
@@ -914,9 +1084,122 @@ mod tests {
         );
     }
 
+    /// A poll with the given chain view and settlement counters.
+    fn settlement_poll(view: u64, committed: u64, executed: u64) -> Poll {
+        Poll {
+            probe_height: None,
+            nodes: vec![observation(view, "0x"), observation(view, "0x")],
+            settlement: Some(SettlementObservation {
+                committed_batches: committed,
+                executed_batches: executed,
+            }),
+        }
+    }
+
+    #[test]
+    fn settlement_stall_with_a_healthy_settler_is_a_finding() {
+        let mut checker = Checker::new(
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(3600),
+            0,
+            Duration::from_secs(10),
+        );
+        let expectations = healthy_expectations(2);
+        let start = Instant::now();
+
+        // Settlement lands a batch, then freezes while the chain keeps finalizing.
+        assert!(
+            checker
+                .observe(start, &expectations, &settlement_poll(10, 1, 1))
+                .is_empty()
+        );
+        assert!(
+            checker
+                .observe(
+                    start + Duration::from_secs(6),
+                    &expectations,
+                    &settlement_poll(11, 1, 1),
+                )
+                .is_empty(),
+            "within the window nothing fires",
+        );
+        let findings = checker.observe(
+            start + Duration::from_secs(12),
+            &expectations,
+            &settlement_poll(12, 1, 1),
+        );
+        assert!(
+            findings.iter().any(|finding| matches!(
+                finding,
+                Finding::SettlementStall {
+                    counter: "committed",
+                    ..
+                }
+            )),
+            "got: {findings:?}",
+        );
+    }
+
+    #[test]
+    fn settlement_lag_is_excused_while_the_settler_is_down() {
+        let mut checker = Checker::new(
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(3600),
+            0,
+            Duration::from_secs(10),
+        );
+        let healthy = healthy_expectations(2);
+        let mut settler_down = healthy_expectations(2);
+        settler_down.conditions[0] = Condition::Killed;
+        let start = Instant::now();
+
+        checker.observe(start, &healthy, &settlement_poll(10, 1, 1));
+        // The driver kills the settler: the frozen counters are sanctioned, however
+        // long it stays down.
+        assert!(
+            checker
+                .observe(
+                    start + Duration::from_secs(20),
+                    &settler_down,
+                    &settlement_poll(11, 1, 1),
+                )
+                .is_empty(),
+        );
+        // Healed: the clock restarts — a full window of grace before judgment.
+        assert!(
+            checker
+                .observe(
+                    start + Duration::from_secs(22),
+                    &healthy,
+                    &settlement_poll(12, 1, 1),
+                )
+                .is_empty(),
+        );
+        // Still frozen a full window later, settler healthy throughout: finding.
+        let findings = checker.observe(
+            start + Duration::from_secs(33),
+            &healthy,
+            &settlement_poll(13, 1, 1),
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::SettlementStall { .. })),
+            "got: {findings:?}",
+        );
+    }
+
     #[test]
     fn regression_and_evidence_and_death_are_findings() {
-        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let expectations = healthy_expectations(1);
         let now = Instant::now();
 
@@ -924,6 +1207,7 @@ mod tests {
             now,
             &expectations,
             &Poll {
+                settlement: None,
                 probe_height: None,
                 nodes: vec![observation(10, "0x")],
             },
@@ -936,6 +1220,7 @@ mod tests {
             now,
             &expectations,
             &Poll {
+                settlement: None,
                 probe_height: None,
                 nodes: vec![regressed],
             },
@@ -962,7 +1247,13 @@ mod tests {
         // A busy docker daemon times out inspects — for every container at once,
         // under restart churn. Unknown state must never read as a death; a real
         // one is confirmed by the next successful poll.
-        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let expectations = healthy_expectations(1);
         let mut unknown = observation(0, "0x");
         unknown.running = None;
@@ -970,6 +1261,7 @@ mod tests {
             Instant::now(),
             &expectations,
             &Poll {
+                settlement: None,
                 probe_height: None,
                 nodes: vec![unknown],
             },
@@ -994,7 +1286,13 @@ mod tests {
         // The scenario hash agreement cannot see: everyone serves the same
         // block hash, but one node's receipt for a sampled transaction differs
         // — an execution/storage/RPC divergence.
-        let mut checker = Checker::new(2, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let mut a = observation(10, "0xsame");
         let mut b = observation(10, "0xsame");
         a.execution_at_probe = Some(print("0xt0", "0x1|0x5208|0x00"));
@@ -1003,6 +1301,7 @@ mod tests {
             Instant::now(),
             &healthy_expectations(2),
             &Poll {
+                settlement: None,
                 probe_height: Some(7),
                 nodes: vec![a, b],
             },
@@ -1022,7 +1321,13 @@ mod tests {
 
     #[test]
     fn diverging_config_fingerprints_are_a_finding() {
-        let mut checker = Checker::new(2, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let mut a = observation(10, "0x");
         let mut b = observation(10, "0x");
         a.chain_fingerprint = Some("aaaa".to_string());
@@ -1031,6 +1336,7 @@ mod tests {
             Instant::now(),
             &healthy_expectations(2),
             &Poll {
+                settlement: None,
                 probe_height: None,
                 nodes: vec![a, b],
             },
@@ -1045,13 +1351,20 @@ mod tests {
 
     #[test]
     fn a_verify_rejection_is_a_finding() {
-        let mut checker = Checker::new(2, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let mut node = observation(10, "0x");
         node.verify_invalid = 1;
         let findings = checker.observe(
             Instant::now(),
             &healthy_expectations(2),
             &Poll {
+                settlement: None,
                 probe_height: None,
                 nodes: vec![observation(10, "0x"), node],
             },
@@ -1074,12 +1387,19 @@ mod tests {
         // retained epoch and its /status reports that older round until it
         // catches up. After a Killed→Healthy transition that dip is expected;
         // the same dip on a node that never restarted stays a finding.
-        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(600));
+        let mut checker = Checker::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(600),
+            0,
+            Duration::from_secs(120),
+        );
         let mut killed = healthy_expectations(1);
         killed.conditions[0] = Condition::Killed;
         let now = Instant::now();
 
         let at = |view, hash: &str| Poll {
+            settlement: None,
             probe_height: None,
             nodes: vec![observation(view, hash)],
         };
@@ -1114,11 +1434,18 @@ mod tests {
 
     #[test]
     fn a_liveness_stall_names_its_laggards() {
-        let mut checker = Checker::new(3, Duration::from_secs(5), Duration::from_secs(1));
+        let mut checker = Checker::new(
+            3,
+            Duration::from_secs(5),
+            Duration::from_secs(1),
+            0,
+            Duration::from_secs(120),
+        );
         let mut expectations = healthy_expectations(3);
         expectations.since = Instant::now() - Duration::from_secs(120);
         // Validator 2 sits behind the tip the other two reached.
         let poll = Poll {
+            settlement: None,
             probe_height: None,
             nodes: vec![
                 observation(10, "0x"),
@@ -1144,10 +1471,17 @@ mod tests {
 
     #[test]
     fn view_restart_at_an_epoch_boundary_is_not_a_regression() {
-        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let expectations = healthy_expectations(1);
         let now = Instant::now();
         let poll = |epoch, view| Poll {
+            settlement: None,
             probe_height: None,
             nodes: vec![NodeObservation {
                 finalized_round: Some((epoch, view)),
@@ -1175,9 +1509,16 @@ mod tests {
 
     #[test]
     fn applied_height_baseline_resets_after_a_restart_heal() {
-        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(60));
+        let mut checker = Checker::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            0,
+            Duration::from_secs(120),
+        );
         let now = Instant::now();
         let poll = |applied| Poll {
+            settlement: None,
             probe_height: None,
             nodes: vec![NodeObservation {
                 applied_height: Some(applied),
@@ -1196,6 +1537,7 @@ mod tests {
             now,
             &expectations,
             &Poll {
+                settlement: None,
                 probe_height: None,
                 nodes: vec![NodeObservation {
                     running: Some(false),

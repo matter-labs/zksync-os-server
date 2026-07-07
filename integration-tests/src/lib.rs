@@ -1101,6 +1101,15 @@ async fn ensure_test_wallet_funded(
     l2_zk_provider: &DynProvider<Zksync>,
     l2_wallet: &EthereumWallet,
 ) -> anyhow::Result<()> {
+    use crate::assert_traits::ReceiptAssert as _;
+    // One funding at a time per test process: concurrently starting testers (a
+    // multi-node cluster) share the L2 wallet *and* the L1 rich wallet, so
+    // parallel deposits race nonces and fee estimates — the loser's deposit
+    // reverts and startup dies. The first holder funds; the rest see the
+    // balance and return.
+    static FUNDING_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _funding = FUNDING_LOCK.lock().await;
+
     let beneficiary = l2_wallet.default_signer().address();
     let balance = l2_provider.get_balance(beneficiary).await?;
     if balance > U256::ZERO {
@@ -1161,7 +1170,9 @@ async fn ensure_test_wallet_funded(
                 .into_transaction_request(),
         )
         .await?
-        .get_receipt()
+        // A reverted deposit must name itself — a bare `get_receipt` would
+        // surface as "no L1->L2 logs" below, hiding the actual failure.
+        .expect_successful_receipt()
         .await?;
     let l1_to_l2_tx_log = receipt
         .logs()

@@ -967,8 +967,15 @@ where
                     "Failed transaction's top-level call frame"
                 );
             }
+            // Reverts on this path have one overwhelmingly likely cause in a
+            // committee: another settler already landed this batch's command —
+            // L1 is the mutual-exclusion arbiter, the loser of a settler
+            // collision dies here, and its restart reconciles against L1 state.
             anyhow::bail!(
-                "{} L1 command transaction failed, see L1 transaction's trace for more details (tx_hash='{:?}')",
+                "{} L1 command transaction failed, see L1 transaction's trace for more details \
+                 (tx_hash='{:?}'). If the trace shows the batch already processed, another \
+                 settler is (or was) active: exactly one node may run with `batcher.enabled` — \
+                 fix the configs, then restart this node; it will reconcile from L1",
                 command,
                 receipt.transaction_hash
             );

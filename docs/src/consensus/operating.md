@@ -20,6 +20,7 @@ alarm names the first place to look.
 | `jemalloc_allocated_bytes` | grows with write load, bounded by the RocksDB write-buffer plateau | unbounded growth is a leak; the known grower is RocksDB memtables (node-team item) | compare against the documented baseline before suspecting consensus |
 | RPC admission (`"pipeline backpressure"` rejections) | brief bursts under heavy load | sustained refusal means proof generation cannot keep up with the block rate | a capacity signal, not a fault: reduce load or scale provers |
 | `/status` `consensus.chain_fingerprint` | identical on every node (also logged once at startup: "committee-uniform configuration fingerprint") | two nodes disagree on a committee-uniform fact — schedule, epoch geometry, consensus timing, or a verification-pinned chain constant. Symptoms otherwise surface later and expensively: a stall at the next epoch boundary, or false byzantine alarms | diff the drifted node's config against a healthy one *before* the next epoch boundary; the fingerprinted surface is enumerated in `node/bin/src/chain_fingerprint.rs` |
+| settlement lag, measured from L1 (age of the diamond's committed/executed batch counters vs the advancing L2 tip) | batches land within the batch timeout plus proving/L1 slack | the chain finalizes but nothing settles: the settler is dead or wedged, or its prover pipeline stalled. Measured from L1 so the alert survives the settler | `lag AND settler dead` → the failover runbook below; `lag AND settler alive` → an L1/capacity incident, promotion changes nothing |
 
 Three structural notes. First, all `consensus_*` counters reset on process
 restart — alert on increases, not absolute values. Second, a *stopped*
@@ -53,12 +54,64 @@ Logged once at consensus startup, and derivable from config:
   *finalized* L1 blocks. This is deliberate, not a knob: every validator
   verifies included L1 content against its own L1 view before voting, and a
   BFT-finalized block is irrevocable — the deep-reorg remedy a single
-  sequencer had (roll back and re-sequence) no longer exists. The decision
-  note lives where the mempool's watchers are wired in `node/bin/src/lib.rs`.
+  sequencer had (roll back and re-sequence) no longer exists.
 
 Chains expected to idle should size `epoch_length` small enough that the
 sprint bound is acceptable for incident response, and raise `epoch_retention`
 to keep the loaded catch-up window sane; the journals are small either way.
+
+## Settlement failover
+
+One validator — the settler — runs the batcher (`batcher.enabled = true`):
+prover input generation, the prover API, and the L1 commit/prove/execute
+senders all live on it. Every other validator keeps a **full batcher
+configuration staged with `enabled = false`**, including its own operator
+keys: three distinct commit/prove/execute signers per validator, all
+pre-authorized on the ValidatorTimelock's per-chain operator roles and
+funded. Key access never moves during a failover — the standby's keys were
+authorized on day one.
+
+There is no lease and no runtime handover, deliberately. **L1 itself is the
+mutual exclusion**: if two settlers ever run, they race on the timelock, L1
+serializes them, the loser's transaction reverts, and the loser dies loudly
+with the remedy in its error message. Losing that race is safe — the crash
+is the design — but it is churn, so the runbook keeps the exactly-one-settler
+invariant by construction.
+
+The drill, when the settler is lost (host down, process dead, region gone):
+
+1. **Detect.** Settlement lag measured *from L1* (the diamond's committed /
+   executed batch counters against the advancing L2 tip) — never from the
+   settler's own telemetry; the detector must not die with it. The chaos
+   rig's watcher implements exactly this check (`SettlementStall`).
+   Distinguish `lag AND settler dead` (this runbook) from `lag AND settler
+   alive` (an L1 or capacity incident — promoting would change nothing).
+2. **Promote a standby.** Flip `batcher.enabled = true` on the chosen
+   standby and restart it. That is the whole in-band procedure: on startup
+   its L1 discovery finds the last committed/proved/executed batches,
+   recreates the committed-but-unexecuted batches from its own chain, and
+   resumes the commit/prove/execute ladder with its own keys. In-flight
+   batches the dead settler had proven are re-proven — bounded compute,
+   never a liveness question.
+3. **Point provers at nothing.** The prover fleet talks to one stable
+   LB/DNS name with a TCP health check; only the active settler serves the
+   prover API, so routing follows the promotion on its own. A prover holding
+   work assigned by the dead settler gets a graceful `UnknownJob` rejection
+   and re-polls.
+4. **Demote the old settler before it returns.** Set `batcher.enabled =
+   false` in its configuration *now*, while it is down — a naively restarted
+   old settler is the split-brain case. (Survivable — one of the two loses
+   the L1 race and crashes — but an incident of its own.) It then rejoins as
+   an ordinary validator: catches up, votes, serves; and stays the natural
+   next standby.
+5. **Verify**: new batches commit and execute on L1, the settler-identity
+   startup log on the promoted node shows *its* operator addresses, and the
+   old node rejoined as a standby.
+
+The integration drill for the whole flow is
+`settlement_fails_over_to_a_promoted_standby` (and the collision half in
+`a_colliding_second_settler_dies_loudly_and_the_committee_recovers`); the
+rig executes the same choreography as one command, `chaos promote-settler`.
 
 ## Changing the consensus protocol version (flag day)
 

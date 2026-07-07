@@ -51,6 +51,12 @@ pub struct DriveArgs {
     /// expects it to be live. Generous on purpose: a false alarm costs minutes.
     #[arg(long, default_value = "60s")]
     pub liveness_window: humantime::Duration,
+    /// How long L1 settlement (committed/executed batch counters, read from L1
+    /// itself) may stand still while the chain finalizes and the settler is
+    /// believed healthy. Generous: batches seal on a timeout and provers take
+    /// their time; the target is a *dead-but-running* settler, not jitter.
+    #[arg(long, default_value = "120s")]
+    pub settlement_lag_window: humantime::Duration,
     /// Disable the L1 fault lane (anvil blackouts and base-fee spikes).
     #[arg(long)]
     pub no_l1_faults: bool,
@@ -552,6 +558,17 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         schedule = schedule.with_l1_faults(args.l1_reorgs);
     }
     let probes = watch::NodeProbe::from_manifest(&manifest);
+    // Settlement progress is read from L1 itself, so the watcher's view of the
+    // settler outlives the settler. Old manifests predate the diamond field —
+    // they run without the settlement check.
+    let settlement = (!manifest.diamond_address.is_empty()).then(|| watch::SettlementWatch {
+        probe: watch::SettlementProbe {
+            l1_url: format!("http://127.0.0.1:{}", manifest.host_l1_port),
+            diamond: manifest.diamond_address.clone(),
+        },
+        settler: manifest.settler,
+        lag_window: *args.settlement_lag_window,
+    });
     let mut ops = DockerOps::new(manifest);
     let started = std::time::Instant::now();
     let deadline = args
@@ -570,6 +587,7 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
     let (findings_sender, mut findings_receiver) = tokio::sync::mpsc::channel(1);
     let watcher = tokio::spawn(watch::watch(
         probes,
+        settlement,
         expectations_receiver,
         findings_sender,
         *args.settle_margin,
