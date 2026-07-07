@@ -91,10 +91,17 @@ const ERA_KEY: &[u8] = b"consensus_era";
 
 pub struct FinalityStore {
     db: RocksDB<FinalityCF>,
-    /// Serializes watermark advances: both writers try to advance after their write,
+    /// Serializes watermark advances (both writers try to advance after their
+    /// write) and carries the covering probe's high-water cursor: the furthest
+    /// contiguously-indexed height a probe has already scanned. The contiguous
+    /// range only grows, so resuming there instead of at the watermark keeps a
+    /// long-downtime hole from being fruitlessly rescanned on every live
+    /// finalization during catch-up — exactly when the node is busiest.
+    /// In-memory only: after a restart the first probe rescans once and
+    /// re-establishes it.
     /// and a read-modify-write race would otherwise lose ground (it would self-heal
     /// on the next write, but there is no reason to allow the gap).
-    watermark_lock: Mutex<()>,
+    watermark_lock: Mutex<u64>,
     /// Broadcasts watermark advances to the status surface.
     watermark_watch: watch::Sender<Option<u64>>,
 }
@@ -104,7 +111,7 @@ impl FinalityStore {
         let db = RocksDB::new(path)?;
         let store = Self {
             db,
-            watermark_lock: Mutex::new(()),
+            watermark_lock: Mutex::new(0),
             watermark_watch: watch::channel(None).0,
         };
         // Re-publish the persisted watermark so the status surface is right from the
@@ -408,7 +415,7 @@ impl FinalityStore {
     ///   certificate and jump there. Probes only run when a certificate landed,
     ///   so backfill's index-only churn never rescans the hole.
     fn advance_watermark(&self, certificate_arrived: bool) -> anyhow::Result<()> {
-        let _guard = self.watermark_lock.lock().unwrap();
+        let mut probe_cursor = self.watermark_lock.lock().unwrap();
         let started_at = self.certified_watermark()?;
         let mut watermark = started_at;
 
@@ -424,8 +431,15 @@ impl FinalityStore {
                 break;
             }
             // Covering probe: the highest certified height reachable through
-            // contiguous digests above the stall point.
-            let mut cursor = watermark.unwrap_or(0);
+            // contiguous digests above the stall point. Resumes from the
+            // cached cursor — heights scanned by an earlier probe are never
+            // rescanned, so during a long catch-up each live finalization
+            // pays for the newly indexed range only, not the whole hole.
+            // (The trade: a certificate arriving late for an already-scanned
+            // interior height is not noticed until a newer certificate lands;
+            // on a live chain one always does, and on a halted chain the
+            // watermark is not the alarm that matters.)
+            let mut cursor = (*probe_cursor).max(watermark.unwrap_or(0));
             let mut jump_to = None;
             while let Some(digest) = self.digest_at_height(cursor + 1)? {
                 cursor += 1;
@@ -433,6 +447,7 @@ impl FinalityStore {
                     jump_to = Some(cursor);
                 }
             }
+            *probe_cursor = cursor;
             match jump_to {
                 Some(covered) if Some(covered) > watermark => {
                     tracing::info!(

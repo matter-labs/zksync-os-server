@@ -204,6 +204,9 @@ pub struct ConsensusSetup {
     /// (the activity observer's custody records, the status surface).
     pub schedule: std::sync::Arc<CommitteeSchedule>,
     pub epoch_length: std::num::NonZeroU64,
+    /// View timeouts, validated against the block time at config load.
+    pub leader_timeout: std::time::Duration,
+    pub certification_timeout: std::time::Duration,
     /// The chain height consensus is anchored at (`consensus.genesis_height`):
     /// consensus heights count from it, and decoded blocks learn it via the block
     /// codec config.
@@ -421,6 +424,8 @@ impl ConsensusSetup {
             schedule: std::sync::Arc::new(schedule),
             epoch_length: std::num::NonZeroU64::new(config.epoch_length)
                 .context("`consensus.epoch_length` must be nonzero")?,
+            leader_timeout: config.leader_timeout,
+            certification_timeout: config.certification_timeout,
             era_anchor: config.genesis_height,
             accept_stale_floor: config.accept_stale_floor,
             epoch_retention: std::num::NonZeroU64::new(config.epoch_retention),
@@ -570,6 +575,15 @@ where
         .name("consensus".to_string())
         .spawn(move || {
             let result = run(setup, env, l2_pool, observability, shutdown);
+            // The reason must hit the logs *here*: the JoinHandle's return value
+            // is nowhere read, and the watchdog that reacts to the death signal
+            // only knows "consensus died" — which failure arm fired (networking,
+            // rotation, marshal, broadcast, shutdown timeout) is exactly what an
+            // on-call engineer needs to pick a remedy.
+            match &result {
+                Ok(()) => tracing::info!("consensus stack exited cleanly"),
+                Err(reason) => tracing::error!(?reason, "consensus stack died"),
+            }
             // Fire unconditionally: the node must learn about consensus death whether
             // it was an error or a clean shutdown (the watchdog is already gone then).
             let _ = dead_sender.send(());
@@ -768,6 +782,8 @@ where
                 let mut stack_config =
                     StackConfig::new("consensus").with_epoch_length(setup.epoch_length);
                 stack_config.epoch_retention = setup.epoch_retention;
+                stack_config.leader_timeout = setup.leader_timeout;
+                stack_config.certification_timeout = setup.certification_timeout;
                 stack_config
             },
             identity,

@@ -142,6 +142,20 @@ struct Rig {
 }
 
 impl Rig {
+    /// Like [`Self::new`], with the node's finality store attached — the
+    /// evidence source for redelivery digest checks.
+    async fn new_with_finality_store() -> Self {
+        let mut rig = Self::new().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = zksync_os_consensus_execution::finality_store::FinalityStore::open(dir.path())
+            .expect("open finality store");
+        rig.env = rig.env.with_finality_store(std::sync::Arc::new(store));
+        // The store outlives the test through the leaked tempdir; env tests are
+        // process-scoped and the handful of bytes is irrelevant.
+        std::mem::forget(dir);
+        rig
+    }
+
     async fn new() -> Self {
         let genesis = shared_genesis(&[(test_sender_address(), U256::from(FUNDING))]);
         let base = TestStateHistory::new(genesis.clone());
@@ -674,4 +688,198 @@ async fn a_stalled_pipeline_bounds_speculation_and_drains_cleanly() {
         "the backlog must drain to the durable chain",
     );
     assert!(rig.env.verify(blocks[3].clone(), blocks[4].clone()).await);
+}
+
+/// The production environment runs the shared `ExecutionEnv` contract checks —
+/// the same ones the sim reference implementations run against themselves.
+/// This is the pin for the two contract clauses an operational review found
+/// violated here while every sim honored them: plural redelivery below the
+/// committed tip (marshal's marker legitimately trails after unclean kills,
+/// and floor restarts re-deliver from the floor block) must be absorbed, and
+/// `committed_height` must speak era-relative heights.
+#[tokio::test]
+async fn production_env_honors_the_commit_contract() {
+    let mut rig = Rig::new().await;
+
+    // A three-block chain through the production VM.
+    let mut blocks = Vec::new();
+    let mut parent_block = rig.genesis_block.clone();
+    let mut parent_record: Option<ReplayRecord> = None;
+    let mut parent_el = rig.genesis.header_hash;
+    let mut parent_diff: Option<Diff> = None;
+    for nonce in 0..3u64 {
+        let (record, el, diff) = rig
+            .produce_record(
+                parent_record.as_ref(),
+                parent_el,
+                parent_diff.as_ref(),
+                rig.genesis.context.timestamp + 1 + nonce,
+                vec![transfer(&rig.genesis, nonce)],
+            )
+            .await;
+        let block = ConsensusBlock::from_record(&parent_block, record.clone());
+        // Verified first, like every finalized block once was somewhere.
+        assert!(rig.env.verify(parent_block.clone(), block.clone()).await);
+        parent_block = block.clone();
+        parent_record = Some(record);
+        parent_el = el;
+        parent_diff = Some(diff);
+        blocks.push(block);
+    }
+
+    zksync_os_consensus_core::conformance::commit_and_redelivery_contract(&mut rig.env, blocks, 0)
+        .await;
+}
+
+/// A contradictory redelivery — same height, different content — must still
+/// die loudly: redelivery tolerance is for *known* finalized blocks only. The
+/// digest evidence comes from the finality store, checked before any write.
+#[tokio::test]
+#[should_panic(expected = "re-delivered a different block")]
+async fn contradictory_redelivery_below_the_tip_still_panics() {
+    let mut rig = Rig::new_with_finality_store().await;
+
+    let mut blocks = Vec::new();
+    let mut parent_block = rig.genesis_block.clone();
+    let mut parent_record: Option<ReplayRecord> = None;
+    let mut parent_el = rig.genesis.header_hash;
+    let mut parent_diff: Option<Diff> = None;
+    for nonce in 0..2u64 {
+        let (record, el, diff) = rig
+            .produce_record(
+                parent_record.as_ref(),
+                parent_el,
+                parent_diff.as_ref(),
+                rig.genesis.context.timestamp + 1 + nonce,
+                vec![transfer(&rig.genesis, nonce)],
+            )
+            .await;
+        let block = ConsensusBlock::from_record(&parent_block, record.clone());
+        parent_block = block.clone();
+        parent_record = Some(record);
+        parent_el = el;
+        parent_diff = Some(diff);
+        blocks.push(block);
+    }
+    for block in &blocks {
+        rig.env.commit(block.clone()).await;
+    }
+
+    // A different block 1 (different timestamp → different digest), redelivered
+    // below the tip: the finality index must convict it.
+    let (forged, _el, _diff) = rig
+        .produce_record(
+            None,
+            rig.genesis.header_hash,
+            None,
+            rig.genesis.context.timestamp + 7,
+            vec![transfer(&rig.genesis, 0)],
+        )
+        .await;
+    let forged = ConsensusBlock::from_record(&rig.genesis_block, forged);
+    rig.env.commit(forged).await;
+}
+
+/// The era-relativity of `committed_height`, pinned at exactly the arithmetic
+/// that matters for a migrated chain: with a realistic anchor (larger than an
+/// epoch), the at-cutover answer is 0 and each consensus block counts from
+/// there — never the chain-absolute WAL tip, which would send the epoch
+/// rotation looking for anchors that cannot exist.
+#[tokio::test]
+async fn committed_height_is_era_relative_over_a_migration_anchor() {
+    let genesis = shared_genesis(&[(test_sender_address(), U256::from(FUNDING))]);
+    let (sink, _payloads) = mpsc::channel::<CommittedPayload>(8);
+    let (_applied_sender, applied) = watch::channel(None);
+    const ANCHOR: u64 = 50_000; // > the default epoch length: any real migration.
+
+    let anchor = ChainAnchor {
+        genesis_height: ANCHOR,
+        genesis_block_hash: genesis.header_hash,
+        genesis_timestamp: genesis.context.timestamp,
+        genesis_protocol_version: "0.31.0".parse().expect("valid version"),
+        genesis_next_cursors: Default::default(),
+        genesis_block_hashes: Default::default(),
+        genesis_carries_upgrade_tx: false,
+        genesis_fee_params: zksync_os_sequencer::execution::FeeParams {
+            eip1559_basefee: genesis.context.eip1559_basefee,
+            native_price: genesis.context.native_price,
+            pubdata_price: genesis.context.pubdata_price,
+        },
+    };
+
+    // Freshly migrated: the WAL tip *is* the anchor.
+    let mut env = NodeExecutionEnv::new(
+        TestStateHistory::new(genesis.clone()),
+        anchor.clone(),
+        ANCHOR,
+        None,
+        sink.clone(),
+        applied.clone(),
+        0,
+    );
+    assert_eq!(
+        env.committed_height().await.map(|h| h.get()),
+        Some(0),
+        "at the cutover, the era height is zero",
+    );
+
+    // Restarted three consensus blocks past the cutover.
+    let mut env = NodeExecutionEnv::new(
+        TestStateHistory::new(genesis.clone()),
+        anchor,
+        ANCHOR + 3,
+        Some(genesis.header_hash),
+        sink,
+        applied,
+        0,
+    );
+    assert_eq!(
+        env.committed_height().await.map(|h| h.get()),
+        Some(3),
+        "three blocks past the cutover is era height three",
+    );
+}
+
+/// Benign below-tip redelivery with the finality store attached: the evidence
+/// path must recognize the *same* block and absorb it silently (the sibling of
+/// the contradictory-redelivery panic above).
+#[tokio::test]
+async fn benign_redelivery_below_the_tip_is_absorbed_with_a_store() {
+    let mut rig = Rig::new_with_finality_store().await;
+
+    let mut blocks = Vec::new();
+    let mut parent_block = rig.genesis_block.clone();
+    let mut parent_record: Option<ReplayRecord> = None;
+    let mut parent_el = rig.genesis.header_hash;
+    let mut parent_diff: Option<Diff> = None;
+    for nonce in 0..3u64 {
+        let (record, el, diff) = rig
+            .produce_record(
+                parent_record.as_ref(),
+                parent_el,
+                parent_diff.as_ref(),
+                rig.genesis.context.timestamp + 1 + nonce,
+                vec![transfer(&rig.genesis, nonce)],
+            )
+            .await;
+        let block = ConsensusBlock::from_record(&parent_block, record.clone());
+        parent_block = block.clone();
+        parent_record = Some(record);
+        parent_el = el;
+        parent_diff = Some(diff);
+        blocks.push(block);
+    }
+    for block in &blocks {
+        rig.env.commit(block.clone()).await;
+    }
+
+    // The unclean-kill shape: everything from the first block again.
+    for block in &blocks {
+        rig.env.commit(block.clone()).await;
+    }
+    assert_eq!(
+        rig.env.committed_height().await.map(|h| h.get()),
+        Some(3),
+        "benign redeliveries must not move the committed height",
+    );
 }

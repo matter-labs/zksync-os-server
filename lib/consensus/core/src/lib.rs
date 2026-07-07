@@ -30,6 +30,7 @@
 
 pub mod application;
 pub mod committer;
+pub mod conformance;
 pub mod execution;
 pub mod idle_policy;
 pub mod schedule;

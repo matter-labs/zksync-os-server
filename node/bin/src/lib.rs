@@ -874,7 +874,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 // whether to slow the idle cadence is a tuning decision for later.
                 idle_block_deadline: config.sequencer_config.block_time,
                 max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
-                interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+                interop_roots_per_block: config.sequencer_config.interop_roots_per_block,
             },
             idle_policy,
         );
@@ -994,7 +994,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             committed_el_hash,
             committed_payload_sender,
             applied_block_number_receiver.clone(),
-            config.batcher_config.interop_roots_per_batch_limit,
+            config.sequencer_config.interop_roots_per_block,
         )
         .with_builder(std::sync::Arc::new(tokio::sync::Mutex::new(builder)))
         .with_validity(validation)
@@ -1058,8 +1058,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 block_time: config.sequencer_config.block_time,
                 service_block_delay: config.sequencer_config.service_block_delay,
                 max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
-                // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
-                interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+                interop_roots_per_block: config.sequencer_config.interop_roots_per_block,
             },
             &node_startup_state.l1_state.settlement_layer_intervals,
             last_constructed_block_ctx_sender,
@@ -1391,7 +1390,7 @@ async fn run_main_node_pipeline(
             // `replay_until + 1`.
             replay_until: block_replay_storage.latest_record(),
             state: state.clone(),
-            interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+            interop_roots_per_block: config.sequencer_config.interop_roots_per_block,
         })
     } else {
         let (replays_to_execute_sender, replays_to_execute) =

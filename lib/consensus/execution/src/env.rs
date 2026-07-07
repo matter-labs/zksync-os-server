@@ -639,8 +639,16 @@ where
     }
 
     async fn committed_height(&mut self) -> Option<Height> {
+        // The contract is era-relative: consensus (marshal archives, the epoch
+        // rotation, the floor window) counts heights from the era anchor, and
+        // the anchor itself is consensus height 0. The pending-state ledger
+        // counts the chain; translate at the boundary — exactly like the sim
+        // reference implementations do. On a fresh chain (anchor 0) the two
+        // coincide, which is why every fresh-chain test passes either way; a
+        // migrated chain with a realistic anchor would otherwise ask the
+        // rotation for epoch anchors that can never exist.
         let height = self.shared.lock().unwrap().pending.committed().height;
-        (height > 0).then(|| Height::new(height))
+        (height > 0).then(|| Height::new(height.saturating_sub(self.anchor.genesis_height)))
     }
 
     async fn adopt_committed_block(&mut self, block: &ConsensusBlock) {
@@ -655,19 +663,98 @@ where
 
     async fn commit(&mut self, block: ConsensusBlock) {
         let height = block.height_u64();
-        // Record the height→digest mapping first thing: it is a pure finality fact
-        // (true regardless of what happens to this delivery), idempotent under
-        // redelivery, and the certificate written by the activity observer is only
-        // reachable by height once this index exists.
-        if let Some(finality) = &self.finality
-            && let Err(err) = finality.index_height(
+        let digest_bytes: [u8; 32] = block
+            .digest()
+            .as_ref()
+            .try_into()
+            .expect("sha256 digests are 32 bytes");
+        let committed = {
+            let shared = self.shared.lock().unwrap();
+            if shared.pipeline_closed {
+                warn!(height, "node is shutting down; dropping commit");
+                return;
+            }
+            shared.pending.committed()
+        };
+
+        if height < committed.height {
+            // At-least-once delivery legitimately reaches *below* the tip:
+            // marshal resumes from its own durable marker, which is synced per
+            // batch of acks and can trail the write-ahead log by several blocks
+            // after an unclean kill; and a finality-floor restart re-delivers
+            // from the floor block itself, which the floor-selection policy
+            // deliberately allows to sit below the tip. The content must still
+            // agree with finalized history where we can check it — and the
+            // check runs against the *existing* index, before any write, so a
+            // contradictory redelivery cannot first overwrite the evidence.
+            if let Some(finality) = &self.finality {
+                match finality.digest_at_height(height) {
+                    Ok(Some(indexed)) => {
+                        assert_eq!(
+                            indexed, digest_bytes,
+                            "consensus re-delivered a different block at an \
+                             already-final height"
+                        );
+                    }
+                    Ok(None) => {
+                        // Not indexed: a rebuilt (wiped) finality store catching
+                        // up over a floor. Redelivery is what repopulates it.
+                        if let Err(err) = finality.index_height(height, digest_bytes) {
+                            error!(
+                                height,
+                                ?err,
+                                "failed to index a redelivered finalized block"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        error!(height, ?err, "failed to read the finality index");
+                    }
+                }
+            }
+            tracing::debug!(
                 height,
-                block
-                    .digest()
-                    .as_ref()
-                    .try_into()
-                    .expect("sha256 digests are 32 bytes"),
-            )
+                tip = committed.height,
+                "absorbed a finalized-block redelivery below the committed tip"
+            );
+            return;
+        }
+        if height == committed.height {
+            // Redelivery of the exact tip after an unclean shutdown. The
+            // in-memory digest is unknown right after a restart (adoption from
+            // the archive may not have happened yet); the finality index still
+            // holds the evidence then.
+            match committed.digest {
+                Some(digest) => assert_eq!(
+                    digest,
+                    block.digest(),
+                    "consensus re-delivered a different block at the committed height"
+                ),
+                None => {
+                    if let Some(finality) = &self.finality
+                        && let Ok(Some(indexed)) = finality.digest_at_height(height)
+                    {
+                        assert_eq!(
+                            indexed, digest_bytes,
+                            "consensus re-delivered a different block at the committed height"
+                        );
+                    }
+                }
+            }
+            return;
+        }
+        assert_eq!(
+            height,
+            committed.height + 1,
+            "consensus delivered a block out of order"
+        );
+
+        // Record the height→digest mapping before the block enters the pipeline:
+        // it is a pure finality fact (true regardless of what happens to this
+        // delivery), idempotent, and the certificate written by the activity
+        // observer is only reachable by height once this index exists.
+        if let Some(finality) = &self.finality
+            && let Err(err) = finality.index_height(height, digest_bytes)
         {
             // Never block consensus on the auxiliary store: certificates remain
             // recoverable from the consensus archives while those exist, and the
@@ -678,37 +765,6 @@ where
                 "failed to index finalized block in the finality store"
             );
         }
-        let committed = {
-            let shared = self.shared.lock().unwrap();
-            if shared.pipeline_closed {
-                warn!(height, "node is shutting down; dropping commit");
-                return;
-            }
-            shared.pending.committed()
-        };
-
-        if height <= committed.height {
-            // At-least-once delivery: consensus may re-deliver the tip after an
-            // unclean shutdown. Anything below is impossible by construction (delivery
-            // is ordered and starts above the durable floor).
-            assert_eq!(
-                height, committed.height,
-                "consensus delivered a block below the durable chain"
-            );
-            if let Some(digest) = committed.digest {
-                assert_eq!(
-                    digest,
-                    block.digest(),
-                    "consensus re-delivered a different block at the committed height"
-                );
-            }
-            return;
-        }
-        assert_eq!(
-            height,
-            committed.height + 1,
-            "consensus delivered a block out of order"
-        );
 
         let record = block
             .record()

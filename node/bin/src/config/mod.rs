@@ -791,6 +791,36 @@ pub struct ConsensusConfig {
         "must be 0s (legacy: idle leaders always build) or well above `sequencer.block_time`"
     ))]
     pub idle_heartbeat: Duration,
+    /// How long a validator waits for the leader's proposal before voting to
+    /// skip the view. The leader's whole turn — waiting out an idle mempool
+    /// (up to one block time) plus building and executing the block (another
+    /// block time) — must fit comfortably inside this, which the validator
+    /// below enforces. Committee-uniform: configure the same value everywhere.
+    #[config(default_t = Duration::from_secs(1))]
+    #[config_validate(custom(
+        |root: &Config, value: &Duration| {
+            // A loaded leader turn costs ~2× block_time (idle wait + build);
+            // demand ≥ 30% headroom so normal jitter does not expire turns.
+            let turn = root.sequencer_config.block_time.saturating_mul(2);
+            turn.as_secs_f64() <= value.as_secs_f64() * 0.7
+        },
+        "must leave headroom over a leader turn: `2 × sequencer.block_time` may use at most \
+         70% of `consensus.leader_timeout` (raise the timeout or lower the block time)"
+    ))]
+    pub leader_timeout: Duration,
+    /// How long a validator waits for notarization progress before voting to
+    /// skip the view. Verification re-executes the proposal, whose cost scales
+    /// with `sequencer.block_time`. Committee-uniform.
+    #[config(default_t = Duration::from_secs(2))]
+    #[config_validate(custom(
+        |root: &Config, value: &Duration| {
+            root.sequencer_config.block_time.saturating_mul(2).as_secs_f64()
+                <= value.as_secs_f64() * 0.7
+        },
+        "must leave headroom over proposal re-execution: `2 × sequencer.block_time` may use \
+         at most 70% of `consensus.certification_timeout`"
+    ))]
+    pub certification_timeout: Duration,
     /// A node whose network key appears in no `committees` entry refuses to start
     /// with consensus enabled — a validator that cannot ever vote is usually a
     /// misconfiguration. Setting this acknowledges the state as deliberate (e.g. a
@@ -1097,6 +1127,15 @@ pub struct SequencerConfig {
     /// One of the block Seal Criteria. Only affects the Main Node.
     #[config(default_t = 1000)]
     pub max_transactions_in_block: usize,
+
+    /// Max number of interop roots per block — an execution-relevant chain
+    /// constant: block building consumes it and consensus verification
+    /// re-executes with the verifier's own value, so a committee must run it
+    /// identically everywhere (like the gas and pubdata limits). Kept apart
+    /// from the batcher's per-batch limit, which is that node's local batching
+    /// concern.
+    #[config(default_t = 1000)]
+    pub interop_roots_per_block: u64,
 
     /// Max gas used per block.
     /// One of the block Seal Criteria. Only affects the Main Node.

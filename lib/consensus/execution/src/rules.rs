@@ -199,7 +199,13 @@ pub async fn check_proposal(
     }
     let max_timestamp = now_epoch_seconds.saturating_add(config.max_timestamp_skew.as_secs());
     if context.timestamp > max_timestamp {
-        invalid!(
+        // Withhold, not invalid: the verdict is inherently round-scoped — it
+        // compares against *this validator's clock right now*, and self-heals
+        // on re-proposal once clocks catch up. Classifying it invalid would
+        // fire the byzantine/divergence alarm (`verify_verdicts{invalid}`,
+        // which operations treat as never-fires-on-honest-committees) for
+        // plain NTP drift on either side.
+        withhold!(
             "timestamp {} is further than {:?} ahead of this validator's clock ({now_epoch_seconds})",
             context.timestamp,
             config.max_timestamp_skew
@@ -659,12 +665,15 @@ mod tests {
         record.block_context.timestamp = PARENT_TIMESTAMP;
         assert_verdict!(check(&record, &StubInputs::default()).await, Verdict::Valid);
 
-        // Beyond the verifier's clock plus skew: invalid.
+        // Beyond the verifier's clock plus skew: *withhold*, not invalid — the
+        // comparison is against this validator's clock right now and self-heals
+        // on re-proposal; classifying it invalid would fire the byzantine/
+        // divergence alarm for plain NTP drift.
         let mut record = valid_record(Vec::new());
         record.block_context.timestamp = NOW + 11; // skew allowance is 10s
         assert_verdict!(
             check(&record, &StubInputs::default()).await,
-            Verdict::Invalid(_)
+            Verdict::Withhold(_)
         );
 
         let mut record = valid_record(Vec::new());

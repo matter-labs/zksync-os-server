@@ -12,7 +12,7 @@ alarm names the first place to look.
 | Signal | Healthy | Alarm means | First response |
 | --- | --- | --- | --- |
 | `consensus_verify_verdicts{verdict="invalid"}` | never increments | a peer proposed a block this validator *permanently* rejects — failed linkage, validity rules, or re-execution mismatch. On an honest committee this is the operational signature of a state-transition divergence (e.g. an upgrade that changed execution) or a byzantine leader | correlate the proposer via logs ("block failed re-execution; rejecting"); halt any rollout in progress; a diverging validator must be rebuilt from a floor after the cause is fixed |
-| `consensus_verify_verdicts{verdict="withhold"}` | increments only around restarts / L1 lag | persistent growth means this validator cannot vouch for proposals — usually its L1 view lags (priority-op authenticity checks) or commits are backlogged | check the L1 provider and the `speculative state at capacity` log line; the condition clears itself when the cause does |
+| `consensus_verify_verdicts{verdict="withhold"}` | increments only around restarts / L1 lag / clock skew | persistent growth means this validator cannot vouch for proposals — usually its L1 view lags (priority-op authenticity checks), commits are backlogged, or a proposer's timestamps outrun this validator's clock (NTP drift on either side) | check the L1 provider, the `speculative state at capacity` log line, and clock sync; the condition clears itself when the cause does |
 | `consensus_activity{...conflicting_notarize / conflicting_finalize / nullify_finalize}` | zero, always | protocol fault evidence: a committee member equivocated | treat as compromise of that validator's key; schedule it out of the committee (["Changing the committee"](enabling.md#changing-the-committee)) |
 | block staleness (`eth_getBlockByNumber("latest")` age, or `/status` `finalized.observed_unix`) | never older than `consensus.idle_heartbeat` plus a couple of leader timeouts | the chain stopped: quorum loss, or every leader declines. The heartbeat makes this rule sharp — an idle chain still pulses | count reachable validators vs quorum; a below-quorum committee needs nodes restored (["Rolling back"](enabling.md#rolling-back) is the last resort) |
 | `/status` `finality_certified_height` | tracks `applied_height` within a small tail | the finality trail stopped being provable: certificates are not being stored. After a restart it briefly trails, then one live certificate covers the gap — a *persistent* stall means the certificate stream itself is broken | check the activity-observer logs ("failed to persist a finality certificate") and disk space |
@@ -20,10 +20,17 @@ alarm names the first place to look.
 | `jemalloc_allocated_bytes` | grows with write load, bounded by the RocksDB write-buffer plateau | unbounded growth is a leak; the known grower is RocksDB memtables (node-team item) | compare against the documented baseline before suspecting consensus |
 | RPC admission (`"pipeline backpressure"` rejections) | brief bursts under heavy load | sustained refusal means proof generation cannot keep up with the block rate | a capacity signal, not a fault: reduce load or scale provers |
 
-Two structural notes. First, all `consensus_*` counters reset on process
+Three structural notes. First, all `consensus_*` counters reset on process
 restart — alert on increases, not absolute values. Second, a *stopped*
 validator alarms on nothing by itself: it is the surviving committee's view
 (quorum arithmetic, staleness) that tells you whether the loss matters.
+Third, **an idle chain is not a quiet chain**: between heartbeats, leaders
+decline their turns and consensus does what it does with a silent leader —
+views time out, nullifications assemble, leaders rotate, about once per
+leader timeout, forever. Dashboards will show steady view/nullification
+counters ticking on a chain producing no blocks; that is the designed idle
+behavior, not distress. The signal that matters stays block staleness
+against the heartbeat, not view churn.
 
 ## Timing characteristics worth knowing by heart
 
