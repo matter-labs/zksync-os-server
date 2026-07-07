@@ -1552,6 +1552,20 @@ async fn effective_parallel_impl(
             .expect("failed to start profiler")
     });
 
+    // Demo-only start gate: with `LOAD_TEST_START_GATE=<path>` set, everything above (funding,
+    // deploy, mints, corpus) is prepared and the run PARKS here until the file appears — so a
+    // presenter can trigger the load on stage (the demo dashboard's Start button calls a tiny
+    // helper that touches the file; see docs/demo/).
+    if let Ok(gate_path) = std::env::var("LOAD_TEST_START_GATE") {
+        let _ = std::fs::remove_file(&gate_path);
+        tracing::error!(gate = %gate_path, "DEMO READY — waiting for start signal");
+        while !std::path::Path::new(&gate_path).exists() {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let _ = std::fs::remove_file(&gate_path);
+        tracing::error!("start signal received — load begins");
+    }
+
     let start = Instant::now();
     let deadline = start + duration;
 

@@ -14,7 +14,6 @@
     --muted: #5c6b79;
     --line: #1d2835;
     --blue: #3f8fe8;
-    --blue-dim: #1c5cab;
     --green: #35d07f;
     --amber: #f5a623;
     --red: #e34948;
@@ -46,6 +45,16 @@
     text-transform: uppercase;
     color: var(--ink-2);
   }
+  .hright { display: flex; align-items: center; gap: 26px; }
+  .countdown {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--ink-2);
+    display: none;
+  }
+  body.live .countdown { display: block; color: var(--green); }
   .phase {
     display: flex;
     align-items: center;
@@ -56,10 +65,7 @@
     text-transform: uppercase;
     color: var(--ink-2);
   }
-  .dot {
-    width: 12px; height: 12px; border-radius: 50%;
-    background: var(--muted);
-  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); }
   .phase.waiting .dot { background: var(--amber); animation: pulse 1.6s infinite; }
   .phase.live .dot { background: var(--green); animation: pulse 0.9s infinite; }
   .phase.live { color: var(--green); }
@@ -94,8 +100,6 @@
     letter-spacing: -0.02em;
     white-space: nowrap;
   }
-  .odometer .dim { color: var(--muted); }
-
   .eth-line {
     margin-top: 0.5em;
     font-size: clamp(16px, 2.1vw, 30px);
@@ -146,23 +150,103 @@
   }
   footer .rpc { font-family: var(--mono); }
 
-  /* completion card */
-  #summary {
-    display: none;
-    margin-top: clamp(16px, 3vh, 36px);
-    border-top: 2px solid var(--blue);
-    padding-top: 16px;
-    font-size: clamp(15px, 1.8vw, 24px);
+  /* ---- overlays (start gate + finale) ---- */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 11, 15, 0.96);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 26px;
+    z-index: 10;
+    text-align: center;
+    padding: 40px;
+  }
+  .overlay.hidden { display: none; }
+
+  #gate-overlay .gbrand {
+    font-family: var(--mono);
+    font-size: 18px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
     color: var(--ink-2);
   }
-  #summary b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  body.done #summary { display: block; }
+  #gate-overlay h1 {
+    margin: 0;
+    font-size: clamp(30px, 4.5vw, 58px);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    max-width: 22ch;
+  }
+  #start-btn {
+    font-family: var(--mono);
+    font-size: clamp(20px, 2.4vw, 32px);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #06130c;
+    background: var(--green);
+    border: none;
+    border-radius: 12px;
+    padding: 0.75em 2.2em;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.2s;
+    box-shadow: 0 0 40px rgba(53, 208, 127, 0.25);
+  }
+  #start-btn:hover { transform: scale(1.04); box-shadow: 0 0 60px rgba(53, 208, 127, 0.45); }
+  #start-btn:disabled { background: var(--muted); color: var(--bg); cursor: wait; box-shadow: none; }
+  #gate-status {
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    min-height: 1.4em;
+  }
+  #gate-status.ready { color: var(--green); }
+
+  #final-overlay { gap: 14px; }
+  #final-overlay .f-label {
+    font-family: var(--mono);
+    font-size: clamp(14px, 1.6vw, 22px);
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--green);
+  }
+  #final-overlay .f-num {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(70px, 13vw, 220px);
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    animation: land 0.6s cubic-bezier(0.2, 1.4, 0.4, 1);
+  }
+  #final-overlay .f-sub {
+    font-size: clamp(18px, 2.4vw, 34px);
+    color: var(--ink-2);
+    max-width: 34ch;
+  }
+  #final-overlay .f-sub b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  #final-overlay .f-note {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  @keyframes land {
+    0% { transform: scale(0.6); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
 </style>
 </head>
 <body>
   <header>
     <div class="brand">ZKsync OS · Live</div>
-    <div class="phase waiting" id="phase"><span class="dot"></span><span id="phase-text">waiting for load</span></div>
+    <div class="hright">
+      <div class="countdown" id="countdown"></div>
+      <div class="phase waiting" id="phase"><span class="dot"></span><span id="phase-text">waiting for node</span></div>
+    </div>
   </header>
 
   <main>
@@ -190,8 +274,6 @@
         <canvas id="spark"></canvas>
       </div>
     </div>
-
-    <div id="summary"></div>
   </main>
 
   <footer>
@@ -200,10 +282,30 @@
     <span class="rpc" id="rpc-label"></span>
   </footer>
 
+  <!-- start gate -->
+  <div class="overlay" id="gate-overlay">
+    <div class="gbrand">ZKsync OS</div>
+    <h1>One million transactions per second, live.</h1>
+    <button id="start-btn">Start</button>
+    <div id="gate-status">connecting to node…</div>
+  </div>
+
+  <!-- finale -->
+  <div class="overlay hidden" id="final-overlay">
+    <div class="f-label">Run complete</div>
+    <div class="f-num" id="f-num">0</div>
+    <div class="f-sub" id="f-sub"></div>
+    <div class="f-note">Official figure: the benchmark terminal's final
+      <span style="font-family:var(--mono)">submitted_parallel_tps</span> line.</div>
+  </div>
+
 <script>
 (function () {
   "use strict";
-  var RPC = new URLSearchParams(location.search).get("rpc") || "http://127.0.0.1:8080";
+  var qs = new URLSearchParams(location.search);
+  var RPC = qs.get("rpc") || "http://127.0.0.1:8080";
+  var STARTER = qs.get("start") || "http://127.0.0.1:8081/start";
+  var DURATION_S = parseInt(qs.get("duration") || "60", 10);
   document.getElementById("rpc-label").textContent = RPC;
 
   // Ethereum mainnet ~1.2M transactions per day (public explorer figures).
@@ -211,7 +313,7 @@
   var POLL_MS = 200;
   var LIVE_ENTER_BPS = 50;   // blocks/s to consider the load running
   var LIVE_EXIT_BPS = 20;    // below this (after being live) the run is over
-  var EXIT_GRACE_MS = 3000;  // rate must stay low this long to finish
+  var EXIT_GRACE_MS = 2500;  // rate must stay low this long to finish
   var MIN_LIVE_MS = 8000;    // ignore early dips right after start
 
   var state = "waiting";     // waiting | live | done | lost
@@ -224,7 +326,7 @@
   var liveStartAt = null, lowSince = null, peakTps = 0;
   var liveStartBlock = null;
   var sparkData = [];        // [t, tps]
-  var lostSince = null;
+  var everConnected = false;
 
   function fmt(n) { return Math.round(n).toLocaleString("en-US"); }
 
@@ -242,12 +344,40 @@
     }).then(function (r) { return r.json(); });
   }
 
+  // ---- start gate ----
+  var startBtn = document.getElementById("start-btn");
+  startBtn.addEventListener("click", function () {
+    startBtn.disabled = true;
+    startBtn.textContent = "Starting…";
+    fetch(STARTER, { method: "GET" }).catch(function () {
+      // No starter helper (running without the gate): just watch for the load.
+    }).finally(function () {
+      document.getElementById("gate-overlay").classList.add("hidden");
+      setPhase("waiting", "waiting for load");
+    });
+  });
+
+  function gateStatus() {
+    var el = document.getElementById("gate-status");
+    if (everConnected) {
+      el.textContent = "node ready";
+      el.className = "ready";
+    } else {
+      el.textContent = "connecting to node…";
+      el.className = "";
+    }
+  }
+
   function poll() {
     rpc([
       { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] },
       { jsonrpc: "2.0", id: 2, method: "eth_getBlockTransactionCountByNumber", params: ["latest"] },
     ]).then(function (res) {
-      lostSince = null;
+      if (!everConnected) {
+        everConnected = true;
+        if (state === "waiting") setPhase("waiting", "node up — waiting for load");
+      }
+      gateStatus();
       var byId = {};
       res.forEach(function (e) { byId[e.id] = e; });
       var bn = parseInt(byId[1].result, 16);
@@ -277,6 +407,8 @@
           }
         } else if (state === "waiting" && instBps > LIVE_ENTER_BPS) {
           state = "live";
+          document.body.classList.add("live");
+          document.getElementById("gate-overlay").classList.add("hidden");
           liveStartAt = now;
           liveStartBlock = bn;
           cumTxs = dBlocks * (txsPerBlock || txc);
@@ -292,8 +424,13 @@
       if (state !== "done") setTimeout(poll, POLL_MS);
     }).catch(function () {
       if (state !== "done") {
-        if (lostSince === null) lostSince = performance.now();
-        setPhase("lost", "connection lost — retrying");
+        if (everConnected) {
+          setPhase("lost", "connection lost — retrying");
+        } else {
+          // Never connected yet: normal before the benchmark starts — stay calm.
+          setPhase("waiting", "waiting for node");
+        }
+        gateStatus();
         setTimeout(poll, 700);
       }
     });
@@ -301,16 +438,16 @@
 
   function finish(now, bn) {
     state = "done";
-    document.body.classList.add("done");
+    document.body.classList.remove("live");
     var secs = (now - liveStartAt) / 1000;
     var avg = cumTxs / secs;
     setPhase("done", "run complete");
-    document.getElementById("summary").innerHTML =
-      "Run complete: <b>" + fmt(cumTxs) + "</b> transactions in <b>" + secs.toFixed(1) +
-      "s</b> — average <b>" + fmt(avg) + "</b> tx/s, peak <b>" + fmt(peakTps) +
-      "</b> tx/s, <b>" + fmt(bn - liveStartBlock) + "</b> blocks. " +
-      "Equivalent to <b>" + (cumTxs / ETH_TXS_PER_DAY).toFixed(1) +
-      " days</b> of Ethereum mainnet traffic.";
+    document.getElementById("f-num").textContent = fmt(cumTxs);
+    document.getElementById("f-sub").innerHTML =
+      "transactions in <b>" + secs.toFixed(0) + " seconds</b> — average <b>" + fmt(avg) +
+      "</b> tx/s, peak <b>" + fmt(peakTps) + "</b> tx/s.<br>&asymp; <b>" +
+      (cumTxs / ETH_TXS_PER_DAY).toFixed(1) + " days</b> of Ethereum mainnet traffic, on one machine.";
+    document.getElementById("final-overlay").classList.remove("hidden");
   }
 
   // ---- animation loop: roll the odometer smoothly between polls ----
@@ -322,11 +459,13 @@
       dispTxs += rate * dt;
       // gentle correction toward the integrated truth
       dispTxs += (cumTxs - dispTxs) * Math.min(1, dt * 2);
+      var left = Math.max(0, DURATION_S - (now - liveStartAt) / 1000);
+      document.getElementById("countdown").textContent = "T−" + Math.ceil(left) + "s";
     } else if (state === "done") {
       dispTxs = cumTxs;
     }
     document.getElementById("odo").textContent = fmt(dispTxs);
-    document.getElementById("tps").textContent = fmt(state === "live" ? rate : (state === "done" ? 0 : 0));
+    document.getElementById("tps").textContent = fmt(state === "live" ? rate : 0);
     document.getElementById("bps").textContent = state === "live" ? fmt(bps) : "0";
     var days = dispTxs / ETH_TXS_PER_DAY;
     document.getElementById("eth-line").innerHTML = days > 0.05
@@ -340,6 +479,7 @@
   var ctx = canvas.getContext("2d");
   function drawSpark() {
     var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
     if (canvas.width !== w * devicePixelRatio) {
       canvas.width = w * devicePixelRatio;
       canvas.height = h * devicePixelRatio;
@@ -369,14 +509,14 @@
     ctx.lineWidth = 2.5;
     ctx.lineJoin = "round";
     ctx.stroke();
-    // area fill
-    ctx.lineTo(w, h); ctx.lineTo(w - (now - sparkData[0][0]) / 60000 * w, h);
+    ctx.lineTo(w, h);
+    ctx.lineTo(w - (now - sparkData[0][0]) / 60000 * w, h);
     ctx.closePath();
     ctx.fillStyle = "rgba(63,143,232,0.12)";
     ctx.fill();
   }
 
-  setPhase("waiting", "waiting for load");
+  setPhase("waiting", "waiting for node");
   poll();
   requestAnimationFrame(frame);
 })();

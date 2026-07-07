@@ -19,10 +19,20 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
 
 ## Demo-day sequence
 
-1. **Tunnel** (on the presenter laptop) — the dashboard reaches the node through it:
+1. **Tunnel** (on the presenter laptop) — port 8080 for the node RPC, 8081 for the
+   Start button's signal helper:
 
    ```bash
-   ssh -p <PORT> root@<HOST> -L 8080:localhost:8080
+   ssh -q -p <PORT> root@<HOST> -L 8080:localhost:8080 -L 8081:localhost:8081
+   ```
+
+   (`-q` silences the harmless `channel open failed: connection refused` lines the
+   dashboard's polling produces before the node is up.)
+
+1b. **Start-signal helper** (on the machine, once per session):
+
+   ```bash
+   python3 /root/zksync-os-server/docs/demo/start-server.py &
    ```
 
 2. **Open the dashboard**: open `docs/demo/live-dashboard.html` in a browser (double-click
@@ -38,7 +48,8 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
    ulimit -n 1048576
    export PATH=$HOME/.cargo/bin:$HOME/.foundry/bin:$PATH WORKSPACE_DIR=/root/zksync-os-server
    cd /root/zksync-os-server
-   LOAD_TEST_L2_RPC_PORT=8080 ERC20_MAX_TX=2000 LOAD_TEST_READER_THREADS=48 \
+   LOAD_TEST_L2_RPC_PORT=8080 LOAD_TEST_START_GATE=/tmp/demo_start \
+   ERC20_MAX_TX=2000 LOAD_TEST_READER_THREADS=48 \
    LOAD_TEST_HTTP=1 sequencer_parallel_elide_tree_manager=true \
    backpressure_default_block_diff_limit=3072 RPC_CALL_METRICS_SAMPLE=64 \
    LOAD_TEST_WAIT_FOR_RECEIPTS=false LOAD_TEST_FINAL_RECEIPTS=true \
@@ -50,9 +61,13 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
    effective_parallel_erc20_tps -- --no-capture
    ```
 
-   Timeline: ~1–2 min of setup (deploy + mints + corpus load) while the dashboard shows
-   *waiting for load*, then the dashboard flips to **LIVE** for the 60-second run, then
-   *run complete* with the summary card.
+   Timeline: start the command EARLY (before the meeting moment) — it does ~1–2 min of
+   setup (deploy + mints + corpus load) and then PARKS, printing `DEMO READY — waiting
+   for start signal`. The dashboard's start screen shows "node ready". At showtime,
+   click **Start** on the dashboard: the load begins within a second, the page flips to
+   **LIVE** with a T−60s countdown, and at the end a full-screen finale card shows the
+   totals. (Without `LOAD_TEST_START_GATE` the run starts by itself and the dashboard
+   auto-detects it — the Start button then just dismisses the intro screen.)
 
 5. **The official number**: when the terminal prints the final line, point at
    `submitted_parallel_tps=…` and `final_receipts_confirmed=12288` — the dashboard's
