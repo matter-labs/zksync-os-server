@@ -20,10 +20,10 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
 
 ## Demo-day sequence
 
-1. **Tunnel** (on the presenter laptop) — 8080 carries the node RPC, 8081 the dashboard:
+1. **Tunnel** (on the presenter laptop) — 8080 carries the node RPC, 7777 the dashboard:
 
    ```bash
-   ssh -q -p <PORT> root@<HOST> -L 8080:localhost:8080 -L 8081:localhost:8081
+   ssh -q -p <PORT> root@<HOST> -L 8080:localhost:8080 -L 7777:localhost:7777
    ```
 
    (`-q` silences the harmless `channel open failed` lines from polling before the node
@@ -31,13 +31,13 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
 
 2. **Run** (on the machine, started EARLY — before the meeting moment). The two demo
    envs are `LOAD_TEST_L2_RPC_PORT=8080` (pins the RPC port to the tunnel) and
-   `LOAD_TEST_DEMO_PORT=8081` (serves the dashboard + parks the run on the Start button):
+   `LOAD_TEST_DEMO_PORT=7777` (serves the dashboard + parks the run on the Start button):
 
    ```bash
    ulimit -n 1048576
    export PATH=$HOME/.cargo/bin:$HOME/.foundry/bin:$PATH WORKSPACE_DIR=/root/zksync-os-server
    cd /root/zksync-os-server
-   LOAD_TEST_L2_RPC_PORT=8080 LOAD_TEST_DEMO_PORT=8081 \
+   LOAD_TEST_L2_RPC_PORT=8080 LOAD_TEST_DEMO_PORT=7777 \
    ERC20_MAX_TX=2000 LOAD_TEST_READER_THREADS=48 \
    LOAD_TEST_HTTP=1 sequencer_parallel_elide_tree_manager=true \
    backpressure_default_block_diff_limit=3072 RPC_CALL_METRICS_SAMPLE=64 \
@@ -53,7 +53,7 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
    It does ~1-2 min of setup (deploy + mints + corpus load), then PARKS and prints
    `DEMO READY — open the dashboard and press Start`.
 
-3. **Open the dashboard**: `http://localhost:8081/` in the presenter's browser. The
+3. **Open the dashboard**: `http://localhost:7777/` in the presenter's browser. The
    start screen shows "node ready" once it can reach the node.
 
 4. **Side terminal**: `btop` on the machine (second ssh session).
@@ -72,7 +72,7 @@ local file, or via `?rpc=` / `?start=` overrides) just auto-detects the load.
 ## Troubleshooting
 
 - **Port busy on the machine**: pick others (`LOAD_TEST_L2_RPC_PORT=9090
-  LOAD_TEST_DEMO_PORT=9091`) and re-tunnel accordingly.
+  LOAD_TEST_DEMO_PORT=7778`) and re-tunnel accordingly.
 - **Dashboard stuck on *connecting to node***: the benchmark isn't running yet, or the
   tunnel dropped — reconnect ssh; the page retries automatically.
 - **Stale leftovers from a previous failed run**: `pkill -9 -f "deps/suite-"` and

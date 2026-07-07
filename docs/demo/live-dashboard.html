@@ -305,7 +305,7 @@
   var qs = new URLSearchParams(location.search);
   var RPC = qs.get("rpc") || "http://127.0.0.1:8080";
   var STARTER = qs.get("start") ||
-    (location.protocol === "file:" ? "http://127.0.0.1:8081/start" : "/start");
+    (location.protocol === "file:" ? "http://127.0.0.1:7777/start" : "/start");
   var DURATION_S = parseInt(qs.get("duration") || "60", 10);
   document.getElementById("rpc-label").textContent = RPC;
 

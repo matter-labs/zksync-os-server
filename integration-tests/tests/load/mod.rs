@@ -1561,6 +1561,21 @@ async fn effective_parallel_impl(
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
     {
+        // The pinned L2 RPC port is followed by `LOAD_TEST_RPC_LISTENERS` extra listeners on
+        // consecutive ports — the demo port must not land inside that range (8081 famously
+        // collides with the first extra listener when the RPC is pinned to 8080).
+        if let Some(rpc_port) = std::env::var("LOAD_TEST_L2_RPC_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+        {
+            let listeners: u16 = env_or("LOAD_TEST_RPC_LISTENERS", 1u16);
+            let range = rpc_port..rpc_port.saturating_add(listeners);
+            anyhow::ensure!(
+                !range.contains(&demo_port),
+                "LOAD_TEST_DEMO_PORT={demo_port} collides with the RPC listener range \
+                 {range:?} (base + LOAD_TEST_RPC_LISTENERS); pick a port outside it, e.g. 7777"
+            );
+        }
         // Prefer the on-disk page (live-editable without a rebuild); fall back to the copy
         // baked in at compile time. Tests run with CWD = the integration-tests package dir.
         const BAKED_DASHBOARD: &str = include_str!(concat!(
