@@ -50,7 +50,7 @@
   .countdown {
     font-family: var(--mono);
     font-variant-numeric: tabular-nums;
-    font-size: 22px;
+    font-size: 27px;
     font-weight: 700;
     color: var(--ink-2);
     display: none;
@@ -59,14 +59,14 @@
   .phase {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     font-family: var(--mono);
-    font-size: 14px;
+    font-size: 18px;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--ink-2);
   }
-  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); }
+  .dot { width: 15px; height: 15px; border-radius: 50%; background: var(--muted); }
   .phase.waiting .dot { background: var(--amber); animation: pulse 1.6s infinite; }
   .phase.live .dot { background: var(--green); animation: pulse 0.9s infinite; }
   .phase.live { color: var(--green); }
@@ -118,12 +118,61 @@
     align-items: stretch;
     margin-top: clamp(18px, 3.5vh, 42px);
   }
+  .chip {
+    font-family: var(--mono);
+    font-size: 16px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 999px;
+    padding: 8px 20px;
+    white-space: nowrap;
+  }
+  .chip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .groups {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1.15;
+    min-width: 430px;
+  }
+  .group {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 22px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex: 1;
+  }
+  .group .cell { flex: 1; min-width: 0; }
+  .group .cell .k {
+    font-family: var(--mono);
+    font-size: clamp(11px, 1vw, 14px);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 5px;
+    white-space: nowrap;
+  }
+  .group .cell .v {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(26px, 3.1vw, 48px);
+    font-weight: 700;
+    line-height: 1.05;
+    white-space: nowrap;
+  }
+  .group .cell .u { font-size: 0.5em; font-weight: 500; color: var(--ink-2); margin-left: 5px; }
   .tile {
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 10px;
     padding: 14px 20px 12px;
-    min-width: 150px;
   }
   .tile .k {
     font-family: var(--mono);
@@ -135,17 +184,28 @@
     margin-bottom: 6px;
     white-space: nowrap;
   }
-  .tile .v {
+  .tile.spark { flex: 1; display: flex; flex-direction: column; min-width: 320px; }
+  .tile.spark canvas { flex: 1; width: 100%; min-height: 120px; }
+  .spark-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .legend {
+    display: flex;
+    gap: 16px;
     font-family: var(--mono);
-    font-variant-numeric: tabular-nums;
-    font-size: clamp(24px, 2.9vw, 42px);
-    font-weight: 700;
-    line-height: 1.05;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--ink-2);
     white-space: nowrap;
   }
-  .tile .u { font-size: 0.45em; font-weight: 500; color: var(--ink-2); margin-left: 6px; }
-  .tile.spark { flex: 1; display: flex; flex-direction: column; min-width: 240px; }
-  .tile.spark canvas { flex: 1; width: 100%; min-height: 56px; }
+  .legend .sw {
+    display: inline-block;
+    width: 22px;
+    height: 0;
+    border-top: 3px solid var(--blue);
+    vertical-align: middle;
+    margin-right: 6px;
+    border-radius: 2px;
+  }
+  .legend .sw.ref { border-top: 2px dashed var(--muted); }
 
   /* ---- overlays (start gate + finale) ---- */
   .overlay {
@@ -210,39 +270,14 @@
   }
   #gate-status.ready { color: var(--green); }
 
-  #final-overlay { gap: 14px; }
-  #final-overlay .f-label {
-    font-family: var(--mono);
-    font-size: clamp(14px, 1.6vw, 22px);
-    letter-spacing: 0.24em;
-    text-transform: uppercase;
-    color: var(--green);
-  }
-  #final-overlay .f-num {
-    font-family: var(--mono);
-    font-variant-numeric: tabular-nums;
-    font-size: clamp(70px, 13vw, 220px);
-    font-weight: 700;
-    line-height: 1;
-    letter-spacing: -0.02em;
-    animation: land 0.6s cubic-bezier(0.2, 1.4, 0.4, 1);
-  }
-  #final-overlay .f-sub {
-    font-size: clamp(18px, 2.4vw, 34px);
-    color: var(--ink-2);
-    max-width: 36ch;
-  }
-  #final-overlay .f-sub b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  @keyframes land {
-    0% { transform: scale(0.6); opacity: 0; }
-    100% { transform: scale(1); opacity: 1; }
-  }
 </style>
 </head>
 <body>
   <header>
     <div class="brand">ZKsync OS · Live</div>
     <div class="hright">
+      <span class="chip">ERC-20 transfers</span>
+      <span class="chip"><b id="accounts">—</b>&nbsp;accounts</span>
       <div class="countdown" id="countdown"></div>
       <div class="phase waiting" id="phase"><span class="dot"></span><span id="phase-text">waiting for node</span></div>
     </div>
@@ -250,33 +285,36 @@
 
   <main>
     <div class="stage">
-      <div class="odo-label">Transactions processed</div>
+      <div class="odo-label">ERC-20 transfers processed</div>
       <div class="odometer" id="odo">0</div>
       <div class="eth-line" id="eth-line">&nbsp;</div>
 
       <div class="row">
-        <div class="tile">
-          <span class="k">Throughput</span>
-          <span class="v"><span id="tps">0</span><span class="u">tx/s</span></span>
-        </div>
-        <div class="tile">
-          <span class="k">Gas throughput</span>
-          <span class="v"><span id="ggas">0</span><span class="u">Ggas/s</span></span>
-        </div>
-        <div class="tile">
-          <span class="k">Blocks / s</span>
-          <span class="v" id="bps">0</span>
-        </div>
-        <div class="tile">
-          <span class="k">Block height</span>
-          <span class="v" id="height">—</span>
-        </div>
-        <div class="tile">
-          <span class="k">Sending accounts</span>
-          <span class="v" id="accounts">—</span>
+        <div class="groups">
+          <div class="group">
+            <div class="cell"><span class="k" id="tps-label">Txs / second</span><span class="v" id="tps">0</span></div>
+            <div class="cell"><span class="k">Peak txs / s</span><span class="v" id="peak">0</span></div>
+            <div class="cell"><span class="k">Avg time / tx</span><span class="v"><span id="txtime">—</span><span class="u">µs</span></span></div>
+          </div>
+          <div class="group">
+            <div class="cell"><span class="k">Block height</span><span class="v" id="height">—</span></div>
+            <div class="cell"><span class="k" id="bps-label">Blocks / second</span><span class="v" id="bps">0</span></div>
+            <div class="cell"><span class="k" id="blockms-label">Block time</span><span class="v"><span id="blockms">—</span><span class="u">ms</span></span></div>
+          </div>
+          <div class="group">
+            <div class="cell"><span class="k">Total gas</span><span class="v"><span id="gastotal">0</span><span class="u">Tgas</span></span></div>
+            <div class="cell"><span class="k" id="ggas-label">Gas / second</span><span class="v"><span id="ggas">0</span><span class="u">Ggas</span></span></div>
+            <div class="cell"><span class="k" id="gasblock-label">Gas / block</span><span class="v"><span id="gasblock">—</span><span class="u">Mgas</span></span></div>
+          </div>
         </div>
         <div class="tile spark">
-          <span class="k">tx/s — last 60 seconds</span>
+          <div class="spark-head">
+            <span class="k">Throughput — last 60 seconds</span>
+            <span class="legend">
+              <span><span class="sw"></span>live tx/s</span>
+              <span><span class="sw ref"></span>1,000,000 tx/s</span>
+            </span>
+          </div>
           <canvas id="spark"></canvas>
         </div>
       </div>
@@ -289,13 +327,6 @@
     <h1>One million transactions per second, live.</h1>
     <button id="start-btn">Start</button>
     <div id="gate-status">connecting to node…</div>
-  </div>
-
-  <!-- finale -->
-  <div class="overlay hidden" id="final-overlay">
-    <div class="f-label">Run complete</div>
-    <div class="f-num" id="f-num">0</div>
-    <div class="f-sub" id="f-sub"></div>
   </div>
 
 <script>
@@ -324,6 +355,7 @@
   var dispTxs = 0;           // animated display value
   var rate = 0;              // txs/s EMA (display)
   var gasRate = 0;           // gas/s (derived)
+  var cumGas = 0;            // integrated gas during live
   var bps = 0;               // blocks/s EMA
   var liveStartAt = null, lowSince = null, peakTps = 0;
   var sparkData = [];        // [t, tps]
@@ -376,12 +408,15 @@
     }
   }
 
-  function goLive(now) {
+  var liveStartBlock = 0;
+  function goLive(now, bn) {
     state = "live";
+    liveStartBlock = bn;
     document.body.classList.add("live");
     document.getElementById("gate-overlay").classList.add("hidden");
     liveStartAt = now;
     cumTxs = 0;
+    cumGas = 0;
     dispTxs = 0;
     peakTps = 0;
     sparkData = [];
@@ -449,6 +484,7 @@
           cumTxs = stats && typeof stats.submitted === "number"
             ? stats.submitted
             : cumTxs + dBlocks * (txsPerBlock || txc);
+          cumGas += dBlocks * (gasPerBlock || gas);
           if (rate > peakTps) peakTps = rate;
           sparkData.push([now, rate]);
           while (sparkData.length && now - sparkData[0][0] > 60000) sparkData.shift();
@@ -461,7 +497,7 @@
           }
         } else if (state === "waiting") {
           var submittedLive = stats && typeof stats.submitted === "number" && stats.submitted > 1000;
-          if (submittedLive || dBlocks / dt > LIVE_ENTER_BPS) goLive(now);
+          if (submittedLive || dBlocks / dt > LIVE_ENTER_BPS) goLive(now, bn);
         }
       }
       if (stats && typeof stats.submitted === "number") {
@@ -475,24 +511,26 @@
     });
   }
 
+  var finalAvg = 0, finalTotal = 0, doneAt = null, finalSecs = 0;
+  var finalBps = 0, finalGasRate = 0, finalGasPerBlock = 0;
   function finish(now) {
     if (state === "done") return;
     state = "done";
+    // Trim the drain-phase cliff off the chart tail so the curve ends at cruise altitude,
+    // and pin the frozen time axis to the last kept sample.
+    while (sparkData.length > 2 && sparkData[sparkData.length - 1][1] < peakTps * 0.5) {
+      sparkData.pop();
+    }
+    doneAt = sparkData.length ? sparkData[sparkData.length - 1][0] : now;
     document.body.classList.remove("live");
-    var secs = Math.min((now - liveStartAt) / 1000, DURATION_S);
-    var total = lastStats && lastStats.submitted ? lastStats.submitted : cumTxs;
-    var avg = total / secs;
+    finalSecs = Math.min((now - liveStartAt) / 1000, DURATION_S);
+    finalTotal = lastStats && lastStats.submitted ? lastStats.submitted : cumTxs;
+    finalAvg = finalTotal / finalSecs;
+    var finalBlocks = Math.max(1, (lastBlock || 0) - liveStartBlock);
+    finalBps = finalBlocks / finalSecs;
+    finalGasRate = cumGas / finalSecs;
+    finalGasPerBlock = cumGas / finalBlocks;
     setPhase("done", "run complete");
-    document.getElementById("f-num").textContent = fmt(total);
-    var receiptLine = lastStats && lastStats.receipts > 0
-      ? "<br><b>" + fmt(lastStats.receipts) + "</b> account chains receipt-verified."
-      : "";
-    document.getElementById("f-sub").innerHTML =
-      "transactions in <b>" + secs.toFixed(0) + " seconds</b> — average <b>" + fmt(avg) +
-      "</b> tx/s, peak <b>" + fmt(peakTps) + "</b> tx/s.<br>&asymp; <b>" +
-      (total / ETH_TXS_PER_DAY).toFixed(1) + " days</b> of Ethereum mainnet traffic, on one machine." +
-      receiptLine;
-    document.getElementById("final-overlay").classList.remove("hidden");
   }
 
   // ---- animation loop: roll the odometer smoothly between polls ----
@@ -507,13 +545,33 @@
       var left = Math.max(0, DURATION_S - (now - liveStartAt) / 1000);
       document.getElementById("countdown").textContent = "T−" + Math.ceil(left) + "s";
     } else if (state === "done") {
-      dispTxs = lastStats && lastStats.submitted ? lastStats.submitted : cumTxs;
+      dispTxs = finalTotal;
     }
+    // After the run, every cell freezes at its final value; throughput shows the run average.
+    var shownRate = state === "live" ? rate : state === "done" ? finalAvg : 0;
+    var active = state === "live" || state === "done";
     document.getElementById("odo").textContent = fmt(dispTxs);
-    document.getElementById("tps").textContent = fmt(state === "live" ? rate : 0);
-    document.getElementById("bps").textContent = state === "live" ? fmt(bps) : "0";
+    document.getElementById("tps").textContent = fmt(shownRate);
+    document.getElementById("peak").textContent = fmt(peakTps);
+    document.getElementById("txtime").textContent =
+      shownRate > 1000 ? (1e6 / shownRate).toFixed(2) : "—";
+    var shownBps = state === "done" ? finalBps : bps;
+    var shownGasRate = state === "done" ? finalGasRate : gasRate;
+    var shownGasPerBlock = state === "done" ? finalGasPerBlock : gasPerBlock;
+    document.getElementById("bps").textContent = active ? fmt(shownBps) : "0";
+    document.getElementById("blockms").textContent =
+      active && shownBps > 0.5 ? Math.round(1000 / shownBps) : "—";
     document.getElementById("ggas").textContent =
-      state === "live" ? (gasRate / 1e9).toFixed(1) : "0";
+      active ? (shownGasRate / 1e9).toFixed(1) : "0";
+    document.getElementById("gastotal").textContent = (cumGas / 1e12).toFixed(2);
+    document.getElementById("gasblock").textContent =
+      shownGasPerBlock > 0 ? Math.round(shownGasPerBlock / 1e6) : "—";
+    var done = state === "done";
+    document.getElementById("tps-label").textContent = done ? "Avg txs / second" : "Txs / second";
+    document.getElementById("bps-label").textContent = done ? "Avg blocks / s" : "Blocks / second";
+    document.getElementById("blockms-label").textContent = done ? "Avg block time" : "Block time";
+    document.getElementById("ggas-label").textContent = done ? "Avg gas / second" : "Gas / second";
+    document.getElementById("gasblock-label").textContent = done ? "Avg gas / block" : "Gas / block";
     var days = dispTxs / ETH_TXS_PER_DAY;
     document.getElementById("eth-line").innerHTML = days > 0.05
       ? "&asymp; <b>" + days.toFixed(1) + " days</b> of Ethereum mainnet traffic"
@@ -534,7 +592,7 @@
     ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
     ctx.clearRect(0, 0, w, h);
     if (sparkData.length < 2) return;
-    var now = performance.now();
+    var now = state === "done" && doneAt !== null ? doneAt : performance.now();
     var max = 1;
     for (var i = 0; i < sparkData.length; i++) max = Math.max(max, sparkData[i][1]);
     max *= 1.15;
