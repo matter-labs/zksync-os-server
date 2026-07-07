@@ -1552,17 +1552,63 @@ async fn effective_parallel_impl(
             .expect("failed to start profiler")
     });
 
-    // Demo-only start gate: with `LOAD_TEST_START_GATE=<path>` set, everything above (funding,
-    // deploy, mints, corpus) is prepared and the run PARKS here until the file appears — so a
-    // presenter can trigger the load on stage (the demo dashboard's Start button calls a tiny
-    // helper that touches the file; see docs/demo/).
-    if let Ok(gate_path) = std::env::var("LOAD_TEST_START_GATE") {
-        let _ = std::fs::remove_file(&gate_path);
-        tracing::error!(gate = %gate_path, "DEMO READY — waiting for start signal");
-        while !std::path::Path::new(&gate_path).exists() {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-        let _ = std::fs::remove_file(&gate_path);
+    // Demo-only start gate: with `LOAD_TEST_DEMO_PORT=<port>` set, everything above (funding,
+    // deploy, mints, corpus) is prepared and the run PARKS here until the dashboard's Start
+    // button is pressed. The listener below is the whole demo infrastructure: it serves the
+    // live dashboard page at `/` and releases the gate on `GET /start` — the presenter opens
+    // http://localhost:<port>/ through the SSH tunnel; nothing else to install or copy.
+    if let Some(demo_port) = std::env::var("LOAD_TEST_DEMO_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+    {
+        // Prefer the on-disk page (live-editable without a rebuild); fall back to the copy
+        // baked in at compile time. Tests run with CWD = the integration-tests package dir.
+        const BAKED_DASHBOARD: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docs/demo/live-dashboard.html"
+        ));
+        let dashboard: std::sync::Arc<str> =
+            std::fs::read_to_string("../docs/demo/live-dashboard.html")
+                .unwrap_or_else(|_| BAKED_DASHBOARD.to_string())
+                .into();
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", demo_port)).await?;
+        tracing::error!(
+            url = format!("http://localhost:{demo_port}/"),
+            "DEMO READY — open the dashboard and press Start"
+        );
+        let server_started = started.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let started = server_started.clone();
+                let dashboard = dashboard.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 2048];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..n]);
+                    let (status, body): (&str, &str) = if request.starts_with("GET /start") {
+                        started.notify_one();
+                        ("200 OK", "started")
+                    } else if request.starts_with("GET / ") || request.starts_with("GET /?") {
+                        ("200 OK", &dashboard)
+                    } else {
+                        ("404 Not Found", "not found")
+                    };
+                    let header = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = sock.write_all(header.as_bytes()).await;
+                    let _ = sock.write_all(body.as_bytes()).await;
+                });
+            }
+        });
+        started.notified().await;
         tracing::error!("start signal received — load begins");
     }
 
