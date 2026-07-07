@@ -81,6 +81,12 @@ pub struct SetupArgs {
     /// Soaks measuring disk growth run short epochs with a small retention.
     #[arg(long, default_value_t = 0)]
     pub epoch_retention: u64,
+    /// Extra environment variables for every validator container, KEY=VALUE
+    /// (repeatable). The escape hatch for investigation runs — e.g. activating
+    /// heap profiling on a `jemalloc-profiling` image with
+    /// `--node-env MALLOC_CONF=prof:true,prof_final:true,prof_prefix:/db/jeprof`.
+    #[arg(long = "node-env")]
+    pub node_env: Vec<String>,
 }
 
 /// Everything the driver (and any external monitor) needs to know about the cluster.
@@ -389,6 +395,16 @@ fn compose_file(args: &SetupArgs, repo: &std::path::Path, manifest: &Manifest) -
     let chain_parent = parent_dir(chain);
     let image = &args.image;
     let host_l1_port = manifest.host_l1_port;
+    let environment = if args.node_env.is_empty() {
+        String::new()
+    } else {
+        let lines: String = args
+            .node_env
+            .iter()
+            .map(|pair| format!("      - \"{pair}\"\n"))
+            .collect();
+        format!("    environment:\n{lines}")
+    };
 
     let validators: String = manifest
         .validators
@@ -404,7 +420,7 @@ fn compose_file(args: &SetupArgs, repo: &std::path::Path, manifest: &Manifest) -
     container_name: chaos-{name}
     depends_on: [anvil]
     command: [\"--config\", \"/app/local-chains/local_dev.yaml\", \"--config\", \"/app/{chain}/config.yaml\", \"--config\", \"/config/validator.yaml\"]
-    volumes:
+{environment}    volumes:
       - {repo}/local-chains:/app/local-chains:ro
       - ./validator-{index}:/config:ro
       - chaos-db-{index}:/db
@@ -428,6 +444,7 @@ fn compose_file(args: &SetupArgs, repo: &std::path::Path, manifest: &Manifest) -
                 status = entry.host_status_port,
                 metrics = entry.host_metrics_port,
                 ip = entry.ip,
+                environment = environment,
             )
         })
         .collect();

@@ -30,8 +30,11 @@ RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
 
 # Build application
 COPY . .
+# Extra cargo features baked into the binary (e.g. jemalloc-profiling for
+# memory investigations).
+ARG FEATURES=""
 RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
-    cargo build --release --bin zksync-os-server
+    cargo build --release -p zksync_os_server --bin zksync-os-server ${FEATURES:+--features "$FEATURES"}
 
 #################################
 # -------- Runtime -------------#

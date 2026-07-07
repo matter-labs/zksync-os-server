@@ -21,6 +21,11 @@ jemalloc = [
     "zksync_os_rpc/jemalloc",
     "tikv-jemallocator/stats",
 ]
+# Heap profiling for memory investigations: adds jemalloc's allocation-site
+# sampling (activate at runtime with `_RJEM_MALLOC_CONF=prof:true,...`;
+# inactive profiling costs nothing). Not a default: production images should
+# opt in deliberately.
+jemalloc-profiling = ["jemalloc", "tikv-jemallocator/profiling"]
 
 [dependencies]
 zksync_os_provider.workspace = true

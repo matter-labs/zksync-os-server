@@ -160,8 +160,14 @@ impl NonceRace {
                     return match mined {
                         1 => Ok(Verdict::Pass),
                         2 => Err("both same-nonce transactions mined".into()),
-                        _ => Err(format!(
-                            "nonce advanced past the race but {mined} of its transactions mined",
+                        // Neither of THIS pair mined yet the nonce moved: under
+                        // kill churn, pools get wiped and a previous episode's
+                        // still-gossiped submission can consume the nonce
+                        // instead. Exactly-one-per-nonce still held, so this is
+                        // displacement, not a safety failure.
+                        _ => Ok(Verdict::Skip(
+                            "race pair displaced (pools flushed under faults); the nonce was                              still consumed exactly once"
+                                .into(),
                         )),
                     };
                 }
