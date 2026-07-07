@@ -1,0 +1,10 @@
+# Background murmur: enough traffic that the chain is never idle, low enough
+# that anything else under test (faults, promotions) dominates the picture.
+tps = 2
+pattern = "bursts"
+burst_secs = 10
+idle_secs = 30
+
+[weights]
+transfers = 70
+erc20 = 30

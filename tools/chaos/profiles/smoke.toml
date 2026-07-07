@@ -1,0 +1,20 @@
+# Development smoke: every workload forced on at equal weight so a 5-minute
+# run touches all of them (the point is coverage per minute, not realism).
+tps = 8
+pattern = "sustained"
+
+[weights]
+transfers = 1
+erc20 = 1
+call_maze = 1
+context_probe = 1
+precompiles = 1
+failing = 1
+blobs = 1
+gas_guzzler = 1
+
+[sagas]
+nonce_race_secs = 30
+deposits_secs = 30
+withdrawals_secs = 20
+failed_deposits_secs = 60

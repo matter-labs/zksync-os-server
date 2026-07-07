@@ -16090,6 +16090,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml 0.8.23",
  "zksync_os_contract_interface",
  "zksync_os_status_server",
  "zksync_os_types",

@@ -51,6 +51,14 @@ pub struct DriveArgs {
     /// expects it to be live. Generous on purpose: a false alarm costs minutes.
     #[arg(long, default_value = "60s")]
     pub liveness_window: humantime::Duration,
+    /// Disable the L1 fault lane (anvil blackouts and base-fee spikes).
+    #[arg(long)]
+    pub no_l1_faults: bool,
+    /// Enable shallow L1 reorgs (anvil_reorg) in the L1 fault lane. Off by
+    /// default: a probe for l1_watcher assumptions, not a standing fault —
+    /// the node may simply not be ready for reorgs yet.
+    #[arg(long)]
+    pub l1_reorgs: bool,
 }
 
 /// One validator's condition as the driver believes it to be.
@@ -102,9 +110,9 @@ impl NetemProfile {
 }
 
 /// What the driver can do to the cluster. The I/O layer maps these onto docker
-/// commands; tests record them.
+/// commands (and, for the L1 lane, anvil RPC calls); tests record them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(tag = "action", content = "validator")]
+#[serde(tag = "action", content = "target")]
 pub enum Action {
     Kill(usize),
     Stop(usize),
@@ -115,6 +123,17 @@ pub enum Action {
     Reconnect(usize),
     Degrade(usize, NetemProfile),
     ClearDegradation(usize),
+    /// Pause the anvil container: the L1 goes dark. L2 consensus is expected
+    /// to keep finalizing right through it — that is the assertion — while
+    /// L1-facing components (watcher, batcher senders) must cope and recover.
+    L1Blackout,
+    L1Restore,
+    /// Multiply the L1 base fee for the next blocks (EIP-1559 decay on anvil's
+    /// mostly-empty blocks walks it back down — no explicit heal needed).
+    L1FeeSpike(u32),
+    /// Replace the last N unfinalized L1 blocks (`anvil_reorg`). Behind
+    /// `--l1-reorgs`, findings-only.
+    L1Reorg(u64),
 }
 
 /// The pure decision core: owns the seeded RNG and the believed cluster state, and
@@ -127,6 +146,11 @@ pub struct Schedule {
     /// Heals due at a given step: (due_step, action).
     pending_heals: Vec<(u64, Action)>,
     step: u64,
+    /// The L1 fault lane; off unless enabled (tests of the validator lane, and
+    /// `--no-l1-faults`, run without it).
+    l1_faults: bool,
+    l1_reorgs: bool,
+    l1_blackout: bool,
 }
 
 impl Schedule {
@@ -137,7 +161,20 @@ impl Schedule {
             quorum,
             pending_heals: Vec::new(),
             step: 0,
+            l1_faults: false,
+            l1_reorgs: false,
+            l1_blackout: false,
         }
+    }
+
+    pub fn with_l1_faults(mut self, reorgs: bool) -> Self {
+        self.l1_faults = true;
+        self.l1_reorgs = reorgs;
+        self
+    }
+
+    pub fn l1_blackout(&self) -> bool {
+        self.l1_blackout
     }
 
     pub fn conditions(&self) -> Vec<Condition> {
@@ -182,6 +219,25 @@ impl Schedule {
             let (_, heal) = self.pending_heals.remove(position);
             self.apply(heal);
             return heal;
+        }
+
+        // The L1 lane, when enabled: rarer than validator faults, and never
+        // stacked (no fee business while the L1 is dark). L2 liveness stays
+        // expected through all of it — an L1 blackout must not stall consensus,
+        // and that is precisely what the watcher keeps checking.
+        if self.l1_faults && !self.l1_blackout && self.rng.gen_ratio(1, 8) {
+            let action = if self.l1_reorgs && self.rng.gen_ratio(1, 3) {
+                Action::L1Reorg(self.rng.gen_range(3..=8))
+            } else if self.rng.gen_ratio(1, 2) {
+                let heal_in = self.rng.gen_range(2..=4);
+                self.pending_heals
+                    .push((self.step + heal_in, Action::L1Restore));
+                Action::L1Blackout
+            } else {
+                Action::L1FeeSpike(self.rng.gen_range(5..=40))
+            };
+            self.apply(action);
+            return action;
         }
 
         // A small chance to sanction a full outage: take any node down regardless of
@@ -251,13 +307,23 @@ impl Schedule {
             | Action::Unpause(index)
             | Action::Reconnect(index)
             | Action::ClearDegradation(index) => (index, Condition::Healthy),
+            Action::L1Blackout => {
+                self.l1_blackout = true;
+                return;
+            }
+            Action::L1Restore => {
+                self.l1_blackout = false;
+                return;
+            }
+            Action::L1FeeSpike(_) | Action::L1Reorg(_) => return,
         };
         self.conditions[index] = condition;
     }
 
     /// The heals that would restore full health — applied on shutdown.
     pub fn heal_everything(&self) -> Vec<Action> {
-        self.conditions
+        let mut heals: Vec<Action> = self
+            .conditions
             .iter()
             .enumerate()
             .filter_map(|(index, condition)| match condition {
@@ -267,7 +333,11 @@ impl Schedule {
                 Condition::Partitioned => Some(Action::Reconnect(index)),
                 Condition::Degraded => Some(Action::ClearDegradation(index)),
             })
-            .collect()
+            .collect();
+        if self.l1_blackout {
+            heals.push(Action::L1Restore);
+        }
+        heals
     }
 }
 
@@ -277,10 +347,15 @@ pub trait ClusterOps {
     async fn apply(&mut self, action: Action) -> anyhow::Result<()>;
 }
 
-/// Docker-backed operations, addressing containers by the names `chaos setup` wrote.
+/// Docker-backed operations, addressing containers by the names `chaos setup`
+/// wrote; L1-lane actions talk to anvil's host-published RPC.
 pub struct DockerOps {
     manifest: Manifest,
+    l1_rpc: reqwest::Client,
 }
+
+/// The anvil container `chaos setup` writes into the compose file.
+const ANVIL_CONTAINER: &str = "chaos-anvil";
 
 /// Docker CLI calls are asynchronous and hard-bounded so a slow daemon degrades
 /// one injection, never the driver's clock (stop waits for the container's grace
@@ -288,8 +363,44 @@ pub struct DockerOps {
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl DockerOps {
+    fn new(manifest: Manifest) -> DockerOps {
+        DockerOps {
+            manifest,
+            l1_rpc: reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("default reqwest client"),
+        }
+    }
+
     fn container(&self, index: usize) -> String {
         format!("chaos-{}", self.manifest.validators[index].name)
+    }
+
+    async fn anvil(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let response: serde_json::Value = self
+            .l1_rpc
+            .post(format!("http://127.0.0.1:{}", self.manifest.host_l1_port))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": params,
+            }))
+            .send()
+            .await?
+            .json()
+            .await?;
+        anyhow::ensure!(
+            response["error"].is_null(),
+            "{method} failed: {}",
+            response["error"],
+        );
+        Ok(response["result"].clone())
     }
 
     async fn docker(&self, args: &[&str]) -> anyhow::Result<()> {
@@ -376,6 +487,34 @@ impl ClusterOps for DockerOps {
                 ])
                 .await
             }
+            Action::L1Blackout => self.docker(&["pause", ANVIL_CONTAINER]).await,
+            Action::L1Restore => self.docker(&["unpause", ANVIL_CONTAINER]).await,
+            Action::L1FeeSpike(multiplier) => {
+                let block = self
+                    .anvil("eth_getBlockByNumber", serde_json::json!(["latest", false]))
+                    .await?;
+                let base = u128::from_str_radix(
+                    block["baseFeePerGas"]
+                        .as_str()
+                        .unwrap_or("0x1")
+                        .trim_start_matches("0x"),
+                    16,
+                )?
+                .max(1_000_000_000);
+                let spiked = base.saturating_mul(u128::from(multiplier));
+                self.anvil(
+                    "anvil_setNextBlockBaseFeePerGas",
+                    serde_json::json!([format!("0x{spiked:x}")]),
+                )
+                .await?;
+                Ok(())
+            }
+            Action::L1Reorg(depth) => {
+                // Replace the last `depth` unfinalized blocks with fresh ones.
+                self.anvil("anvil_reorg", serde_json::json!([depth, []]))
+                    .await?;
+                Ok(())
+            }
         }
     }
 }
@@ -390,6 +529,7 @@ struct JournalEntry {
     action: Action,
     healthy_after: usize,
     expect_liveness: bool,
+    l1_blackout: bool,
 }
 
 pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
@@ -408,8 +548,11 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         .open(&journal_path)?;
 
     let mut schedule = Schedule::new(args.seed, validators, quorum);
+    if !args.no_l1_faults {
+        schedule = schedule.with_l1_faults(args.l1_reorgs);
+    }
     let probes = watch::NodeProbe::from_manifest(&manifest);
-    let mut ops = DockerOps { manifest };
+    let mut ops = DockerOps::new(manifest);
     let started = std::time::Instant::now();
     let deadline = args
         .duration
@@ -422,6 +565,7 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
             conditions: schedule.conditions(),
             expect_liveness: schedule.expect_liveness(),
             since: started,
+            l1_blackout: schedule.l1_blackout(),
         });
     let (findings_sender, mut findings_receiver) = tokio::sync::mpsc::channel(1);
     let watcher = tokio::spawn(watch::watch(
@@ -477,6 +621,7 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
                 | Action::Unpause(_)
                 | Action::Reconnect(_)
                 | Action::ClearDegradation(_)
+                | Action::L1Restore
         );
         if !heals {
             publish_expectations(
@@ -507,6 +652,7 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
             action,
             healthy_after: schedule.healthy_count(),
             expect_liveness: schedule.expect_liveness(),
+            l1_blackout: schedule.l1_blackout(),
         };
         writeln!(journal, "{}", serde_json::to_string(&entry)?)?;
     }
@@ -589,6 +735,7 @@ fn publish_expectations(
         conditions: schedule.conditions(),
         expect_liveness,
         since: *liveness_since,
+        l1_blackout: schedule.l1_blackout(),
     });
 }
 
@@ -606,6 +753,57 @@ mod tests {
     fn same_seed_same_schedule() {
         assert_eq!(actions(42, 5, 4, 500), actions(42, 5, 4, 500));
         assert_ne!(actions(42, 5, 4, 500), actions(43, 5, 4, 500));
+    }
+
+    #[test]
+    fn the_l1_lane_is_bounded_and_off_by_default() {
+        // Off by default: the validator-lane tests above stay meaningful.
+        assert!(
+            !actions(42, 5, 4, 2000)
+                .iter()
+                .any(|action| matches!(action, Action::L1Blackout | Action::L1FeeSpike(_))),
+        );
+
+        // On: blackouts never stack, always heal, and never excuse a stall —
+        // liveness expectation tracks validators only.
+        let mut schedule = Schedule::new(7, 5, 4).with_l1_faults(false);
+        let mut dark = false;
+        let mut saw_blackout = false;
+        for _ in 0..5000 {
+            let action = schedule.next_action();
+            match action {
+                Action::L1Blackout => {
+                    assert!(!dark, "blackout while already dark");
+                    dark = true;
+                    saw_blackout = true;
+                }
+                Action::L1Restore => dark = false,
+                Action::L1Reorg(_) => panic!("reorg action while reorgs are disabled"),
+                _ => {}
+            }
+            assert_eq!(schedule.l1_blackout(), dark);
+        }
+        assert!(saw_blackout, "the lane never fired in 5000 steps");
+
+        // Reorgs appear only when asked for, with shallow depths.
+        let mut schedule = Schedule::new(7, 5, 4).with_l1_faults(true);
+        let mut saw_reorg = false;
+        for _ in 0..5000 {
+            if let Action::L1Reorg(depth) = schedule.next_action() {
+                assert!((3..=8).contains(&depth));
+                saw_reorg = true;
+            }
+        }
+        assert!(saw_reorg, "reorgs enabled but never drawn in 5000 steps");
+    }
+
+    #[test]
+    fn heal_everything_restores_a_dark_l1() {
+        let mut schedule = Schedule::new(7, 5, 4).with_l1_faults(false);
+        while !schedule.l1_blackout() {
+            schedule.next_action();
+        }
+        assert!(schedule.heal_everything().contains(&Action::L1Restore));
     }
 
     #[test]

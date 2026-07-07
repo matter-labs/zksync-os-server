@@ -43,6 +43,11 @@ pub struct Expectations {
     pub expect_liveness: bool,
     /// When `expect_liveness` last changed.
     pub since: Instant,
+    /// The driver is holding the L1 dark. Consensus liveness stays expected —
+    /// that is the point of the fault — but L1-facing components legitimately
+    /// scream about connectivity, so those specific log lines are tolerated
+    /// while this holds (and briefly after, for lines still flushing).
+    pub l1_blackout: bool,
 }
 
 /// One validator, as observed during a poll.
@@ -60,10 +65,32 @@ pub struct NodeObservation {
     pub finalized_round: Option<(u64, u64)>,
     pub applied_height: Option<u64>,
     pub block_hash_at_probe: Option<String>,
+    /// What this node says the probed block *did*: its transaction list and a
+    /// sample of receipts, condensed for cross-node comparison.
+    pub execution_at_probe: Option<ExecutionFingerprint>,
     /// Sum of the consensus fault-evidence counters.
     pub evidence: u64,
+    /// The node's `consensus_verify_verdicts{verdict="invalid"}` counter: how
+    /// many peer proposals it has permanently rejected (linkage, validity, or
+    /// re-execution mismatch). Never ticks on an honest, converged cluster.
+    pub verify_invalid: u64,
     /// Log lines since the previous poll that match the forbidden patterns.
     pub suspicious_log_lines: Vec<String>,
+}
+
+/// A block's execution outputs as served over RPC, condensed to strings that
+/// either match across validators or convict someone. The receipt sample is
+/// deterministic (the block's first transactions), so every node summarizes
+/// the same subset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExecutionFingerprint {
+    /// The block's transaction hashes, joined — divergence here means nodes
+    /// disagree on the block's *contents*.
+    pub txs: String,
+    /// `(tx hash, "status|gasUsed|logsBloom")` for the sampled transactions —
+    /// divergence here means nodes executed the same block differently (or
+    /// serve corrupted results).
+    pub receipts: Vec<(String, String)>,
 }
 
 /// The height whose hash every reachable validator was asked about this poll.
@@ -106,11 +133,26 @@ pub enum Finding {
     UnexpectedDeath { validator: usize },
     /// A forbidden log line (panic / unexplained ERROR).
     SuspiciousLog { validator: usize, line: String },
+    /// Validators disagree about a finalized block's execution: its transaction
+    /// list or a sampled receipt differs between nodes that agree on the hash
+    /// chain — an RPC/storage-layer divergence.
+    ExecutionDisagreement {
+        height: u64,
+        what: &'static str,
+        details: Vec<(usize, String)>,
+    },
+    /// A validator permanently rejected a peer proposal (`verify_verdicts`
+    /// `invalid` ticked). On an honest cluster this is the STF-divergence
+    /// tripwire: some peer built a block this node's re-execution refuses.
+    VerifyRejection { validator: usize, count: u64 },
     /// The committee was expected live for the whole window but no new finalization
     /// appeared.
     LivenessStall {
         window: Duration,
         at_round: (u64, u64),
+        /// Who to look at first: validators whose own finalized round sits
+        /// below the stalled tip (crashed? rejecting? isolated?).
+        laggards: Vec<usize>,
     },
 }
 
@@ -121,6 +163,7 @@ pub struct Checker {
     finalized_rounds: Vec<(u64, u64)>,
     applied_heights: Vec<u64>,
     evidence: Vec<u64>,
+    verify_invalid: Vec<u64>,
     /// The driver's beliefs at the previous poll, for spotting heal transitions.
     previous_conditions: Vec<Condition>,
     /// Highest finalized `(epoch, view)` seen anywhere, and when it last advanced.
@@ -139,6 +182,7 @@ impl Checker {
             finalized_rounds: vec![(0, 0); validators],
             applied_heights: vec![0; validators],
             evidence: vec![0; validators],
+            verify_invalid: vec![0; validators],
             previous_conditions: vec![Condition::Healthy; validators],
             tip_round: (0, 0),
             tip_advanced_at: Instant::now(),
@@ -156,11 +200,15 @@ impl Checker {
     ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
-        // A node healed from Killed/Stopped has *restarted*: its applied height is
-        // the applier's per-run progress and legitimately starts over from the
-        // restart replay range, so its baseline resets. Unpause and reconnect do not
-        // restart the process, and finalized views come from the consensus journal
-        // and stay monotone across restarts — neither resets.
+        // A node healed from Killed/Stopped has *restarted*: its applied height
+        // is the applier's per-run progress and legitimately starts over from
+        // the restart replay range. Its *reported* finalized round dips too:
+        // with epoch retention, journal replay begins at the oldest retained
+        // epoch, and /status reports that older round until replay catches up
+        // (seen live: a restart at epoch 62 re-reporting epoch 60). Both
+        // baselines reset; regressions on nodes that did not restart remain
+        // findings. Unpause and reconnect do not restart the process — neither
+        // resets for those.
         for (index, condition) in expectations.conditions.iter().enumerate() {
             if *condition == Condition::Healthy
                 && matches!(
@@ -169,6 +217,7 @@ impl Checker {
                 )
             {
                 self.applied_heights[index] = 0;
+                self.finalized_rounds[index] = (0, 0);
             }
         }
         self.previous_conditions = expectations.conditions.clone();
@@ -185,6 +234,40 @@ impl Checker {
                 .collect();
             if hashes.windows(2).any(|pair| pair[0].1 != pair[1].1) {
                 findings.push(Finding::HashDisagreement { height, hashes });
+            }
+
+            // Execution agreement: matching hashes are necessary, not
+            // sufficient — the nodes must also *serve* the same transaction
+            // list and the same receipts for it.
+            let prints: Vec<(usize, &ExecutionFingerprint)> = poll
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, node)| {
+                    node.execution_at_probe.as_ref().map(|print| (index, print))
+                })
+                .collect();
+            if prints.windows(2).any(|pair| pair[0].1.txs != pair[1].1.txs) {
+                findings.push(Finding::ExecutionDisagreement {
+                    height,
+                    what: "transaction list",
+                    details: prints
+                        .iter()
+                        .map(|(index, print)| (*index, print.txs.clone()))
+                        .collect(),
+                });
+            } else if prints
+                .windows(2)
+                .any(|pair| pair[0].1.receipts != pair[1].1.receipts)
+            {
+                findings.push(Finding::ExecutionDisagreement {
+                    height,
+                    what: "sampled receipts",
+                    details: prints
+                        .iter()
+                        .map(|(index, print)| (*index, format!("{:?}", print.receipts)))
+                        .collect(),
+                });
             }
         }
 
@@ -224,6 +307,16 @@ impl Checker {
                     count: node.evidence,
                 });
                 self.evidence[index] = node.evidence;
+            }
+
+            // Nobody proposes blocks an honest peer must reject; a rejection
+            // ticking here means someone's execution disagrees.
+            if node.verify_invalid > self.verify_invalid[index] {
+                findings.push(Finding::VerifyRejection {
+                    validator: index,
+                    count: node.verify_invalid,
+                });
+                self.verify_invalid[index] = node.verify_invalid;
             }
 
             // "Not running" is only ever expected while the driver holds a node
@@ -273,6 +366,13 @@ impl Checker {
             findings.push(Finding::LivenessStall {
                 window: self.liveness_window,
                 at_round: self.tip_round,
+                laggards: self
+                    .finalized_rounds
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, round)| **round < self.tip_round)
+                    .map(|(index, _)| index)
+                    .collect(),
             });
             // Re-arm so a genuinely stuck cluster produces one finding per window,
             // not one per poll.
@@ -285,6 +385,29 @@ impl Checker {
 
 /// Log lines that always warrant a finding.
 const FORBIDDEN_LOG_PATTERNS: [&str; 2] = ["panicked at", " ERROR "];
+
+/// ERROR shapes that are the *expected* voice of an L1-facing component while
+/// the driver holds the L1 dark: transport-level connectivity failures. A
+/// panic, or an ERROR that is not connectivity-shaped, is a finding even then.
+const L1_OUTAGE_TOLERATED_PATTERNS: [&str; 5] = [
+    "error sending request",
+    "connection refused",
+    "tcp connect error",
+    "operation timed out",
+    "request timeout",
+];
+
+/// Whether a suspicious line is excused by an ongoing (or just-ended) L1
+/// blackout: ERROR + connectivity-shaped, never panics.
+pub fn is_tolerated_during_l1_outage(line: &str) -> bool {
+    if line.contains("panicked at") {
+        return false;
+    }
+    let lower = line.to_lowercase();
+    L1_OUTAGE_TOLERATED_PATTERNS
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
 /// Known-benign teardown noise of a node being stopped by the driver itself:
 /// the pipeline's critical tasks report their neighbor channels closing as
 /// errors, and the runtime-drop panic is a registered shutdown wart (tracked in
@@ -397,7 +520,12 @@ impl NodeProbe {
 
     /// New log lines since `since` that match the forbidden patterns. `--tail`
     /// keeps the scan bounded no matter how old the container is.
-    async fn suspicious_logs(&self, since: Instant, now: Instant) -> Vec<String> {
+    async fn suspicious_logs(
+        &self,
+        since: Instant,
+        now: Instant,
+        tolerate_l1_outage: bool,
+    ) -> Vec<String> {
         let seconds = now.duration_since(since).as_secs().max(1);
         let Some(text) = docker_output(
             &[
@@ -418,6 +546,7 @@ impl NodeProbe {
             .lines()
             .map(strip_ansi)
             .filter(|line| is_suspicious_log_line(line))
+            .filter(|line| !(tolerate_l1_outage && is_tolerated_during_l1_outage(line)))
             .collect();
         lines.truncate(5); // one finding is enough; don't flood the artifacts
         lines
@@ -429,24 +558,30 @@ impl NodeProbe {
         probe_height: Option<u64>,
         logs_since: Instant,
         now: Instant,
+        tolerate_l1_outage: bool,
     ) -> NodeObservation {
         let (running, paused) = self.container_state().await;
 
         // All probes run concurrently: an unreachable node costs one client
         // timeout per poll, not a sum of them.
-        let (status, block_hash_at_probe, evidence, suspicious_log_lines) = tokio::join!(
+        let (status, block_probe, counters, suspicious_log_lines) = tokio::join!(
             self.status(client),
             async {
                 match probe_height {
                     Some(height) if running == Some(true) && !paused => {
-                        self.block_hash(client, height).await
+                        self.block_probe(client, height).await
                     }
                     _ => None,
                 }
             },
-            self.evidence_total(client),
-            self.suspicious_logs(logs_since, now),
+            self.consensus_counters(client),
+            self.suspicious_logs(logs_since, now, tolerate_l1_outage),
         );
+        let (block_hash_at_probe, execution_at_probe) = match block_probe {
+            Some((hash, print)) => (Some(hash), print),
+            None => (None, None),
+        };
+        let (evidence, verify_invalid) = counters;
         let consensus = status.and_then(|status| status.consensus);
         let finalized_round = consensus.as_ref().and_then(|consensus| {
             consensus
@@ -464,7 +599,9 @@ impl NodeProbe {
             finalized_round,
             applied_height,
             block_hash_at_probe,
+            execution_at_probe,
             evidence,
+            verify_invalid,
             suspicious_log_lines,
         }
     }
@@ -476,12 +613,67 @@ impl NodeProbe {
         }
     }
 
-    async fn block_hash(&self, client: &reqwest::Client, height: u64) -> Option<String> {
+    /// The probed block's hash plus, when it has transactions, an execution
+    /// fingerprint: the full transaction-hash list and receipts for the first
+    /// [`RECEIPT_SAMPLE`] of them (a deterministic sample — every node
+    /// summarizes the same transactions).
+    async fn block_probe(
+        &self,
+        client: &reqwest::Client,
+        height: u64,
+    ) -> Option<(String, Option<ExecutionFingerprint>)> {
+        let response = self
+            .rpc(
+                client,
+                "eth_getBlockByNumber",
+                serde_json::json!([format!("0x{height:x}"), false]),
+            )
+            .await?;
+        let hash = response["hash"].as_str()?.to_string();
+        let txs: Vec<String> = response["transactions"]
+            .as_array()?
+            .iter()
+            .filter_map(|tx| tx.as_str().map(|hash| hash.to_string()))
+            .collect();
+        if txs.is_empty() {
+            return Some((hash, None));
+        }
+
+        let mut receipts = Vec::new();
+        for tx in txs.iter().take(RECEIPT_SAMPLE) {
+            let receipt = self
+                .rpc(client, "eth_getTransactionReceipt", serde_json::json!([tx]))
+                .await?;
+            receipts.push((
+                tx.clone(),
+                format!(
+                    "{}|{}|{}",
+                    receipt["status"].as_str().unwrap_or("?"),
+                    receipt["gasUsed"].as_str().unwrap_or("?"),
+                    receipt["logsBloom"].as_str().unwrap_or("?"),
+                ),
+            ));
+        }
+        Some((
+            hash,
+            Some(ExecutionFingerprint {
+                txs: txs.join(","),
+                receipts,
+            }),
+        ))
+    }
+
+    async fn rpc(
+        &self,
+        client: &reqwest::Client,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Option<serde_json::Value> {
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "eth_getBlockByNumber",
-            "params": [format!("0x{height:x}"), false],
+            "method": method,
+            "params": params,
         });
         let response: serde_json::Value = client
             .post(&self.rpc_url)
@@ -492,34 +684,42 @@ impl NodeProbe {
             .json()
             .await
             .ok()?;
-        response["result"]["hash"]
-            .as_str()
-            .map(|hash| hash.to_string())
+        (!response["result"].is_null()).then(|| response["result"].clone())
     }
 
-    /// Sum of the protocol fault-evidence counters from the node's metrics text.
-    pub async fn evidence_total(&self, client: &reqwest::Client) -> u64 {
+    /// Two counter families from one metrics scrape: the summed protocol
+    /// fault-evidence counters, and the permanent verify rejections.
+    async fn consensus_counters(&self, client: &reqwest::Client) -> (u64, u64) {
         let Ok(response) = client.get(&self.metrics_url).send().await else {
-            return 0;
+            return (0, 0);
         };
         let Ok(text) = response.text().await else {
-            return 0;
+            return (0, 0);
         };
-        text.lines()
-            .filter(|line| {
-                line.starts_with("consensus_activity")
-                    && (line.contains("conflicting_notarize")
-                        || line.contains("conflicting_finalize")
-                        || line.contains("nullify_finalize"))
-            })
-            .filter_map(|line| line.split_whitespace().last())
-            .filter_map(|value| value.parse::<f64>().ok())
-            .sum::<f64>() as u64
+        let sum = |predicate: &dyn Fn(&str) -> bool| -> u64 {
+            text.lines()
+                .filter(|line| predicate(line))
+                .filter_map(|line| line.split_whitespace().last())
+                .filter_map(|value| value.parse::<f64>().ok())
+                .sum::<f64>() as u64
+        };
+        let evidence = sum(&|line: &str| {
+            line.starts_with("consensus_activity")
+                && (line.contains("conflicting_notarize")
+                    || line.contains("conflicting_finalize")
+                    || line.contains("nullify_finalize"))
+        });
+        let verify_invalid = sum(&|line: &str| {
+            line.starts_with("consensus_verify_verdicts") && line.contains("\"invalid\"")
+        });
+        (evidence, verify_invalid)
     }
 }
 
 /// How often the watcher polls the cluster.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Receipts fetched per node per poll for the execution fingerprint.
+const RECEIPT_SAMPLE: usize = 3;
 
 /// The watcher loop: polls every validator, feeds the [`Checker`], and sends the
 /// first non-empty batch of findings (with the poll that produced it) before
@@ -541,17 +741,22 @@ pub async fn watch(
     // *previous* poll, so every reachable validator has the block by now.
     let mut probe_height: Option<u64> = None;
     let mut logs_since = Instant::now();
+    // Log lines written during a blackout can surface in the poll after it
+    // ended; keep excusing connectivity noise for a short grace period.
+    let mut l1_tolerance_until = Instant::now() - Duration::from_secs(1);
 
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
         let now = Instant::now();
         let current_expectations = expectations.borrow().clone();
+        if current_expectations.l1_blackout {
+            l1_tolerance_until = now + Duration::from_secs(15);
+        }
+        let tolerate_l1_outage = current_expectations.l1_blackout || now < l1_tolerance_until;
 
-        let observations = futures::future::join_all(
-            probes
-                .iter()
-                .map(|probe| probe.observe(&client, probe_height, logs_since, now)),
-        )
+        let observations = futures::future::join_all(probes.iter().map(|probe| {
+            probe.observe(&client, probe_height, logs_since, now, tolerate_l1_outage)
+        }))
         .await;
         logs_since = now;
 
@@ -582,6 +787,7 @@ mod tests {
             conditions: vec![Condition::Healthy; validators],
             expect_liveness: true,
             since: Instant::now() - Duration::from_secs(3600),
+            l1_blackout: false,
         }
     }
 
@@ -593,7 +799,9 @@ mod tests {
             finalized_round: Some((0, finalized_view)),
             applied_height: Some(finalized_view),
             block_hash_at_probe: Some(hash.to_string()),
+            execution_at_probe: None,
             evidence: 0,
+            verify_invalid: 0,
             suspicious_log_lines: Vec::new(),
         }
     }
@@ -743,6 +951,143 @@ mod tests {
                 .any(|finding| matches!(finding, Finding::UnexpectedDeath { .. })),
             "a probe failure produced a death finding: {findings:?}"
         );
+    }
+
+    fn print(txs: &str, receipt: &str) -> ExecutionFingerprint {
+        ExecutionFingerprint {
+            txs: txs.to_string(),
+            receipts: vec![("0xt0".to_string(), receipt.to_string())],
+        }
+    }
+
+    #[test]
+    fn matching_hashes_with_diverging_receipts_is_a_finding() {
+        // The scenario hash agreement cannot see: everyone serves the same
+        // block hash, but one node's receipt for a sampled transaction differs
+        // — an execution/storage/RPC divergence.
+        let mut checker = Checker::new(2, Duration::from_secs(5), Duration::from_secs(60));
+        let mut a = observation(10, "0xsame");
+        let mut b = observation(10, "0xsame");
+        a.execution_at_probe = Some(print("0xt0", "0x1|0x5208|0x00"));
+        b.execution_at_probe = Some(print("0xt0", "0x0|0x5208|0x00"));
+        let findings = checker.observe(
+            Instant::now(),
+            &healthy_expectations(2),
+            &Poll {
+                probe_height: Some(7),
+                nodes: vec![a, b],
+            },
+        );
+        assert!(
+            findings.iter().any(|finding| matches!(
+                finding,
+                Finding::ExecutionDisagreement {
+                    height: 7,
+                    what: "sampled receipts",
+                    ..
+                }
+            )),
+            "no execution finding: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_verify_rejection_is_a_finding() {
+        let mut checker = Checker::new(2, Duration::from_secs(5), Duration::from_secs(60));
+        let mut node = observation(10, "0x");
+        node.verify_invalid = 1;
+        let findings = checker.observe(
+            Instant::now(),
+            &healthy_expectations(2),
+            &Poll {
+                probe_height: None,
+                nodes: vec![observation(10, "0x"), node],
+            },
+        );
+        assert!(
+            findings.iter().any(|finding| matches!(
+                finding,
+                Finding::VerifyRejection {
+                    validator: 1,
+                    count: 1
+                }
+            )),
+            "no rejection finding: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_restarted_node_may_re_report_older_rounds() {
+        // With epoch retention, a restarted validator replays from its oldest
+        // retained epoch and its /status reports that older round until it
+        // catches up. After a Killed→Healthy transition that dip is expected;
+        // the same dip on a node that never restarted stays a finding.
+        let mut checker = Checker::new(1, Duration::from_secs(5), Duration::from_secs(600));
+        let mut killed = healthy_expectations(1);
+        killed.conditions[0] = Condition::Killed;
+        let now = Instant::now();
+
+        let at = |view, hash: &str| Poll {
+            probe_height: None,
+            nodes: vec![observation(view, hash)],
+        };
+        assert!(
+            checker
+                .observe(now, &healthy_expectations(1), &at(46, "0x"))
+                .is_empty()
+        );
+        assert!(checker.observe(now, &killed, &at(46, "0x")).is_empty());
+        // Restarted, replaying: an older round appears. Not a finding.
+        let findings = checker.observe(now, &healthy_expectations(1), &at(19, "0x"));
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::RoundRegression { .. })),
+            "restart replay flagged as a regression: {findings:?}"
+        );
+        // No restart in between: the same dip is a real finding.
+        assert!(
+            checker
+                .observe(now, &healthy_expectations(1), &at(50, "0x"))
+                .is_empty()
+        );
+        let findings = checker.observe(now, &healthy_expectations(1), &at(20, "0x"));
+        assert!(
+            findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::RoundRegression { .. })),
+            "a genuine regression was not flagged: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_liveness_stall_names_its_laggards() {
+        let mut checker = Checker::new(3, Duration::from_secs(5), Duration::from_secs(1));
+        let mut expectations = healthy_expectations(3);
+        expectations.since = Instant::now() - Duration::from_secs(120);
+        // Validator 2 sits behind the tip the other two reached.
+        let poll = Poll {
+            probe_height: None,
+            nodes: vec![
+                observation(10, "0x"),
+                observation(10, "0x"),
+                observation(4, "0x"),
+            ],
+        };
+        let _ = checker.observe(
+            Instant::now() - Duration::from_secs(60),
+            &expectations,
+            &poll,
+        );
+        let findings = checker.observe(Instant::now(), &expectations, &poll);
+        let stall = findings
+            .iter()
+            .find_map(|finding| match finding {
+                Finding::LivenessStall { laggards, .. } => Some(laggards.clone()),
+                _ => None,
+            })
+            .expect("no stall finding");
+        assert_eq!(stall, vec![2]);
     }
 
     #[test]

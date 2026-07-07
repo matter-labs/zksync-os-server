@@ -1,0 +1,14 @@
+# Expensive blocks on purpose: heavy compute/storage burn plus calldata bulk,
+# probing view timing when proposals are slow to build and slow to re-verify.
+tps = 6
+pattern = "sustained"
+
+[weights]
+gas_guzzler = 40
+blobs = 20
+call_maze = 20
+transfers = 20
+
+[knobs]
+guzzler_gas = 6000000
+blob_kib = 96

@@ -42,7 +42,7 @@ cargo run -p zksync_os_chaos -- drive --workdir ./chaos-workdir --seed 42 \
 
 # 5. (Optionally, in parallel:) put transaction load on the committee.
 cargo run -p zksync_os_chaos -- load --workdir ./chaos-workdir \
-    --tps 20 --pattern sustained --spread even --duration 2h
+    --profile realistic --duration 2h
 ```
 
 Watch the cluster through any validator's mapped ports (see the manifest):
@@ -62,6 +62,14 @@ driver injected:
 
 - **agreement** — every reachable validator serves the identical block hash at the
   probed height;
+- **execution agreement** — matching hashes are necessary, not sufficient: every
+  reachable validator must also serve the same transaction list for the probed
+  block and the same receipts (status, gas used, logs bloom) for a deterministic
+  sample of its transactions — the tripwire for RPC/storage-layer divergence;
+- **no verify rejections** — the `consensus_verify_verdicts{verdict="invalid"}`
+  counter must never tick on an honest cluster: a validator permanently rejecting
+  a peer's proposal (failed linkage, validity, or re-execution mismatch) is the
+  operational signature of an STF divergence;
 - **monotone finality** — no validator's finalized view or applied height ever goes
   backwards;
 - **no progress without quorum** — while the driver holds the healthy set below
@@ -74,12 +82,31 @@ driver injected:
 - **clean logs** — no panics or ERROR lines beyond an explicit allowlist of known
   teardown noise;
 - **liveness** — when the committee is expected live for a whole `--liveness-window`
-  (default 60s, deliberately generous), the finalized view must advance within it.
+  (default 60s, deliberately generous), the finalized view must advance within it;
+  a stall finding names its laggards (validators whose own finalized round sits
+  below the stalled tip) so triage starts with the right node.
 
 On the first finding the experiment freezes: injection stops, nothing is healed, the
 findings plus the offending poll plus every container's recent logs land in
 `<workdir>/artifacts/`, and the driver exits nonzero. The cluster stays up exactly
 as it failed — attach, inspect, then `docker compose down -v` when done.
+
+## The L1 lane
+
+`chaos drive` also faults the L1 itself (disable with `--no-l1-faults`):
+
+- **L1 blackout** — the anvil container is paused for a bounded window. L2
+  consensus is expected to keep finalizing right through it (the watcher keeps
+  checking liveness); L1-facing components may log connectivity errors, and
+  exactly those — transport-shaped ERROR lines — are tolerated while the
+  blackout holds, so a panic or an unrelated ERROR still trips the log check.
+- **Base-fee spikes** — `anvil_setNextBlockBaseFeePerGas` multiplies the L1
+  base fee (5–40×); EIP-1559 decay on anvil's mostly-empty blocks walks it
+  back down. Exercises fee-tracking paths.
+- **Shallow reorgs** (`--l1-reorgs`, off by default) — `anvil_reorg` replaces
+  the last few unfinalized L1 blocks. A findings-only probe of l1_watcher
+  assumptions: the node may simply not be ready for reorgs, which is why this
+  is opt-in and trivial to leave off.
 
 ## Network degradation
 
@@ -94,21 +121,56 @@ filters) is a known possible extension.
 
 ## Load
 
-`chaos load` puts real transactions through the committee while the driver does its
-work. Sender accounts are derived deterministically and funded once through a real
-L1→L2 bridgehub deposit (signed by anvil's default rich account), then drive plain
-transfers:
+`chaos load` puts real transactions through the committee while the driver does
+its work. Sender accounts are derived deterministically and funded once through a
+real L1→L2 bridgehub deposit (signed by anvil's default rich account); a
+**profile** then decides what they send.
 
-- `--pattern sustained --tps N` — steady traffic (low N = background hum, high N =
-  stress);
-- `--pattern bursts --burst-secs 5 --idle-secs 15` — on/off duty cycle;
-- `--spread even` pins senders round-robin across validators (tx gossip carries
-  them to whoever leads); `--spread single:2` aims everything at one validator.
+A profile (`--profile <name-or-path>`, TOML) sets the rate, the traffic shape,
+and the workload mix. Built-ins under `tools/chaos/profiles/` double as starting
+points for hand-rolled mixes:
+
+- `default` — plain transfers only (the original behavior);
+- `realistic` — the staple soak mix: mostly boring traffic plus every
+  STF-coverage workload at a sensible weight;
+- `guzzler` — expensive blocks on purpose (compute burn + calldata bulk);
+- `quiet` — a low background murmur in bursts;
+- `smoke` — everything at equal weight, for short development runs.
+
+The tick-driven workloads (weights in `[weights]`): `transfers` (1 wei to fresh
+addresses), `erc20` (mint/transfer/approve churn), `call_maze` (seeded walks
+through nested CALL/DELEGATECALL/STATICCALL with CREATE/CREATE2 leaves and
+bubbling reverts), `precompiles` (known-vector exercises, self-calibrating to
+what the chain's VM supports), `context_probe` (the environment-opcode family
+emitted into logs), `gas_guzzler` (burns nearly a whole gas limit per
+transaction), `failing` (transactions *meant* to revert or run out of gas),
+`blobs` (big random calldata). Sagas (`[sagas]`) run beside the tick loop with
+their own cadence and assertions: `nonce_race` signs two different transactions
+with the same nonce and submits them to two validators' mempools at once —
+exactly one may ever mine. Contract-based workloads deploy their contracts on
+first use (foundry project under `tools/chaos/contracts/`, built by `build.rs`
+when forge is installed) and reuse live deployments across runs.
+
+L1-flow sagas ride the same `[sagas]` table: `deposits` (a trickle of real
+priority operations with occasional bursts, asserting L2 arrival), `withdrawals`
+(the full round trip, continuously: L2 withdraw → batch executed on L1 → log
+proof → `L1Nullifier.finalizeDeposit` → exact L1 balance), and
+`failed_deposits` (deposits engineered to revert or run out of gas on L2 —
+asserting only what must always hold: the relay includes them and the priority
+queue keeps working afterwards, while *recording* the observed refund
+semantics in the report, since no other test in the repo exercises that path
+yet). Each L1 saga runs on its own funded L1 account so none of them race
+another's nonces.
+
+Flags override the profile's shape knobs: `--tps N`, `--pattern
+sustained|bursts`, `--burst-secs`/`--idle-secs`, `--spread even|single:<i>`.
 
 Submission failures are counted, never fatal — validators go down mid-run by
-design. The end-of-run report shows per-validator accepted/rejected counts,
-achieved tps, and whether each sender's final transaction was actually included
-(end-to-end proof that traffic flowed through consensus).
+design. The end-of-run report shows per-validator and per-workload counts, saga
+verdicts, whether each sender's final transaction was included, and an
+**expectation audit**: a sample of receipts checked against each workload's
+declared expectation (clean traffic landed with status 1, planned failures with
+status 0). Audit violations and saga failures exit nonzero.
 
 ## Notes and known gaps
 

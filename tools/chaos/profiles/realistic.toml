@@ -1,0 +1,20 @@
+# The staple mix: mostly boring traffic, with every STF-coverage workload
+# present enough to matter. The default choice for soaks.
+tps = 12
+pattern = "sustained"
+
+[weights]
+transfers = 40
+erc20 = 22
+call_maze = 10
+context_probe = 6
+precompiles = 6
+failing = 6
+blobs = 4
+gas_guzzler = 2
+
+[sagas]
+nonce_race_secs = 45
+deposits_secs = 60
+withdrawals_secs = 45
+failed_deposits_secs = 180

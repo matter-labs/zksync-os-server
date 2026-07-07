@@ -1,0 +1,7 @@
+# Plain value transfers only — `chaos load` without --profile behaves exactly
+# like the original single-workload rig.
+tps = 10
+pattern = "sustained"
+
+[weights]
+transfers = 1

@@ -240,6 +240,7 @@ rand08 = { package = "rand", version = "0.8" }
 bytes = "1"
 assert_matches = "1.5"
 serde_yaml = "0.9"
+toml = "0.8"
 secrecy = "0.10.3"
 cargo_metadata = { version = "0.20.0", default-features = false }
 tracing-logfmt = { version = "0.3.5" }
