@@ -37,6 +37,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 22px 36px 0;
+    flex: none;
   }
   .brand {
     font-family: var(--mono);
@@ -78,10 +79,13 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    padding: 0 36px;
+    padding: 0 36px 24px;
     min-height: 0;
+    overflow: hidden;
   }
+  /* Auto margins center the stage but collapse to zero when space runs out —
+     nothing ever clips off the top of the viewport. */
+  .stage { margin: auto 0; min-height: 0; }
 
   .odo-label {
     font-family: var(--mono);
@@ -94,7 +98,7 @@
   .odometer {
     font-family: var(--mono);
     font-variant-numeric: tabular-nums;
-    font-size: clamp(64px, 11.5vw, 190px);
+    font-size: clamp(60px, 10.5vw, 170px);
     font-weight: 700;
     line-height: 1;
     letter-spacing: -0.02em;
@@ -109,16 +113,17 @@
 
   .row {
     display: flex;
-    gap: 18px;
+    flex-wrap: wrap;
+    gap: 14px;
     align-items: stretch;
-    margin-top: clamp(20px, 4vh, 48px);
+    margin-top: clamp(18px, 3.5vh, 42px);
   }
   .tile {
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 16px 22px 14px;
-    min-width: 180px;
+    padding: 14px 20px 12px;
+    min-width: 150px;
   }
   .tile .k {
     font-family: var(--mono);
@@ -128,33 +133,25 @@
     color: var(--muted);
     display: block;
     margin-bottom: 6px;
+    white-space: nowrap;
   }
   .tile .v {
     font-family: var(--mono);
     font-variant-numeric: tabular-nums;
-    font-size: clamp(26px, 3.2vw, 46px);
+    font-size: clamp(24px, 2.9vw, 42px);
     font-weight: 700;
     line-height: 1.05;
+    white-space: nowrap;
   }
   .tile .u { font-size: 0.45em; font-weight: 500; color: var(--ink-2); margin-left: 6px; }
-  .tile.spark { flex: 1; display: flex; flex-direction: column; min-width: 260px; }
-  .tile.spark canvas { flex: 1; width: 100%; min-height: 60px; }
-
-  footer {
-    padding: 14px 36px 18px;
-    display: flex;
-    justify-content: space-between;
-    gap: 24px;
-    font-size: 12.5px;
-    color: var(--muted);
-  }
-  footer .rpc { font-family: var(--mono); }
+  .tile.spark { flex: 1; display: flex; flex-direction: column; min-width: 240px; }
+  .tile.spark canvas { flex: 1; width: 100%; min-height: 56px; }
 
   /* ---- overlays (start gate + finale) ---- */
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(8, 11, 15, 0.96);
+    background: rgba(8, 11, 15, 0.97);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -196,7 +193,14 @@
     box-shadow: 0 0 40px rgba(53, 208, 127, 0.25);
   }
   #start-btn:hover { transform: scale(1.04); box-shadow: 0 0 60px rgba(53, 208, 127, 0.45); }
-  #start-btn:disabled { background: var(--muted); color: var(--bg); cursor: wait; box-shadow: none; }
+  #start-btn:disabled {
+    background: transparent;
+    color: var(--green);
+    border: 2px solid var(--green);
+    cursor: wait;
+    box-shadow: none;
+    animation: pulse 1.1s infinite;
+  }
   #gate-status {
     font-family: var(--mono);
     font-size: 14px;
@@ -226,14 +230,9 @@
   #final-overlay .f-sub {
     font-size: clamp(18px, 2.4vw, 34px);
     color: var(--ink-2);
-    max-width: 34ch;
+    max-width: 36ch;
   }
   #final-overlay .f-sub b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  #final-overlay .f-note {
-    margin-top: 10px;
-    font-size: 13px;
-    color: var(--muted);
-  }
   @keyframes land {
     0% { transform: scale(0.6); opacity: 0; }
     100% { transform: scale(1); opacity: 1; }
@@ -250,37 +249,39 @@
   </header>
 
   <main>
-    <div>
+    <div class="stage">
       <div class="odo-label">Transactions processed</div>
       <div class="odometer" id="odo">0</div>
       <div class="eth-line" id="eth-line">&nbsp;</div>
-    </div>
 
-    <div class="row">
-      <div class="tile">
-        <span class="k">Throughput</span>
-        <span class="v"><span id="tps">0</span><span class="u">tx/s</span></span>
-      </div>
-      <div class="tile">
-        <span class="k">Block height</span>
-        <span class="v" id="height">—</span>
-      </div>
-      <div class="tile">
-        <span class="k">Blocks / s</span>
-        <span class="v" id="bps">0</span>
-      </div>
-      <div class="tile spark">
-        <span class="k">tx/s — last 60 seconds</span>
-        <canvas id="spark"></canvas>
+      <div class="row">
+        <div class="tile">
+          <span class="k">Throughput</span>
+          <span class="v"><span id="tps">0</span><span class="u">tx/s</span></span>
+        </div>
+        <div class="tile">
+          <span class="k">Gas throughput</span>
+          <span class="v"><span id="ggas">0</span><span class="u">Ggas/s</span></span>
+        </div>
+        <div class="tile">
+          <span class="k">Blocks / s</span>
+          <span class="v" id="bps">0</span>
+        </div>
+        <div class="tile">
+          <span class="k">Block height</span>
+          <span class="v" id="height">—</span>
+        </div>
+        <div class="tile">
+          <span class="k">Sending accounts</span>
+          <span class="v" id="accounts">—</span>
+        </div>
+        <div class="tile spark">
+          <span class="k">tx/s — last 60 seconds</span>
+          <canvas id="spark"></canvas>
+        </div>
       </div>
     </div>
   </main>
-
-  <footer>
-    <span>Live estimate from public JSON-RPC block polling (±1–2%). The terminal's final
-      <span style="font-family:var(--mono)">submitted_parallel_tps</span> line is the official figure.</span>
-    <span class="rpc" id="rpc-label"></span>
-  </footer>
 
   <!-- start gate -->
   <div class="overlay" id="gate-overlay">
@@ -295,39 +296,40 @@
     <div class="f-label">Run complete</div>
     <div class="f-num" id="f-num">0</div>
     <div class="f-sub" id="f-sub"></div>
-    <div class="f-note">Official figure: the benchmark terminal's final
-      <span style="font-family:var(--mono)">submitted_parallel_tps</span> line.</div>
   </div>
 
 <script>
 (function () {
   "use strict";
   var qs = new URLSearchParams(location.search);
+  var isFile = location.protocol === "file:";
   var RPC = qs.get("rpc") || "http://127.0.0.1:8080";
-  var STARTER = qs.get("start") ||
-    (location.protocol === "file:" ? "http://127.0.0.1:7777/start" : "/start");
+  var STARTER = qs.get("start") || (isFile ? "http://127.0.0.1:7777/start" : "/start");
+  var STATS = qs.get("stats") || (isFile ? "http://127.0.0.1:7777/stats" : "/stats");
   var DURATION_S = parseInt(qs.get("duration") || "60", 10);
-  document.getElementById("rpc-label").textContent = RPC;
 
   // Ethereum mainnet ~1.2M transactions per day (public explorer figures).
   var ETH_TXS_PER_DAY = 1200000;
   var POLL_MS = 200;
-  var LIVE_ENTER_BPS = 50;   // blocks/s to consider the load running
+  var LIVE_ENTER_BPS = 50;   // blocks/s fallback threshold when /stats is unavailable
   var LIVE_EXIT_BPS = 20;    // below this (after being live) the run is over
   var EXIT_GRACE_MS = 2500;  // rate must stay low this long to finish
   var MIN_LIVE_MS = 8000;    // ignore early dips right after start
 
-  var state = "waiting";     // waiting | live | done | lost
+  var state = "waiting";     // waiting | live | done
   var lastBlock = null, lastPollAt = null;
   var txsPerBlock = 0;       // EMA
-  var cumTxs = 0;            // integrated during live
+  var gasPerBlock = 0;       // EMA
+  var cumTxs = 0;            // exact (from /stats) or integrated estimate
   var dispTxs = 0;           // animated display value
   var rate = 0;              // txs/s EMA (display)
+  var gasRate = 0;           // gas/s (derived)
   var bps = 0;               // blocks/s EMA
   var liveStartAt = null, lowSince = null, peakTps = 0;
-  var liveStartBlock = null;
   var sparkData = [];        // [t, tps]
   var everConnected = false;
+  var lastStats = null;      // last /stats payload seen
+  var lastSubmitted = null, lastSubmittedAt = null;
 
   function fmt(n) { return Math.round(n).toLocaleString("en-US"); }
 
@@ -337,29 +339,34 @@
     document.getElementById("phase-text").textContent = text;
   }
 
-  function rpc(bodies) {
+  function fetchRpc() {
     return fetch(RPC, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(bodies),
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        method: "eth_getBlockByNumber", params: ["latest", false],
+      }),
     }).then(function (r) { return r.json(); });
   }
 
-  // ---- start gate ----
+  function fetchStats() {
+    return fetch(STATS).then(function (r) { return r.json(); });
+  }
+
+  // ---- start gate: the overlay stays up until the run is actually LIVE, so the
+  // audience never sees an idle zeroed dashboard between click and ignition. ----
   var startBtn = document.getElementById("start-btn");
   startBtn.addEventListener("click", function () {
     startBtn.disabled = true;
-    startBtn.textContent = "Starting…";
-    fetch(STARTER, { method: "GET" }).catch(function () {
-      // No starter helper (running without the gate): just watch for the load.
-    }).finally(function () {
-      document.getElementById("gate-overlay").classList.add("hidden");
-      setPhase("waiting", "waiting for load");
-    });
+    startBtn.textContent = "Igniting…";
+    document.getElementById("gate-status").textContent = "load starting";
+    fetch(STARTER).catch(function () { /* no gate helper: just watch for the load */ });
   });
 
   function gateStatus() {
     var el = document.getElementById("gate-status");
+    if (startBtn.disabled) return; // "load starting" owns the line now
     if (everConnected) {
       el.textContent = "node ready";
       el.className = "ready";
@@ -369,92 +376,122 @@
     }
   }
 
+  function goLive(now) {
+    state = "live";
+    document.body.classList.add("live");
+    document.getElementById("gate-overlay").classList.add("hidden");
+    liveStartAt = now;
+    cumTxs = 0;
+    dispTxs = 0;
+    peakTps = 0;
+    sparkData = [];
+    setPhase("live", "live");
+  }
+
   function poll() {
-    rpc([
-      { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] },
-      { jsonrpc: "2.0", id: 2, method: "eth_getBlockTransactionCountByNumber", params: ["latest"] },
-    ]).then(function (res) {
+    Promise.allSettled([fetchRpc(), fetchStats()]).then(function (results) {
+      var rpcRes = results[0].status === "fulfilled" ? results[0].value : null;
+      var stats = results[1].status === "fulfilled" ? results[1].value : null;
+      var now = performance.now();
+
+      if (stats) {
+        lastStats = stats;
+        if (stats.duration_s) DURATION_S = stats.duration_s;
+        var acc = document.getElementById("accounts");
+        if (stats.wallets) acc.textContent = fmt(stats.wallets);
+      }
+
+      if (!rpcRes || !rpcRes.result) {
+        // Node unreachable. Near/past the planned end of a live run this IS the ending:
+        // the benchmark finishes, verifies receipts, and shuts the node down.
+        if (state === "live" && now - liveStartAt > (DURATION_S - 5) * 1000) {
+          finish(now);
+          return;
+        }
+        if (state !== "done") {
+          setPhase(everConnected ? "lost" : "waiting",
+                   everConnected ? "connection lost — retrying" : "waiting for node");
+          gateStatus();
+          setTimeout(poll, 700);
+        }
+        return;
+      }
+
       if (!everConnected) {
         everConnected = true;
         if (state === "waiting") setPhase("waiting", "node up — waiting for load");
       }
       gateStatus();
-      var byId = {};
-      res.forEach(function (e) { byId[e.id] = e; });
-      var bn = parseInt(byId[1].result, 16);
-      var txc = parseInt(byId[2].result, 16) || 0;
-      var now = performance.now();
+
+      var blk = rpcRes.result;
+      var bn = parseInt(blk.number, 16);
+      var txc = (blk.transactions || []).length;
+      var gas = parseInt(blk.gasUsed || "0x0", 16);
 
       if (lastBlock !== null && lastPollAt !== null) {
         var dt = (now - lastPollAt) / 1000;
         var dBlocks = Math.max(0, bn - lastBlock);
-        var instBps = dBlocks / dt;
-        bps = bps * 0.8 + instBps * 0.2;
+        bps = bps * 0.8 + (dBlocks / dt) * 0.2;
         if (txc > 0) txsPerBlock = txsPerBlock === 0 ? txc : txsPerBlock * 0.8 + txc * 0.2;
-        var instTps = dBlocks * (txsPerBlock || txc) / dt;
-        rate = rate * 0.75 + instTps * 0.25;
+        if (gas > 0) gasPerBlock = gasPerBlock === 0 ? gas : gasPerBlock * 0.8 + gas * 0.2;
+
+        // Rate: prefer the exact submitted counter from /stats.
+        if (stats && typeof stats.submitted === "number" && lastSubmitted !== null) {
+          var dSub = Math.max(0, stats.submitted - lastSubmitted);
+          var sdt = (now - lastSubmittedAt) / 1000;
+          rate = rate * 0.75 + (dSub / sdt) * 0.25;
+        } else {
+          rate = rate * 0.75 + (dBlocks * (txsPerBlock || txc) / dt) * 0.25;
+        }
+        gasRate = bps * gasPerBlock;
 
         if (state === "live") {
-          cumTxs += dBlocks * (txsPerBlock || txc);
+          cumTxs = stats && typeof stats.submitted === "number"
+            ? stats.submitted
+            : cumTxs + dBlocks * (txsPerBlock || txc);
           if (rate > peakTps) peakTps = rate;
           sparkData.push([now, rate]);
           while (sparkData.length && now - sparkData[0][0] > 60000) sparkData.shift();
 
           if (bps < LIVE_EXIT_BPS && now - liveStartAt > MIN_LIVE_MS) {
             if (lowSince === null) lowSince = now;
-            if (now - lowSince > EXIT_GRACE_MS) finish(now, bn);
+            if (now - lowSince > EXIT_GRACE_MS) finish(now);
           } else {
             lowSince = null;
           }
-        } else if (state === "waiting" && instBps > LIVE_ENTER_BPS) {
-          state = "live";
-          document.body.classList.add("live");
-          document.getElementById("gate-overlay").classList.add("hidden");
-          liveStartAt = now;
-          liveStartBlock = bn;
-          cumTxs = dBlocks * (txsPerBlock || txc);
-          dispTxs = 0;
-          peakTps = 0;
-          sparkData = [];
-          setPhase("live", "live");
+        } else if (state === "waiting") {
+          var submittedLive = stats && typeof stats.submitted === "number" && stats.submitted > 1000;
+          if (submittedLive || dBlocks / dt > LIVE_ENTER_BPS) goLive(now);
         }
+      }
+      if (stats && typeof stats.submitted === "number") {
+        lastSubmitted = stats.submitted;
+        lastSubmittedAt = now;
       }
       lastBlock = bn;
       lastPollAt = now;
       document.getElementById("height").textContent = fmt(bn);
       if (state !== "done") setTimeout(poll, POLL_MS);
-    }).catch(function () {
-      if (state === "done") return;
-      var now = performance.now();
-      // Near or past the planned end of a live run, the node going away IS the ending:
-      // the benchmark finishes, confirms receipts, and shuts the node down — often faster
-      // than the rate-collapse grace period. Cut to the finale instead of a red badge.
-      if (state === "live" && now - liveStartAt > (DURATION_S - 5) * 1000) {
-        finish(now, lastBlock || 0);
-        return;
-      }
-      if (everConnected) {
-        setPhase("lost", "connection lost — retrying");
-      } else {
-        // Never connected yet: normal before the benchmark starts — stay calm.
-        setPhase("waiting", "waiting for node");
-      }
-      gateStatus();
-      setTimeout(poll, 700);
     });
   }
 
-  function finish(now, bn) {
+  function finish(now) {
+    if (state === "done") return;
     state = "done";
     document.body.classList.remove("live");
     var secs = Math.min((now - liveStartAt) / 1000, DURATION_S);
-    var avg = cumTxs / secs;
+    var total = lastStats && lastStats.submitted ? lastStats.submitted : cumTxs;
+    var avg = total / secs;
     setPhase("done", "run complete");
-    document.getElementById("f-num").textContent = fmt(cumTxs);
+    document.getElementById("f-num").textContent = fmt(total);
+    var receiptLine = lastStats && lastStats.receipts > 0
+      ? "<br><b>" + fmt(lastStats.receipts) + "</b> account chains receipt-verified."
+      : "";
     document.getElementById("f-sub").innerHTML =
       "transactions in <b>" + secs.toFixed(0) + " seconds</b> — average <b>" + fmt(avg) +
       "</b> tx/s, peak <b>" + fmt(peakTps) + "</b> tx/s.<br>&asymp; <b>" +
-      (cumTxs / ETH_TXS_PER_DAY).toFixed(1) + " days</b> of Ethereum mainnet traffic, on one machine.";
+      (total / ETH_TXS_PER_DAY).toFixed(1) + " days</b> of Ethereum mainnet traffic, on one machine." +
+      receiptLine;
     document.getElementById("final-overlay").classList.remove("hidden");
   }
 
@@ -465,16 +502,18 @@
     lastFrame = now;
     if (state === "live") {
       dispTxs += rate * dt;
-      // gentle correction toward the integrated truth
+      // gentle correction toward the exact count
       dispTxs += (cumTxs - dispTxs) * Math.min(1, dt * 2);
       var left = Math.max(0, DURATION_S - (now - liveStartAt) / 1000);
       document.getElementById("countdown").textContent = "T−" + Math.ceil(left) + "s";
     } else if (state === "done") {
-      dispTxs = cumTxs;
+      dispTxs = lastStats && lastStats.submitted ? lastStats.submitted : cumTxs;
     }
     document.getElementById("odo").textContent = fmt(dispTxs);
     document.getElementById("tps").textContent = fmt(state === "live" ? rate : 0);
     document.getElementById("bps").textContent = state === "live" ? fmt(bps) : "0";
+    document.getElementById("ggas").textContent =
+      state === "live" ? (gasRate / 1e9).toFixed(1) : "0";
     var days = dispTxs / ETH_TXS_PER_DAY;
     document.getElementById("eth-line").innerHTML = days > 0.05
       ? "&asymp; <b>" + days.toFixed(1) + " days</b> of Ethereum mainnet traffic"

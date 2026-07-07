@@ -1593,6 +1593,11 @@ async fn effective_parallel_impl(
             "DEMO READY — open the dashboard and press Start"
         );
         let server_started = started.clone();
+        let stats_submitted = submitted.clone();
+        let stats_receipts = final_receipts_confirmed.clone();
+        let stats_wallets = num_wallets;
+        let stats_lanes = k;
+        let stats_duration = duration.as_secs();
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else {
@@ -1600,18 +1605,34 @@ async fn effective_parallel_impl(
                 };
                 let started = server_started.clone();
                 let dashboard = dashboard.clone();
+                let stats_submitted = stats_submitted.clone();
+                let stats_receipts = stats_receipts.clone();
                 tokio::spawn(async move {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     let mut buf = [0u8; 2048];
                     let n = sock.read(&mut buf).await.unwrap_or(0);
                     let request = String::from_utf8_lossy(&buf[..n]);
-                    let (status, body): (&str, &str) = if request.starts_with("GET /start") {
+                    let (status, body): (&str, String) = if request.starts_with("GET /start") {
                         started.notify_one();
-                        ("200 OK", "started")
+                        ("200 OK", "started".to_string())
+                    } else if request.starts_with("GET /stats") {
+                        // Exact live counters straight from the load generator — the
+                        // dashboard prefers these over block-derived estimates.
+                        (
+                            "200 OK",
+                            format!(
+                                "{{\"submitted\":{},\"receipts\":{},\"wallets\":{},\"lanes\":{},\"duration_s\":{}}}",
+                                stats_submitted.load(Ordering::Relaxed),
+                                stats_receipts.load(Ordering::Relaxed),
+                                stats_wallets,
+                                stats_lanes,
+                                stats_duration,
+                            ),
+                        )
                     } else if request.starts_with("GET / ") || request.starts_with("GET /?") {
-                        ("200 OK", &dashboard)
+                        ("200 OK", dashboard.to_string())
                     } else {
-                        ("404 Not Found", "not found")
+                        ("404 Not Found", "not found".to_string())
                     };
                     let header = format!(
                         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\n\
