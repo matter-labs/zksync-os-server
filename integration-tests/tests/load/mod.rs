@@ -1636,6 +1636,7 @@ async fn effective_parallel_impl(
                     };
                     let header = format!(
                         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\n\
+                         Access-Control-Allow-Origin: *\r\n\
                          Content-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
                     );
