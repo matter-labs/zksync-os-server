@@ -27,6 +27,49 @@ use zksync_os_storage_api::{BlockContext, ViewState};
 /// equally large `VM_PIPELINE_DEPTH` in `execute_block_in_vm`, otherwise the in-flight cap dominates.
 const VM_CHANNEL_CAPACITY: usize = 30_000;
 
+/// Bench/demo-only VM-busy accounting, gated by `VM_EXECUTE_PROFILE` (deliberately NOT
+/// `PARALLEL_PRODUCER_PROFILE`, which also enables per-block/per-WAL ERROR log spam).
+/// Accumulated once per block — at bench block rates the cost is unmeasurable. All parallel
+/// producer threads aggregate into the same statics.
+static VM_EXECUTE_BUSY_MICROS: AtomicU64 = AtomicU64::new(0);
+static VM_EXECUTE_TXS: AtomicU64 = AtomicU64::new(0);
+
+fn vm_execute_profile_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("VM_EXECUTE_PROFILE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
+
+/// `(avg VM-worker-busy micros per tx, total txs)` since start/reset; `None` when
+/// `VM_EXECUTE_PROFILE` is off or no block has completed yet.
+///
+/// "Busy" is the VM worker's wall time minus the time it spent blocked in
+/// `ChannelTxSource::get_next_tx` waiting to be fed — i.e. per-tx execution plus the block's
+/// amortized VM-init/seal cost, excluding all lane/queue gaps by construction. The
+/// denominator includes VM-rejected txs (anomalies on the bench path). Sum and count are
+/// separate relaxed atomics, so a snapshot under load can be torn by a block — fine for a
+/// live readout.
+pub fn vm_execute_snapshot() -> Option<(f64, u64)> {
+    let txs = VM_EXECUTE_TXS.load(Ordering::Relaxed);
+    if txs == 0 {
+        return None;
+    }
+    Some((
+        VM_EXECUTE_BUSY_MICROS.load(Ordering::Relaxed) as f64 / txs as f64,
+        txs,
+    ))
+}
+
+/// Bench/demo-only: zero the VM-busy accumulators (e.g. when the demo Start gate releases)
+/// so setup-phase blocks don't pollute the averages.
+pub fn vm_execute_reset() {
+    VM_EXECUTE_BUSY_MICROS.store(0, Ordering::Relaxed);
+    VM_EXECUTE_TXS.store(0, Ordering::Relaxed);
+}
+
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
 /// (as opposed to pull interface of `run_block` in zksync-os)
 /// consider changing that interface on zksync-os side, which will make this file redundant
@@ -54,11 +97,13 @@ impl VmWrapper {
         let (res_sender, res_receiver) = channel(VM_CHANNEL_CAPACITY);
 
         // Wrap the channels in the traits run_block expects:
+        let idle_for_stats = vm_idle_micros.clone();
         let tx_source = ChannelTxSource::new(tx_receiver, vm_idle_micros);
         let tx_callback = ChannelTxResultCallback::new(res_sender);
 
         // Spawn the blocking run_block(...) call.
         let join_handle = spawn_blocking(move || {
+            let vm_started_at = Instant::now();
             let (recording_state, recording_handle) = ReadRecordingState::new(state_view.clone());
             let block_output = zksync_os_multivm::run_block(
                 context,
@@ -69,6 +114,16 @@ impl VmWrapper {
                 &mut tracer,
                 &mut validator,
             )?;
+            if vm_execute_profile_enabled() {
+                let txs = block_output.tx_results.len() as u64;
+                if txs > 0 {
+                    let wall_us = vm_started_at.elapsed().as_micros() as u64;
+                    let idle_us = idle_for_stats.load(Ordering::Relaxed);
+                    VM_EXECUTE_BUSY_MICROS
+                        .fetch_add(wall_us.saturating_sub(idle_us), Ordering::Relaxed);
+                    VM_EXECUTE_TXS.fetch_add(txs, Ordering::Relaxed);
+                }
+            }
 
             let recording = recording_handle.into_recording();
             Ok(BlockOutputWithReads::new(

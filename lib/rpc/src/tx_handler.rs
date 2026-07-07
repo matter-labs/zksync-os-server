@@ -29,7 +29,17 @@ const SEND_RAW_TRANSACTION_SYNC_MAX_TIMEOUT: Duration = Duration::from_secs(30);
 /// JSON-RPC error code used by EIP-7966 to signal a sync-send timeout.
 const EIP_7966_TIMEOUT_CODE: i64 = 4;
 
-const ADMISSION_PROFILE_LOG_EVERY: u64 = 100_000;
+/// Counts samples, not admissions: 100k samples ≈ 6.4M txs between log lines.
+const ADMISSION_PROFILE_LOG_EVERY: u64 = 1_000_000;
+
+/// Record only every Nth admission per worker thread. Averages stay unbiased (admission
+/// latencies carry no period-64 structure) while an unsampled admission costs one
+/// thread-local increment + branch — no shared-cacheline RMWs, no clock reads.
+const ADMISSION_SAMPLE_EVERY: u64 = 64;
+
+thread_local! {
+    static ADMISSION_SAMPLE_COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 static ADMISSION_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
 static ADMISSION_PROFILE_STATS: AdmissionProfileStats = AdmissionProfileStats::new();
@@ -37,13 +47,17 @@ static ADMISSION_PROFILE_STATS: AdmissionProfileStats = AdmissionProfileStats::n
 struct AdmissionProfileStats {
     total: AtomicU64,
     direct: AtomicU64,
+    // Sampled-guard concurrency (≈ actual admissions in flight / ADMISSION_SAMPLE_EVERY);
+    // log-only diagnostics, not exported.
     in_flight: AtomicU64,
     max_in_flight: AtomicU64,
-    decode_micros: AtomicU64,
-    recover_micros: AtomicU64,
-    hash_signer_micros: AtomicU64,
-    lane_send_micros: AtomicU64,
-    total_micros: AtomicU64,
+    // Nanos, not micros: decode/hash_signer run ~1µs, so per-sample micros truncation
+    // would bias them down by up to ~50%. u64 nanos holds ~584 years of accumulated time.
+    decode_nanos: AtomicU64,
+    recover_nanos: AtomicU64,
+    hash_signer_nanos: AtomicU64,
+    lane_send_nanos: AtomicU64,
+    total_nanos: AtomicU64,
 }
 
 impl AdmissionProfileStats {
@@ -53,11 +67,11 @@ impl AdmissionProfileStats {
             direct: AtomicU64::new(0),
             in_flight: AtomicU64::new(0),
             max_in_flight: AtomicU64::new(0),
-            decode_micros: AtomicU64::new(0),
-            recover_micros: AtomicU64::new(0),
-            hash_signer_micros: AtomicU64::new(0),
-            lane_send_micros: AtomicU64::new(0),
-            total_micros: AtomicU64::new(0),
+            decode_nanos: AtomicU64::new(0),
+            recover_nanos: AtomicU64::new(0),
+            hash_signer_nanos: AtomicU64::new(0),
+            lane_send_nanos: AtomicU64::new(0),
+            total_nanos: AtomicU64::new(0),
         }
     }
 }
@@ -89,6 +103,16 @@ impl AdmissionProfileGuard {
         if !admission_profile_enabled() {
             return None;
         }
+        // Sampling decision comes first so an unsampled admission pays no atomics and no
+        // clock reads (the per-stage timers below are also gated on the guard's presence).
+        let sampled = ADMISSION_SAMPLE_COUNTER.with(|c| {
+            let n = c.get().wrapping_add(1);
+            c.set(n);
+            n % ADMISSION_SAMPLE_EVERY == 0
+        });
+        if !sampled {
+            return None;
+        }
         let in_flight = ADMISSION_PROFILE_STATS
             .in_flight
             .fetch_add(1, Ordering::Relaxed)
@@ -108,20 +132,20 @@ impl AdmissionProfileGuard {
         direct: bool,
     ) {
         ADMISSION_PROFILE_STATS
-            .decode_micros
-            .fetch_add(decode.as_micros() as u64, Ordering::Relaxed);
+            .decode_nanos
+            .fetch_add(decode.as_nanos() as u64, Ordering::Relaxed);
         ADMISSION_PROFILE_STATS
-            .recover_micros
-            .fetch_add(recover.as_micros() as u64, Ordering::Relaxed);
+            .recover_nanos
+            .fetch_add(recover.as_nanos() as u64, Ordering::Relaxed);
         ADMISSION_PROFILE_STATS
-            .hash_signer_micros
-            .fetch_add(hash_signer.as_micros() as u64, Ordering::Relaxed);
+            .hash_signer_nanos
+            .fetch_add(hash_signer.as_nanos() as u64, Ordering::Relaxed);
         ADMISSION_PROFILE_STATS
-            .lane_send_micros
-            .fetch_add(lane_send.as_micros() as u64, Ordering::Relaxed);
+            .lane_send_nanos
+            .fetch_add(lane_send.as_nanos() as u64, Ordering::Relaxed);
         ADMISSION_PROFILE_STATS
-            .total_micros
-            .fetch_add(self.start.elapsed().as_micros() as u64, Ordering::Relaxed);
+            .total_nanos
+            .fetch_add(self.start.elapsed().as_nanos() as u64, Ordering::Relaxed);
         if direct {
             ADMISSION_PROFILE_STATS
                 .direct
@@ -145,11 +169,22 @@ impl Drop for AdmissionProfileGuard {
     }
 }
 
-fn avg_duration(total_micros: u64, count: u64) -> Duration {
+/// Stage timers only tick for sampled admissions — unsampled txs skip the clock reads too.
+#[inline]
+fn stage_start(profile: &Option<AdmissionProfileGuard>) -> Option<Instant> {
+    profile.as_ref().map(|_| Instant::now())
+}
+
+#[inline]
+fn stage_elapsed(started_at: Option<Instant>) -> Duration {
+    started_at.map(|t| t.elapsed()).unwrap_or_default()
+}
+
+fn avg_duration(total_nanos: u64, count: u64) -> Duration {
     if count == 0 {
         Duration::ZERO
     } else {
-        Duration::from_micros(total_micros / count)
+        Duration::from_nanos(total_nanos / count)
     }
 }
 
@@ -160,31 +195,29 @@ fn log_admission_profile(total: u64) {
         .max_in_flight
         .load(Ordering::Relaxed);
     let avg_decode = avg_duration(
-        ADMISSION_PROFILE_STATS
-            .decode_micros
-            .load(Ordering::Relaxed),
+        ADMISSION_PROFILE_STATS.decode_nanos.load(Ordering::Relaxed),
         total,
     );
     let avg_recover = avg_duration(
         ADMISSION_PROFILE_STATS
-            .recover_micros
+            .recover_nanos
             .load(Ordering::Relaxed),
         total,
     );
     let avg_hash_signer = avg_duration(
         ADMISSION_PROFILE_STATS
-            .hash_signer_micros
+            .hash_signer_nanos
             .load(Ordering::Relaxed),
         total,
     );
     let avg_lane_send = avg_duration(
         ADMISSION_PROFILE_STATS
-            .lane_send_micros
+            .lane_send_nanos
             .load(Ordering::Relaxed),
         direct,
     );
     let avg_total = avg_duration(
-        ADMISSION_PROFILE_STATS.total_micros.load(Ordering::Relaxed),
+        ADMISSION_PROFILE_STATS.total_nanos.load(Ordering::Relaxed),
         total,
     );
     tracing::error!(
@@ -199,6 +232,78 @@ fn log_admission_profile(total: u64) {
         ?avg_total,
         "rpc admission profile"
     );
+}
+
+/// Point-in-time averages of the sampled admission-stage timings (see
+/// [`admission_profile_snapshot`]).
+#[derive(Debug, Clone, Copy)]
+pub struct AdmissionSnapshot {
+    /// Sampled admissions recorded (1 per `ADMISSION_SAMPLE_EVERY` per worker thread).
+    pub samples: u64,
+    /// Sampled admissions that took the direct-lane path (denominator of `avg_lane_send_us`).
+    pub direct_samples: u64,
+    pub avg_decode_us: f64,
+    pub avg_recover_us: f64,
+    pub avg_hash_signer_us: f64,
+    pub avg_lane_send_us: f64,
+    pub avg_total_us: f64,
+}
+
+/// Bench/demo-only: averages of the `RPC_ADMISSION_PROFILE` accumulators. `None` when
+/// profiling is off or nothing has been sampled yet. Sums and counts are separate relaxed
+/// atomics, so a snapshot taken under load can be torn by a sample or two — fine for a
+/// live readout, not for accounting.
+pub fn admission_profile_snapshot() -> Option<AdmissionSnapshot> {
+    if !admission_profile_enabled() {
+        return None;
+    }
+    let samples = ADMISSION_PROFILE_STATS.total.load(Ordering::Relaxed);
+    if samples == 0 {
+        return None;
+    }
+    let direct_samples = ADMISSION_PROFILE_STATS.direct.load(Ordering::Relaxed);
+    let avg_us = |nanos: &AtomicU64, count: u64| {
+        if count == 0 {
+            0.0
+        } else {
+            nanos.load(Ordering::Relaxed) as f64 / count as f64 / 1_000.0
+        }
+    };
+    Some(AdmissionSnapshot {
+        samples,
+        direct_samples,
+        avg_decode_us: avg_us(&ADMISSION_PROFILE_STATS.decode_nanos, samples),
+        avg_recover_us: avg_us(&ADMISSION_PROFILE_STATS.recover_nanos, samples),
+        avg_hash_signer_us: avg_us(&ADMISSION_PROFILE_STATS.hash_signer_nanos, samples),
+        avg_lane_send_us: avg_us(&ADMISSION_PROFILE_STATS.lane_send_nanos, direct_samples),
+        avg_total_us: avg_us(&ADMISSION_PROFILE_STATS.total_nanos, samples),
+    })
+}
+
+/// Bench/demo-only: zero the admission-profile accumulators (e.g. when the demo Start gate
+/// releases) so setup-phase traffic doesn't pollute the averages. Fields are cleared one by
+/// one while traffic may be in flight — a transient few-sample skew, nothing more.
+pub fn admission_profile_reset() {
+    ADMISSION_PROFILE_STATS.total.store(0, Ordering::Relaxed);
+    ADMISSION_PROFILE_STATS.direct.store(0, Ordering::Relaxed);
+    ADMISSION_PROFILE_STATS
+        .max_in_flight
+        .store(0, Ordering::Relaxed);
+    ADMISSION_PROFILE_STATS
+        .decode_nanos
+        .store(0, Ordering::Relaxed);
+    ADMISSION_PROFILE_STATS
+        .recover_nanos
+        .store(0, Ordering::Relaxed);
+    ADMISSION_PROFILE_STATS
+        .hash_signer_nanos
+        .store(0, Ordering::Relaxed);
+    ADMISSION_PROFILE_STATS
+        .lane_send_nanos
+        .store(0, Ordering::Relaxed);
+    ADMISSION_PROFILE_STATS
+        .total_nanos
+        .store(0, Ordering::Relaxed);
 }
 
 /// Test/bench-only: routes RPC-admitted transactions straight into the sequencer's parallel
@@ -295,22 +400,22 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             ));
         }
 
-        let decode_started_at = Instant::now();
+        let decode_started_at = stage_start(&profile);
         let transaction = L2Envelope::decode_2718(&mut tx_bytes.as_ref())
             .map_err(|_| EthSendRawTransactionError::FailedToDecodeSignedTransaction)?;
-        let decode_elapsed = decode_started_at.elapsed();
-        let recover_started_at = Instant::now();
+        let decode_elapsed = stage_elapsed(decode_started_at);
+        let recover_started_at = stage_start(&profile);
         let l2_tx: L2Transaction = transaction
             .try_into_recovered()
             .map_err(|_| EthSendRawTransactionError::InvalidTransactionSignature)?;
-        let recover_elapsed = recover_started_at.elapsed();
-        let hash_signer_started_at = Instant::now();
+        let recover_elapsed = stage_elapsed(recover_started_at);
+        let hash_signer_started_at = stage_start(&profile);
         let hash = *l2_tx.hash();
         let signer = l2_tx.signer();
         if self.config.l2_signer_blacklist.contains(&signer) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
         }
-        let hash_signer_elapsed = hash_signer_started_at.elapsed();
+        let hash_signer_elapsed = stage_elapsed(hash_signer_started_at);
 
         // Test/bench-only: with the direct-injection lane router active, shard by sender into the
         // sequencer's parallel lanes and skip the mempool entirely (no nonce/balance/tip ordering).
@@ -320,12 +425,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         {
             let lane = router.lane_for(&signer);
             let zk_tx: ZkTransaction = l2_tx.into();
-            let lane_send_started_at = Instant::now();
+            let lane_send_started_at = stage_start(&profile);
             router.lanes[lane]
                 .send(zk_tx)
                 .await
                 .map_err(|_| EthSendRawTransactionError::DirectLaneClosed)?;
-            let lane_send_elapsed = lane_send_started_at.elapsed();
+            let lane_send_elapsed = stage_elapsed(lane_send_started_at);
             if let Some(profile) = &profile {
                 profile.record(
                     decode_elapsed,

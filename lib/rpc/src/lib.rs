@@ -29,7 +29,9 @@ mod trace_filter;
 mod tx_forwarder;
 pub use tx_forwarder::{TxForwardEndpoint, TxForwarder};
 mod tx_handler;
-pub use tx_handler::DirectLaneRouter;
+pub use tx_handler::{
+    AdmissionSnapshot, DirectLaneRouter, admission_profile_reset, admission_profile_snapshot,
+};
 mod txpool_impl;
 mod types;
 mod unstable_impl;

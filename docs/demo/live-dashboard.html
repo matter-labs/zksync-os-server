@@ -86,6 +86,113 @@
   /* Auto margins center the stage but collapse to zero when space runs out —
      nothing ever clips off the top of the viewport. */
   .stage { margin: auto 0; min-height: 0; }
+  .stage-top { display: flex; align-items: stretch; gap: clamp(20px, 3vw, 48px); }
+  .stage-main { flex: 1; min-width: 0; align-self: center; }
+
+  /* ---- transaction journey stepper ---- */
+  .journey {
+    flex: none;
+    width: clamp(300px, 27vw, 430px);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 20px 12px;
+    display: flex;
+    flex-direction: column;
+  }
+  @media (max-width: 1100px) { .journey { display: none; } }
+  .j-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .j-mode {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  body.live .j-mode { color: var(--green); }
+  .j-node { display: flex; align-items: center; gap: 10px; flex: none; }
+  .j-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex: none;
+    transition: background 0.4s, box-shadow 0.4s;
+  }
+  body.live .j-dot, body.done .j-dot {
+    background: var(--blue);
+    box-shadow: 0 0 10px rgba(63, 143, 232, 0.7);
+  }
+  .j-name { font-size: clamp(14px, 1.2vw, 17px); font-weight: 650; white-space: nowrap; }
+  .j-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  /* Connector: a vertical track under the node dot; while live, a pulse runs down it. */
+  .j-link {
+    position: relative;
+    flex: 1;
+    min-height: 26px;
+    display: flex;
+    align-items: center;
+    margin: 3px 0;
+  }
+  .j-link::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--line);
+    border-radius: 1px;
+  }
+  .j-link::after {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--blue);
+    box-shadow: 0 0 8px rgba(63, 143, 232, 0.9);
+    opacity: 0;
+  }
+  /* All children are divs: header(1), then nodes and links alternate — links land on 3/5/7/9.
+     The stagger makes the pulses cascade down the pipeline instead of firing in sync. */
+  body.live .j-link::after { animation: jflow 1.2s linear infinite; }
+  body.live .j-link:nth-child(5)::after { animation-delay: 0.3s; }
+  body.live .j-link:nth-child(7)::after { animation-delay: 0.6s; }
+  body.live .j-link:nth-child(9)::after { animation-delay: 0.9s; }
+  @keyframes jflow {
+    0% { top: 0; opacity: 0; }
+    18% { opacity: 1; }
+    82% { opacity: 1; }
+    100% { top: calc(100% - 8px); opacity: 0; }
+  }
+  .j-lat {
+    margin-left: 24px;
+    font-family: var(--mono);
+    font-size: clamp(12px, 1vw, 14px);
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .j-lat b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .j-total {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: clamp(13px, 1.1vw, 16px);
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .j-total b { color: var(--ink); font-variant-numeric: tabular-nums; }
 
   .odo-label {
     font-family: var(--mono);
@@ -285,9 +392,29 @@
 
   <main>
     <div class="stage">
-      <div class="odo-label">ERC-20 transfers processed</div>
-      <div class="odometer" id="odo">0</div>
-      <div class="eth-line" id="eth-line">&nbsp;</div>
+      <div class="stage-top">
+        <div class="stage-main">
+          <div class="odo-label">ERC-20 transfers processed</div>
+          <div class="odometer" id="odo">0</div>
+          <div class="eth-line" id="eth-line">&nbsp;</div>
+        </div>
+        <div class="journey">
+          <div class="j-head">
+            <span class="k">Transaction journey</span>
+            <span class="j-mode" id="j-mode">awaiting run</span>
+          </div>
+          <div class="j-node"><span class="j-dot"></span><span class="j-name">Submitted</span><span class="j-sub">JSON-RPC</span></div>
+          <div class="j-link"><span class="j-lat"><b id="j-verify">—</b> signature verified</span></div>
+          <div class="j-node"><span class="j-dot"></span><span class="j-name">Verified</span></div>
+          <div class="j-link"><span class="j-lat"><b id="j-route">—</b> routed to a lane</span></div>
+          <div class="j-node"><span class="j-dot"></span><span class="j-name">In lane</span><span class="j-sub">ZKsync OS VM</span></div>
+          <div class="j-link"><span class="j-lat"><b id="j-vm">—</b> executed</span></div>
+          <div class="j-node"><span class="j-dot"></span><span class="j-name">Executed</span></div>
+          <div class="j-link"><span class="j-lat"><b id="j-seal">—</b> sealed into a block</span></div>
+          <div class="j-node"><span class="j-dot"></span><span class="j-name">In block</span><span class="j-sub" id="j-block"></span></div>
+          <div class="j-total">&asymp; <b id="j-total">—</b> end-to-end</div>
+        </div>
+      </div>
 
       <div class="row">
         <div class="groups">
@@ -363,7 +490,71 @@
   var lastStats = null;      // last /stats payload seen
   var lastSubmitted = null, lastSubmittedAt = null;
 
+  // ---- transaction-journey latencies (µs), smoothed windowed averages ----
+  var jVerify = 0, jRoute = 0, jVm = 0;
+  var jPrev = null;          // previous cumulative (avg, count) pairs for windowing
+
   function fmt(n) { return Math.round(n).toLocaleString("en-US"); }
+
+  function latStr(us) {
+    if (us >= 1000) return (us / 1000).toFixed(1) + " ms";
+    if (us >= 100) return Math.round(us) + " µs";
+    return us.toFixed(1) + " µs";
+  }
+
+  // The /stats averages are cumulative since the run started; differencing successive
+  // (avg, count) pairs recovers the average over just the last poll window, so the panel
+  // breathes with the run instead of flatlining. Torn reads can produce garbage for one
+  // window — the caller drops non-positive results and the EMA absorbs the rest.
+  function windowedAvg(avg2, n2, avg1, n1) {
+    var dn = n2 - n1;
+    if (dn <= 0) return null;
+    return (avg2 * n2 - avg1 * n1) / dn;
+  }
+
+  function updateJourney(stats) {
+    if (!stats) return;
+    var ema = function (cur, w) { return cur > 0 ? cur * 0.7 + w * 0.3 : w; };
+    if (typeof stats.verify_us === "number" && stats.adm_samples > 0) {
+      if (jPrev && stats.adm_samples > jPrev.an) {
+        var wv = windowedAvg(stats.verify_us, stats.adm_samples, jPrev.v, jPrev.an);
+        var wr = windowedAvg(stats.route_us, stats.adm_samples, jPrev.r, jPrev.an);
+        if (wv !== null && wv > 0) jVerify = ema(jVerify, wv);
+        if (wr !== null && wr > 0) jRoute = ema(jRoute, wr);
+      } else if (jVerify === 0) {
+        jVerify = stats.verify_us;
+        jRoute = stats.route_us;
+      }
+    }
+    if (typeof stats.vm_us === "number" && stats.vm_txs > 0) {
+      if (jPrev && stats.vm_txs > jPrev.mn) {
+        var wm = windowedAvg(stats.vm_us, stats.vm_txs, jPrev.m, jPrev.mn);
+        if (wm !== null && wm > 0) jVm = ema(jVm, wm);
+      } else if (jVm === 0) {
+        jVm = stats.vm_us;
+      }
+    }
+    jPrev = {
+      v: stats.verify_us || 0, r: stats.route_us || 0, an: stats.adm_samples || 0,
+      m: stats.vm_us || 0, mn: stats.vm_txs || 0,
+    };
+  }
+
+  function renderJourney() {
+    var active = state === "live" || state === "done";
+    var useBps = state === "done" ? finalBps : bps;
+    // A tx submitted at a random instant waits ~half the block cadence to be sealed.
+    var sealUs = useBps > 0.5 ? (1000 / useBps / 2) * 1000 : 0;
+    var put = function (id, us) {
+      document.getElementById(id).textContent = active && us > 0 ? latStr(us) : "—";
+    };
+    put("j-verify", jVerify);
+    put("j-route", jRoute);
+    put("j-vm", jVm);
+    put("j-seal", sealUs);
+    var total = jVerify + jRoute + jVm + sealUs;
+    document.getElementById("j-total").textContent = active && total > 0 ? latStr(total) : "—";
+  }
 
   function setPhase(cls, text) {
     var el = document.getElementById("phase");
@@ -420,6 +611,9 @@
     dispTxs = 0;
     peakTps = 0;
     sparkData = [];
+    // Journey counters restart with the run (the server zeroes its accumulators at Start).
+    jVerify = 0; jRoute = 0; jVm = 0; jPrev = null;
+    document.getElementById("j-mode").textContent = "measured live";
     setPhase("live", "live");
   }
 
@@ -507,6 +701,9 @@
       lastBlock = bn;
       lastPollAt = now;
       document.getElementById("height").textContent = fmt(bn);
+      document.getElementById("j-block").textContent = "#" + fmt(bn);
+      if (state === "live") updateJourney(stats);
+      renderJourney();
       if (state !== "done") setTimeout(poll, POLL_MS);
     });
   }
@@ -530,6 +727,18 @@
     finalBps = finalBlocks / finalSecs;
     finalGasRate = cumGas / finalSecs;
     finalGasPerBlock = cumGas / finalBlocks;
+    // Freeze the journey at whole-run averages (the /stats figures are cumulative since
+    // the Start-gate reset, so they ARE the run averages).
+    if (lastStats) {
+      if (lastStats.adm_samples > 0) {
+        jVerify = lastStats.verify_us;
+        jRoute = lastStats.route_us;
+      }
+      if (lastStats.vm_txs > 0) jVm = lastStats.vm_us;
+    }
+    document.body.classList.add("done");
+    document.getElementById("j-mode").textContent = "run average";
+    renderJourney();
     setPhase("done", "run complete");
   }
 

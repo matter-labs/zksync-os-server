@@ -1534,6 +1534,10 @@ async fn effective_parallel_impl(
     let confirmed = Arc::new(AtomicU64::new(0));
     let final_receipts_confirmed = Arc::new(AtomicU64::new(0));
     let submit_latency_micros = Arc::new(AtomicU64::new(0));
+    // Batch rounds behind `submit_latency_micros`: latency/batches is the RTT a tx actually
+    // experiences (every tx in a batch waits the whole batch round trip), while the terminal
+    // summary's latency/submitted is the amortized per-tx share.
+    let submit_batches = Arc::new(AtomicU64::new(0));
     let latency_micros = Arc::new(AtomicU64::new(0));
     let final_receipt_latency_micros = Arc::new(AtomicU64::new(0));
     // Receipts whose heartbeat watcher missed the inclusion (fell back to direct polling); a
@@ -1595,6 +1599,8 @@ async fn effective_parallel_impl(
         let server_started = started.clone();
         let stats_submitted = submitted.clone();
         let stats_receipts = final_receipts_confirmed.clone();
+        let stats_submit_latency = submit_latency_micros.clone();
+        let stats_submit_batches = submit_batches.clone();
         let stats_wallets = num_wallets;
         let stats_lanes = k;
         let stats_duration = duration.as_secs();
@@ -1607,6 +1613,8 @@ async fn effective_parallel_impl(
                 let dashboard = dashboard.clone();
                 let stats_submitted = stats_submitted.clone();
                 let stats_receipts = stats_receipts.clone();
+                let stats_submit_latency = stats_submit_latency.clone();
+                let stats_submit_batches = stats_submit_batches.clone();
                 tokio::spawn(async move {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     let mut buf = [0u8; 2048];
@@ -1617,16 +1625,48 @@ async fn effective_parallel_impl(
                         ("200 OK", "started".to_string())
                     } else if request.starts_with("GET /stats") {
                         // Exact live counters straight from the load generator — the
-                        // dashboard prefers these over block-derived estimates.
+                        // dashboard prefers these over block-derived estimates. The
+                        // per-stage latencies come from the in-process node's profiling
+                        // statics (zeros when the gating env vars are off; the dashboard
+                        // shows "—" for zeros).
+                        let batches = stats_submit_batches.load(Ordering::Relaxed);
+                        let submit_rtt_us = if batches > 0 {
+                            stats_submit_latency.load(Ordering::Relaxed) as f64 / batches as f64
+                        } else {
+                            0.0
+                        };
+                        let (verify_us, route_us, admit_us, adm_samples) =
+                            zksync_os_rpc::admission_profile_snapshot()
+                                .map(|a| {
+                                    (
+                                        a.avg_recover_us,
+                                        a.avg_hash_signer_us + a.avg_lane_send_us,
+                                        a.avg_total_us,
+                                        a.samples,
+                                    )
+                                })
+                                .unwrap_or_default();
+                        let (vm_us, vm_txs) =
+                            zksync_os_sequencer::execution::vm_wrapper::vm_execute_snapshot()
+                                .unwrap_or((0.0, 0));
                         (
                             "200 OK",
                             format!(
-                                "{{\"submitted\":{},\"receipts\":{},\"wallets\":{},\"lanes\":{},\"duration_s\":{}}}",
+                                "{{\"submitted\":{},\"receipts\":{},\"wallets\":{},\"lanes\":{},\"duration_s\":{},\
+                                 \"submit_rtt_us\":{:.1},\"verify_us\":{:.2},\"route_us\":{:.2},\
+                                 \"admit_us\":{:.2},\"adm_samples\":{},\"vm_us\":{:.2},\"vm_txs\":{}}}",
                                 stats_submitted.load(Ordering::Relaxed),
                                 stats_receipts.load(Ordering::Relaxed),
                                 stats_wallets,
                                 stats_lanes,
                                 stats_duration,
+                                submit_rtt_us,
+                                verify_us,
+                                route_us,
+                                admit_us,
+                                adm_samples,
+                                vm_us,
+                                vm_txs,
                             ),
                         )
                     } else if request.starts_with("GET / ") || request.starts_with("GET /?") {
@@ -1646,6 +1686,11 @@ async fn effective_parallel_impl(
             }
         });
         started.notified().await;
+        // Setup traffic (funding, deploy, mints) went through the same admission path and
+        // VmWrapper — zero the profiling accumulators so the journey panel shows run-only
+        // averages.
+        zksync_os_rpc::admission_profile_reset();
+        zksync_os_sequencer::execution::vm_wrapper::vm_execute_reset();
         tracing::error!("start signal received — load begins");
     }
 
@@ -1771,6 +1816,7 @@ async fn effective_parallel_impl(
         let client = clients[chunk_index % clients.len()].clone();
         let submitted = submitted.clone();
         let submit_latency_micros = submit_latency_micros.clone();
+        let submit_batches = submit_batches.clone();
         let sem = sem.clone();
         let confirmed = confirmed.clone();
         let latency_micros = latency_micros.clone();
@@ -1832,6 +1878,7 @@ async fn effective_parallel_impl(
                 }
                 submitted.fetch_add(accepted.len() as u64, Ordering::Relaxed);
                 submit_latency_micros.fetch_add(rtt.as_micros() as u64, Ordering::Relaxed);
+                submit_batches.fetch_add(1, Ordering::Relaxed);
                 if accepted.len() == chunk_len {
                     full_rounds += 1;
                 }

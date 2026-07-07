@@ -40,6 +40,7 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
    LOAD_TEST_L2_RPC_PORT=8080 LOAD_TEST_DEMO_PORT=7777 \
    ERC20_MAX_TX=2000 LOAD_TEST_READER_THREADS=48 \
    LOAD_TEST_HTTP=1 sequencer_parallel_elide_tree_manager=true \
+   RPC_ADMISSION_PROFILE=1 VM_EXECUTE_PROFILE=1 \
    backpressure_default_block_diff_limit=3072 RPC_CALL_METRICS_SAMPLE=64 \
    LOAD_TEST_WAIT_FOR_RECEIPTS=false LOAD_TEST_FINAL_RECEIPTS=true \
    LOAD_TEST_RPC_LISTENERS=128 general_blocks_to_retain_in_memory=1000000 \
@@ -68,6 +69,12 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
 
 Without `LOAD_TEST_DEMO_PORT` the run starts by itself and the dashboard (opened as a
 local file, or via `?rpc=` / `?start=` overrides) just auto-detects the load.
+
+The two profiling envs feed the "transaction journey" panel (per-stage latencies measured
+during the run): `RPC_ADMISSION_PROFILE=1` samples 1-in-64 admissions (signature verify /
+lane routing, ~free), `VM_EXECUTE_PROFILE=1` accounts VM-busy time once per block. Without
+them the panel shows "—" for those stages. Both are server-side: changing them (or any of
+this instrumentation) needs a **rebuild** on the machine, unlike dashboard-only tweaks.
 
 ## Troubleshooting
 
