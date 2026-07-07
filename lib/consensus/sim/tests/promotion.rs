@@ -56,7 +56,7 @@ fn fresh_consensus_over_retained_chain_converges() {
 
             // The promotion storage shape: consensus state gone, chain retained.
             // (clear_consensus_state moves journals+archives to a fresh prefix;
-            // NOT calling reset_env is the whole point of this scenario.)
+            // not calling reset_env is the whole point of this scenario.)
             cluster.crash(4);
             cluster.clear_consensus_state(4);
             cluster.restart(4).await;
@@ -133,7 +133,7 @@ async fn wipe_and_return_across_boundaries(context: commonware_runtime::determin
     cluster.assert_no_blocked_peers().await;
 }
 
-/// Semantic pin for the epoch-crossing promotion shape. Runs each seed ONCE
+/// Semantic pin for the epoch-crossing promotion shape. Runs each seed once
 /// (`fingerprint` directly) instead of through `run_scenario`'s bit-exactness
 /// double-run: this choreography trips the registered teardown determinism gap —
 /// same-seed runs converge to identical chains and identical logs but differ in
@@ -152,7 +152,7 @@ fn fresh_consensus_over_retained_chain_across_epoch_boundaries() {
 }
 
 /// The registered determinism gap, sharpened: the wiped-restart catch-up diverges
-/// the auditor fingerprint WITHOUT a crash landing mid-backfill — the catch-up
+/// the auditor fingerprint without a crash landing mid-backfill — the catch-up
 /// window itself (retired-epoch certificates re-heard through the tip scout,
 /// racing marshal's processed-height floor drops) is enough. Kept ignored as the
 /// on-demand reproducer for the upstream issue
@@ -171,7 +171,7 @@ fn promotion_catch_up_determinism_gap() {
 
 /// Floor-started rebuild, the base shape: wipe a validator's consensus state,
 /// hand its restart a floor finalization from its own retained chain, and it
-/// converges WITHOUT refetching history below the floor — then votes again.
+/// converges without refetching history below the floor — then votes again.
 ///
 /// The floor here plays the role the node's finality store plays in production
 /// (the sim harvests it from a healthy peer's activity log; the caller contract

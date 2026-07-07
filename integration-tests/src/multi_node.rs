@@ -317,7 +317,7 @@ impl MultiNodeTester {
         for _ in 0..total {
             consensus_ports.push(LockedPort::acquire_unused().await?);
         }
-        // Committee-style entries for EVERY node: the validators' feed the config;
+        // Committee-style entries for every node: the validators' feed the config;
         // an observer's is the entry a future committee would list (promotion
         // material, stored on the tester).
         let all_entries: Vec<String> = keys

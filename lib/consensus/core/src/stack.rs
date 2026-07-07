@@ -106,6 +106,21 @@ pub struct StackConfig {
     pub view_retention_timeout: ViewDelta,
     /// Cap on concurrent backfill repairs.
     pub max_repair: NonZeroUsize,
+    /// How many *retired* epochs of consensus storage to keep; anything older is
+    /// pruned (vote-journal partitions removed, marshal's finalized archives
+    /// pruned below the horizon). `None` keeps everything. A per-node setting —
+    /// pruning local storage needs no committee coordination — but with every
+    /// peer pruning, history below everyone's horizon is gone from the network:
+    /// a rebuild then starts from a finality floor, not from the era genesis.
+    /// The node's own finality store (the sovereign certificate trail) is never
+    /// touched by this.
+    pub epoch_retention: Option<NonZeroU64>,
+    /// Heights per storage section in marshal's finalized archives — the
+    /// granularity pruning works at: only sections entirely below the prune
+    /// horizon are dropped. The default suits production epoch lengths (many
+    /// sections per epoch); tests with tiny epochs shrink it so pruning is
+    /// observable at their scale.
+    pub archive_items_per_section: NonZeroU64,
 }
 
 impl StackConfig {
@@ -127,6 +142,8 @@ impl StackConfig {
             max_pending_acks: NonZeroUsize::new(4).expect("nonzero"),
             view_retention_timeout: ViewDelta::new(100),
             max_repair: NonZeroUsize::new(16).expect("nonzero"),
+            epoch_retention: None,
+            archive_items_per_section: NonZeroU64::new(1024).expect("nonzero"),
         }
     }
 }
@@ -192,6 +209,14 @@ impl<A: Send + 'static> Reporter for NullReporter<A> {
 /// rotation task (which starts and retires them) and [`ValidatorStack::abort`]
 /// (which must kill whatever is alive when the whole validator stops).
 pub type EngineRegistry = Arc<Mutex<BTreeMap<u64, Handle<()>>>>;
+
+/// The storage partition one epoch's engine journals its votes under. Stable
+/// across restarts (a restarted engine must find its own journal to avoid
+/// double-signing) and per-epoch (so retiring an epoch can drop exactly its
+/// journal). Public for storage probes (tests, debugging tooling).
+pub fn engine_partition(partition_prefix: &str, epoch: u64) -> String {
+    format!("{partition_prefix}-engine-epoch-{epoch}")
+}
 
 /// What every engine reports to: marshal first (finalizations drive ordered delivery
 /// and backfill), then the node's extra reporter (metrics, observers). Named so the
@@ -326,13 +351,19 @@ where
         channels.block_backfill,
     );
 
-    let finalizations =
-        init_finalizations_archive(&context, &config.partition_prefix, page_cache.clone()).await;
+    let finalizations = init_finalizations_archive(
+        &context,
+        &config.partition_prefix,
+        page_cache.clone(),
+        config.archive_items_per_section,
+    )
+    .await;
     let blocks = init_blocks_archive::<_, X::Block>(
         &context,
         &config.partition_prefix,
         page_cache.clone(),
         block_codec_config.clone(),
+        config.archive_items_per_section,
     )
     .await;
 
@@ -369,7 +400,7 @@ where
             partition_prefix: config.partition_prefix.clone(),
             mailbox_size: config.mailbox_size,
             view_retention_timeout: config.view_retention_timeout,
-            prunable_items_per_section: NonZeroU64::new(1024).expect("nonzero"),
+            prunable_items_per_section: config.archive_items_per_section,
             page_cache: page_cache.clone(),
             replay_buffer: NZUsize!(1024 * 1024),
             key_write_buffer: NZUsize!(1024 * 1024),
@@ -452,7 +483,7 @@ where
     ];
 
     // Certificates for epochs this validator runs flow to their engines through the
-    // mux; certificates for epochs it does NOT run land on the backup lane. One of
+    // mux; certificates for epochs it does not run land on the backup lane. One of
     // them is exactly how a validator that slept through epoch boundaries discovers
     // the chain moved on: a *valid* finalization from a later epoch is self-proving
     // evidence of the real tip, no matter which peer sent it or what its message was
@@ -541,7 +572,7 @@ where
                     // finalization); the extra reporter observes alongside it.
                     reporter,
                     strategy: Sequential,
-                    partition: format!("{}-engine-epoch-{}", config.partition_prefix, epoch.get()),
+                    partition: engine_partition(&config.partition_prefix, epoch.get()),
                     mailbox_size: config.mailbox_size,
                     epoch,
                     // Where this engine's chain of certificates begins — the epoch's
@@ -576,6 +607,8 @@ where
     };
     let epoch_manager = context.child("epoch_manager").spawn({
         let engines = engines.clone();
+        let partition_prefix = config.partition_prefix.clone();
+        let epoch_retention = config.epoch_retention;
         move |context| {
             run_epoch_rotation(
                 context,
@@ -584,6 +617,8 @@ where
                 env,
                 rotation_marshal,
                 stack_floor,
+                partition_prefix,
+                epoch_retention,
                 votes_mux,
                 certificates_mux,
                 certificate_backfill_mux,
@@ -641,13 +676,15 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
             <X::Block as Digestible>::Digest,
         >,
     >,
+    partition_prefix: String,
+    epoch_retention: Option<NonZeroU64>,
     mut votes_mux: MuxHandle<TSender, TReceiver>,
     mut certificates_mux: MuxHandle<TSender, TReceiver>,
     mut certificate_backfill_mux: MuxHandle<TSender, TReceiver>,
     engines: EngineRegistry,
     spawn_engine: F,
 ) where
-    R: Clock + Spawner + Metrics,
+    R: Clock + Spawner + Metrics + Storage,
     X: ExecutionEnv,
     TSender: commonware_p2p::Sender<PublicKey = PublicKey>,
     TReceiver: commonware_p2p::Receiver<PublicKey = PublicKey>,
@@ -664,6 +701,11 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
     // Epochs we've already logged "not a member" for — the poll re-derives the same
     // answer every tick, the operator needs to hear it once. Pruned with retirement.
     let mut announced_outside = std::collections::BTreeSet::new();
+    // Epochs whose anchor-wait was already announced (same once-per-epoch rule).
+    let mut announced_waiting = std::collections::BTreeSet::new();
+    // Epochs below this have had their storage pruned (this run; restarts
+    // re-derive it by re-walking, which is idempotent).
+    let mut pruned_below: u64 = 0;
     let mut stopped = context.stopped();
     loop {
         // A graceful stop makes engines exit on purpose (they watch the same
@@ -747,9 +789,19 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
                     Floor::Finalized(floor)
                 }
                 None => {
-                    // The anchor is not locally available yet (e.g. a fresh
-                    // validator still backfilling toward the boundary). Try again
-                    // next tick.
+                    // The anchor is not locally available yet. Usually transient
+                    // (a fresh validator still backfilling toward the boundary) —
+                    // but permanent when every peer has pruned the anchor's
+                    // height, which is exactly the state a consensus rebuild over
+                    // pruned peers lands in without a floor: following forever,
+                    // voting never. Say so once, with the remedy.
+                    if announced_waiting.insert(key) {
+                        info!(
+                            epoch = key,
+                            anchor_height = anchor_height.get(),
+                            "engine is waiting for its epoch's anchor block; if                              peers no longer serve that height, restart this                              validator from a finality floor"
+                        );
+                    }
                     continue;
                 }
             };
@@ -762,6 +814,7 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
                 .register(key)
                 .await
                 .expect("register certificate backfill mux");
+            announced_waiting.remove(&key);
             info!(epoch = key, "starting consensus engine for epoch");
             let handle = spawn_engine(
                 epoch,
@@ -785,6 +838,45 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
             }
         });
         announced_outside.retain(|&epoch| epoch >= keep_from);
+        announced_waiting.retain(|&epoch| epoch >= keep_from);
+
+        // Prune consensus storage past the retention horizon. Only epochs the
+        // chain has fully moved beyond are eligible, and the rotation never
+        // starts engines below the tail again — a pruned epoch's journal has no
+        // reader left. Restarts re-walk from zero: removing an already-missing
+        // partition is a no-op, so the walk is idempotent.
+        if let Some(retention) = epoch_retention {
+            let horizon = keep_from.saturating_sub(retention.get());
+            if horizon > pruned_below {
+                for epoch in pruned_below..horizon {
+                    match context
+                        .remove(&engine_partition(&partition_prefix, epoch), None)
+                        .await
+                    {
+                        Ok(()) => info!(epoch, "pruned a retired epoch's vote journal"),
+                        // Never created (a member that joined later) or already
+                        // pruned before a restart — nothing to do either way.
+                        Err(commonware_runtime::Error::PartitionMissing(_)) => {}
+                        Err(err) => {
+                            tracing::warn!(
+                                ?err,
+                                epoch,
+                                "failed to prune a retired epoch's vote journal"
+                            );
+                        }
+                    }
+                }
+                // Marshal's finalized block/certificate archives, below the
+                // horizon epoch's anchor. Upstream refuses to prune above its
+                // processed floor, so this can never outrun block delivery. The
+                // node's own finality store is deliberately not part of this:
+                // certificates there are the permanent proof trail.
+                if let Some(first) = epocher.first(Epoch::new(horizon)) {
+                    marshal.prune(Height::new(first.get().saturating_sub(1)));
+                }
+                pruned_below = horizon;
+            }
+        }
 
         context.sleep(EPOCH_POLL).await;
     }

@@ -77,6 +77,10 @@ pub struct SetupArgs {
     /// committee later.
     #[arg(long, default_value_t = 0)]
     pub observers: usize,
+    /// Retired epochs of consensus storage each node keeps (0 = keep everything).
+    /// Soaks measuring disk growth run short epochs with a small retention.
+    #[arg(long, default_value_t = 0)]
+    pub epoch_retention: u64,
 }
 
 /// Everything the driver (and any external monitor) needs to know about the cluster.
@@ -125,6 +129,9 @@ pub struct Materials {
     pub schedule: Vec<ScheduleStep>,
     pub fee_collector: String,
     pub epoch_length: u64,
+    /// Retired epochs of consensus storage each node keeps (0 = keep everything).
+    #[serde(default)]
+    pub epoch_retention: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -219,6 +226,7 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
         }],
         fee_collector: format!("{fee_collector}"),
         epoch_length: args.epoch_length,
+        epoch_retention: args.epoch_retention,
     };
 
     let bridgehub_address = read_bridgehub_address(&repo.join(&args.chain).join("config.yaml"))?;
@@ -287,13 +295,14 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
 /// at setup); promotion appends entries. Observers get `role: observer`, no BLS
 /// key, and transaction forwarding to every committee member's in-network RPC.
 pub fn node_overlay(materials: &Materials, index: usize) -> String {
-    // A node is validator-role as soon as ANY schedule entry seats it: it needs
+    // A node is validator-role as soon as any schedule entry seats it: it needs
     // its signing key deployed before its activation epoch arrives (it simply
     // runs no engine until then).
     let scheduled_validators = materials.scheduled_validators();
     let is_validator = index < scheduled_validators;
     let fee_collector = &materials.fee_collector;
     let epoch_length = materials.epoch_length;
+    let epoch_retention = materials.epoch_retention;
     let node = &materials.nodes[index];
     let network_key_hex = &node.network_key_hex;
 
@@ -368,6 +377,7 @@ consensus:
 {role_section}  listen_address: 0.0.0.0:{CONTAINER_CONSENSUS}
   allow_private_ips: true
   epoch_length: {epoch_length}
+  epoch_retention: {epoch_retention}
 {committees}{observers}"
     )
 }
@@ -508,6 +518,7 @@ mod tests {
             }],
             fee_collector: "0x0000000000000000000000000000000000000001".into(),
             epoch_length: 240,
+            epoch_retention: 0,
         }
     }
 

@@ -89,7 +89,7 @@ fn chain_migrates_again_after_a_rollback() {
             }
 
             // The single-sequencer era in between produces more blocks; the second
-            // migration anchors at the NEW tip. A fresh cluster with fresh consensus
+            // migration anchors at the new tip. A fresh cluster with fresh consensus
             // state models the documented re-migration procedure (stale consensus
             // state from the first era must be cleared — the node refuses to mix
             // eras; that guard is pinned node-side).

@@ -778,7 +778,7 @@ pub struct ConsensusConfig {
     pub acknowledge_non_member: bool,
     /// Non-voting observers admitted to the consensus network, one entry per
     /// observer: `<ed25519_public_hex>@<host:port>`. The consensus network only
-    /// completes handshakes with explicitly listed identities, so this list IS the
+    /// completes handshakes with explicitly listed identities, so this list is the
     /// observers' admission perimeter. Configure it identically on every node —
     /// validators authorize observer connections from it, and an observer finds
     /// its own identity in it. Observers hold no committee power: worst case is
@@ -826,6 +826,22 @@ pub struct ConsensusConfig {
     /// Upper bound on a consensus network message (must fit the largest block).
     #[config(default_t = 16 * 1024 * 1024)]
     pub max_message_size: usize,
+    /// How many *retired* epochs of consensus storage this node keeps; older
+    /// epochs are pruned — vote-journal partitions removed, marshal's finalized
+    /// block/certificate archives pruned below the horizon. `0` disables pruning.
+    /// A per-node setting (pruning local storage needs no committee
+    /// coordination), but with every peer pruning, chain history below
+    /// everyone's horizon is no longer served on the consensus network — a
+    /// rebuild then starts from a finality floor rather than the era genesis.
+    /// The node's own finality store (the sovereign certificate trail) is never
+    /// pruned. Values 1 and below (other than 0) are refused: the retention
+    /// window must cover the epoch handoff and the finality-floor cache.
+    #[config(default_t = 2)]
+    #[config_validate(custom(
+        |_root: &Config, value: &u64| *value == 0 || *value >= 2,
+        "must be 0 (pruning disabled) or at least 2 (the handoff + floor-cache window)"
+    ))]
+    pub epoch_retention: u64,
     /// A validator starting with empty consensus storage but a retained chain
     /// (a rebuild, a promoted node) resumes from a cached finality floor instead
     /// of backfilling from the consensus genesis — but only when that floor is

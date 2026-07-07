@@ -34,7 +34,7 @@ fn never_member_follows_from_genesis_and_through_reconfig() {
         Duration::from_secs(600),
         |context| async move {
             let behaviors = vec![Behavior::Honest; 5];
-            // Validator 4 appears in NO schedule entry — a pure observer. The
+            // Validator 4 appears in no schedule entry — a pure observer. The
             // committee itself shrinks 4 → 3 at epoch 2, so the observer must
             // verify certificates from two different committees to keep up.
             let schedule = vec![(0, vec![0, 1, 2, 3]), (2, vec![0, 1, 2])];

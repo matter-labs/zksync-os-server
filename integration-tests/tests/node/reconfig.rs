@@ -183,21 +183,19 @@ async fn misconfigured_validator_stalls_then_recovers_after_config_fix() -> anyh
          committee (applied {lagging}, members at {target}+)"
     );
 
-    // The remedy, exactly as the runbook documents it: corrected config + a
-    // fresh CONSENSUS data directory — the chain, the write-ahead log, and the
-    // finality store all stay. The restart resumes from a cached finality floor
-    // (observed in this scenario: the last finalization before the committee
-    // change, one height below the boundary) instead of replaying consensus
-    // history from genesis; catch-up is bounded to the blocks above it. The
-    // floor-engagement mechanics are DST-pinned in the sim's promotion tests;
-    // this proves the wiring over a real node's finality store.
+    // The remedy: corrected config + a fresh consensus data directory — the
+    // chain, the write-ahead log, and the finality store all stay. The restart
+    // resumes from a cached finality floor (here: a finalization just below the
+    // committee-change boundary) and backfills only the blocks above it, instead
+    // of replaying consensus history from genesis. The floor-engagement
+    // mechanics are pinned by the sim's promotion tests; this test covers the
+    // wiring over a real node's finality store.
     //
-    // `accept_stale_floor` rides along because where the stall lands varies:
-    // a validator that observed even one finalization of the epoch it stalled
-    // in has a custody record for it, and then every USABLE floor (from before
-    // the change) fails the freshness policy — the flag is the runbook's escape
-    // hatch for exactly this rebuild, harmless in the runs where the floor is
-    // fresh anyway.
+    // `accept_stale_floor` rides along because where the stall lands varies: a
+    // validator that observed even one finalization of the epoch it stalled in
+    // has a custody record for it, making every usable floor (from before the
+    // change) fail the freshness policy — the flag covers that variant, and is
+    // harmless when the floor turns out fresh.
     let stalled_rocks = cluster
         .node(1)
         .config()
@@ -266,7 +264,7 @@ async fn wait_for_height_on(
 }
 
 /// The full promotion choreography, live: a node that started life as a
-/// non-voting OBSERVER (no BLS key configured, admitted via the observers list)
+/// non-voting observer (no BLS key configured, admitted via the observers list)
 /// is scheduled into the committee at a future epoch and becomes a voting
 /// validator — without ever resyncing. The steps mirror the runbook exactly:
 ///
@@ -275,7 +273,7 @@ async fn wait_for_height_on(
 ///    which also keeps it connectable throughout: the address book spans every
 ///    schedule entry);
 /// 2. the candidate restarts last, flipping `role = validator` and gaining its
-///    BLS key — over its RETAINED chain and consensus archives from observing;
+///    BLS key — over its retained chain and consensus archives from observing;
 /// 3. nothing special happens at the boundary itself: the rotation starts the
 ///    candidate's first-ever engine because the schedule now says "member".
 #[test_log::test(tokio::test)]
@@ -294,7 +292,7 @@ async fn observer_promoted_to_validator_at_a_scheduled_boundary() -> anyhow::Res
         .await?;
 
     // The promotion target: far enough out for five sequential restarts. All
-    // configs must name the SAME activation epoch, so pick it before touching
+    // configs must name the same activation epoch, so pick it before touching
     // anyone. (If the restarts overran it, the committee would simply run one
     // member short until the candidate arrives — late first engines are safe —
     // but the margin keeps the test deterministic in what it asserts.)
@@ -361,7 +359,7 @@ async fn observer_promoted_to_validator_at_a_scheduled_boundary() -> anyhow::Res
         "expected the promoted committee of 5 at epoch {activation_epoch}+, got {finalized:?}"
     );
 
-    // And it VOTES: with one original member stopped, the committee of 5
+    // And it votes: with one original member stopped, the committee of 5
     // (quorum 4) advances only if the promoted member signs.
     cluster.stop_validator(1).await?;
     let target = cluster.max_height().await? + EPOCH_LENGTH;

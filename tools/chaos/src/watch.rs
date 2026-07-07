@@ -49,9 +49,8 @@ pub struct Expectations {
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeObservation {
     /// `None` when the docker probe itself failed (a busy daemon times out under
-    /// restart churn) — state unknown, NOT dead; a real death is confirmed by the
-    /// next successful poll. Mass false `UnexpectedDeath`s on a promoted
-    /// 7-validator cluster taught this distinction (2026-07-06).
+    /// restart churn) — state unknown, not dead; a real death is confirmed by the
+    /// next successful poll.
     pub running: Option<bool>,
     pub paused: bool,
     /// `None` when unreachable (which is fine for stopped/paused/partitioned nodes).
@@ -291,14 +290,11 @@ const FORBIDDEN_LOG_PATTERNS: [&str; 2] = ["panicked at", " ERROR "];
 /// errors, and the runtime-drop panic is a registered shutdown wart (tracked in
 /// the shortcut register; harmless but not yet eliminated). Deliberately narrow —
 /// a *novel* critical-task panic must still surface.
-// Two long-standing allowances were REMOVED after the commonware-2026.5.0
-// upgrade soaks showed them gone (they fired routinely on 2026.4.0):
-// the runtime-drop teardown wart ("Cannot drop a runtime" +
-// "runtime/blocking/shutdown.rs") and marshal's empty-archive destroy panic
-// ("failed to destroy", BlobMissing on follower-shaped per-epoch caches;
-// dormant issue draft in consensus_planning/upstream-issues.md). If either
-// resurfaces, the watcher now freezes on it — deliberate: a workaround must
-// not outlive its wart.
+// Only shutdown noise from the node's own pipeline is tolerated. Nothing from
+// the consensus library is allowlisted — any panic or teardown error it emits
+// freezes the soak, deliberately: an allowance here is a workaround, and a
+// workaround must not outlive its wart. Add entries only for patterns that are
+// registered and understood.
 const ALLOWED_LOG_PATTERNS: [&str; 2] = [
     "pipeline segment failed",
     "failed to receive deregistration",
@@ -838,12 +834,10 @@ mod tests {
         assert!(!is_suspicious_log_line(
             "ERROR reth_tasks::runtime: Critical task `pipeline` panicked: `failed to receive deregistration`"
         ));
-        // The runtime-drop teardown wart's allowance was REMOVED after the
-        // commonware-2026.5.0 upgrade soaks showed it gone: its site line (the one
-        // carrying `panicked at`) freezes a soak again, on purpose — a workaround
-        // must not outlive its wart. (The message-bearing second line alone never
-        // matched a forbidden pattern; the two-line allowance existed for the
-        // site line.)
+        // Teardown panics from the consensus runtime are not tolerated: the
+        // site line (the one carrying `panicked at`) freezes a soak. The
+        // message-bearing second line alone matches no forbidden pattern, so it
+        // needs no allowance.
         assert!(is_suspicious_log_line(
             "thread 'tokio-rt-worker' (215) panicked at /usr/local/cargo/registry/\
              src/index.crates.io-xxx/tokio-1.52.3/src/runtime/blocking/shutdown.rs:51:21:"

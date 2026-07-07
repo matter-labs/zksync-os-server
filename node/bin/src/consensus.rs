@@ -219,6 +219,9 @@ pub struct ConsensusSetup {
     /// Use a cached finality floor even when it predates the committee's last
     /// scheduled change (`consensus.accept_stale_floor`).
     pub accept_stale_floor: bool,
+    /// Retired epochs of consensus storage to keep (`consensus.epoch_retention`;
+    /// `None` = keep everything).
+    pub epoch_retention: Option<std::num::NonZeroU64>,
     /// Whether this node votes or only follows (`consensus.role`).
     pub role: crate::config::ConsensusRole,
     /// Admitted non-voting observers (`consensus.observers`) — tracked as the
@@ -420,6 +423,7 @@ impl ConsensusSetup {
                 .context("`consensus.epoch_length` must be nonzero")?,
             era_anchor: config.genesis_height,
             accept_stale_floor: config.accept_stale_floor,
+            epoch_retention: std::num::NonZeroU64::new(config.epoch_retention),
             role: config.role,
             observers,
             listen_address: config
@@ -690,12 +694,12 @@ where
             })
             .try_collect()
             .expect("duplicate validator network identity");
-        // Observers ride in the SAME tracked set as the committee, as its
+        // Observers ride in the same tracked set as the committee, as its
         // *secondary* tier: tracked identities complete handshakes (this is the
         // observers' admission perimeter — see `consensus.observers`), but
         // primary-only policies skip them — notably the block-broadcast cache,
         // which only accepts blocks from primary peers, i.e. potential proposers.
-        // Deliberately NOT a second peer-set index: set indexes are generations
+        // Deliberately not a second peer-set index: set indexes are generations
         // (the committee-transition overlap mechanism), and components treat the
         // latest generation as *the* network — a separate observers set would
         // supersede the committee and stall block dissemination.
@@ -760,7 +764,12 @@ where
         };
         let stack = start_validator(
             context.child("validator"),
-            StackConfig::new("consensus").with_epoch_length(setup.epoch_length),
+            {
+                let mut stack_config =
+                    StackConfig::new("consensus").with_epoch_length(setup.epoch_length);
+                stack_config.epoch_retention = setup.epoch_retention;
+                stack_config
+            },
             identity,
             setup.provider.clone(),
             env,
@@ -1036,15 +1045,14 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
                 let entry = self.schedule.entry_for(round.epoch());
                 let committee_size = entry.committee.len() as u32;
                 // Finality is monotone, so the published observation must be too.
-                // Finalizations do NOT arrive in round order here: the tip scout
+                // Finalizations do not arrive in round order here: the tip scout
                 // re-hears certificates for already-retired epochs (a lagging peer
                 // catching up re-broadcasts them, and with no engine registered for
                 // that epoch they fall through to the scout), and marshal replays
-                // finalizations during backfill. Rig finding (2026-07-06): without
-                // this clamp, `/status.finalized` briefly regressed a whole epoch on
-                // four healthy validators when a fifth reconnected after lagging
-                // across a boundary. The durable observed-round floor clamps
-                // internally already (`FinalityStore::note_observed_round`).
+                // finalizations during backfill. Without the clamp, a stale
+                // re-heard finalization would move `/status.finalized` backwards on
+                // a perfectly healthy validator. The durable observed-round floor
+                // clamps internally already (`FinalityStore::note_observed_round`).
                 let _ = self.finalized.send_if_modified(|current| {
                     let observed = (round.epoch().get(), round.view().get());
                     let advances = current

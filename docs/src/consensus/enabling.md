@@ -240,6 +240,26 @@ Two sharp edges, both loud by design:
   default: a reconfiguration deployed in the morning activates the same day,
   while boundary handoffs (one re-proposal view each) stay rare events.
 
+## Storage retention
+
+Consensus storage grows with the chain: every epoch's engine journals its votes
+under its own partition, and marshal archives every finalized block and
+certificate. `consensus.epoch_retention` bounds this: once an epoch falls that
+many epochs behind the live one, its vote journal is removed and the finalized
+archives are pruned below its start. `0` disables pruning; values below 2 are
+refused (the window must cover the epoch handoff and the finality-floor cache).
+
+Retention is a **per-node** choice — pruning local storage needs no committee
+coordination. Its network-wide consequence does deserve a deliberate decision,
+though: once every peer has pruned, chain history below everyone's horizon is
+simply not served anymore. A consensus rebuild still converges (the node picks
+up live finality and syncs forward, ending with a bounded recent window rather
+than the full chain) — but *rejoining the committee* then requires starting
+from a finality floor, because the epoch anchor blocks that engines otherwise
+start from are gone. The floor comes from the node's own finality store, which
+is exactly why that store is never pruned: certificates there are the permanent
+proof trail, and the floors for every future rebuild.
+
 ## Rolling back
 
 Rollback — returning a committee-run chain to single-sequencer operation — is

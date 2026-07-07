@@ -7,7 +7,7 @@
 //! means a released wire format changed — which is never a fix, always a new
 //! version file.
 //!
-//! Adding a fixture for a NEW format (never for changing a committed one):
+//! Adding a fixture for a new format (never for changing a committed one):
 //! `UPDATE_GOLDENS=1 cargo test -p zksync_os_wire --test goldens`
 
 use alloy::consensus::transaction::Recovered;

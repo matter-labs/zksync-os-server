@@ -404,9 +404,23 @@ where
             .expect("no observed finalization matches the retained chain")
     }
 
+    /// Whether validator `index`'s engine journal for `epoch` exists in storage
+    /// (test probe for retention pruning). An empty-but-present partition counts
+    /// as absent — pruning removes the partition wholesale.
+    pub async fn engine_journal_exists(&self, index: usize, epoch: u64) -> bool {
+        let partition = zksync_os_consensus_core::engine_partition(
+            &self.validators[index].partition_prefix,
+            epoch,
+        );
+        match commonware_runtime::Storage::scan(&self.context, &partition).await {
+            Ok(blobs) => !blobs.is_empty(),
+            Err(_) => false,
+        }
+    }
+
     /// Whether validator `index`'s marshal holds a finalized block at `height`
     /// (test probe). A floor-started validator must answer `false` below its
-    /// floor — that absence IS the bounded-catch-up property: the history was
+    /// floor — that absence is the bounded-catch-up property: the history was
     /// never fetched, not merely not needed.
     pub async fn marshal_has_height(&mut self, index: usize, height: u64) -> bool {
         use commonware_consensus::types::Height;

@@ -619,7 +619,7 @@ async fn observer_follows_the_committee_and_serves_transactions() -> anyhow::Res
 
     // The observer's whole startup already proves following: reaching here means it
     // applied the initial-deposit block it could only have received via consensus.
-    // Now the RPC path: submit through the OBSERVER, get the receipt FROM it.
+    // Now the RPC path: submit through the observer, get the receipt from it.
     let included_at = send_transfer(&cluster, OBSERVER, Address::repeat_byte(0x51)).await?;
 
     // Everyone — observer included — converges on the block, byte-identical.

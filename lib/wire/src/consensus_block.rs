@@ -36,7 +36,7 @@ use zksync_os_storage_api::ReplayRecord;
 pub struct ConsensusBlock {
     height: u64,
     /// The chain height consensus counts from in this era (0 for a chain that runs
-    /// consensus from genesis, the cutover height for a migrated one). NOT part of
+    /// consensus from genesis, the cutover height for a migrated one). not part of
     /// the wire encoding or the digest — consensus-side bookkeeping only, injected
     /// at construction (and, for blocks received from the wire, via the codec
     /// config): the consensus library requires its genesis at height zero, so the

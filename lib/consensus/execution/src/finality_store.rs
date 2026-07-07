@@ -40,7 +40,7 @@ pub enum FinalityCF {
     Transitions,
     /// Raw consensus-library-encoded finalizations by round (epoch ‖ view, both
     /// u64 big-endian), value = block digest (32 bytes) ‖ encoded finalization.
-    /// A LOCAL CACHE, not a sovereign format: it exists so a restart with empty
+    /// A local cache, not a sovereign format: it exists so a restart with empty
     /// consensus storage can hand marshal a floor finalization (which the
     /// sovereign [`FinalityCertificate`] cannot reconstruct — it deliberately
     /// drops library-internal fields). A consensus-library upgrade may invalidate
