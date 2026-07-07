@@ -777,6 +777,11 @@ where
         self.validators[index].env.committed_tip().unwrap_or(0)
     }
 
+    /// A validator's execution environment (test probe — e.g. exporting its chain).
+    pub fn env(&self, index: usize) -> &X {
+        &self.validators[index].env
+    }
+
     /// The agreement property: every honest validator's committed chain (as a digest
     /// sequence) is a prefix of the longest one, and every honest validator reached at
     /// least `minimum_height`.

@@ -40,6 +40,11 @@ pub struct ConsensusStatusSource {
     /// trail (see the consensus execution crate's finality store). Tracks the
     /// tip on a healthy chain; a stall is a real health signal.
     pub finality_certified: watch::Receiver<Option<u64>>,
+    /// Canonical hash of the committee-uniform configuration surface (schedule,
+    /// chain constants, consensus timing). Identical on every healthy committee
+    /// member; a mismatch is config drift caught *before* it becomes a boundary
+    /// stall or a false byzantine alarm.
+    pub chain_fingerprint: String,
     pub metrics_encoder: watch::Receiver<Option<ConsensusMetricsEncoder>>,
 }
 
@@ -60,6 +65,10 @@ pub struct ConsensusStatus {
     /// digest trail) — the externally-provable-finality trail.
     #[serde(default)]
     pub finality_certified_height: Option<u64>,
+    /// Canonical hash of the committee-uniform configuration surface; compare
+    /// across validators — any mismatch is config drift.
+    #[serde(default)]
+    pub chain_fingerprint: String,
 }
 
 impl ConsensusStatusSource {
@@ -71,6 +80,7 @@ impl ConsensusStatusSource {
             finalized: *self.finalized.borrow(),
             applied_height: *self.applied_height.borrow(),
             finality_certified_height: *self.finality_certified.borrow(),
+            chain_fingerprint: self.chain_fingerprint.clone(),
         }
     }
 }

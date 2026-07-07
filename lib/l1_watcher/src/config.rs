@@ -9,6 +9,12 @@ pub struct L1WatcherConfig {
     /// Number of latest L1 blocks to leave unprocessed in order to reduce reorg risk.
     pub confirmations: u64,
 
+    /// Ingest block-content events (priority transactions, protocol upgrades) only once
+    /// their L1 block is finalized, instead of `confirmations` blocks behind the tip.
+    /// Set by the node wiring, not by operators — see the decision note where the
+    /// mempool's watcher config is assembled in `node/bin`.
+    pub finalized_ingestion: bool,
+
     /// How often to poll L1 for the latest block.
     pub poll_interval: Duration,
 

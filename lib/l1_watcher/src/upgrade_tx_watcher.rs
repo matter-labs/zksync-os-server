@@ -71,6 +71,7 @@ impl L1UpgradeTxWatcher {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
+            config.finalized_ingestion,
             zk_chain_address_l1 = ?zk_chain_l1.address(),
             zk_chain_address_sl = ?zk_chain_sl.address(),
             "initializing upgrade transaction watcher"
@@ -129,15 +130,27 @@ impl L1UpgradeTxWatcher {
             Ok((last_l1_block, processor))
         };
 
-        StartResolver::new(
-            config,
-            watcher_provider,
-            server_notifier_l1.into(),
-            None,
-            l1_chain_id,
-            resolve_start,
-        )
-        .await
+        // Upgrade transactions become consensus block content; the boundary choice is
+        // a chain-safety decision made in the node wiring (`finalized_ingestion`).
+        if config.finalized_ingestion {
+            Ok(StartResolver::new_finalized(
+                config,
+                watcher_provider,
+                server_notifier_l1.into(),
+                None,
+                resolve_start,
+            ))
+        } else {
+            StartResolver::new(
+                config,
+                watcher_provider,
+                server_notifier_l1.into(),
+                None,
+                l1_chain_id,
+                resolve_start,
+            )
+            .await
+        }
     }
 
     async fn fetch_upgrade_info(&self, request: &L1UpgradeRequest) -> anyhow::Result<UpgradeInfo> {

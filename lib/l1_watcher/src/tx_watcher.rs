@@ -33,6 +33,7 @@ impl L1TxWatcher {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
+            config.finalized_ingestion,
             zk_chain_address_l1 = ?zk_chain_l1.address(),
             zk_chain_address_sl = ?zk_chain_sl.address(),
             "initializing L1 transaction watcher"
@@ -60,7 +61,19 @@ impl L1TxWatcher {
             Ok((next_l1_block, processor))
         };
 
-        StartResolver::new(config, provider, address, None, l1_chain_id, resolve_start).await
+        // Priority transactions become consensus block content; the boundary choice is
+        // a chain-safety decision made in the node wiring (`finalized_ingestion`).
+        if config.finalized_ingestion {
+            Ok(StartResolver::new_finalized(
+                config,
+                provider,
+                address,
+                None,
+                resolve_start,
+            ))
+        } else {
+            StartResolver::new(config, provider, address, None, l1_chain_id, resolve_start).await
+        }
     }
 }
 

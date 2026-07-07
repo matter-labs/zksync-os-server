@@ -121,6 +121,19 @@ impl MockExecution {
         }
     }
 
+    /// A chain restored from durable state — the mock equivalent of a node whose
+    /// write-ahead log survived a restart alongside its consensus storage (the
+    /// replay gate rebuilds environments this way from its fixture).
+    pub fn with_committed_chain(committed: Vec<SimBlock>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                anchor_height: 0,
+                committed,
+                idle: None,
+            })),
+        }
+    }
+
     /// Opts this environment into the cluster's shared idle-work pool; attach
     /// the same [`IdleWork`] to every validator's environment.
     pub fn attach_idle(&self, work: IdleWork) {

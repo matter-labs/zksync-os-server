@@ -4,6 +4,7 @@
 mod acceptance;
 mod batch_sink;
 pub mod batcher;
+mod chain_fingerprint;
 mod command_source;
 pub mod config;
 pub mod consensus;
@@ -772,7 +773,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             gateway_chain_id: config.general_config.gateway_chain_id,
             interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
             bytecode_supplier_address,
-            l1_watcher_config: config.l1_watcher_config.clone().into(),
+            l1_watcher_config: {
+                let mut watcher_config: zksync_os_l1_watcher::L1WatcherConfig =
+                    config.l1_watcher_config.clone().into();
+                // Decision (2026-07): under consensus, deposits and protocol upgrades
+                // are ingested at the *finalized* L1 boundary, not `confirmations`
+                // blocks behind the tip. These events become block content that every
+                // validator verifies against its own L1 view before voting, and a BFT
+                // finalized block is irrevocable — the deep-reorg remedy that made a
+                // shallow boundary tolerable for a single sequencer (roll the chain
+                // back and re-sequence) no longer exists. The cost is deposit latency
+                // (~13 min on Ethereum); the alternative is a finalized L2 block
+                // referencing an L1 event that no longer exists.
+                watcher_config.finalized_ingestion = config.consensus_config.enabled;
+                watcher_config
+            },
             interop_fee_updater_config: config.interop_fee_updater_config.clone().into(),
         },
         local_eth_call,
@@ -1010,6 +1025,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // world.
         let (finalized_sender, finalized_receiver) = tokio::sync::watch::channel(None);
         let (metrics_encoder_sender, metrics_encoder_receiver) = tokio::sync::watch::channel(None);
+        // Committee-uniform config surface, hashed: every healthy member logs
+        // and serves the same value; a mismatch is drift caught before it
+        // becomes a boundary stall or a false byzantine alarm.
+        let chain_fingerprint = chain_fingerprint::chain_fingerprint(&config);
+        tracing::info!(
+            chain_fingerprint,
+            "committee-uniform configuration fingerprint"
+        );
         let status_source = zksync_os_status_server::ConsensusStatusSource {
             role: setup.role.as_str(),
             committee_size: setup.committee.len(),
@@ -1021,6 +1044,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finalized: finalized_receiver,
             applied_height: applied_block_number_receiver.clone(),
             finality_certified: finality_store.watermark_subscription(),
+            chain_fingerprint,
             metrics_encoder: metrics_encoder_receiver,
         };
 

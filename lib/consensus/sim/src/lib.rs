@@ -20,6 +20,7 @@ pub mod activity;
 pub mod block;
 pub mod cluster;
 pub mod execution;
+pub mod fixtures;
 pub mod links;
 pub mod scenario;
 pub mod stf;

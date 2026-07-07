@@ -19,6 +19,7 @@ alarm names the first place to look.
 | `repositories_persistence_lag` | ~0 | the block-persist loop is falling behind memory; a crash while behind loses the unpersisted window | check disk throughput; falling behind persistently is a capacity problem |
 | `jemalloc_allocated_bytes` | grows with write load, bounded by the RocksDB write-buffer plateau | unbounded growth is a leak; the known grower is RocksDB memtables (node-team item) | compare against the documented baseline before suspecting consensus |
 | RPC admission (`"pipeline backpressure"` rejections) | brief bursts under heavy load | sustained refusal means proof generation cannot keep up with the block rate | a capacity signal, not a fault: reduce load or scale provers |
+| `/status` `consensus.chain_fingerprint` | identical on every node (also logged once at startup: "committee-uniform configuration fingerprint") | two nodes disagree on a committee-uniform fact — schedule, epoch geometry, consensus timing, or a verification-pinned chain constant. Symptoms otherwise surface later and expensively: a stall at the next epoch boundary, or false byzantine alarms | diff the drifted node's config against a healthy one *before* the next epoch boundary; the fingerprinted surface is enumerated in `node/bin/src/chain_fingerprint.rs` |
 
 Three structural notes. First, all `consensus_*` counters reset on process
 restart — alert on increases, not absolute values. Second, a *stopped*
@@ -47,10 +48,56 @@ Logged once at consensus startup, and derivable from config:
   retention"](enabling.md#storage-retention)). Idle chains stretch this
   window enormously — retention is epoch-denominated and idle epochs take
   wall-clock ages.
+- **Deposit latency** ≈ L1 finality (~13 minutes on Ethereum, two epochs):
+  under consensus, deposits and protocol upgrades are ingested only from
+  *finalized* L1 blocks. This is deliberate, not a knob: every validator
+  verifies included L1 content against its own L1 view before voting, and a
+  BFT-finalized block is irrevocable — the deep-reorg remedy a single
+  sequencer had (roll back and re-sequence) no longer exists. The decision
+  note lives where the mempool's watchers are wired in `node/bin/src/lib.rs`.
 
 Chains expected to idle should size `epoch_length` small enough that the
 sprint bound is acceptable for incident response, and raise `epoch_retention`
 to keep the loaded catch-up window sane; the journals are small either way.
+
+## Changing the consensus protocol version (flag day)
+
+`consensus.protocol_version` names the domain-separation namespace everything
+on the consensus network signs and speaks (`zksync-os-consensus/{version}`).
+It cannot be negotiated per connection — a finality certificate aggregates
+signatures over one message encoding, so the whole committee speaks exactly
+one version per round. Two versions do not interoperate *by design*: a
+mismatched validator fails at the p2p handshake, loudly, instead of
+exchanging messages it might misinterpret. That makes bumping it a **flag
+day**: a coordinated, briefly chain-halting activation. The choreography:
+
+1. **Deploy first, flip later.** Roll the new binary across the committee at
+   normal operational pace, with `consensus.protocol_version` unchanged.
+   Deploying a binary that *supports* a new version and *activating* that
+   version are separate steps; rolling restarts are routine (each validator
+   catches up on restart).
+2. **Verify the committee is uniform** before the flip: every node serves the
+   same `/status` `consensus.chain_fingerprint` (the protocol version is part
+   of the fingerprinted surface, so a half-flipped committee shows two
+   fingerprints — the drift alarm doubles as flag-day progress tracking).
+3. **Flip together.** At the agreed time, restart every validator with the
+   bumped `consensus.protocol_version`. Between the moment the old-version
+   side drops below quorum and the moment the new-version side reaches it,
+   the chain is deliberately halted — nothing is wrong, and no operator
+   action is needed beyond completing the restarts. Sequence the flip like
+   any quorum-sensitive operation: one node at a time is fine, the halt just
+   lasts until 2f+1 nodes are on the new version.
+4. **Confirm** all fingerprints match again and blocks finalize. Finalized
+   history is untouched — certificates already stored remain valid, and the
+   node's own persisted encodings are version-tagged independently of the
+   network namespace.
+5. **Rolling back**: safe by symmetry (flip the value back the same way) as
+   long as it happens before the new-version committee finalizes blocks;
+   after that, roll forward only — stragglers join by upgrading, never by
+   the committee returning to the old version.
+
+An idle chain flag-days the same way — the halt window is invisible between
+heartbeats, and the idle policy needs no special handling.
 
 ## Incident playbook pointers
 

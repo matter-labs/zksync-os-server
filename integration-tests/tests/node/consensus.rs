@@ -26,6 +26,24 @@ async fn send_transfer(
     via: usize,
     recipient: Address,
 ) -> anyhow::Result<u64> {
+    use anyhow::Context as _;
+    let sender = cluster.node(via).l2_wallet.default_signer().address();
+    let (pending, latest, height) = tokio::try_join!(
+        cluster
+            .node(via)
+            .l2_provider
+            .get_transaction_count(sender)
+            .pending()
+            .into_future(),
+        cluster
+            .node(via)
+            .l2_provider
+            .get_transaction_count(sender)
+            .latest()
+            .into_future(),
+        cluster.node(via).l2_provider.get_block_number(),
+    )?;
+    tracing::info!(via, %sender, pending, latest, height, "sending transfer");
     let receipt = tokio::time::timeout(CONVERGENCE_TIMEOUT, async {
         cluster
             .node(via)
@@ -33,16 +51,21 @@ async fn send_transfer(
             .send_transaction(
                 TransactionRequest::default()
                     .with_to(recipient)
-                    .with_value(U256::from(1_000_000u64)),
+                    .with_value(U256::from(1_000_000u64))
+                    // Explicit nonce: the provider's nonce filler caches per
+                    // provider instance, and one wallet acts through *many*
+                    // providers here (one per validator, plus test harnesses),
+                    // so a cached value goes stale the moment the wallet
+                    // transacts through anyone else.
+                    .with_nonce(pending),
             )
             .await?
             .expect_successful_receipt()
             .await
     })
     .await
-    .map_err(|_| {
-        anyhow::anyhow!("transaction was not included within {CONVERGENCE_TIMEOUT:?}")
-    })??;
+    .map_err(|_| anyhow::anyhow!("transaction was not included within {CONVERGENCE_TIMEOUT:?}"))?
+    .with_context(|| format!("transfer via validator {via} (pending nonce view {pending})"))?;
     Ok(receipt
         .block_number
         .expect("included transactions have a block"))
@@ -715,6 +738,137 @@ async fn an_idle_chain_heartbeats_and_wakes_on_work() -> anyhow::Result<()> {
     // Work still wakes the chain immediately.
     let woke_at = send_transfer(&cluster, 1, Address::repeat_byte(0x62)).await?;
     assert!(woke_at > after_quiet);
+
+    Ok(())
+}
+
+/// The zksync-os protocol upgrade, end to end on a live committee — the
+/// choreography every prior test exercised only on a single node: governance
+/// lands the upgrade on L1, every validator's watcher gates it independently,
+/// some leader includes the upgrade transaction, the *other* validators verify
+/// its content byte-for-byte against their own L1 view before voting, and the
+/// activation flips execution semantics on all of them in the same block.
+/// A divergence anywhere in that chain is exactly what the verify-before-vote
+/// alarm exists to catch — this test is the drill that keeps a real upgrade
+/// from being the first time the composition runs.
+#[test_log::test(tokio::test)]
+async fn protocol_upgrade_executes_under_consensus() -> anyhow::Result<()> {
+    use alloy::primitives::{Bytes, FixedBytes};
+    use alloy::sol_types::SolCall as _;
+    use std::collections::BTreeMap;
+    use zksync_os_integration_tests::contracts::SampleForceDeployment;
+    use zksync_os_integration_tests::upgrade::{
+        Action, CommitterFacetV31, FacetCut, UpgradeTester,
+    };
+
+    let cluster = MultiNodeTester::start(4).await?;
+
+    // A healthy pre-upgrade baseline — including agreement on the
+    // committee-uniform config fingerprint (these nodes were configured by
+    // one harness, so any mismatch is a fingerprint bug).
+    let before = send_transfer(&cluster, 1, Address::repeat_byte(0x71)).await?;
+    cluster
+        .wait_for_block_on_all(before, CONVERGENCE_TIMEOUT)
+        .await?;
+    let reference = cluster
+        .node(0)
+        .status()
+        .await?
+        .consensus
+        .expect("consensus status")
+        .chain_fingerprint;
+    assert!(!reference.is_empty(), "fingerprint must be served");
+    for validator in 1..4 {
+        let fingerprint = cluster
+            .node(validator)
+            .status()
+            .await?
+            .consensus
+            .expect("consensus status")
+            .chain_fingerprint;
+        assert_eq!(
+            fingerprint, reference,
+            "validator {validator} serves a different chain fingerprint",
+        );
+    }
+
+    // Governance is pure L1: drive it through node 0's provider — the shared
+    // anvil means every validator's watcher sees the same upgrade.
+    let upgrade_tester = UpgradeTester::for_default_upgrade(cluster.node(0)).await?;
+    upgrade_tester
+        .publish_bytecodes([SampleForceDeployment::BYTECODE.clone()])
+        .await?;
+
+    let force_address: Address = "0x000000000000000000000000000000000000dead".parse()?;
+    let force_deployments: BTreeMap<Address, Bytes> = [(
+        force_address,
+        SampleForceDeployment::DEPLOYED_BYTECODE.clone(),
+    )]
+    .into_iter()
+    .collect();
+    let protocol_upgrade = upgrade_tester
+        .protocol_upgrade_builder()
+        .await?
+        .bump_minor(1)
+        .with_force_deployments(force_deployments)
+        .with_timestamp(U256::from(1))
+        .build();
+
+    let l1_chain_id = cluster.node(0).l1_provider().get_chain_id().await?;
+    let committer_facet = CommitterFacetV31::deploy(
+        cluster.node(0).l1_provider().clone(),
+        U256::from(l1_chain_id),
+    )
+    .await?;
+    let facet_cut = FacetCut {
+        facet: *committer_facet.address(),
+        action: Action::Replace,
+        isFreezable: true,
+        selectors: vec![FixedBytes(
+            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
+        )],
+    };
+
+    upgrade_tester
+        .execute_default_upgrade(
+            &protocol_upgrade,
+            U256::MAX,
+            U256::from(1),
+            false,
+            vec![facet_cut],
+        )
+        .await?;
+
+    // The activation executed *identically* on every validator: the force
+    // deployment is post-upgrade state, served by each node's own chain.
+    for validator in 0..4 {
+        let deployed =
+            SampleForceDeployment::new(force_address, cluster.node(validator).l2_provider.clone());
+        assert_eq!(
+            deployed.return42().call().await?,
+            U256::from(42),
+            "validator {validator} did not execute the upgrade's force deployment",
+        );
+    }
+
+    // The committee agreed on the upgrade-era blocks, and stays live with
+    // every validator accepting traffic post-upgrade.
+    let tip = cluster.max_height().await?;
+    cluster
+        .wait_for_block_on_all(tip, CONVERGENCE_TIMEOUT)
+        .await?;
+    cluster.assert_block_hashes_agree(tip).await?;
+    let mut last = tip;
+    for via in [1, 2, 3] {
+        last = send_transfer(&cluster, via, Address::repeat_byte(0x72 + via as u8)).await?;
+        // Converge before rotating to the next submitter: each node's provider
+        // derives the sender nonce from that node's own state, so a lagging
+        // follower would compute a stale nonce.
+        cluster
+            .wait_for_block_on_all(last, CONVERGENCE_TIMEOUT)
+            .await?;
+    }
+    cluster.assert_block_hashes_agree(last).await?;
 
     Ok(())
 }

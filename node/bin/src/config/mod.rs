@@ -2428,6 +2428,9 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
         Self {
             max_blocks_to_process: c.max_blocks_to_process,
             confirmations: c.confirmations,
+            // Not operator-facing: the node wiring flips this for the watchers whose
+            // events become consensus block content (see the mempool assembly in lib.rs).
+            finalized_ingestion: false,
             poll_interval: c.poll_interval,
             finalized_poll_interval: c.finalized_poll_interval,
             logs_cache_capacity: c.logs_cache_capacity,

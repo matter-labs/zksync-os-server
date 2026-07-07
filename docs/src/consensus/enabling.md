@@ -64,7 +64,10 @@ version — flipping the config — is the coordinated step, done committee-wide
 Consensus messages cannot be negotiated per-connection the way ordinary p2p
 protocols do it, for a structural reason: a finality certificate aggregates many
 validators' signatures over one message encoding, so the protocol version is a
-committee-wide fact, not a pairwise one.
+committee-wide fact, not a pairwise one. The step-by-step activation runbook —
+including the deliberate halt window and how to track flip progress via the chain
+fingerprint — is ["Changing the consensus protocol version (flag
+day)"](operating.md#changing-the-consensus-protocol-version-flag-day).
 
 ## Migrating an existing chain into a committee
 

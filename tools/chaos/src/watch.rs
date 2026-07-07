@@ -74,6 +74,9 @@ pub struct NodeObservation {
     /// many peer proposals it has permanently rejected (linkage, validity, or
     /// re-execution mismatch). Never ticks on an honest, converged cluster.
     pub verify_invalid: u64,
+    /// The committee-uniform configuration fingerprint the node serves; any
+    /// two healthy members must agree.
+    pub chain_fingerprint: Option<String>,
     /// Log lines since the previous poll that match the forbidden patterns.
     pub suspicious_log_lines: Vec<String>,
 }
@@ -145,6 +148,10 @@ pub enum Finding {
     /// `invalid` ticked). On an honest cluster this is the STF-divergence
     /// tripwire: some peer built a block this node's re-execution refuses.
     VerifyRejection { validator: usize, count: u64 },
+    /// Validators serve different committee-uniform config fingerprints —
+    /// config drift, caught before an epoch boundary or upgrade makes it
+    /// expensive.
+    ConfigDrift { fingerprints: Vec<(usize, String)> },
     /// The committee was expected live for the whole window but no new finalization
     /// appeared.
     LivenessStall {
@@ -336,6 +343,23 @@ impl Checker {
                     line: line.clone(),
                 });
             }
+        }
+
+        // Committee-uniform config must be uniform: any two served
+        // fingerprints that differ are drift.
+        let fingerprints: Vec<(usize, String)> = poll
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                node.chain_fingerprint
+                    .clone()
+                    .filter(|fingerprint| !fingerprint.is_empty())
+                    .map(|fingerprint| (index, fingerprint))
+            })
+            .collect();
+        if fingerprints.windows(2).any(|pair| pair[0].1 != pair[1].1) {
+            findings.push(Finding::ConfigDrift { fingerprints });
         }
 
         // Progress-without-quorum: once the settle margin after losing quorum has
@@ -592,6 +616,9 @@ impl NodeProbe {
         let applied_height = consensus
             .as_ref()
             .and_then(|consensus| consensus.applied_height);
+        let chain_fingerprint = consensus
+            .as_ref()
+            .map(|consensus| consensus.chain_fingerprint.clone());
 
         NodeObservation {
             running,
@@ -602,6 +629,7 @@ impl NodeProbe {
             execution_at_probe,
             evidence,
             verify_invalid,
+            chain_fingerprint,
             suspicious_log_lines,
         }
     }
@@ -802,6 +830,7 @@ mod tests {
             execution_at_probe: None,
             evidence: 0,
             verify_invalid: 0,
+            chain_fingerprint: None,
             suspicious_log_lines: Vec::new(),
         }
     }
@@ -988,6 +1017,29 @@ mod tests {
                 }
             )),
             "no execution finding: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn diverging_config_fingerprints_are_a_finding() {
+        let mut checker = Checker::new(2, Duration::from_secs(5), Duration::from_secs(60));
+        let mut a = observation(10, "0x");
+        let mut b = observation(10, "0x");
+        a.chain_fingerprint = Some("aaaa".to_string());
+        b.chain_fingerprint = Some("bbbb".to_string());
+        let findings = checker.observe(
+            Instant::now(),
+            &healthy_expectations(2),
+            &Poll {
+                probe_height: None,
+                nodes: vec![a, b],
+            },
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::ConfigDrift { .. })),
+            "no drift finding: {findings:?}"
         );
     }
 

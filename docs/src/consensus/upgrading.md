@@ -39,12 +39,17 @@ releases. Our policy, pre-launch: **cross-version journal compatibility is not
 required.** A validator can always be rebuilt — fresh consensus storage, state
 restored from the chain itself — using the recovery runbook in
 [Running it](enabling.md); a committee of `n ≥ 3f+1` tolerates each member being
-rebuilt in turn. What the procedure does require is *knowing*: check upstream's
-release notes for storage-format changes, and if the upgrade is deployed onto
-validators with existing journals, either upstream guarantees compatibility for that
-pair of versions or the rollout plan says "rebuild per validator" explicitly. Once
-real value depends on the network, this policy gets revisited — that is a launch
-checklist item, not a footnote here.
+rebuilt in turn. What the procedure does require is *knowing*, and knowing is now
+executable: the **consensus-storage replay gate**
+(`lib/consensus/sim/tests/replay_gate.rs`) reopens a committed fixture of a full
+cluster's consensus storage — vote journals, block and finalization archives,
+marshal's caches and processed-height markers — under the current stack and
+requires the chain to resume. An upgrade that breaks on-disk compatibility fails
+this gate on the PR; the response is either upstream compatibility for that version
+pair or a rollout plan that says "rebuild per validator" explicitly (and then a
+deliberate, reviewed fixture regeneration — the policy is at the top of that test
+file). Once real value depends on the network, the rebuild-is-acceptable stance
+gets revisited — that is a launch checklist item, not a footnote here.
 
 **The committee's version discipline.** A commonware upgrade rides inside a node
 release, and inside a committee it is governed by the protocol-version rule from
@@ -104,14 +109,16 @@ Each step gates the next; a failure means stop and decide, not push through.
 4. **Climb the regression ladder.** In order, because each rung is faster and more
    precise than the next: workspace unit tests including the full simulation corpus
    (the DSTs are the primary consensus surface — see
-   [How it is tested](testing.md)); the `lib/wire` goldens, byte-identical and
-   unregenerated; clippy and fmt clean; the consensus, migration, and
-   reconfiguration integration-test groups (real nodes, real RocksDB, real L1);
-   and finally a chaos-rig soak on an image built from the upgraded tree — faults,
-   load, and epoch rotation under wall-clock time, watched by the rig's log
-   scanner. The soak is the only rung that catches timing- and teardown-shaped
-   regressions, which is exactly the shape of change runtime releases tend to
-   carry.
+   [How it is tested](testing.md)) and the consensus-storage replay gate, which
+   must pass **against the old fixture, unregenerated** (that is the on-disk
+   compatibility claim — see the policy above); the `lib/wire` goldens,
+   byte-identical and unregenerated; clippy and fmt clean; the consensus,
+   migration, and reconfiguration integration-test groups (real nodes, real
+   RocksDB, real L1); and finally a chaos-rig soak on an image built from the
+   upgraded tree — faults, load, and epoch rotation under wall-clock time, watched
+   by the rig's log scanner. The soak is the only rung that catches timing- and
+   teardown-shaped regressions, which is exactly the shape of change runtime
+   releases tend to carry.
 
 5. **Re-judge the findings register** (previous section), removing workarounds for
    what upstream fixed and refreshing issue drafts for what remains.
