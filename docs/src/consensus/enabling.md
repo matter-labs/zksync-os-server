@@ -260,6 +260,9 @@ start from are gone. The floor comes from the node's own finality store, which
 is exactly why that store is never pruned: certificates there are the permanent
 proof trail, and the floors for every future rebuild.
 
+> Day-two operations — the alarm table, timing characteristics, and the
+> incident playbook — live in [Operating a committee](operating.md).
+
 ## Idle chains
 
 A quiet chain does not fill with empty blocks. With `consensus.idle_heartbeat`

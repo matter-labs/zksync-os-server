@@ -781,6 +781,15 @@ pub struct ConsensusConfig {
     /// so block cadence is predictable. See `idle_policy` in the consensus
     /// execution crate.
     #[config(default_t = Duration::from_secs(600))]
+    #[config_validate(custom(
+        |root: &Config, value: &Duration| {
+            // Zero is the explicit legacy mode; a non-zero heartbeat at or
+            // below the block cadence is a confused configuration (it would
+            // behave like legacy while claiming not to).
+            value.is_zero() || *value >= root.sequencer_config.block_time.saturating_mul(4)
+        },
+        "must be 0s (legacy: idle leaders always build) or well above `sequencer.block_time`"
+    ))]
     pub idle_heartbeat: Duration,
     /// A node whose network key appears in no `committees` entry refuses to start
     /// with consensus enabled — a validator that cannot ever vote is usually a

@@ -822,6 +822,25 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // pool moves into the builder.
         let l1_inputs_view = pool.l1_inputs_view();
 
+        // The operational timing this configuration implies, in one line an
+        // operator can sanity-check (the derivations are documented in the
+        // "Operating a committee" chapter).
+        {
+            let block_time = config.sequencer_config.block_time.as_secs_f64();
+            let epoch = std::time::Duration::from_secs_f64(
+                block_time * config.consensus_config.epoch_length as f64,
+            );
+            let retention = config.consensus_config.epoch_retention.max(1);
+            let catch_up =
+                std::time::Duration::from_secs_f64(epoch.as_secs_f64() * retention as f64);
+            tracing::info!(
+                epoch_under_load = ?epoch,
+                emergency_rotation_sprint_bound = ?epoch,
+                catch_up_window_under_load = ?catch_up,
+                idle_heartbeat = ?config.consensus_config.idle_heartbeat,
+                "consensus timing characteristics"
+            );
+        }
         // The idle policy is the deliberate strategy for quiet chains — see the
         // `idle_policy` module for the full story. Sprint targets come from the
         // schedule: an entry still waiting for its boundary keeps idle leaders

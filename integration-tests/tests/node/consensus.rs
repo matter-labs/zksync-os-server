@@ -191,6 +191,27 @@ async fn validator_restart_rejoins_catches_up_and_votes_again() -> anyhow::Resul
         .await?;
     cluster.assert_block_hashes_agree(after_rejoin).await?;
 
+    // The finality trail must self-heal too: certificates for the heights
+    // finalized while validator 3 was down never re-broadcast, but its first
+    // live certificate after catching up covers them — the certified watermark
+    // converges to the moving tip instead of stalling at the downtime hole.
+    let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        let status = cluster.node(3).status().await?;
+        let consensus = status.consensus.expect("validator serves consensus status");
+        let certified = consensus.finality_certified_height.unwrap_or(0);
+        let applied = consensus.applied_height.unwrap_or(0);
+        if certified >= after_rejoin && applied.saturating_sub(certified) < 16 {
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "restarted validator's certified watermark never converged: \
+             certified {certified}, applied {applied}, needed >= {after_rejoin}",
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
     cluster.shutdown_all().await
 }
 

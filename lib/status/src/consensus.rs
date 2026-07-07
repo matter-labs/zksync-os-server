@@ -35,8 +35,10 @@ pub struct ConsensusStatusSource {
     pub finalized: watch::Receiver<Option<FinalizedObservation>>,
     /// Height of the last block durably applied by this node's pipeline.
     pub applied_height: watch::Receiver<Option<u64>>,
-    /// Highest height with a complete, contiguous certificate trail in the node's
-    /// own finality store (see the consensus execution crate's finality store).
+    /// Highest height *covered* by the node's own finality store: certified at
+    /// that height or by a later stored certificate over the contiguous digest
+    /// trail (see the consensus execution crate's finality store). Tracks the
+    /// tip on a healthy chain; a stall is a real health signal.
     pub finality_certified: watch::Receiver<Option<u64>>,
     pub metrics_encoder: watch::Receiver<Option<ConsensusMetricsEncoder>>,
 }
@@ -53,8 +55,9 @@ pub struct ConsensusStatus {
     pub finalized: Option<FinalizedObservation>,
     /// Node-side progress: the height this node has durably applied.
     pub applied_height: Option<u64>,
-    /// Every height up to this one has its finality certificate stored in the
-    /// node's own format — the externally-provable-finality trail.
+    /// Every height up to this one is covered by the node's stored finality
+    /// certificates (its own height's, or a later one over the contiguous
+    /// digest trail) — the externally-provable-finality trail.
     #[serde(default)]
     pub finality_certified_height: Option<u64>,
 }

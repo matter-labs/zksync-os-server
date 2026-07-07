@@ -15,10 +15,16 @@
 //! writes the height→digest index (it sees the block, but no certificate). Both
 //! writes are idempotent, so at-least-once delivery and restarts are absorbed.
 //!
-//! The *certified watermark* joins the two streams: the highest height H such that
-//! every height 1..=H has an indexed digest whose certificate is present. It only
-//! advances — a gap in either stream stalls it, which makes it an honest
-//! end-to-end health gauge (surfaced in `/status`).
+//! The *certified watermark* joins the two streams: the highest height H that is
+//! *covered* — H has an indexed digest and a certificate at H or at some later
+//! height reachable through the contiguous digest index (a certificate vouches
+//! for its whole recorded ancestry; this is the same covering authentication
+//! marshal's backfill trusts). Coverage rather than per-height presence is
+//! deliberate: certificates finalized while this validator was down never
+//! re-broadcast, so a per-height rule would stall forever after any downtime,
+//! while coverage heals at the first live certificate after catch-up. The
+//! watermark only advances, and on a healthy chain it tracks the tip — a stall
+//! is an honest end-to-end health signal (surfaced in `/status`).
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -131,7 +137,9 @@ impl FinalityStore {
             &encoded,
         );
         self.db.write(batch)?;
-        self.advance_watermark()
+        // A new certificate is what can lift the watermark over an uncovered
+        // range, so this is the one place the covering probe runs.
+        self.advance_watermark(true)
     }
 
     /// Records which digest was finalized at `height`. Idempotent; called by the
@@ -140,7 +148,7 @@ impl FinalityStore {
         let mut batch = self.db.new_write_batch();
         batch.put_cf(FinalityCF::HeightIndex, &height.to_be_bytes(), &digest);
         self.db.write(batch)?;
-        self.advance_watermark()
+        self.advance_watermark(false)
     }
 
     /// The consensus era this chain runs: the digest of the consensus genesis block
@@ -185,8 +193,8 @@ impl FinalityStore {
             }
         }
         // Certificates observed before the era was recorded may already continue
-        // past the floor.
-        self.advance_watermark()
+        // past the floor — including covering ones above a gap.
+        self.advance_watermark(true)
     }
 
     /// Records the highest consensus round this validator has *seen* — an upper
@@ -382,20 +390,66 @@ impl FinalityStore {
         Ok(Some(u64::from_be_bytes(bytes)))
     }
 
-    /// Advances the certified watermark over every consecutive height that now has a
-    /// certificate. Amortized O(1): each height is walked over once, ever.
-    fn advance_watermark(&self) -> anyhow::Result<()> {
+    /// Advances the certified watermark. A height is *covered* the way the
+    /// protocol itself authenticates history during catch-up: by a certificate
+    /// at that height or by any later certificate reachable through the
+    /// contiguous digest index (each digest commits to its parent, so one
+    /// certificate vouches for its whole recorded ancestry). Certificates for
+    /// heights finalized while this validator was down never re-broadcast —
+    /// marshal's backfill deliberately fetches blocks, not per-height
+    /// certificates — so a per-height rule would stall on such a hole forever;
+    /// the covering rule heals at the first live certificate after catch-up.
+    ///
+    /// Two motions, both monotone:
+    /// - the dense walk (every advance): step while the next height has its own
+    ///   certificate — amortized O(1), each height walked once;
+    /// - the covering probe (`certificate_arrived` only): from the stall point,
+    ///   scan the contiguous digest range ahead for the highest height with a
+    ///   certificate and jump there. Probes only run when a certificate landed,
+    ///   so backfill's index-only churn never rescans the hole.
+    fn advance_watermark(&self, certificate_arrived: bool) -> anyhow::Result<()> {
         let _guard = self.watermark_lock.lock().unwrap();
-        let mut watermark = self.certified_watermark()?;
-        let mut advanced = false;
-        while self
-            .certificate_by_height(watermark.unwrap_or(0) + 1)?
-            .is_some()
-        {
-            watermark = Some(watermark.unwrap_or(0) + 1);
-            advanced = true;
+        let started_at = self.certified_watermark()?;
+        let mut watermark = started_at;
+
+        loop {
+            // Dense walk: consecutive heights carrying their own certificates.
+            while self
+                .certificate_by_height(watermark.unwrap_or(0) + 1)?
+                .is_some()
+            {
+                watermark = Some(watermark.unwrap_or(0) + 1);
+            }
+            if !certificate_arrived {
+                break;
+            }
+            // Covering probe: the highest certified height reachable through
+            // contiguous digests above the stall point.
+            let mut cursor = watermark.unwrap_or(0);
+            let mut jump_to = None;
+            while let Some(digest) = self.digest_at_height(cursor + 1)? {
+                cursor += 1;
+                if self.certificate_by_digest(&digest)?.is_some() {
+                    jump_to = Some(cursor);
+                }
+            }
+            match jump_to {
+                Some(covered) if Some(covered) > watermark => {
+                    tracing::info!(
+                        from = watermark.unwrap_or(0),
+                        to = covered,
+                        "certified watermark jumped an uncovered range (certificates \
+                         finalized during downtime are covered by a later one)",
+                    );
+                    watermark = Some(covered);
+                    // The jump may expose a dense run right above it.
+                    continue;
+                }
+                _ => break,
+            }
         }
-        if advanced {
+
+        if watermark != started_at {
             let mut batch = self.db.new_write_batch();
             batch.put_cf(
                 FinalityCF::Meta,
@@ -465,6 +519,82 @@ mod tests {
             .expect("present");
         assert_eq!(by_height.view, 11);
         assert!(store.certificate_by_height(4).expect("read").is_none());
+    }
+
+    /// The downtime shape: heights finalized while a validator is down are
+    /// backfilled as blocks only — their per-height certificates never
+    /// re-broadcast. The first live certificate after catch-up must cover the
+    /// hole (a certificate vouches for its recorded ancestry), or the
+    /// watermark stalls forever, which is exactly what soaks observed under
+    /// the per-height rule.
+    #[test]
+    fn a_later_certificate_covers_a_downtime_hole() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FinalityStore::open(dir.path()).expect("open");
+
+        // Live before the crash: heights 1..=3, densely certified.
+        for height in 1..=3u64 {
+            store
+                .index_height(height, [height as u8; 32])
+                .expect("write");
+            store
+                .put_certificate(&certificate(height, [height as u8; 32]))
+                .expect("write");
+        }
+        assert_eq!(store.certified_watermark().expect("read"), Some(3));
+
+        // Down for heights 4..=6: backfill re-commits the blocks (index only).
+        for height in 4..=6u64 {
+            store
+                .index_height(height, [height as u8; 32])
+                .expect("write");
+        }
+        assert_eq!(
+            store.certified_watermark().expect("read"),
+            Some(3),
+            "index-only backfill must not move the watermark",
+        );
+
+        // Live again: height 7 lands with its certificate — covering 4..=6.
+        store.index_height(7, [7; 32]).expect("write");
+        store
+            .put_certificate(&certificate(7, [7; 32]))
+            .expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(7));
+    }
+
+    /// The covering jump never crosses a digest gap (nothing chains across
+    /// it), and a re-observed certificate — the scout re-hears them — is
+    /// enough to trigger the probe once the gap closes.
+    #[test]
+    fn covering_stops_at_digest_gaps_until_they_close() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FinalityStore::open(dir.path()).expect("open");
+
+        store.index_height(1, [1; 32]).expect("write");
+        store
+            .put_certificate(&certificate(1, [1; 32]))
+            .expect("write");
+        // Digests 2..=3 present, 4 missing, 5 present and certified.
+        store.index_height(2, [2; 32]).expect("write");
+        store.index_height(3, [3; 32]).expect("write");
+        store.index_height(5, [5; 32]).expect("write");
+        store
+            .put_certificate(&certificate(5, [5; 32]))
+            .expect("write");
+        assert_eq!(
+            store.certified_watermark().expect("read"),
+            Some(1),
+            "a certificate beyond a digest gap covers nothing",
+        );
+
+        // The gap closes (backfill delivers height 4); the certificate for 5
+        // is re-observed — put_certificate is idempotent — and now covers.
+        store.index_height(4, [4; 32]).expect("write");
+        store
+            .put_certificate(&certificate(5, [5; 32]))
+            .expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(5));
     }
 
     #[test]
