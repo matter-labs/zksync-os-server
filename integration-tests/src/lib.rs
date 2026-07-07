@@ -1039,7 +1039,18 @@ impl Drop for SupportingNode {
 
 impl Ports {
     pub(crate) async fn acquire_unused() -> anyhow::Result<Self> {
-        let l2_rpc = LockedPort::acquire_unused().await?;
+        // Demo/bench-only: `LOAD_TEST_L2_RPC_PORT` pins the main L2 RPC port to a fixed
+        // number (e.g. 8080) so an SSH tunnel / live dashboard can reach the node without
+        // discovering a random port per run. Extra listeners still derive `base+1..`.
+        let l2_rpc = match std::env::var("LOAD_TEST_L2_RPC_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+        {
+            Some(port) => acquire_port_with_retry(port)
+                .await
+                .with_context(|| format!("failed to acquire pinned L2 RPC port {port}"))?,
+            None => LockedPort::acquire_unused().await?,
+        };
         let extra_l2_rpc = acquire_extra_rpc_ports(l2_rpc.port).await?;
         Ok(Self {
             l2_rpc,

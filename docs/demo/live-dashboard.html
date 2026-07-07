@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZKsync OS — Live Throughput</title>
+<style>
+  /* Single dark theme by design: this page lives on projectors. */
+  :root {
+    --bg: #0b0f14;
+    --panel: #101720;
+    --ink: #f2f5f8;
+    --ink-2: #9fb0bf;
+    --muted: #5c6b79;
+    --line: #1d2835;
+    --blue: #3f8fe8;
+    --blue-dim: #1c5cab;
+    --green: #35d07f;
+    --amber: #f5a623;
+    --red: #e34948;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 36px 0;
+  }
+  .brand {
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .phase {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--muted);
+  }
+  .phase.waiting .dot { background: var(--amber); animation: pulse 1.6s infinite; }
+  .phase.live .dot { background: var(--green); animation: pulse 0.9s infinite; }
+  .phase.live { color: var(--green); }
+  .phase.done .dot { background: var(--blue); }
+  .phase.lost .dot { background: var(--red); animation: pulse 0.5s infinite; }
+  .phase.lost { color: var(--red); }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 36px;
+    min-height: 0;
+  }
+
+  .odo-label {
+    font-family: var(--mono);
+    font-size: clamp(12px, 1.3vw, 18px);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin-bottom: 0.4em;
+  }
+  .odometer {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(64px, 11.5vw, 190px);
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+  }
+  .odometer .dim { color: var(--muted); }
+
+  .eth-line {
+    margin-top: 0.5em;
+    font-size: clamp(16px, 2.1vw, 30px);
+    color: var(--ink-2);
+  }
+  .eth-line b { color: var(--ink); font-weight: 650; }
+
+  .row {
+    display: flex;
+    gap: 18px;
+    align-items: stretch;
+    margin-top: clamp(20px, 4vh, 48px);
+  }
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 22px 14px;
+    min-width: 180px;
+  }
+  .tile .k {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .tile .v {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(26px, 3.2vw, 46px);
+    font-weight: 700;
+    line-height: 1.05;
+  }
+  .tile .u { font-size: 0.45em; font-weight: 500; color: var(--ink-2); margin-left: 6px; }
+  .tile.spark { flex: 1; display: flex; flex-direction: column; min-width: 260px; }
+  .tile.spark canvas { flex: 1; width: 100%; min-height: 60px; }
+
+  footer {
+    padding: 14px 36px 18px;
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  footer .rpc { font-family: var(--mono); }
+
+  /* completion card */
+  #summary {
+    display: none;
+    margin-top: clamp(16px, 3vh, 36px);
+    border-top: 2px solid var(--blue);
+    padding-top: 16px;
+    font-size: clamp(15px, 1.8vw, 24px);
+    color: var(--ink-2);
+  }
+  #summary b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  body.done #summary { display: block; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">ZKsync OS · Live</div>
+    <div class="phase waiting" id="phase"><span class="dot"></span><span id="phase-text">waiting for load</span></div>
+  </header>
+
+  <main>
+    <div>
+      <div class="odo-label">Transactions processed</div>
+      <div class="odometer" id="odo">0</div>
+      <div class="eth-line" id="eth-line">&nbsp;</div>
+    </div>
+
+    <div class="row">
+      <div class="tile">
+        <span class="k">Throughput</span>
+        <span class="v"><span id="tps">0</span><span class="u">tx/s</span></span>
+      </div>
+      <div class="tile">
+        <span class="k">Block height</span>
+        <span class="v" id="height">—</span>
+      </div>
+      <div class="tile">
+        <span class="k">Blocks / s</span>
+        <span class="v" id="bps">0</span>
+      </div>
+      <div class="tile spark">
+        <span class="k">tx/s — last 60 seconds</span>
+        <canvas id="spark"></canvas>
+      </div>
+    </div>
+
+    <div id="summary"></div>
+  </main>
+
+  <footer>
+    <span>Live estimate from public JSON-RPC block polling (±1–2%). The terminal's final
+      <span style="font-family:var(--mono)">submitted_parallel_tps</span> line is the official figure.</span>
+    <span class="rpc" id="rpc-label"></span>
+  </footer>
+
+<script>
+(function () {
+  "use strict";
+  var RPC = new URLSearchParams(location.search).get("rpc") || "http://127.0.0.1:8080";
+  document.getElementById("rpc-label").textContent = RPC;
+
+  // Ethereum mainnet ~1.2M transactions per day (public explorer figures).
+  var ETH_TXS_PER_DAY = 1200000;
+  var POLL_MS = 200;
+  var LIVE_ENTER_BPS = 50;   // blocks/s to consider the load running
+  var LIVE_EXIT_BPS = 20;    // below this (after being live) the run is over
+  var EXIT_GRACE_MS = 3000;  // rate must stay low this long to finish
+  var MIN_LIVE_MS = 8000;    // ignore early dips right after start
+
+  var state = "waiting";     // waiting | live | done | lost
+  var lastBlock = null, lastPollAt = null;
+  var txsPerBlock = 0;       // EMA
+  var cumTxs = 0;            // integrated during live
+  var dispTxs = 0;           // animated display value
+  var rate = 0;              // txs/s EMA (display)
+  var bps = 0;               // blocks/s EMA
+  var liveStartAt = null, lowSince = null, peakTps = 0;
+  var liveStartBlock = null;
+  var sparkData = [];        // [t, tps]
+  var lostSince = null;
+
+  function fmt(n) { return Math.round(n).toLocaleString("en-US"); }
+
+  function setPhase(cls, text) {
+    var el = document.getElementById("phase");
+    el.className = "phase " + cls;
+    document.getElementById("phase-text").textContent = text;
+  }
+
+  function rpc(bodies) {
+    return fetch(RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bodies),
+    }).then(function (r) { return r.json(); });
+  }
+
+  function poll() {
+    rpc([
+      { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] },
+      { jsonrpc: "2.0", id: 2, method: "eth_getBlockTransactionCountByNumber", params: ["latest"] },
+    ]).then(function (res) {
+      lostSince = null;
+      var byId = {};
+      res.forEach(function (e) { byId[e.id] = e; });
+      var bn = parseInt(byId[1].result, 16);
+      var txc = parseInt(byId[2].result, 16) || 0;
+      var now = performance.now();
+
+      if (lastBlock !== null && lastPollAt !== null) {
+        var dt = (now - lastPollAt) / 1000;
+        var dBlocks = Math.max(0, bn - lastBlock);
+        var instBps = dBlocks / dt;
+        bps = bps * 0.8 + instBps * 0.2;
+        if (txc > 0) txsPerBlock = txsPerBlock === 0 ? txc : txsPerBlock * 0.8 + txc * 0.2;
+        var instTps = dBlocks * (txsPerBlock || txc) / dt;
+        rate = rate * 0.75 + instTps * 0.25;
+
+        if (state === "live") {
+          cumTxs += dBlocks * (txsPerBlock || txc);
+          if (rate > peakTps) peakTps = rate;
+          sparkData.push([now, rate]);
+          while (sparkData.length && now - sparkData[0][0] > 60000) sparkData.shift();
+
+          if (bps < LIVE_EXIT_BPS && now - liveStartAt > MIN_LIVE_MS) {
+            if (lowSince === null) lowSince = now;
+            if (now - lowSince > EXIT_GRACE_MS) finish(now, bn);
+          } else {
+            lowSince = null;
+          }
+        } else if (state === "waiting" && instBps > LIVE_ENTER_BPS) {
+          state = "live";
+          liveStartAt = now;
+          liveStartBlock = bn;
+          cumTxs = dBlocks * (txsPerBlock || txc);
+          dispTxs = 0;
+          peakTps = 0;
+          sparkData = [];
+          setPhase("live", "live");
+        }
+      }
+      lastBlock = bn;
+      lastPollAt = now;
+      document.getElementById("height").textContent = fmt(bn);
+      if (state !== "done") setTimeout(poll, POLL_MS);
+    }).catch(function () {
+      if (state !== "done") {
+        if (lostSince === null) lostSince = performance.now();
+        setPhase("lost", "connection lost — retrying");
+        setTimeout(poll, 700);
+      }
+    });
+  }
+
+  function finish(now, bn) {
+    state = "done";
+    document.body.classList.add("done");
+    var secs = (now - liveStartAt) / 1000;
+    var avg = cumTxs / secs;
+    setPhase("done", "run complete");
+    document.getElementById("summary").innerHTML =
+      "Run complete: <b>" + fmt(cumTxs) + "</b> transactions in <b>" + secs.toFixed(1) +
+      "s</b> — average <b>" + fmt(avg) + "</b> tx/s, peak <b>" + fmt(peakTps) +
+      "</b> tx/s, <b>" + fmt(bn - liveStartBlock) + "</b> blocks. " +
+      "Equivalent to <b>" + (cumTxs / ETH_TXS_PER_DAY).toFixed(1) +
+      " days</b> of Ethereum mainnet traffic.";
+  }
+
+  // ---- animation loop: roll the odometer smoothly between polls ----
+  var lastFrame = performance.now();
+  function frame(now) {
+    var dt = (now - lastFrame) / 1000;
+    lastFrame = now;
+    if (state === "live") {
+      dispTxs += rate * dt;
+      // gentle correction toward the integrated truth
+      dispTxs += (cumTxs - dispTxs) * Math.min(1, dt * 2);
+    } else if (state === "done") {
+      dispTxs = cumTxs;
+    }
+    document.getElementById("odo").textContent = fmt(dispTxs);
+    document.getElementById("tps").textContent = fmt(state === "live" ? rate : (state === "done" ? 0 : 0));
+    document.getElementById("bps").textContent = state === "live" ? fmt(bps) : "0";
+    var days = dispTxs / ETH_TXS_PER_DAY;
+    document.getElementById("eth-line").innerHTML = days > 0.05
+      ? "&asymp; <b>" + days.toFixed(1) + " days</b> of Ethereum mainnet traffic"
+      : "&nbsp;";
+    drawSpark();
+    requestAnimationFrame(frame);
+  }
+
+  var canvas = document.getElementById("spark");
+  var ctx = canvas.getContext("2d");
+  function drawSpark() {
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== w * devicePixelRatio) {
+      canvas.width = w * devicePixelRatio;
+      canvas.height = h * devicePixelRatio;
+    }
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (sparkData.length < 2) return;
+    var now = performance.now();
+    var max = 1;
+    for (var i = 0; i < sparkData.length; i++) max = Math.max(max, sparkData[i][1]);
+    max *= 1.15;
+    // 1M reference line, when in range
+    if (max > 1000000 * 0.6) {
+      var refY = h - (1000000 / max) * h;
+      ctx.strokeStyle = "rgba(159,176,191,0.35)";
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath(); ctx.moveTo(0, refY); ctx.lineTo(w, refY); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.beginPath();
+    for (var j = 0; j < sparkData.length; j++) {
+      var x = w - ((now - sparkData[j][0]) / 60000) * w;
+      var y = h - (sparkData[j][1] / max) * h;
+      if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = "#3f8fe8";
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = "round";
+    ctx.stroke();
+    // area fill
+    ctx.lineTo(w, h); ctx.lineTo(w - (now - sparkData[0][0]) / 60000 * w, h);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(63,143,232,0.12)";
+    ctx.fill();
+  }
+
+  setPhase("waiting", "waiting for load");
+  poll();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
