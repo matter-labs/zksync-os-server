@@ -109,6 +109,7 @@ impl ExecuteCommand {
                 let mut logs = Vec::new();
                 let mut messages = Vec::new();
                 let mut multichain_roots = Vec::new();
+                let mut imt_roots = Vec::new();
                 if gateway {
                     logs = self
                         .batches
@@ -133,6 +134,14 @@ impl ExecuteCommand {
                         .iter()
                         .map(|batch| batch.batch.multichain_root)
                         .collect::<Vec<_>>();
+                    imt_roots = self
+                        .batches
+                        .iter()
+                        .map(|batch| IExecutor::BatchImtRoots {
+                            rootBegin: batch.batch.imt_root_begin,
+                            rootEnd: batch.batch.imt_root_end,
+                        })
+                        .collect::<Vec<_>>();
                 }
                 (
                     stored_batch_infos,
@@ -141,6 +150,7 @@ impl ExecuteCommand {
                     logs,
                     messages,
                     multichain_roots,
+                    imt_roots,
                     operator,
                 )
                     .abi_encode_params()

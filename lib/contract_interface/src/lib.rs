@@ -385,6 +385,13 @@ alloy::sol! {
            bytes32 value;
        }
 
+        /// A batch's interop commitment tree (IMT) root snapshots at its boundaries, as committed
+        /// by the bootloader into the chain batch root (leaves 2 and 3 of ChainBatchRootTree).
+        struct BatchImtRoots {
+            bytes32 rootBegin;
+            bytes32 rootEnd;
+        }
+
         function executeBatchesSharedBridge(
             address _chainAddress,
             uint256 _processFrom,

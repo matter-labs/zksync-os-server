@@ -28,7 +28,9 @@ pub use state::{ReadStateHistory, StateError, StateResult, ViewState, WriteState
 pub mod state_override_view;
 pub use state_override_view::OverriddenStateView;
 
+mod read_commitment_tree_root;
 mod read_multichain_root;
+pub use read_commitment_tree_root::read_commitment_tree_root;
 pub use read_multichain_root::read_multichain_root;
 mod overlay_buffer;
 pub use overlay_buffer::OverlayBuffer;

@@ -8,5 +8,6 @@ pub use block_merkle_tree_data::BlockMerkleTreeData;
 
 mod batch_info;
 pub mod batcher_model;
+pub mod chain_batch_root;
 
 pub use batch_info::{CommittedBatchInfo, DiscoveredCommittedBatch, PendingBatchInfo};

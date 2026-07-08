@@ -17,8 +17,8 @@
  * predeploys the atomic built-ins (`L2InteropCommitmentTree` @ 0x10012,
  * `AtomicFlowManager` @ 0x10014) and uses the atomic protocol layout
  * (`InteropCenter` @ 0x1000d, `InteropHandler` @ 0x1000e), built from the
- * `kl/l1-settled-interop-proof` server branch + the `atomic-imt-interop`
- * era-contracts genesis. The pinned `test-only-interop-demo` image in this stack
+ * `ad-atomic-interop` server branch + the `atomic-imt-interop`
+ * era-contracts genesis (chain-batch-root leaf proof model). The pinned `test-only-interop-demo` image in this stack
  * does NOT support it. See ATOMIC-INTEROP-PLAN.md. This script detects that at
  * startup and prints a precise BLOCKED message rather than failing obscurely.
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,7 +29,8 @@
  *   npx ts-node examples/atomic-swap-3chains.ts
  *
  * Optional env:
- *   ATOMIC_DEADLINE_BLOCK   settlement-layer block number for the flow deadline
+ *   ATOMIC_DEADLINE_TS      settlement-layer (L1) timestamp for the flow deadline
+ *                           (default: latest L1 block timestamp + 24h)
  *   ATOMIC_INTEROP_CENTER / ATOMIC_INTEROP_HANDLER /
  *   ATOMIC_COMMITMENT_TREE / ATOMIC_FLOW_MANAGER  layout overrides (if the
  *                          published atomic image uses a different layout)
@@ -50,12 +51,10 @@ import {
   AtomicInteropHandlerAbi,
   AtomicFlowManagerAbi,
   INTEROP_BUNDLE_TUPLE,
-  commitmentTreeContract,
   atomicBundleAttr,
   computeFlowId,
   commitValue,
   sortLegs,
-  lowNullifierIndexFor,
   atomicFinalityProofTuple,
   LegState,
   type ImtProof,
@@ -150,17 +149,16 @@ async function sendAtomicLeg(params: {
   const { source, dest, amount, recipient, flowId, deadline, predictedHash, interopCenterAddr, commitmentTreeAddr, value } =
     params;
 
-  // Low-nullifier index from the server's IMT engine (zks_getImtLowNullifierIndex),
-  // falling back to off-chain reconstruction if the RPC is absent.
+  // Low-nullifier index from the server's IMT engine (zks_getImtLowNullifierIndex). The atomic
+  // server always exposes it; a null result means the value is already present (or the tree is
+  // uninitialized), both fatal for a fresh send.
   const v = commitValue(flowId, predictedHash);
   const block = await source.provider.getBlockNumber();
-  let lowNull: number;
-  const lnRpc = await source.provider.send('zks_getImtLowNullifierIndex', [v, block]).catch(() => null);
-  if (lnRpc !== null && lnRpc !== undefined) {
-    lowNull = Number(lnRpc);
-  } else {
-    lowNull = await lowNullifierIndexFor(commitmentTreeContract(commitmentTreeAddr, source.provider), v);
+  const lnRpc = await source.provider.send('zks_getImtLowNullifierIndex', [v, block]);
+  if (lnRpc === null || lnRpc === undefined) {
+    throw new Error(`no low-nullifier for commit value ${v} at block ${block} (already committed?)`);
   }
+  const lowNull = Number(lnRpc);
 
   const ic = new ethers.Contract(interopCenterAddr, AtomicInteropCenterAbi, source.wallet);
   const builder = new BundleBuilder(dest.chainId).addCall(legCall(source, amount, recipient));
@@ -199,64 +197,56 @@ async function sendAtomicLeg(params: {
 const COMMITMENT_TREE_ADDR = '0x0000000000000000000000000000000000010012';
 const L2_INTEROP_ROOT_STORAGE = '0x0000000000000000000000000000000000010008';
 
-/** Index of the commitment-tree (0x10012) publish among a send tx's l2ToL1Logs. */
-async function commitmentTreeMessageIndex(provider: ethers.JsonRpcProvider, txHash: string): Promise<number> {
-  const receipt: any = await provider.send('eth_getTransactionReceipt', [txHash]);
-  const logs = receipt?.l2ToL1Logs ?? [];
-  for (let i = 0; i < logs.length; i++) {
-    if ((logs[i].sender ?? '').toLowerCase() === COMMITMENT_TREE_ADDR.toLowerCase()) return i;
-  }
-  return 0;
-}
-
-interface RawLogProof {
-  batchNumber?: number;
-  id: number;
-  proof: string[];
-  gatewayBlockNumber?: number;
-}
-
-/** Poll zks_getL2ToL1LogProof(messageRoot) until the commitment-tree publish settles. */
-async function waitForMessageProof(
-  provider: ethers.JsonRpcProvider,
-  txHash: string,
-  msgIndex: number
-): Promise<RawLogProof> {
-  for (let i = 0; i < 150; i++) {
-    const p = await provider.send('zks_getL2ToL1LogProof', [txHash, msgIndex, 'messageRoot']);
-    if (p) return p as RawLogProof;
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  throw new Error(`timed out waiting for message proof of ${txHash}`);
-}
-
+/**
+ * Server-completed per-leg proof (mirror of the `zks_getImtInclusionProof` /
+ * `zks_getImtNonInclusionProof` response): the IMT half against the batch-end (inclusion) or
+ * batch-begin (non-inclusion) root, plus the settlement half authenticating that root as a
+ * chain-batch-root leaf against the imported interop root.
+ */
 interface RpcImtProof {
+  batchNumber: number;
+  settlementBlockNumber?: number;
   chainImtRoot: string;
+  settlementProof: string[];
   leaf: { value: string; nextIndex: string; nextValue: string };
   imtLeafIndex: number;
   imtProof: string[];
 }
 
-/** Build a full per-leg ImtProof from the server RPCs (mirrors atomic_swap.rs build_inclusion_proof). */
-async function buildLegProof(
+/**
+ * Poll `zks_getImtInclusionProof(value, sendBlock)` until the batch containing the send is
+ * executed on L1 and the proof is available. The server errors with "batch not available yet"
+ * until execution; a `null` result means the commit value is genuinely absent (fail fast).
+ */
+async function waitForImtInclusionProof(
   provider: ethers.JsonRpcProvider,
-  chainId: bigint,
   value: string,
-  sendBlock: number,
-  raw: RawLogProof
-): Promise<ImtProof> {
-  const imt: RpcImtProof | null = await provider.send('zks_getImtInclusionProof', [value, sendBlock]);
-  if (!imt) throw new Error(`commit value ${value} not present in IMT (server returned null)`);
+  sendBlock: number
+): Promise<RpcImtProof> {
+  for (let i = 0; i < 150; i++) {
+    try {
+      const p = await provider.send('zks_getImtInclusionProof', [value, sendBlock]);
+      if (p) return p as RpcImtProof;
+      throw new Error(`commit value ${value} not present in IMT (server returned null)`);
+    } catch (err) {
+      const msg = (err as Error).message ?? '';
+      if (!/not been finalized|not available/i.test(msg)) throw err;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error(`timed out waiting for IMT inclusion proof of ${value}`);
+}
+
+/** Attach the source chain id to a server proof, forming the on-chain `ImtProof`. */
+function toLegProof(chainId: bigint, p: RpcImtProof): ImtProof {
   return {
     sourceChainId: chainId.toString(),
-    batchNumber: String(raw.batchNumber ?? 0),
-    chainImtRoot: imt.chainImtRoot,
-    messageTxNumberInBatch: 0,
-    messageIndex: String(raw.id),
-    messageProof: raw.proof,
-    leaf: { value: String(imt.leaf.value), nextIndex: String(imt.leaf.nextIndex), nextValue: String(imt.leaf.nextValue) },
-    imtLeafIndex: Number(imt.imtLeafIndex),
-    imtProof: imt.imtProof,
+    batchNumber: String(p.batchNumber),
+    chainImtRoot: p.chainImtRoot,
+    settlementProof: p.settlementProof,
+    leaf: { value: String(p.leaf.value), nextIndex: String(p.leaf.nextIndex), nextValue: String(p.leaf.nextValue) },
+    imtLeafIndex: Number(p.imtLeafIndex),
+    imtProof: p.imtProof,
   };
 }
 
@@ -283,7 +273,12 @@ async function main() {
   const PRIVATE_KEY = requireEnv('PRIVATE_KEY');
   const RPC_A = requireEnv('L2_RPC_URL');
   const RPC_B = requireEnv('L2_RPC_URL_SECOND');
-  const deadline = Number(process.env.ATOMIC_DEADLINE_BLOCK ?? '10000000');
+  // The deadline is a settlement-layer (L1) TIMESTAMP: each leg's inclusion proof carries its
+  // batch's L1 settlement timestamp, checked on-chain against this value.
+  const l1Provider = new ethers.JsonRpcProvider(process.env.L1_RPC_URL ?? 'http://127.0.0.1:8545');
+  const l1ChainId = (await l1Provider.getNetwork()).chainId;
+  const l1Now = (await l1Provider.getBlock('latest'))!.timestamp;
+  const deadline = Number(process.env.ATOMIC_DEADLINE_TS ?? l1Now + 24 * 3600);
   const layout = resolveAtomicLayout();
   const aAmount = ethers.parseUnits('100', 18);
   const bAmount = ethers.parseUnits('100', 18);
@@ -328,7 +323,7 @@ async function main() {
     { bundleHash: hAB, chainId: a.chainId },
     { bundleHash: hBA, chainId: b.chainId },
   ]);
-  const flowId = computeFlowId(legBundleHashes, chainIds, deadline);
+  const flowId = computeFlowId(legBundleHashes, chainIds, deadline, l1ChainId);
   console.log('hAB:', hAB);
   console.log('hBA:', hBA);
   console.log('flowId:', flowId, 'deadline:', deadline);
@@ -370,32 +365,36 @@ async function main() {
     throw new Error('both legs must be Committed after send');
   }
 
-  // ── PHASE 2: wait for L1 settlement, fetch REAL proofs from the server ────────
-  // The server (kl/l1-settled-interop-proof) exposes zks_getL2ToL1LogProof
-  // (messageRoot target) + zks_getImtInclusionProof. We assemble the full per-leg
-  // ImtProof exactly as the native atomic_swap E2E does. The settlement-layer
-  // block (deadline anchor) is the proof's gatewayBlockNumber.
-  console.log('\n=== FETCH MESSAGE + IMT PROOFS ===');
-  const abMsgIdx = await commitmentTreeMessageIndex(a.provider, ab.txHash);
-  const baMsgIdx = await commitmentTreeMessageIndex(b.provider, ba.txHash);
-  console.log('waiting for commitment-tree roots to settle on L1...');
-  const abRaw = await waitForMessageProof(a.provider, ab.txHash, abMsgIdx);
-  const baRaw = await waitForMessageProof(b.provider, ba.txHash, baMsgIdx);
-  console.log(`AB proof: batch=${abRaw.batchNumber} slBlock=${abRaw.gatewayBlockNumber}; BA proof: batch=${baRaw.batchNumber} slBlock=${baRaw.gatewayBlockNumber}`);
+  // ── PHASE 2: wait for L1 settlement, fetch COMPLETE proofs from the server ────
+  // `zks_getImtInclusionProof` now returns the full per-leg ImtProof: the IMT half against the
+  // batch-END root plus the settlement half authenticating that root as chain-batch-root leaf 3
+  // against the imported interop root (the commitment tree publishes no L2->L1 message anymore).
+  console.log('\n=== FETCH IMT PROOFS ===');
+  console.log('waiting for the send batches to execute on L1...');
+  const abRaw = await waitForImtInclusionProof(a.provider, commitValue(flowId, hAB), ab.sendBlock);
+  const baRaw = await waitForImtInclusionProof(b.provider, commitValue(flowId, hBA), ba.sendBlock);
+  console.log(`AB proof: batch=${abRaw.batchNumber} slBlock=${abRaw.settlementBlockNumber}; BA proof: batch=${baRaw.batchNumber} slBlock=${baRaw.settlementBlockNumber}`);
 
-  const proofAB = await buildLegProof(a.provider, a.chainId, commitValue(flowId, hAB), ab.sendBlock, abRaw);
-  const proofBA = await buildLegProof(b.provider, b.chainId, commitValue(flowId, hBA), ba.sendBlock, baRaw);
+  const proofAB = toLegProof(a.chainId, abRaw);
+  const proofBA = toLegProof(b.chainId, baRaw);
   // Order proofs to match legBundleHashes ascending.
   const proofs: ImtProof[] = legBundleHashes[0].toLowerCase() === hAB.toLowerCase() ? [proofAB, proofBA] : [proofBA, proofAB];
-  const finality = atomicFinalityProofTuple({ flowId, deadline, legBundleHashes, chainIds, proofs });
+  const finality = atomicFinalityProofTuple({
+    flowId,
+    deadline,
+    settlementLayerChainId: l1ChainId,
+    legBundleHashes,
+    legSourceChainIds: chainIds,
+    proofs,
+  });
 
   // ── Wait for interop roots to import on both executing chains ─────────────────
   // Both executeAtomicBundle calls verify every leg, so each executing chain must
   // have imported the L1 interop root at each leg's settlement block.
   console.log('\n=== WAIT FOR INTEROP ROOTS ===');
-  const l1Provider = new ethers.JsonRpcProvider(process.env.L1_RPC_URL ?? 'http://127.0.0.1:8545');
-  const l1ChainId = (await l1Provider.getNetwork()).chainId;
-  const slBlocks = [abRaw.gatewayBlockNumber, baRaw.gatewayBlockNumber].filter((x): x is number => x !== undefined && x !== null);
+  const slBlocks = [abRaw.settlementBlockNumber, baRaw.settlementBlockNumber].filter(
+    (x): x is number => x !== undefined && x !== null
+  );
   console.log(`waiting for interop roots (L1 ${l1ChainId}) at blocks ${slBlocks} on both chains...`);
   for (const ctx of [a, b]) {
     for (const sl of slBlocks) {

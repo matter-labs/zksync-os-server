@@ -38,6 +38,8 @@ impl PendingBatchInfo {
         pubdata_mode: PubdataMode,
         sl_chain_id: u64,
         multichain_root: B256,
+        imt_root_begin: B256,
+        imt_root_end: B256,
         protocol_version: &ProtocolSemanticVersion,
         last_256_block_hashes: &[U256; 256],
     ) -> (Self, Option<BlobTransactionSidecar>) {
@@ -144,8 +146,15 @@ impl PendingBatchInfo {
         .merkle_root();
 
         let l2_to_l1_logs_root_hash = if protocol_version.is_post_v31() {
-            // The result should be Keccak(l2_l1_local_root, multichain_root).
-            keccak256([l2_l1_local_root.0, multichain_root.0].concat())
+            // The chain batch root: a fixed height-3 (8-leaf) keccak tree over the logs root, the
+            // multichain root, and the IMT (interop commitment tree) roots at the batch boundaries.
+            // Must match the zksync-os bootloader's `compute_chain_batch_root` bit-for-bit.
+            crate::chain_batch_root::compute_chain_batch_root(
+                l2_l1_local_root,
+                multichain_root,
+                imt_root_begin,
+                imt_root_end,
+            )
         } else {
             // For older protocol versions, multichain root should be set to zero.
             keccak256([l2_l1_local_root.0, [0u8; 32]].concat())
