@@ -64,6 +64,27 @@ impl PrometheusExporterConfig {
             .collect()
     }
 
+    /// Bench/demo-only: run a pull exporter with no shutdown plumbing — it lives until the
+    /// process exits. Lets the in-process benchmark node (integration tests) expose its
+    /// metrics for a local Prometheus scrape without a task-manager runtime.
+    pub async fn run_detached(self) -> anyhow::Result<()> {
+        let registry = self.registry();
+        let metrics_exporter = MetricsExporter::new(registry.into());
+        match self.transport {
+            PrometheusTransport::Pull { port } => {
+                let prom_bind_address = (Ipv4Addr::UNSPECIFIED, port).into();
+                metrics_exporter
+                    .start(prom_bind_address)
+                    .await
+                    .context("Failed starting metrics server")?;
+                Ok(())
+            }
+            PrometheusTransport::Push { .. } => {
+                anyhow::bail!("run_detached supports pull transport only")
+            }
+        }
+    }
+
     /// Runs the exporter. This future should be spawned in a separate Tokio task.
     pub async fn run(self, shutdown: GracefulShutdown) -> anyhow::Result<()> {
         tokio_runtime::register_monitor();

@@ -23,6 +23,8 @@ zksync_os_types.workspace = true
 zksync_os_rpc_api.workspace = true
 # Demo /stats endpoint: read the in-process node's admission-profile accumulators.
 zksync_os_rpc.workspace = true
+# Demo Grafana finale: expose the in-process node's vise metrics for Prometheus.
+zksync_os_observability.workspace = true
 zksync_os_merkle_tree_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true

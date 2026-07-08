@@ -1556,6 +1556,24 @@ async fn effective_parallel_impl(
             .expect("failed to start profiler")
     });
 
+    // Demo/bench-only: `LOAD_TEST_PROMETHEUS_PORT=<port>` exposes the node's vise metrics
+    // for a local Prometheus scrape (Grafana finale, see docs/demo/grafana/). The node runs
+    // in-process, so a plain pull exporter in this process sees all of its metrics.
+    if let Some(prom_port) = std::env::var("LOAD_TEST_PROMETHEUS_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+    {
+        tokio::spawn(async move {
+            if let Err(err) =
+                zksync_os_observability::prometheus::PrometheusExporterConfig::pull(prom_port)
+                    .run_detached()
+                    .await
+            {
+                tracing::warn!(?err, "prometheus exporter failed");
+            }
+        });
+    }
+
     // Demo-only start gate: with `LOAD_TEST_DEMO_PORT=<port>` set, everything above (funding,
     // deploy, mints, corpus) is prepared and the run PARKS here until the dashboard's Start
     // button is pressed. The listener below is the whole demo infrastructure: it serves the
