@@ -1,35 +1,44 @@
+//! Status HTTP endpoints.
+//!
+//! - `GET /status` — general node status, including consensus (Raft) state.
+//! - `GET /status/health` — liveness endpoint. Always 200 while the process is up.
+//! - `GET /status/pipeline` — per-component backpressure and lag snapshot for
+//!   diagnostics and dashboards.
+
 mod health;
+mod pipeline;
 mod status;
 
 use crate::health::health;
+use crate::pipeline::pipeline;
 use crate::status::status;
 use axum::{Router, routing::get};
 use reth_tasks::shutdown::GracefulShutdown;
 use tokio::{net::TcpListener, sync::watch};
+use zksync_os_backpressure::PipelineSnapshot;
 use zksync_os_raft::RaftConsensusStatus;
 
 pub use status::{ConsensusStatus, StatusResponse};
 
 #[derive(Clone)]
-struct AppState {
-    consensus_raft_status_rx: Option<watch::Receiver<Option<RaftConsensusStatus>>>,
+pub struct StatusServerState {
+    pub pipeline_snapshot: watch::Receiver<PipelineSnapshot>,
+    pub consensus_raft_status_rx: Option<watch::Receiver<Option<RaftConsensusStatus>>>,
 }
 
-// todo: handle graceful shutdown in a meaningful manner:
-//       we should start a timer for status server's lifetime, report healthy=false and only shutdown
-//       after timer is expired
+pub(crate) type AppState = StatusServerState;
+
 /// Runs the status HTTP server on a pre-bound listener.
 pub async fn run_status_server(
     listener: TcpListener,
     shutdown: GracefulShutdown,
-    consensus_raft_status_rx: Option<watch::Receiver<Option<RaftConsensusStatus>>>,
+    state: StatusServerState,
 ) -> anyhow::Result<()> {
     let app = Router::new()
-        .route("/status/health", get(health))
         .route("/status", get(status))
-        .with_state(AppState {
-            consensus_raft_status_rx,
-        });
+        .route("/status/health", get(health))
+        .route("/status/pipeline", get(pipeline))
+        .with_state(state);
 
     let addr = listener.local_addr()?;
     tracing::info!(%addr, "status server running");
