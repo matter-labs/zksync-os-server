@@ -21,6 +21,17 @@ use zksync_os_types::{PubdataMode, ZksyncOsEncode};
 
 const TREE_DEPTH: u8 = 64;
 
+/// The chain config all V8 native batch runs are executed with. Its hash is part of the batch
+/// public input, so proof verification must reconstruct it identically.
+fn chain_config(chain_id: u64) -> anyhow::Result<ChainConfig> {
+    ChainConfig::new(chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
+        .map_err(|err| anyhow::anyhow!("invalid chain config: {err:?}"))
+}
+
+pub(crate) fn chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
+    Ok(B256::from(chain_config(chain_id)?.hash()))
+}
+
 pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
     replay_records: &[ReplayRecord],
     read_state: &ReadState,
@@ -36,8 +47,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
     // The chain config is frozen for the whole batch; chain id lives there now rather than in
     // per-block metadata. All blocks in a batch share the same chain.
     let chain_id = first_replay_record.block_context.chain_id;
-    let chain_config = ChainConfig::new(chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
-        .map_err(|err| anyhow::anyhow!("invalid chain config: {err:?}"))?;
+    let chain_config = chain_config(chain_id)?;
     let first_state_version = first_replay_record
         .block_context
         .block_number
@@ -103,6 +113,8 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
     Ok(NativeBatchRunOutput {
         prover_input: batch_run.prover_input,
         pubdata: batch_run.pubdata,
+        previous_state_commitment: b256_from_bytes32(batch_public_input.state_before),
+        batch_public_input_hash: B256::from(batch_public_input.hash()),
         new_state_commitment: b256_from_bytes32(batch_public_input.state_after),
         da_commitment: b256_from_bytes32(batch_output.pubdata_commitment),
         number_of_layer1_txs: u256_to_u64(

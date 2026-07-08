@@ -330,6 +330,14 @@ impl Tester {
         &self.config
     }
 
+    /// URL of the node's prover API, if the prover server is enabled.
+    /// Stable across [`Tester::stop`] / restart (HTTP ports are preserved).
+    pub fn prover_api_url(&self) -> Option<String> {
+        self.bound_ports
+            .prover_api
+            .map(|port| format!("http://localhost:{port}"))
+    }
+
     fn apply_external_node_defaults(&self, config: &mut Config) {
         config.general_config.node_role = NodeRole::ExternalNode;
         config.network_config.boot_nodes = vec![self.node_record.into()];
@@ -1017,6 +1025,12 @@ impl GatewayTester {
 
     pub fn gateway(&self) -> &Tester {
         &self.gateway
+    }
+
+    /// Consumes the tester and returns the owned gateway and chain testers, for flows that
+    /// need ownership of a node — e.g. restarting a chain with a different config.
+    pub fn into_parts(self) -> (Tester, Vec<Tester>) {
+        (self.gateway, self.chains)
     }
 }
 

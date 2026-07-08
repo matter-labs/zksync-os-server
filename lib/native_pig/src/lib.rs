@@ -15,6 +15,14 @@ mod v8;
 pub struct NativeBatchRunOutput {
     pub prover_input: Vec<u32>,
     pub pubdata: Vec<u8>,
+    /// State commitment before the batch, as seen by the batch program (public input
+    /// `state_before`).
+    pub previous_state_commitment: B256,
+    /// keccak256 of the full batch public input computed by the zksync-os batch program:
+    /// `keccak(state_before || state_after || chain_config_hash || batch_output)`. This is the
+    /// value a FRI proof of this batch exposes in its final registers; server-side proof
+    /// verification must reconstruct exactly this hash.
+    pub batch_public_input_hash: B256,
     pub new_state_commitment: B256,
     pub da_commitment: B256,
     pub number_of_layer1_txs: u64,
@@ -55,6 +63,13 @@ impl NativeBatchRunOutput {
     }
 }
 
+/// keccak256 commitment of the chain config used by V8 native batch runs (and thus committed
+/// to in the V8 batch public input). Must stay in sync with the `ChainConfig` constructed in
+/// [`v8::generate_batch_run`].
+pub fn v8_chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
+    v8::chain_config_hash(chain_id)
+}
+
 pub fn generate_batch_run<ReadState: ReadStateHistory>(
     proving_version: ProvingVersion,
     replay_records: &[ReplayRecord],
@@ -79,6 +94,8 @@ mod tests {
         let output = NativeBatchRunOutput {
             prover_input: vec![1, 2, 3],
             pubdata: vec![9, 8, 7],
+            previous_state_commitment: B256::repeat_byte(0x77),
+            batch_public_input_hash: B256::repeat_byte(0x88),
             new_state_commitment: B256::repeat_byte(0x11),
             da_commitment: B256::repeat_byte(0x22),
             number_of_layer1_txs: 3,

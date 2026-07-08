@@ -231,7 +231,7 @@ impl FriJobManager {
             | ProvingVersion::V5 => {
                 panic!("proof verification for v1-v5 is not supported")
             }
-            ProvingVersion::V6 | ProvingVersion::V7 | ProvingVersion::V8 => {
+            ProvingVersion::V6 | ProvingVersion::V7 => {
                 tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
                 let program_proof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
@@ -243,6 +243,26 @@ impl FriJobManager {
                 fri_proof_verifier::verify_fri_proof(
                     batch_metadata.previous_stored_batch_info.state_commitment,
                     batch_metadata.batch_info.clone().into_stored(),
+                    program_proof,
+                )
+            }
+            ProvingVersion::V8 => {
+                // V8 provers (airbender unrolled stack) submit `UnrolledProgramProof`,
+                // which is a different wire format and proof system than the 0.5.2 lane.
+                tracing::debug!(
+                    "Using airbender-73d69b5 unified-layer proof verifier for batch {}",
+                    batch_number
+                );
+                let program_proof: execution_utils_0_4_0::unrolled::UnrolledProgramProof =
+                    bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
+                        .map_err(|err| {
+                            tracing::warn!(batch_number, ?err, "Failed to deserialize V8 proof");
+                            SubmitError::DeserializationFailed(err)
+                        })?
+                        .0;
+                fri_proof_verifier::verify_fri_proof_v8(
+                    batch_metadata.previous_stored_batch_info.state_commitment,
+                    &batch_metadata.batch_info,
                     program_proof,
                 )
             }

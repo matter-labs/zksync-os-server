@@ -284,6 +284,34 @@ impl PendingBatchInfo {
         }
     }
 
+    /// Batch output hash exactly as the zksync-os 0.4.0 (proving V8) batch program computes it
+    /// (`BatchOutput::hash` in `basic_bootloader/.../post_tx_op/public_input.rs`): unlike the
+    /// pre-V8 [`Self::public_input_hash`] layout, it does NOT include the leading `chain_id` —
+    /// the chain id is committed through the chain config hash in the outer batch public input
+    /// instead. Used for server-side verification of V8 FRI proofs; the L1-facing commitment
+    /// (`public_input_hash`) is intentionally left unchanged until v32.1 contracts define the
+    /// on-chain layout.
+    pub fn v8_batch_output_hash(&self) -> B256 {
+        let commit_info = &self.commit_info;
+        let upgrade_tx_hash = self.upgrade_tx_hash.unwrap_or(B256::ZERO);
+        B256::from(keccak256(
+            (
+                commit_info.first_block_timestamp,
+                commit_info.last_block_timestamp,
+                U256::from(commit_info.l2_da_commitment_scheme as u8),
+                commit_info.da_commitment,
+                U256::from(commit_info.number_of_layer1_txs),
+                U256::from(commit_info.number_of_layer2_txs),
+                commit_info.priority_operations_hash,
+                commit_info.l2_to_l1_logs_root_hash,
+                upgrade_tx_hash,
+                commit_info.dependency_roots_rolling_hash,
+                U256::from(commit_info.sl_chain_id),
+            )
+                .abi_encode_packed(),
+        ))
+    }
+
     /// Computes the batch commitment and turns this into its committed form.
     pub fn into_committed(self) -> CommittedBatchInfo {
         let commitment = self.public_input_hash();

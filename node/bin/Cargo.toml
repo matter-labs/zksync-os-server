@@ -74,6 +74,9 @@ zk_os_forward_system.workspace = true
 zksync_os_interface.workspace = true
 execution_utils.workspace = true
 full_statement_verifier.workspace = true
+execution_utils_0_4_0.workspace = true
+riscv_transpiler_0_4_0.workspace = true
+verifier_common_0_4_0.workspace = true
 
 reth-tasks.workspace = true
 reth-network-peers.workspace = true

@@ -450,6 +450,55 @@ mod tests {
         assert_eq!(*validated.signer(), expected_signer);
     }
 
+    /// The server-side V8 batch public-input reconstruction (used to verify V8 FRI proofs in
+    /// `fri_proof_verifier::verify_fri_proof_v8`) must match the public input the zksync-os
+    /// 0.4.0 batch program computes natively:
+    /// `keccak(state_before || state_after || chain_config_hash || batch_output)`.
+    #[test]
+    fn v8_public_input_reconstruction_matches_native_run() {
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let genesis_state = build_genesis_state_for_test(&protocol_version);
+        let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let tree = genesis_tree(&genesis_state, temp_dir.path());
+        let tree_block = empty_tree_block(&tree, protocol_version.clone());
+
+        let native_batch_run = generate_batch_run(
+            ProvingVersion::V8,
+            std::slice::from_ref(&tree_block.record),
+            &read_state,
+            tree.clone(),
+            PubdataMode::Calldata,
+        )
+        .unwrap();
+
+        let (batch_info, _) = PendingBatchInfo::build_from_canonical_output(
+            BATCH_NUMBER,
+            PubdataMode::Calldata,
+            &protocol_version,
+            native_batch_run.canonical_commit_data(1, 1),
+        )
+        .unwrap();
+
+        let chain_config_hash =
+            zksync_os_native_pig::v8_chain_config_hash(batch_info.commit_info.chain_id).unwrap();
+        let reconstructed = keccak256(
+            [
+                native_batch_run.previous_state_commitment.0,
+                batch_info.commit_info.new_state_commitment.0,
+                chain_config_hash.0,
+                batch_info.v8_batch_output_hash().0,
+            ]
+            .concat(),
+        );
+
+        assert_eq!(
+            reconstructed, native_batch_run.batch_public_input_hash,
+            "server-side V8 public input reconstruction diverges from the batch program"
+        );
+    }
+
     /// Utility (not a real test): runs the V8 native batch PIG for the simplest possible batch
     /// (a single empty block at protocol v32.1) and dumps the resulting prover input in the
     /// formats the `zksync-airbender` CLI understands, so it can be proven/verified on CPU
