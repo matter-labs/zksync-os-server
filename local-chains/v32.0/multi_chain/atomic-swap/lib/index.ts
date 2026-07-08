@@ -32,8 +32,9 @@ export {
   computeFlowId,
   commitValue,
   sortLegs,
-  lowNullifierIndexFor,
+  atomicFlowTuple,
   atomicFinalityProofTuple,
   LegState,
   type ImtProof,
+  type AtomicFlow,
 } from './atomic';

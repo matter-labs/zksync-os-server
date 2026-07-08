@@ -18,7 +18,9 @@ use zksync_os_network::{
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent};
 use zksync_os_storage_api::{ReadFinality, ReadStateHistory};
-use zksync_os_storage_api::{StateError, TreeBlock, read_multichain_root};
+use zksync_os_storage_api::{
+    StateError, TreeBlock, read_commitment_tree_root, read_multichain_root,
+};
 use zksync_os_types::ProvingVersion;
 
 mod block_cache;
@@ -115,6 +117,13 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
 
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
+        // IMT boundary snapshots, matching what the bootloader commits into the chain batch root.
+        let imt_root_begin = read_commitment_tree_root(
+            self.read_state
+                .state_view_at(request.first_block_number - 1)?,
+        );
+        let imt_root_end =
+            read_commitment_tree_root(self.read_state.state_view_at(request.last_block_number)?);
         let last_replay_record = &blocks.last().unwrap().record;
         let protocol_version = blocks.first().unwrap().record.protocol_version.clone();
         let proving_version =
@@ -184,6 +193,8 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
                 request.pubdata_mode,
                 self.l1_state.l1_chain_id,
                 multichain_root,
+                imt_root_begin,
+                imt_root_end,
                 &protocol_version,
                 &last_replay_record.block_context.block_hashes.0,
             )

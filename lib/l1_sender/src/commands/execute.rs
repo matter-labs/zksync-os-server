@@ -106,11 +106,12 @@ impl ExecuteCommand {
         let encoded_data: Vec<u8> = match protocol_version_minor {
             29 | 30 => (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
             31 | 32 => {
-                // Batch logs / messages / multichain roots are only relayed when executing on a
-                // Gateway; when settling on L1 they are always empty.
+                // Batch logs / messages / multichain roots / IMT boundary roots are only relayed
+                // when executing on a Gateway; when settling on L1 they are always empty.
                 let logs: Vec<Vec<IExecutor::L2Log>> = Vec::new();
                 let messages: Vec<Vec<Vec<u8>>> = Vec::new();
                 let multichain_roots: Vec<B256> = Vec::new();
+                let imt_roots: Vec<IExecutor::BatchImtRoots> = Vec::new();
                 (
                     stored_batch_infos,
                     priority_ops,
@@ -118,6 +119,7 @@ impl ExecuteCommand {
                     logs,
                     messages,
                     multichain_roots,
+                    imt_roots,
                     operator,
                 )
                     .abi_encode_params()

@@ -84,9 +84,12 @@ export const INTEROP_BUNDLE_TUPLE =
   'tuple(bytes1 version, uint256 sourceChainId, uint256 destinationChainId, bytes32 destinationBaseTokenAssetId, bytes32 interopBundleSalt, tuple(bytes1 version, bool shadowAccount, address to, address from, uint256 value, bytes data)[] calls, tuple(bytes executionAddress, bytes unbundlerAddress, bool useFixedFee) bundleAttributes)';
 
 const IMT_PROOF_TUPLE =
-  'tuple(uint256 sourceChainId, uint256 batchNumber, bytes32 chainImtRoot, uint16 messageTxNumberInBatch, uint256 messageIndex, bytes32[] messageProof, tuple(uint256 value, uint256 nextIndex, uint256 nextValue) leaf, uint256 imtLeafIndex, bytes32[] imtProof)';
+  'tuple(uint256 sourceChainId, uint256 batchNumber, bytes32 chainImtRoot, bytes32[] settlementProof, tuple(uint256 value, uint256 nextIndex, uint256 nextValue) leaf, uint256 imtLeafIndex, bytes32[] imtProof)';
 
-const ATOMIC_FINALITY_TUPLE = `tuple(bytes32 flowId, uint64 deadline, bytes32[] legBundleHashes, uint256[] chainIds, ${IMT_PROOF_TUPLE}[] proofs)`;
+const ATOMIC_FLOW_TUPLE =
+  'tuple(bytes32 flowId, uint64 deadline, uint256 settlementLayerChainId, bytes32[] legBundleHashes, uint256[] legSourceChainIds)';
+
+const ATOMIC_FINALITY_TUPLE = `tuple(${ATOMIC_FLOW_TUPLE} flow, ${IMT_PROOF_TUPLE}[] proofs)`;
 
 export const AtomicInteropHandlerAbi = [
   `function executeAtomicBundle(bytes memory _bundle, ${ATOMIC_FINALITY_TUPLE} _finality) external`,
@@ -99,7 +102,7 @@ export const AtomicFlowManagerAbi = [
   'function commitmentTree() view returns (address)',
   'function interopCenter() view returns (address)',
   'function interopHandler() view returns (address)',
-  `function authorizeRefund(bytes32 _flowId, bytes32[] calldata _legBundleHashes, uint256[] calldata _chainIds, uint64 _deadline, uint256 _missingLegIndex, ${IMT_PROOF_TUPLE} _proof) external`,
+  `function authorizeRefund(${ATOMIC_FLOW_TUPLE} _flow, uint256 _missingLegIndex, ${IMT_PROOF_TUPLE} _absence) external`,
   'function claimRefund(bytes32 _flowId, bytes calldata _bundle) external',
   'event FlowCommitted(bytes32 indexed flowId, bytes32 indexed bundleHash, uint64 deadline, uint256 leafIndex)',
   'event FlowRefundAuthorized(bytes32 indexed flowId, bytes32 indexed bundleHash)',
@@ -126,9 +129,6 @@ export enum LegState {
 // Pure helpers — no server / no provider needed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Fixed depth of the Indexed Merkle Tree — matches IMT_DEPTH in IndexedMerkleTree.sol. */
-export const IMT_DEPTH = 32;
-
 /** Domain tag for commit values: bytes4(keccak256("AtomicInterop.commit.v1")). */
 export const ATOMIC_COMMIT_LEAF_TAG: string = ethers
   .keccak256(ethers.toUtf8Bytes('AtomicInterop.commit.v1'))
@@ -146,25 +146,34 @@ export interface IMTLeaf {
   nextValue: string;
 }
 
-/** Mirror of `ImtProof` in IAtomicInterop.sol (inclusion + non-inclusion). */
+/**
+ * Mirror of `ImtProof` in IAtomicInterop.sol (inclusion + non-inclusion). Served COMPLETE by the
+ * server: `zks_getImtInclusionProof` returns the IMT half anchored at the batch-END root (leaf 3
+ * of the chain batch root) plus the `settlementProof` authenticating that root against the
+ * imported interop root; `zks_getImtNonInclusionProof` does the same for the batch-BEGIN root
+ * (leaf 2) with a low-nullifier leaf. The client only adds `sourceChainId`.
+ */
 export interface ImtProof {
   sourceChainId: string;
   batchNumber: string;
   chainImtRoot: string;
-  messageTxNumberInBatch: number;
-  messageIndex: string;
-  messageProof: string[];
+  settlementProof: string[];
   leaf: IMTLeaf;
   imtLeafIndex: number;
   imtProof: string[];
 }
 
-/** Full atomicity proof for `executeAtomicBundle`. */
-export interface AtomicFinalityProof {
+/** The flow definition (mirror of `AtomicFlow` in IAtomicInterop.sol). */
+export interface AtomicFlow {
   flowId: string;
   deadline: number;
+  settlementLayerChainId: bigint | number | string;
   legBundleHashes: string[];
-  chainIds: (bigint | number | string)[];
+  legSourceChainIds: (bigint | number | string)[];
+}
+
+/** Full atomicity proof for `executeAtomicBundle`: the flow + one inclusion proof per leg. */
+export interface AtomicFinalityProof extends AtomicFlow {
   proofs: ImtProof[];
 }
 
@@ -192,29 +201,21 @@ export function commitValue(flowId: string, bundleHash: string): string {
   );
 }
 
-/** Leaf hash in canonical layout: keccak256(abi.encode(value, nextIndex, nextValue)). */
-export function indexedLeafHash(leaf: IMTLeaf): string {
-  return ethers.keccak256(
-    ethers.AbiCoder.defaultAbiCoder().encode(
-      ['uint256', 'uint256', 'uint256'],
-      [leaf.value, leaf.nextIndex, leaf.nextValue]
-    )
-  );
-}
-
 /**
- * flowId = keccak256(abi.encode(sortedBundleHashes, sortedChainIds, deadline)).
- * Both arrays MUST already be strictly ascending.
+ * flowId = keccak256(abi.encode(legBundleHashes, legSourceChainIds, deadline, settlementLayerChainId)).
+ * `legBundleHashes` MUST be strictly ascending; `legSourceChainIds` is POSITIONAL (aligned 1:1
+ * with the hashes, may repeat, need not be sorted). `deadline` is a settlement-layer timestamp.
  */
 export function computeFlowId(
   bundleHashes: string[],
   chainIds: (bigint | number | string)[],
-  deadline: number
+  deadline: number,
+  settlementLayerChainId: bigint | number | string
 ): string {
   return ethers.keccak256(
     ethers.AbiCoder.defaultAbiCoder().encode(
-      ['bytes32[]', 'uint256[]', 'uint64'],
-      [bundleHashes, chainIds.map((c) => BigInt(c)), deadline]
+      ['bytes32[]', 'uint256[]', 'uint64', 'uint256'],
+      [bundleHashes, chainIds.map((c) => BigInt(c)), deadline, BigInt(settlementLayerChainId)]
     )
   );
 }
@@ -230,95 +231,19 @@ export function sortLegs(
   const order = legs.map((_, i) => i).sort((a, b) => (BigInt(legs[a].bundleHash) < BigInt(legs[b].bundleHash) ? -1 : 1));
   return {
     legBundleHashes: order.map((i) => legs[i].bundleHash),
-    chainIds: order.map((i) => BigInt(legs[i].chainId)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    // POSITIONAL: chainIds[i] is the source chain of legBundleHashes[i]. Sorting them
+    // independently would misalign the pairs, which the on-chain source-chain binding rejects.
+    chainIds: order.map((i) => BigInt(legs[i].chainId)),
     order,
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IMT engine B — fixed depth 32. Faithful port of imt-engine-lib.ts to ethers v6.
+// Contract handle. Proofs come COMPLETE from the server RPCs
+// (`zks_getImtInclusionProof` / `zks_getImtNonInclusionProof` — IMT half +
+// settlement half; `zks_getImtLowNullifierIndex` for sends), so no off-chain
+// IMT engine is vendored here.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/** efficientHash(a, b) = keccak256(a ++ b) over two 32-byte siblings. */
-function efficientHash(left: string, right: string): string {
-  return ethers.keccak256(ethers.concat([left, right]));
-}
-
-/** Precomputed zero-subtree hashes, length IMT_DEPTH + 1. */
-export function computeZeros(): string[] {
-  const zeros: string[] = new Array(IMT_DEPTH + 1);
-  zeros[0] = indexedLeafHash({ value: '0', nextIndex: '0', nextValue: '0' });
-  for (let i = 0; i < IMT_DEPTH; i++) {
-    zeros[i + 1] = efficientHash(zeros[i], zeros[i]);
-  }
-  return zeros;
-}
-
-const ZEROS = computeZeros();
-
-/** Sparse fixed-depth Indexed Merkle Tree reconstructed from the index-ordered leaf set. */
-export class IndexedMerkleTree {
-  readonly leaves: IMTLeaf[];
-  private readonly nodes: Array<Map<number, string>>;
-
-  constructor(leaves: IMTLeaf[]) {
-    this.leaves = leaves;
-    this.nodes = Array.from({ length: IMT_DEPTH + 1 }, () => new Map<number, string>());
-    for (let i = 0; i < leaves.length; i++) {
-      this.nodes[0].set(i, indexedLeafHash(leaves[i]));
-    }
-    for (let level = 0; level < IMT_DEPTH; level++) {
-      const parents = new Set<number>();
-      for (const childIndex of this.nodes[level].keys()) {
-        parents.add(childIndex >> 1);
-      }
-      for (const parentIndex of parents) {
-        const leftIndex = parentIndex * 2;
-        const left = this.nodeAt(level, leftIndex);
-        const right = this.nodeAt(level, leftIndex + 1);
-        this.nodes[level + 1].set(parentIndex, efficientHash(left, right));
-      }
-    }
-  }
-
-  private nodeAt(level: number, index: number): string {
-    return this.nodes[level].get(index) ?? ZEROS[level];
-  }
-
-  /** The current IMT root (level IMT_DEPTH, index 0). */
-  root(): string {
-    return this.nodeAt(IMT_DEPTH, 0);
-  }
-
-  /** Fixed-depth Merkle path (32 siblings, leaf level up) for the leaf at `index`. */
-  merklePath(index: number): string[] {
-    const path: string[] = new Array(IMT_DEPTH);
-    let idx = index;
-    for (let level = 0; level < IMT_DEPTH; level++) {
-      const siblingIdx = idx % 2 === 0 ? idx + 1 : idx - 1;
-      path[level] = this.nodeAt(level, siblingIdx);
-      idx = Math.floor(idx / 2);
-    }
-    return path;
-  }
-}
-
-/** Index of the low-nullifier leaf for `value`. */
-export function findLowNullifierIndex(leaves: IMTLeaf[], value: string): number {
-  const v = BigInt(value);
-  for (let i = 0; i < leaves.length; i++) {
-    const lv = BigInt(leaves[i].value);
-    const nv = BigInt(leaves[i].nextValue);
-    if (lv < v && (nv === 0n || v < nv)) return i;
-  }
-  throw new Error(`no low nullifier for value ${value} (already present or empty tree)`);
-}
-
-/** Index of the leaf holding `value`, or -1 if absent. */
-export function findValueIndex(leaves: IMTLeaf[], value: string): number {
-  const v = BigInt(value);
-  return leaves.findIndex((l) => BigInt(l.value) === v);
-}
 
 /** Build an ethers contract handle for the commitment tree. */
 export function commitmentTreeContract(
@@ -326,118 +251,6 @@ export function commitmentTreeContract(
   runner: ethers.ContractRunner
 ): ethers.Contract {
   return new ethers.Contract(address, L2InteropCommitmentTreeAbi, runner);
-}
-
-/**
- * Reconstruct a chain's IMT from its live leaf set (`leafCount` + `leafAt`). The
- * reconstructed root is asserted against `tree.root()` by callers (the proof builders).
- */
-export async function reconstructChainImt(
-  tree: ethers.Contract,
-  blockTag?: number
-): Promise<{ leaves: IMTLeaf[]; engine: IndexedMerkleTree; root: string }> {
-  const overrides = blockTag !== undefined ? { blockTag } : {};
-  const count = Number(await tree.leafCount(overrides));
-  const leaves: IMTLeaf[] = [];
-  for (let i = 0; i < count; i++) {
-    const l = await tree.leafAt(i, overrides);
-    leaves.push({ value: l.value.toString(), nextIndex: l.nextIndex.toString(), nextValue: l.nextValue.toString() });
-  }
-  const engine = new IndexedMerkleTree(leaves);
-  return { leaves, engine, root: engine.root() };
-}
-
-/** Convenience: low-nullifier index for inserting `value` into the current tree. */
-export async function lowNullifierIndexFor(tree: ethers.Contract, value: string, blockTag?: number): Promise<number> {
-  const imt = await reconstructChainImt(tree, blockTag);
-  return findLowNullifierIndex(imt.leaves, value);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Proof builders. The message-inclusion part authenticates the chain's IMT root
-// AND carries the settlement-layer block number used for the deadline check.
-// `buildSlProofBytes` mirrors the era-contracts harness; against a real atomic
-// server, prefer the server-provided `messageProof` (see example).
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Default settlement-layer chain id encoded into harness proof bytes. */
-export const DEFAULT_SL_CHAIN_ID = 506;
-
-/**
- * Minimal format-valid multi-hop L2-message inclusion proof bytes parsed by the real
- * `MessageHashing._getProofData` to a chosen settlement-layer block `slBlock`
- * (finalProofNode == false). Mirrors `AtomicInteropTestUtils.slProofBytes`.
- */
-export function buildSlProofBytes(slBlock: number, slChainId: number = DEFAULT_SL_CHAIN_ID): string[] {
-  const metadata = ethers.zeroPadValue(ethers.toBeHex(1n << 248n), 32);
-  const batchLeafProofMask = ethers.zeroPadValue('0x00', 32);
-  const packedBatchInfo = ethers.zeroPadValue(ethers.toBeHex(BigInt(slBlock) << 128n), 32);
-  const settlementLayerChainId = ethers.zeroPadValue(ethers.toBeHex(BigInt(slChainId)), 32);
-  return [metadata, batchLeafProofMask, packedBatchInfo, settlementLayerChainId];
-}
-
-function messageProofForSlBlock(slBlock: number): {
-  batchNumber: string;
-  messageIndex: string;
-  messageTxNumberInBatch: number;
-  messageProof: string[];
-} {
-  return { batchNumber: '1', messageIndex: '0', messageTxNumberInBatch: 0, messageProof: buildSlProofBytes(slBlock) };
-}
-
-/** Build an inclusion `ImtProof` (leaf is the value's own leaf), carrying `slBlock` (<= deadline). */
-export async function buildInclusionProof(params: {
-  l2Tree: ethers.Contract;
-  chainId: bigint | number | string;
-  value: string;
-  slBlock: number;
-  l2BlockTag?: number;
-}): Promise<ImtProof> {
-  const { l2Tree, chainId, value, slBlock, l2BlockTag } = params;
-  const imt = await reconstructChainImt(l2Tree, l2BlockTag);
-  const idx = findValueIndex(imt.leaves, value);
-  if (idx < 0) throw new Error(`value ${value} not found in chain ${chainId} IMT`);
-
-  const onChainRoot: string = await l2Tree.root(l2BlockTag !== undefined ? { blockTag: l2BlockTag } : {});
-  if (imt.root.toLowerCase() !== onChainRoot.toLowerCase()) {
-    throw new Error(`off-chain IMT root ${imt.root} != on-chain root ${onChainRoot} for chain ${chainId}`);
-  }
-
-  return {
-    sourceChainId: BigInt(chainId).toString(),
-    chainImtRoot: imt.root,
-    leaf: imt.leaves[idx],
-    imtLeafIndex: idx,
-    imtProof: imt.engine.merklePath(idx),
-    ...messageProofForSlBlock(slBlock),
-  };
-}
-
-/** Build a non-inclusion `ImtProof` (leaf is the low-nullifier), carrying `slBlock` (> deadline). */
-export async function buildNonInclusionProof(params: {
-  l2Tree: ethers.Contract;
-  chainId: bigint | number | string;
-  value: string;
-  slBlock: number;
-  l2BlockTag?: number;
-}): Promise<ImtProof> {
-  const { l2Tree, chainId, value, slBlock, l2BlockTag } = params;
-  const imt = await reconstructChainImt(l2Tree, l2BlockTag);
-  const lowIndex = findLowNullifierIndex(imt.leaves, value); // throws if value present
-
-  const onChainRoot: string = await l2Tree.root(l2BlockTag !== undefined ? { blockTag: l2BlockTag } : {});
-  if (imt.root.toLowerCase() !== onChainRoot.toLowerCase()) {
-    throw new Error(`off-chain IMT root ${imt.root} != on-chain root ${onChainRoot} for chain ${chainId}`);
-  }
-
-  return {
-    sourceChainId: BigInt(chainId).toString(),
-    chainImtRoot: imt.root,
-    leaf: imt.leaves[lowIndex],
-    imtLeafIndex: lowIndex,
-    imtProof: imt.engine.merklePath(lowIndex),
-    ...messageProofForSlBlock(slBlock),
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -453,24 +266,27 @@ export function proofTuple(p: ImtProof): unknown[] {
     p.sourceChainId,
     p.batchNumber,
     p.chainImtRoot,
-    p.messageTxNumberInBatch,
-    p.messageIndex,
-    p.messageProof,
+    p.settlementProof,
     leafTuple(p.leaf),
     p.imtLeafIndex,
     p.imtProof,
   ];
 }
 
+/** Build the `AtomicFlow` tuple (the flow definition). */
+export function atomicFlowTuple(f: AtomicFlow): unknown[] {
+  return [
+    f.flowId,
+    f.deadline,
+    BigInt(f.settlementLayerChainId),
+    f.legBundleHashes,
+    f.legSourceChainIds.map((c) => BigInt(c)),
+  ];
+}
+
 /** Build the `AtomicFinalityProof` tuple `executeAtomicBundle` consumes. */
 export function atomicFinalityProofTuple(p: AtomicFinalityProof): unknown[] {
-  return [
-    p.flowId,
-    p.deadline,
-    p.legBundleHashes,
-    p.chainIds.map((c) => BigInt(c)),
-    p.proofs.map(proofTuple),
-  ];
+  return [atomicFlowTuple(p), p.proofs.map(proofTuple)];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -69,22 +69,41 @@ pub struct ImtLeaf {
     pub next_value: U256,
 }
 
-/// Membership proof of a commit leaf in a chain's atomic-interop commitment tree (IMT).
+/// A complete, on-chain-ready atomic-interop IMT proof, mirroring `ImtProof` in
+/// `IAtomicInterop.sol` (minus `sourceChainId`, which the caller knows).
 ///
-/// This is the IMT half of an `ImtInclusionProof` (`IAtomicInterop.sol`): it authenticates the
-/// leaf holding a given commit value against the chain's IMT root as of a specific L2 block. The
-/// caller pairs it with the message/interop-root proof from `zks_getL2ToL1LogProof` to form the
-/// full per-leg proof consumed by `InteropHandler.executeAtomicBundle`.
+/// Two layers:
+///   1. The IMT half (`chain_imt_root` / `leaf` / `imt_leaf_index` / `imt_proof`) authenticates a
+///      leaf against the chain's IMT root. For an inclusion proof (`zks_getImtInclusionProof`)
+///      `leaf` is the commit value's own leaf; for a non-inclusion proof
+///      (`zks_getImtNonInclusionProof`) it is the low-nullifier (predecessor) leaf bracketing the
+///      absent value.
+///   2. The settlement half (`batch_number` / `settlement_proof`) authenticates `chain_imt_root`
+///      as a chain-batch-root leaf of the source batch (leaf 3 = batch-end root for inclusion,
+///      leaf 2 = batch-begin root for non-inclusion; the mask is hardcoded on-chain per verify
+///      path) against the interop root the verifying chain imported, and carries the batch's
+///      `l1Timestamp` for the deadline check.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ImtInclusionProof {
-    /// The IMT root at the requested block (matches `L2InteropCommitmentTree.root()`).
+pub struct ImtProof {
+    /// The source batch number the settlement proof anchors to.
+    pub batch_number: u64,
+    /// The settlement-layer block the proof's interop root anchor was resolved at
+    /// (`interopRoots[slChainId][block]`). Callers wait for the verifying chain to import that
+    /// root before submitting the proof on-chain.
+    pub settlement_block_number: Option<u64>,
+    /// The proven IMT boundary root: the batch-END root for inclusion proofs, the batch-BEGIN
+    /// root for non-inclusion proofs.
     pub chain_imt_root: B256,
-    /// The proven leaf.
+    /// Multi-hop settlement proof (`bytes32[]`): metadata word, the 3 chain-batch-root siblings,
+    /// then the batch-leaf / chain-tree / shared-tree hops (consumed by
+    /// `AtomicInteropProof._authenticateRoot`).
+    pub settlement_proof: Vec<B256>,
+    /// The proven leaf (own leaf for inclusion; low-nullifier leaf for non-inclusion).
     pub leaf: ImtLeaf,
     /// The leaf's index in the tree.
     pub imt_leaf_index: u64,
-    /// Fixed-depth Merkle path (32 siblings, leaf level up) authenticating the leaf against the root.
+    /// Dynamic-height Merkle path (leaf level up) authenticating the leaf against the root.
     pub imt_proof: Vec<B256>,
 }
 

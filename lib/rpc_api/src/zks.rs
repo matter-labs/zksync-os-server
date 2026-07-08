@@ -1,6 +1,4 @@
-use crate::types::{
-    BatchStorageProof, BlockMetadata, ImtInclusionProof, L2ToL1LogProof, LogProofTarget,
-};
+use crate::types::{BatchStorageProof, BlockMetadata, ImtProof, L2ToL1LogProof, LogProofTarget};
 use alloy::primitives::{Address, B256, TxHash, U256};
 use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
@@ -28,17 +26,34 @@ pub trait ZksApi {
         proof_target: Option<LogProofTarget>,
     ) -> RpcResult<Option<L2ToL1LogProof>>;
 
-    /// Returns the IMT membership proof for the atomic-interop commit leaf holding `commit_value`,
-    /// against this chain's commitment tree (`L2InteropCommitmentTree`) as of `block_number`.
+    /// Returns the complete atomic-interop inclusion proof for the commit leaf holding
+    /// `commit_value`: the IMT membership half against the **batch-end** IMT root of the batch
+    /// containing `block_number` (typically the atomic-send block), plus the settlement half
+    /// authenticating that root as chain-batch-root leaf 3 against the imported interop root.
     ///
-    /// `block_number` must be the L2 block whose IMT root the caller's message proof authenticates
-    /// (typically the atomic-send block). Returns `None` if no leaf holds `commit_value` at that block.
+    /// The batch must be executed on the settlement layer (the settlement half anchors at the
+    /// execution block). Returns `None` if no leaf holds `commit_value` in that batch.
     #[method(name = "getImtInclusionProof")]
     async fn get_imt_inclusion_proof(
         &self,
         commit_value: U256,
         block_number: u64,
-    ) -> RpcResult<Option<ImtInclusionProof>>;
+    ) -> RpcResult<Option<ImtProof>>;
+
+    /// Returns the complete atomic-interop timeout (non-inclusion) proof for `commit_value`
+    /// against the **batch-begin** IMT root of `batch_number`: the low-nullifier half proving the
+    /// value absent, plus the settlement half authenticating that root as chain-batch-root leaf 2.
+    ///
+    /// For a refund the caller picks a batch whose settlement timestamp exceeds the flow deadline
+    /// (`AtomicInteropProof.verifyTimeoutAbsence`); absence at the begin of a late batch proves
+    /// the value was never committed in time. The batch must be executed on the settlement layer.
+    /// Returns `None` if the value IS present (no low-nullifier bracket exists).
+    #[method(name = "getImtNonInclusionProof")]
+    async fn get_imt_non_inclusion_proof(
+        &self,
+        commit_value: U256,
+        batch_number: u64,
+    ) -> RpcResult<Option<ImtProof>>;
 
     /// Returns the index of the low-nullifier leaf for `value` (the predecessor used when inserting
     /// `value`) in this chain's commitment tree as of `block_number`, or `None` if none exists.

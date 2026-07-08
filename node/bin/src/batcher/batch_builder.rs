@@ -11,7 +11,7 @@ use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_native_pig::{NativeBatchBlock, NativeBatchRunOutput, generate_batch_run};
-use zksync_os_storage_api::{ReadStateHistory, read_multichain_root};
+use zksync_os_storage_api::{ReadStateHistory, read_commitment_tree_root, read_multichain_root};
 use zksync_os_types::{ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +47,12 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
+    // IMT (interop commitment tree) boundary snapshots, exactly as the bootloader commits them
+    // into the chain batch root: `begin` is the root before the batch's first block ran (i.e. at
+    // the end of the previous block), `end` after the batch's last block.
+    let imt_root_begin =
+        read_commitment_tree_root(read_state.state_view_at(block_number_from - 1)?);
+    let imt_root_end = read_commitment_tree_root(read_state.state_view_at(block_number_to)?);
     let (native_batch_run, native_pig_measurement) = if proving_version >= ProvingVersion::V8 {
         let native_blocks = blocks
             .iter()
@@ -59,6 +65,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
                         .context("native batch PIG requires per-block tree data")?,
                 })
             })
+<<<<<<< HEAD
             .collect::<anyhow::Result<Vec<_>>>()?;
         let started_at = std::time::Instant::now();
         let batch_run = generate_batch_run(
@@ -124,6 +131,8 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             pubdata_mode,
             sl_chain_id,
             multichain_root,
+            imt_root_begin,
+            imt_root_end,
             &protocol_version,
             &last_replay_record.block_context.block_hashes.0,
         )
@@ -212,6 +221,8 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             logs,
             messages,
             multichain_root,
+            imt_root_begin,
+            imt_root_end,
             set_sl_chain_id_migration_number,
         },
         batch_prover_input,
