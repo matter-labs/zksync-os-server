@@ -357,6 +357,38 @@ zksync_os_server = { version = "=0.20.8", path = "node/bin" }
 #zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
 
+[patch.crates-io]
+# TODO: temporary commonware fork whose only delta from the released v2026.5.0
+# is a one-line fix to the segmented journal's prune, which otherwise panics
+# the consensus voter ("unable to prune journal: BlobMissing(...)") when a
+# straggling file operation from a previous in-process node incarnation removes
+# an already-obsolete journal section — integration tests that restart
+# validators hit this as a rare flake.
+# Upstream PR: https://github.com/commonwarexyz/monorepo/pull/4196
+# Drop this whole patch section once the PR is merged and commonware is
+# upgraded past it.
+#
+# The entire family is patched, not just commonware-storage: the fork is a
+# monorepo, so its storage crate resolves sibling dependencies from its own
+# tree, and mixing those with the same crates from crates.io splits the
+# dependency graph into two incompatible copies of every shared type.
+commonware-actor = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-broadcast = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-codec = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-coding = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-consensus = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-cryptography = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-formatting = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-macros = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-math = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-p2p = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-parallel = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-resolver = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-runtime = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-storage = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-stream = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-utils = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
 overflow-checks = true

@@ -11,6 +11,7 @@
 //! both halves: the clean promotion, and the collision.
 
 use alloy::primitives::Address;
+use anyhow::Context as _;
 use std::time::Duration;
 use zksync_os_integration_tests::l1_helpers::{fetch_l1_state, wait_for_l1_state};
 use zksync_os_integration_tests::multi_node::MultiNodeTester;
@@ -30,7 +31,9 @@ async fn settlement_fails_over_to_a_promoted_standby() -> anyhow::Result<()> {
     // Settlement is live under the original settler (validator 0), with work in
     // flight: a batch committed but not yet executed is exactly what the promoted
     // standby must pick up and re-drive.
-    let included_at = send_transfer(&cluster, 1, Address::repeat_byte(0x51)).await?;
+    let included_at = send_transfer(&cluster, 1, Address::repeat_byte(0x51))
+        .await
+        .context("transfer before the failover")?;
     cluster
         .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
         .await?;
@@ -44,7 +47,9 @@ async fn settlement_fails_over_to_a_promoted_standby() -> anyhow::Result<()> {
     // The settler is lost. Sequencing rides on (3-of-4 quorum) while settlement
     // freezes — both commit and execute senders lived on the dead node.
     cluster.stop_validator(0).await?;
-    let while_down = send_transfer(&cluster, 1, Address::repeat_byte(0x52)).await?;
+    let while_down = send_transfer(&cluster, 1, Address::repeat_byte(0x52))
+        .await
+        .context("transfer while the settler is down")?;
     cluster
         .wait_for_block_on_all(while_down, CONVERGENCE_TIMEOUT)
         .await?;
@@ -96,7 +101,9 @@ async fn settlement_fails_over_to_a_promoted_standby() -> anyhow::Result<()> {
     cluster
         .wait_for_block_on_all(tip, CONVERGENCE_TIMEOUT)
         .await?;
-    let after_rejoin = send_transfer(&cluster, 0, Address::repeat_byte(0x53)).await?;
+    let after_rejoin = send_transfer(&cluster, 0, Address::repeat_byte(0x53))
+        .await
+        .context("transfer via the rejoined standby")?;
     cluster
         .wait_for_block_on_all(after_rejoin, CONVERGENCE_TIMEOUT)
         .await?;
@@ -123,7 +130,9 @@ async fn settlement_fails_over_to_a_promoted_standby() -> anyhow::Result<()> {
 async fn a_colliding_second_settler_dies_loudly_and_the_committee_recovers() -> anyhow::Result<()> {
     let mut cluster = MultiNodeTester::start(4).await?;
 
-    let included_at = send_transfer(&cluster, 3, Address::repeat_byte(0x61)).await?;
+    let included_at = send_transfer(&cluster, 3, Address::repeat_byte(0x61))
+        .await
+        .context("transfer before the collision")?;
     cluster
         .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
         .await?;
@@ -136,12 +145,11 @@ async fn a_colliding_second_settler_dies_loudly_and_the_committee_recovers() -> 
 
     // The misconfiguration under drill: validator 1 comes up batcher-enabled
     // with its own (authorized, funded) identity while validator 0 still
-    // settles. The L1 mutual exclusion has two teeth, and which one bites is a
-    // race: usually the second settler's commit watcher sees a foreign batch
-    // land moments after its own startup and executes it *at birth* (the launch
-    // itself fails); if it survives birth, the two race until one loses a
-    // commit on L1 and dies.
-    use anyhow::Context as _;
+    // settles. The L1 mutual exclusion has several teeth, and which one bites
+    // is a race: usually the second settler dies *at birth* (the launch itself
+    // fails) — its startup L1 read finds the incumbent's commits in flight, or
+    // its commit watcher sees a foreign batch land moments after startup. If it
+    // survives birth, the two race until one loses a commit on L1 and dies.
     let identity = SettlerIdentity::generate(0x61);
     authorize_and_fund(cluster.node(3), &identity).await?;
     cluster.stop_validator(1).await?;
@@ -153,13 +161,13 @@ async fn a_colliding_second_settler_dies_loudly_and_the_committee_recovers() -> 
         .await;
 
     let loser = match launch {
-        // Killed at birth: the guard refused to run a second settler at all.
+        // Killed at birth: a guard refused to run a second settler at all.
         // Validator 1's harness slot is spent for this run; the drill's
         // remaining claims are the survivor's.
         Err(launch_error) => {
             tracing::info!(
                 %launch_error,
-                "the second settler was killed at birth by the unexpected-commit guard",
+                "the second settler was killed at birth by the L1 mutual exclusion",
             );
             None
         }
@@ -218,7 +226,9 @@ async fn a_colliding_second_settler_dies_loudly_and_the_committee_recovers() -> 
 
     // In either shape: sequencing never depended on the loser, the committee
     // still agrees, and the surviving settler keeps settling.
-    let after_recovery = send_transfer(&cluster, 3, Address::repeat_byte(0x69)).await?;
+    let after_recovery = send_transfer(&cluster, 3, Address::repeat_byte(0x69))
+        .await
+        .context("transfer after the collision resolved")?;
     cluster
         .wait_for_block_on_all(after_recovery, CONVERGENCE_TIMEOUT)
         .await

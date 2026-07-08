@@ -13,93 +13,21 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
-use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::l1_helpers::wait_for_l1_state;
 use zksync_os_integration_tests::multi_node::MultiNodeTester;
-
-const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Submits a transfer through the validator at `via` and waits for its inclusion.
-/// Returns the block number the transaction landed in.
-async fn send_transfer(
-    cluster: &MultiNodeTester,
-    via: usize,
-    recipient: Address,
-) -> anyhow::Result<u64> {
-    use anyhow::Context as _;
-    let sender = cluster.node(via).l2_wallet.default_signer().address();
-    let (pending, latest, height) = tokio::try_join!(
-        cluster
-            .node(via)
-            .l2_provider
-            .get_transaction_count(sender)
-            .pending()
-            .into_future(),
-        cluster
-            .node(via)
-            .l2_provider
-            .get_transaction_count(sender)
-            .latest()
-            .into_future(),
-        cluster.node(via).l2_provider.get_block_number(),
-    )?;
-    tracing::info!(via, %sender, pending, latest, height, "sending transfer");
-    let receipt = tokio::time::timeout(CONVERGENCE_TIMEOUT, async {
-        cluster
-            .node(via)
-            .l2_provider
-            .send_transaction(
-                TransactionRequest::default()
-                    .with_to(recipient)
-                    .with_value(U256::from(1_000_000u64))
-                    // Explicit nonce: the provider's nonce filler caches per
-                    // provider instance, and one wallet acts through *many*
-                    // providers here (one per validator, plus test harnesses),
-                    // so a cached value goes stale the moment the wallet
-                    // transacts through anyone else.
-                    .with_nonce(pending),
-            )
-            .await?
-            .expect_successful_receipt()
-            .await
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("transaction was not included within {CONVERGENCE_TIMEOUT:?}"))?
-    .with_context(|| format!("transfer via validator {via} (pending nonce view {pending})"))?;
-    Ok(receipt
-        .block_number
-        .expect("included transactions have a block"))
-}
+use zksync_os_integration_tests::settlement::{CONVERGENCE_TIMEOUT, send_transfer};
 
 #[test_log::test(tokio::test)]
 async fn three_validators_finalize_and_agree() -> anyhow::Result<()> {
     let cluster = MultiNodeTester::start(3).await?;
 
-    // A user transaction, submitted to a NON-batcher validator: it sits in that
+    // A user transaction, submitted to a non-batcher validator: it sits in that
     // validator's mempool until that validator's turn as leader, then rides a block
-    // like any other transaction.
+    // like any other transaction. (`send_transfer` moves 1_000_000 wei — the value
+    // the balance assertion below checks for.)
     let recipient = Address::repeat_byte(0x42);
     let value = U256::from(1_000_000u64);
-    let receipt = tokio::time::timeout(CONVERGENCE_TIMEOUT, async {
-        cluster
-            .node(1)
-            .l2_provider
-            .send_transaction(
-                TransactionRequest::default()
-                    .with_to(recipient)
-                    .with_value(value),
-            )
-            .await?
-            .expect_successful_receipt()
-            .await
-    })
-    .await
-    .map_err(|_| {
-        anyhow::anyhow!("transaction was not included within {CONVERGENCE_TIMEOUT:?}")
-    })??;
-    let included_at = receipt
-        .block_number
-        .expect("included transactions have a block");
+    let included_at = send_transfer(&cluster, 1, recipient).await?;
 
     // Every validator converges on the same chain: same height reached, identical
     // block hash where the transaction landed, and the state effect visible everywhere.
@@ -602,7 +530,6 @@ async fn validator_on_a_different_protocol_version_cannot_pair() -> anyhow::Resu
     // finalized *before* the restart, so merely "observed a finalization" proves
     // nothing — the sharp fact is that the committee's finalized view keeps
     // advancing while the mismatched validator's stands still.)
-    tokio::time::sleep(Duration::from_secs(2)).await;
     fn finalized_view(status: zksync_os_status_server::StatusResponse) -> u64 {
         status
             .consensus
@@ -610,7 +537,40 @@ async fn validator_on_a_different_protocol_version_cannot_pair() -> anyhow::Resu
             .map(|finalized| finalized.view)
             .unwrap_or(0)
     }
-    let stuck_view = finalized_view(cluster.node(3).status().await?);
+    // The replay's pace depends on host load, so record the frozen view and
+    // height only once both have held still for a while — a fixed sleep
+    // undershoots on a busy machine and the assertions below then read replay
+    // progress as a pairing leak. If they never settle, that IS the pairing
+    // leak, reported here.
+    let (stuck_view, stuck_height) = {
+        use alloy::providers::Provider as _;
+        let observe = || async {
+            anyhow::Ok((
+                finalized_view(cluster.node(3).status().await?),
+                cluster.node(3).l2_provider.get_block_number().await?,
+            ))
+        };
+        let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+        let mut last = observe().await?;
+        let mut stable_since = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let now = observe().await?;
+            if now != last {
+                last = now;
+                stable_since = tokio::time::Instant::now();
+            } else if stable_since.elapsed() >= Duration::from_secs(2) {
+                break last;
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "the mismatched validator's consensus knowledge never settled \
+                 (still moving at view {}, height {})",
+                now.0,
+                now.1,
+            );
+        }
+    };
 
     // Let the committee finalize well past everything the mismatched validator knows.
     let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
@@ -636,10 +596,9 @@ async fn validator_on_a_different_protocol_version_cannot_pair() -> anyhow::Resu
         use alloy::providers::Provider as _;
         cluster.node(3).l2_provider.get_block_number().await?
     };
-    assert!(
-        height_after <= height_before_restart,
-        "a protocol-mismatched validator must not apply new blocks \
-         ({height_after} > {height_before_restart})",
+    assert_eq!(
+        height_after, stuck_height,
+        "a protocol-mismatched validator must not apply new blocks",
     );
     assert!(
         second_at > height_before_restart,

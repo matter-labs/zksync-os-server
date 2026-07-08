@@ -781,7 +781,7 @@ impl MultiNodeTester {
         }
     }
 
-    fn running(&self) -> impl Iterator<Item = (usize, &Tester)> {
+    pub(crate) fn running(&self) -> impl Iterator<Item = (usize, &Tester)> {
         self.validators
             .iter()
             .enumerate()
@@ -835,7 +835,9 @@ impl MultiNodeTester {
         // means everything else is gone too — gate the relaunch on it, then on the
         // listen port being bindable. (The lockfile reservation keeps other tests
         // away from the port meanwhile.)
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+        // Sized for a loaded machine: with the stop-then-release contract, the
+        // lock is held until every consensus task has actually wound down.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
         let instance_lock = zksync_os_server::consensus::instance_lock_path(
             &stopped
                 .config()

@@ -21,6 +21,14 @@ slow-timeout = { period = "15m", terminate-after = 3 }
 test-group = 'prover-serial'
 
 [[profile.default.overrides]]
+# Consensus-era multi-node suites spin up a 3-5 validator committee (each a full
+# in-process node) plus an anvil L1 per test. At one scheduling slot each, a
+# many-core runner packs a dozen committees concurrently and their fixed timeout
+# windows start missing under the load.
+filter = 'test(~node::consensus) | test(~node::settlement_ha) | test(~node::committee_verification) | test(~node::migration) | test(~node::reconfig)'
+threads-required = 4
+
+[[profile.default.overrides]]
 # Interop tests spin up 3 nodes (2 L2 + 1 L1) and need significant resources.
 filter = 'test(~interop)'
 threads-required = 4

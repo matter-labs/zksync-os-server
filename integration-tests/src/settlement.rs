@@ -15,8 +15,10 @@ use alloy::sol_types::SolCall;
 use std::time::Duration;
 use zksync_os_operator_signer::SignerConfig;
 
-/// How long committee tests wait for cluster-wide effects.
-pub const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long committee tests wait for cluster-wide effects. Sized for a loaded
+/// machine (a full-suite run packs several committees concurrently, and CI
+/// runners are slower still), not for the idle-machine happy path.
+pub const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
 
 alloy::sol! {
     // The ValidatorTimelock's operator-management surface (era-contracts v31):
@@ -122,38 +124,75 @@ pub async fn authorize_and_fund(node: &Tester, identity: &SettlerIdentity) -> an
 
 /// Submits a transfer through the validator at `via` and waits for inclusion.
 /// The nonce is pinned explicitly: one wallet acts through many providers here,
-/// and each provider's nonce filler caches independently.
+/// and each provider's nonce filler caches independently. It is pinned from the
+/// *most-applied* view across the cluster, not from `via` alone: right after a
+/// wallet-touching block lands (the funding deposit, an earlier transfer), a
+/// validator that has not applied it yet reports a stale count — and a transfer
+/// pinned to that count is below the account's true nonce, so every pool holds
+/// or rejects it and no leader ever includes it. Whichever node confirmed the
+/// previous receipt reports the true count, so the maximum is the truth.
+///
+/// The receipt is polled directly rather than through the provider's
+/// block-subscription watcher: blocks arrive here by consensus commit, and a
+/// watcher that misses one notification would report a timeout for a
+/// transaction that landed long ago. On a real timeout, the error says whether
+/// the node still holds the transaction — "stuck in the pool" and "lost
+/// entirely" are different bugs.
 pub async fn send_transfer(
     cluster: &MultiNodeTester,
     via: usize,
     recipient: Address,
 ) -> anyhow::Result<u64> {
-    use anyhow::Context as _;
-    let sender = cluster.node(via).l2_wallet.default_signer().address();
-    let pending = cluster
-        .node(via)
+    let node = cluster.node(via);
+    let sender = node.l2_wallet.default_signer().address();
+    let mut pending = 0;
+    for (_, running) in cluster.running() {
+        pending = pending.max(
+            running
+                .l2_provider
+                .get_transaction_count(sender)
+                .pending()
+                .await?,
+        );
+    }
+    let submitted = node
         .l2_provider
-        .get_transaction_count(sender)
-        .pending()
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(recipient)
+                .with_value(U256::from(1_000_000u64))
+                .with_nonce(pending),
+        )
         .await?;
-    let receipt = tokio::time::timeout(CONVERGENCE_TIMEOUT, async {
-        cluster
-            .node(via)
-            .l2_provider
-            .send_transaction(
-                TransactionRequest::default()
-                    .with_to(recipient)
-                    .with_value(U256::from(1_000_000u64))
-                    .with_nonce(pending),
-            )
-            .await?
-            .expect_successful_receipt()
-            .await
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("transaction was not included within {CONVERGENCE_TIMEOUT:?}"))?
-    .with_context(|| format!("transfer via validator {via}"))?;
-    Ok(receipt
-        .block_number
-        .expect("included transactions have a block"))
+    let hash = *submitted.tx_hash();
+
+    let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        if let Some(receipt) = node.l2_provider.get_transaction_receipt(hash).await? {
+            anyhow::ensure!(
+                receipt.status(),
+                "transfer {hash} via validator {via} reverted",
+            );
+            return Ok(receipt
+                .block_number
+                .expect("included transactions have a block"));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let still_known = node
+                .l2_provider
+                .get_transaction_by_hash(hash)
+                .await?
+                .is_some();
+            anyhow::bail!(
+                "transfer {hash} via validator {via} (nonce {pending}) was not included \
+                 within {CONVERGENCE_TIMEOUT:?}; the node {}",
+                if still_known {
+                    "still holds it unincluded"
+                } else {
+                    "no longer knows it"
+                },
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }

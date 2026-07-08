@@ -14,37 +14,60 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
-use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::multi_node::MultiNodeTester;
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 
-const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
+// Sized for a loaded machine (a full-suite run packs several committees
+// concurrently, and CI runners are slower still), not for the idle happy path.
+const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Submits a transfer through the given node and returns (block number, tx hash).
+///
+/// The receipt is polled directly rather than through the provider's
+/// block-subscription watcher (see `settlement::send_transfer` for why); on a
+/// timeout the error says whether the node still holds the transaction.
 async fn transfer_via(
     node: &Tester,
     recipient: Address,
     value: U256,
 ) -> anyhow::Result<(u64, alloy::primitives::B256)> {
-    let receipt = tokio::time::timeout(CONVERGENCE_TIMEOUT, async {
-        node.l2_provider
-            .send_transaction(
-                TransactionRequest::default()
-                    .with_to(recipient)
-                    .with_value(value),
-            )
-            .await?
-            .expect_successful_receipt()
-            .await
-    })
-    .await
-    .map_err(|_| {
-        anyhow::anyhow!("transaction was not included within {CONVERGENCE_TIMEOUT:?}")
-    })??;
-    Ok((
-        receipt.block_number.expect("included txs have a block"),
-        receipt.transaction_hash,
-    ))
+    let submitted = node
+        .l2_provider
+        .send_transaction(
+            TransactionRequest::default()
+                .with_to(recipient)
+                .with_value(value),
+        )
+        .await?;
+    let hash = *submitted.tx_hash();
+
+    let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        if let Some(receipt) = node.l2_provider.get_transaction_receipt(hash).await? {
+            anyhow::ensure!(receipt.status(), "transfer {hash} reverted");
+            return Ok((
+                receipt.block_number.expect("included txs have a block"),
+                receipt.transaction_hash,
+            ));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let still_known = node
+                .l2_provider
+                .get_transaction_by_hash(hash)
+                .await?
+                .is_some();
+            anyhow::bail!(
+                "transfer {hash} was not included within {CONVERGENCE_TIMEOUT:?}; \
+                 the node {}",
+                if still_known {
+                    "still holds it unincluded"
+                } else {
+                    "no longer knows it"
+                },
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 #[test_multisetup([CURRENT_TO_L1])]
@@ -153,8 +176,12 @@ async fn migrated_chain_rolls_back_to_the_single_sequencer(
     // Rollback: stop the whole committee, then restart the batcher validator as a
     // plain single sequencer — same databases, consensus disabled, the rollback
     // explicitly acknowledged (without the flag the node refuses; that guard is
-    // unit-pinned).
-    for index in [1, 2, 0] {
+    // unit-pinned). The settler goes down first: its final commit may still be
+    // in flight, and if it lands only after the relaunched node's startup L1
+    // snapshot, the unexpected-commit guard reads the node's own commit as a
+    // foreign settler's and dies. Stopping the other two validators in between
+    // gives L1 that much longer to digest it before the relaunch.
+    for index in [0, 1, 2] {
         cluster.stop_validator(index).await?;
     }
     cluster

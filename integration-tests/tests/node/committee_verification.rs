@@ -11,9 +11,7 @@
 //! must be reachable from the standbys alone: `threshold <= n - 1 - f`.
 
 use std::time::Duration;
-use zksync_os_integration_tests::l1_helpers::{
-    fetch_l1_state, wait_for_l1_state, wait_for_l1_state_with_timeout,
-};
+use zksync_os_integration_tests::l1_helpers::{fetch_l1_state, wait_for_l1_state_with_timeout};
 
 /// The multisig ladder is legitimately slower than plain settlement: every batch
 /// adds a signature collection round-trip, and the first batches pay the

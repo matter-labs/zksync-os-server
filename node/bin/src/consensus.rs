@@ -806,24 +806,38 @@ where
 
         // Any component exiting is fatal: these tasks run for the life of the node.
         // The shutdown arm (fired explicitly or by the node runtime dropping the
-        // sender) is the one non-fatal exit: signal every consensus task to stop and
-        // wait for them to wind down, which releases the p2p listener and journals.
-        tokio::select! {
+        // sender) is the one non-fatal exit.
+        let outcome = tokio::select! {
             _ = shutdown => {
                 tracing::info!("node is shutting down; stopping consensus");
-                context
-                    .stop(0, Some(std::time::Duration::from_secs(10)))
-                    .await
-                    .context("consensus tasks did not stop in time")?;
                 Ok(())
             }
-            _ = network_handle => anyhow::bail!("consensus networking exited unexpectedly"),
+            _ = network_handle => Err(anyhow::anyhow!("consensus networking exited unexpectedly")),
             _ = stack.epoch_manager => {
-                anyhow::bail!("consensus epoch rotation exited unexpectedly")
+                Err(anyhow::anyhow!("consensus epoch rotation exited unexpectedly"))
             }
-            _ = stack.marshal => anyhow::bail!("consensus marshal exited unexpectedly"),
-            _ = stack.broadcast => anyhow::bail!("consensus broadcast exited unexpectedly"),
+            _ = stack.marshal => Err(anyhow::anyhow!("consensus marshal exited unexpectedly")),
+            _ = stack.broadcast => Err(anyhow::anyhow!("consensus broadcast exited unexpectedly")),
+        };
+        // On every exit path — graceful or fatal — signal all consensus tasks to
+        // stop and wait until they actually have. This must not give up on a
+        // deadline: a task still winding down may be mid journal write, and
+        // releasing the storage lock (below) while it lives hands the next
+        // instance a vote journal that mutates under it. Better a loud, visibly
+        // stuck shutdown than that. Anything still running here is wedged on
+        // I/O contention and does finish; the warning gives it a name if it
+        // ever truly hangs.
+        while let Err(err) = context
+            .child("stop")
+            .stop(0, Some(std::time::Duration::from_secs(30)))
+            .await
+        {
+            tracing::warn!(
+                ?err,
+                "consensus tasks are still winding down; holding the storage lock until they finish"
+            );
         }
+        outcome
     });
     drop(env_anchor);
     // Withdraw the metrics encoder: it captures a runtime context, and leaving it in

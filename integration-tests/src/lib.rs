@@ -543,6 +543,10 @@ impl Tester {
         // `restart()` works for `NEXT_TO_GATEWAY` topology.  They are only torn down in
         // `StoppedTester::shutdown()` or when `StoppedTester` is dropped.
         shutdown_runtime(runtime).await?;
+        // The consensus stack outlives the node runtime by design; a stopped
+        // tester must mean the whole instance is gone (restarts reopen its
+        // storage, and a test ending here must not race live threads at exit).
+        wait_for_consensus_storage_released(&config).await?;
         Ok(StoppedTester {
             l1,
             tempdir,
@@ -580,10 +584,27 @@ impl Tester {
         let Self {
             runtime,
             owned_supporting_nodes,
+            config,
+            // Keep the storage directory alive until consensus has wound down:
+            // deleting it under a live instance turns its teardown into a crash.
+            tempdir,
             ..
         } = self;
         drop(owned_supporting_nodes);
         shutdown_runtime(runtime).await?;
+        // A test returning from shutdown may end the process; consensus threads
+        // still winding down at that point die mid-teardown (observed as
+        // SIGABRT at exit under load).
+        wait_for_consensus_storage_released(&config).await?;
+        // The storage lock covers every task the consensus runtime can track,
+        // but a task that never subscribed to the stop signal can hold the
+        // runtime itself alive a beat longer — and a process exit under its
+        // worker threads aborts in pthread teardown. A short grace absorbs
+        // that last gasp.
+        if config.consensus_config.enabled {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        drop(tempdir);
         Ok(())
     }
 
@@ -704,9 +725,45 @@ impl Tester {
             role = %node_role,
         );
         tracing::info!(parent: &node_span, "Launching test node");
-        zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
-            .instrument(node_span)
+        // Node startup runs inline on the test task, and the node's style for a
+        // fatal startup condition is a panic (e.g. the L1 mutual-exclusion guard
+        // refusing to start a second settler). In production that is a loud
+        // process exit; in-process it would unwind the *test*. Catch it and
+        // surface a launch error instead, so tests can assert on failed launches
+        // the same way they assert on any other `Err`.
+        //
+        // One panic class is transient and retried instead of surfaced: a
+        // restarted node can find its own databases still locked, because the
+        // previous incarnation's RocksDB handles drop on the process-shared
+        // blocking pool and can lag its runtime shutdown. The conflict clears
+        // as soon as the straggling drop lands.
+        let launch_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let launch = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+                zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
+                    .instrument(node_span.clone()),
+            ))
             .await;
+            let panic = match launch {
+                Ok(()) => break,
+                Err(panic) => panic,
+            };
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&'static str>().copied())
+                .unwrap_or("<non-string panic payload>");
+            let stale_db_lock = message.contains("lock hold by current process");
+            if stale_db_lock && tokio::time::Instant::now() < launch_deadline {
+                tracing::warn!(
+                    parent: &node_span,
+                    "previous incarnation's database handles are still closing; retrying launch"
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+            anyhow::bail!("node startup panicked: {message}");
+        }
         let task_manager_handle = runtime
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
@@ -848,6 +905,13 @@ impl StoppedTester {
             Ports::from_config(&config).await?
         };
         wait_for_rocksdb_locks_released(&config.general_config.rocks_db_path).await?;
+        // A batcher must not come back up while its previous incarnation's L1
+        // transactions are still in flight — a commit landing after the new
+        // session's startup snapshot reads as a foreign settler's and trips the
+        // unexpected-commit guard (whose designed remedy is another restart).
+        if config.batcher_config.enabled {
+            wait_for_operator_l1_quiescence(&l1, &config).await?;
+        }
         let mut tester = Tester::launch_node_inner(
             l1,
             config,
@@ -1092,6 +1156,119 @@ pub async fn wait_for_rocksdb_locks_released(
             PORT_ACQUISITION_TIMEOUT,
         );
         tokio::time::sleep(PORT_ACQUISITION_POLL_INTERVAL).await;
+    }
+}
+
+/// Waits until no consensus instance holds the storage under `config`'s rocksdb
+/// path. The node's consensus stack winds down asynchronously after the node
+/// runtime stops, and its storage lock is released only once every consensus
+/// task is gone — so this returning means the instance is truly dead: safe to
+/// restart over the same storage, safe for the test process to exit without
+/// racing a live runtime's threads.
+pub async fn wait_for_consensus_storage_released(config: &Config) -> anyhow::Result<()> {
+    if !config.consensus_config.enabled {
+        return Ok(());
+    }
+    let instance_lock = zksync_os_server::consensus::instance_lock_path(
+        &config.general_config.rocks_db_path.join("consensus"),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        // The lock's parent directory may not exist (consensus never ran, or its
+        // storage was wiped) — trivially nobody holds it, but the probe needs
+        // the directory to create its file.
+        if let Some(parent) = instance_lock.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(probe) = std::fs::File::create(&instance_lock)
+            && fs2::FileExt::try_lock_exclusive(&probe).is_ok()
+        {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the consensus instance did not release its storage within 120s of the node stopping",
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Waits until the node's L1 operator addresses have no in-flight L1
+/// transactions. A settler restarted while its previous incarnation's commit is
+/// still being digested by the L1 node trips its own mutual-exclusion guard:
+/// the commit lands after the new session's startup snapshot and reads as a
+/// foreign settler's. Real deployments answer that with another restart
+/// (startup reconciles from L1); tests must simply not manufacture the
+/// situation.
+///
+/// Nonce parity (pending == latest) alone is not enough: a transaction the L1
+/// node has *received* but not yet admitted to its pool is invisible to both
+/// counts, and on a loaded host that window is real. So after parity, a probe
+/// transaction is pushed through and mined — anything received before the
+/// probe lands with or before it — and parity is required to survive the
+/// probe round-trip.
+async fn wait_for_operator_l1_quiescence(l1: &AnvilL1, config: &Config) -> anyhow::Result<()> {
+    use crate::assert_traits::ReceiptAssert as _;
+    use alloy::primitives::Address;
+    use alloy::providers::ext::AnvilApi as _;
+
+    let signers = [
+        &config.l1_sender_config.operator_commit_sk,
+        &config.l1_sender_config.operator_prove_sk,
+        &config.l1_sender_config.operator_execute_sk,
+    ];
+    let mut addresses = Vec::new();
+    for signer in signers.into_iter().flatten() {
+        addresses.push(signer.address().await?);
+    }
+
+    let in_flight = |addresses: Vec<Address>| async move {
+        for address in addresses {
+            let pending = l1
+                .provider
+                .get_transaction_count(address)
+                .pending()
+                .await?;
+            let latest = l1.provider.get_transaction_count(address).latest().await?;
+            if pending != latest {
+                return anyhow::Ok(Some((address, pending, latest)));
+            }
+        }
+        anyhow::Ok(None)
+    };
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some((address, pending, latest)) = in_flight(addresses.clone()).await? {
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "operator {address} still has L1 transactions in flight \
+                 (pending nonce {pending}, latest {latest}) 60s after the node stopped",
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+
+        // The flush barrier: a no-op self-transfer from a throwaway identity,
+        // mined before we look again.
+        let probe = Address::repeat_byte(0xF1);
+        l1.provider
+            .anvil_set_balance(probe, U256::from(1_000_000_000_000_000_000u128))
+            .await?;
+        l1.provider.anvil_impersonate_account(probe).await?;
+        let hash = l1
+            .provider
+            .anvil_send_impersonated_transaction(
+                TransactionRequest::default().from(probe).to(probe),
+            )
+            .await?;
+        PendingTransactionBuilder::new(l1.provider.root().clone(), hash)
+            .expect_successful_receipt()
+            .await?;
+
+        if in_flight(addresses.clone()).await?.is_none() {
+            return Ok(());
+        }
     }
 }
 
