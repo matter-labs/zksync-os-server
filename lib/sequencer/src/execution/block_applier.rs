@@ -178,7 +178,7 @@ where
                     )?;
                     let output_send_elapsed = t_output_send.elapsed();
                     if parallel_producer_profile_enabled() {
-                        tracing::error!(
+                        tracing::info!(
                             block_number = bn,
                             in_flight_window = window,
                             ?add_state_elapsed,
@@ -276,7 +276,7 @@ where
             }
             let wal_write_elapsed = t_wal.elapsed();
             if parallel_producer_profile_enabled() {
-                tracing::error!(
+                tracing::info!(
                     block_number,
                     txs = executed_replay.transactions.len(),
                     ?wal_write_elapsed,
@@ -344,7 +344,7 @@ where
                 )?;
                 let output_send_elapsed = t_output_send.elapsed();
                 if parallel_producer_profile_enabled() {
-                    tracing::error!(
+                    tracing::info!(
                         block_number = bn,
                         in_flight_window = window,
                         ?add_state_elapsed,

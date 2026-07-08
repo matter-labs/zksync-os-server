@@ -272,7 +272,7 @@ where
                 last_processed_block_at = Some(Instant::now());
 
                 if parallel_producer_profile_enabled() {
-                    tracing::error!(
+                    tracing::info!(
                         k,
                         base_block_number = stats.base_block_number,
                         blocks = stats.blocks,

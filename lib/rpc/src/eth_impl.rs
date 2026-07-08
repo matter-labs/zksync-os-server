@@ -150,7 +150,7 @@ fn log_send_raw_method_profile(total: u64) {
             .load(Ordering::Relaxed),
         total,
     );
-    tracing::error!(
+    tracing::info!(
         total,
         errors,
         in_flight,

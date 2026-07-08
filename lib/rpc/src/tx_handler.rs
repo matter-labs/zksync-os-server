@@ -220,7 +220,7 @@ fn log_admission_profile(total: u64) {
         ADMISSION_PROFILE_STATS.total_nanos.load(Ordering::Relaxed),
         total,
     );
-    tracing::error!(
+    tracing::info!(
         total,
         direct,
         in_flight,

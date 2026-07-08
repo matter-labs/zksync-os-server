@@ -45,7 +45,8 @@ cat /root/zksync-os-server/integration-tests/db/corpus*/* > /dev/null
    LOAD_TEST_WAIT_FOR_RECEIPTS=false LOAD_TEST_FINAL_RECEIPTS=true \
    LOAD_TEST_RPC_LISTENERS=128 general_blocks_to_retain_in_memory=1000000 \
    PARALLEL_BLOCK_LINGER_MS=20 PARALLEL_BLOCKS=192 LOAD_TEST_WALLETS=12288 \
-   LOADTEST_TXS_PER_FILE=10000 LOAD_TEST_SUBMIT_PIPELINE=32 RUST_LOG=warn \
+   LOADTEST_TXS_PER_FILE=10000 LOAD_TEST_SUBMIT_PIPELINE=32 \
+   RUST_LOG=warn,suite=info,zksync_os_rpc=info \
    LOAD_TEST_DURATION_SECS=60 \
    cargo test --release -p zksync_os_integration_tests --test suite \
    effective_parallel_erc20_tps -- --no-capture

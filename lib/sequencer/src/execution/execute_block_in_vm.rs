@@ -653,7 +653,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
     // feed; `execute_tx_time` dominating (with low `vm_idle_time`) → genuinely VM-bound;
     // `read_time` → the share of VM time blocked on server-side state reads.
     if parallel_producer_profile_enabled() {
-        tracing::error!(
+        tracing::info!(
             block_number = output.header.number,
             label = command.metrics_label,
             txs = executed_txs.len(),

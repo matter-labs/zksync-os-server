@@ -188,7 +188,7 @@ impl BlockReplayStorage {
             .write(batch)
             .expect("Failed to write to block replay storage");
         if let (Some(t0), Some(t1)) = (profile_started, serialized_at) {
-            tracing::error!(
+            tracing::info!(
                 block_number = profile_block_number,
                 txs = profile_tx_count,
                 txs_bytes,
@@ -734,7 +734,7 @@ impl WriteReplay for BlockReplayStorage {
                 .expect("Failed to write to block replay storage");
         }
         if let (Some(t0), Some(t1)) = (profile_started, serialized_at) {
-            tracing::error!(
+            tracing::info!(
                 blocks = total,
                 serialize = ?t1.duration_since(t0),
                 rocks_write = ?t1.elapsed(),

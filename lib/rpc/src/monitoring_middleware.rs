@@ -365,7 +365,7 @@ where
             };
 
             if let (Some(t0), Some(t1)) = (profile_started, spawned_at) {
-                tracing::error!(
+                tracing::info!(
                     entries = entry_count,
                     spawn = ?t1.duration_since(t0),
                     join = ?t1.elapsed(),

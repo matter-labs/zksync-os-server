@@ -695,7 +695,7 @@ async fn direct_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()> 
 
     let tps = executed as f64 / measured.as_secs_f64();
     let blocks_produced = block_after - block_before;
-    tracing::error!(
+    tracing::info!(
         max_tx,
         executed,
         ?measured,
@@ -955,7 +955,7 @@ async fn parallel_blocks_tps(env: TestEnvironment) -> anyhow::Result<()> {
         if k == 1 {
             baseline_tps = tps;
         }
-        tracing::error!(
+        tracing::info!(
             k,
             txs_per_block = m,
             total_txs = k * m,
@@ -1075,7 +1075,7 @@ async fn parallel_injection_tps(env: TestEnvironment) -> anyhow::Result<()> {
 
     let tps = executed as f64 / measured.as_secs_f64();
     let blocks_produced = block_after - block_before;
-    tracing::error!(
+    tracing::info!(
         k,
         executed,
         ?measured,
@@ -1226,7 +1226,7 @@ async fn parallel_injection_erc20_tps(env: TestEnvironment) -> anyhow::Result<()
 
     let tps = executed as f64 / measured.as_secs_f64();
     let blocks_produced = block_after - block_before;
-    tracing::error!(
+    tracing::info!(
         k,
         max_tx,
         executed,
@@ -1592,7 +1592,7 @@ async fn effective_parallel_impl(
                 .into();
         let started = std::sync::Arc::new(tokio::sync::Notify::new());
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", demo_port)).await?;
-        tracing::error!(
+        tracing::info!(
             url = format!("http://localhost:{demo_port}/"),
             "DEMO READY — open the dashboard and press Start"
         );
@@ -1691,7 +1691,7 @@ async fn effective_parallel_impl(
         // averages.
         zksync_os_rpc::admission_profile_reset();
         zksync_os_sequencer::execution::vm_wrapper::vm_execute_reset();
-        tracing::error!("start signal received — load begins");
+        tracing::info!("start signal received — load begins");
     }
 
     let start = Instant::now();
@@ -2075,7 +2075,7 @@ async fn effective_parallel_impl(
             Ok(report) => {
                 let file = std::fs::File::create(path)?;
                 report.flamegraph(file)?;
-                tracing::error!(path, "wrote flamegraph");
+                tracing::info!(path, "wrote flamegraph");
             }
             Err(err) => tracing::warn!(%err, "failed to build profiler report"),
         }
@@ -2105,7 +2105,7 @@ async fn effective_parallel_impl(
     } else {
         Duration::ZERO
     };
-    tracing::error!(
+    tracing::info!(
         k,
         ?workload,
         num_wallets,
@@ -2128,7 +2128,7 @@ async fn effective_parallel_impl(
         "parallel effective load test complete"
     );
     if chunk_rounds_total > 0 {
-        tracing::error!(
+        tracing::info!(
             chunks = chunks_total,
             chunk_rounds = chunk_rounds_total,
             avg_chunk_rtt = ?(rtt_sum_total / chunk_rounds_total as u32),

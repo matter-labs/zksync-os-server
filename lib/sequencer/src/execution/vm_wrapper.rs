@@ -28,7 +28,7 @@ use zksync_os_storage_api::{BlockContext, ViewState};
 const VM_CHANNEL_CAPACITY: usize = 30_000;
 
 /// Bench/demo-only VM-busy accounting, gated by `VM_EXECUTE_PROFILE` (deliberately NOT
-/// `PARALLEL_PRODUCER_PROFILE`, which also enables per-block/per-WAL ERROR log spam).
+/// `PARALLEL_PRODUCER_PROFILE`, which also enables per-block/per-WAL profile-log spam).
 /// Accumulated once per block — at bench block rates the cost is unmeasurable. All parallel
 /// producer threads aggregate into the same statics.
 static VM_EXECUTE_BUSY_MICROS: AtomicU64 = AtomicU64::new(0);

@@ -12,7 +12,7 @@ use zksync_os_storage_api::BlockContext;
 use zksync_os_types::{BlockOutput, ZkTransaction};
 
 /// Bench-only: `true` when `PARALLEL_PRODUCER_PROFILE` is set — gates the per-round / per-block
-/// profile logs (emitted at ERROR level so they survive `RUST_LOG=warn` bench runs).
+/// profile logs (INFO level; bench runs need e.g. `RUST_LOG=warn,zksync_os_sequencer=info`).
 pub(crate) fn parallel_producer_profile_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {

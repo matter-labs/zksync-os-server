@@ -257,7 +257,7 @@ pub fn spawn_task_monitor_logger() {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let Some(m) = intervals.next() else { return };
-            tracing::error!(
+            tracing::info!(
                 mean_scheduled = ?m.mean_scheduled_duration(),
                 mean_poll = ?m.mean_poll_duration(),
                 mean_idle = ?m.mean_idle_duration(),
