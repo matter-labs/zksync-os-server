@@ -485,6 +485,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
                     accepted_verifier_signers,
                     verify_result_tx: verify_result_tx.clone(),
+                    // A committee validator also verifies its peers' batches:
+                    // the same session that would serve an EN carries the
+                    // verifier handshake and request/response traffic.
+                    verification: config.batch_verification_config.client_enabled.then(|| {
+                        ExternalNodeVerifierConfig {
+                            signing_key: config.batch_verification_config.signing_key.clone(),
+                            verify_batch_tx: verify_batch_tx.clone(),
+                            outgoing_verify_results: outgoing_verify_results.clone(),
+                        }
+                    }),
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
@@ -1160,6 +1170,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             commit_submitted_tx,
             verify_request_tx,
             verify_result_rx,
+            verify_batch_rx,
+            outgoing_verify_results.clone(),
             settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
             replay_archiver,
@@ -1375,6 +1387,8 @@ async fn run_main_node_pipeline(
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
+    verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
+    outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
     settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
@@ -1466,7 +1480,23 @@ async fn run_main_node_pipeline(
         tracing::warn!(
             "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
         );
-        let pipeline = pipeline.pipe(NoOpSink::new());
+        // A standby validator is a batch verifier: it co-signs the settler's
+        // batch commitments against its own finalized chain (the committee is
+        // the 2FA verifier set — no separate verifier fleet).
+        let pipeline = pipeline.pipe_if(
+            config.batch_verification_config.client_enabled,
+            BatchVerificationResponder::new(
+                chain_id,
+                node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+                config.batch_verification_config.signing_key.clone(),
+                finality.clone(),
+                node_state_on_startup.l1_state.clone(),
+                state.clone(),
+                verify_batch_rx,
+                outgoing_verify_results,
+            ),
+            NoOpSink::new(),
+        );
         let components = pipeline.components();
         pipeline.spawn();
         runtime.spawn_critical_task(
@@ -1476,6 +1506,19 @@ async fn run_main_node_pipeline(
         let snapshot_rx = PipelineTracker::spawn(runtime, components);
         return monitor.spawn(runtime, snapshot_rx);
     }
+
+    // The settler never verifies its own batches (a self-signature adds
+    // nothing to 2FA), but peers may still probe: drain requests politely so
+    // their sessions don't read a closed channel as a dead peer.
+    runtime.spawn_critical_task("verify request drain", async move {
+        let mut verify_batch_rx = verify_batch_rx;
+        while let Some(request) = verify_batch_rx.recv().await {
+            tracing::debug!(
+                batch_number = request.message.batch_number,
+                "ignoring verify request: this node settles, it does not co-sign",
+            );
+        }
+    });
 
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())

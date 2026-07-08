@@ -1,4 +1,5 @@
 mod batcher;
+mod committee_verification;
 mod consensus;
 mod external_node;
 mod mempool;

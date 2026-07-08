@@ -315,11 +315,19 @@ impl BatchVerificationRunner {
                     }
                 };
 
-            if response.message.request_id != request_id {
+            // A signature's authority is the *batch content* it signs, not the
+            // attempt that requested it: a response to an earlier retry of the
+            // same batch is exactly as valid, and refusing it starts a death
+            // spiral once verifiers lag one attempt behind (every retry enqueues
+            // more work, every response arrives one attempt stale, nothing ever
+            // counts). Only responses for a different batch are foreign.
+            if response.message.batch_number != batch_envelope.batch_number() {
                 tracing::debug!(
                     request_id,
+                    batch_number = batch_envelope.batch_number(),
+                    received_batch_number = response.message.batch_number,
                     received_request_id = response.message.request_id,
-                    "ignoring verify result for different request"
+                    "ignoring verify result for a different batch"
                 );
                 continue;
             }

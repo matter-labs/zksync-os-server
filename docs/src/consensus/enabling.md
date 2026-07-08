@@ -266,6 +266,36 @@ proof trail, and the floors for every future rebuild.
 > Day-two operations — the alarm table, timing characteristics, and the
 > incident playbook — live in [Operating a committee](operating.md).
 
+## The committee as the batch-verification set
+
+Batch verification ("2FA") gates every L1 commit on threshold co-signatures
+from independent verifiers — and a consensus committee already *is* that set:
+every validator re-executed every block before voting for it, so co-signing a
+batch is a recomputation of the commit metadata from its own finalized data,
+not a second execution. No separate verifier fleet, and each signature attests
+against the signer's independent BFT finality rather than a chain synced from
+the node being checked.
+
+To enable it, on **every validator**:
+
+- `network.enabled = true`, with a stable `network.secret_key` and
+  `network.boot_nodes` listing the other validators — the committee meshes on
+  the zks network, and batch-verification traffic rides those sessions.
+  Whoever currently settles collects from its own peers, so the verifier set
+  follows a settlement failover with no reconfiguration.
+- `batch_verification.client_enabled = true` with a per-validator
+  `signing_key`; `server_enabled = true` and the shared `threshold` +
+  `accepted_signers` (or the on-chain verifier config, which takes precedence
+  when set). Uniform configuration means any promoted standby collects under
+  the same policy.
+
+**The threshold rule**: the settler never co-signs its own batches, so the
+threshold must be reachable from standbys alone — with `n` validators
+tolerating `f` faults, `threshold ≤ n − 1 − f` keeps settlement live through
+a failover (n=4, f=1 → threshold 2). A threshold the standbys cannot meet
+does not bypass verification; settlement stalls until signatures arrive,
+which is the designed failure direction.
+
 ## Idle chains
 
 A quiet chain does not fill with empty blocks. With `consensus.idle_heartbeat`

@@ -12,6 +12,14 @@ pub struct MainNodeProtocolConfig {
     pub accepted_verifier_signers: Vec<Address>,
     /// Channel used to forward batch verification results back into the node.
     pub verify_result_tx: mpsc::Sender<PeerVerifyBatchResult>,
+    /// This node's own verifier half, when it also verifies batches for its
+    /// peers — a committee validator co-signing the settler's batches. Absent
+    /// on a plain main node.
+    ///
+    /// TODO: batch-verification traffic between committee members could ride
+    /// the consensus p2p network (one mesh to operate) instead of the zks
+    /// network; revisit once the committee-as-verifiers shape has settled.
+    pub verification: Option<ExternalNodeVerifierConfig>,
 }
 
 /// Dependencies required to run the external-node side of the `zks` protocol.

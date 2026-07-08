@@ -93,6 +93,106 @@ impl MultiNodeTester {
         Self::start_inner(num_validators, chain_layout, l1).await
     }
 
+    /// Like [`Self::start`], with the committee acting as the batch-verification
+    /// (2FA) set: every validator meshes on the zks network with a stable
+    /// identity, carries its own verifier signing key, and co-signs the
+    /// settler's batch commitments against its own finalized chain. The settler
+    /// collects `threshold` signatures before committing to L1 — it never
+    /// co-signs its own batches, so `threshold` must be reachable from the
+    /// standbys alone (`threshold <= n - 1 - f`).
+    pub async fn start_with_batch_verification(
+        num_validators: usize,
+        threshold: u64,
+    ) -> anyhow::Result<Self> {
+        let chain_layout = ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let l1 = crate::AnvilL1::start(chain_layout).await?;
+
+        // Every validator's zks-network identity, decided up front so each
+        // node's boot list can name all the others. The port reservations are
+        // released just before launch; the launching testers re-acquire them
+        // (the window is tolerated the same way single-node tests tolerate
+        // port churn — a loud launch failure, never silent misbehavior).
+        let mut network_ports = Vec::with_capacity(num_validators);
+        for _ in 0..num_validators {
+            network_ports.push(crate::utils::LockedPort::acquire_unused().await?);
+        }
+        let network_secrets: Vec<_> = (0..num_validators)
+            .map(|_| zksync_os_network::rng_secret_key())
+            .collect();
+        let node_records: Vec<zksync_os_network::NodeRecord> = network_secrets
+            .iter()
+            .zip(&network_ports)
+            .map(|(secret, port)| {
+                zksync_os_network::NodeRecord::from_secret_key(
+                    std::net::SocketAddr::new(
+                        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                        port.port,
+                    ),
+                    secret,
+                )
+            })
+            .collect();
+        let network_port_numbers: Vec<u16> = network_ports.iter().map(|port| port.port).collect();
+        // Release the reservations before launching: each tester re-locks its
+        // own port at launch, and a *restarting* validator (promotion flips)
+        // must be able to re-acquire it too — a cluster-held lock would
+        // deadlock exactly there. The unlocked window is the same one every
+        // single-node test tolerates.
+        drop(network_ports);
+
+        // Per-validator verifier identities; the allow-list every settler
+        // checks results against is the union.
+        let verifier_keys: Vec<String> = (0..num_validators)
+            .map(|index| format!("0x{}", alloy::hex::encode([0xB1 + index as u8; 32])))
+            .collect();
+        let verifier_addresses: Vec<String> = verifier_keys
+            .iter()
+            .map(|key| {
+                <alloy::signers::local::PrivateKeySigner as std::str::FromStr>::from_str(key)
+                    .expect("static test key")
+                    .address()
+                    .to_string()
+            })
+            .collect();
+
+        Self::start_inner_indexed(num_validators, chain_layout, l1, move |index, config| {
+            tracing::info!(
+                index,
+                port = network_port_numbers[index],
+                boot_nodes = ?node_records
+                    .iter()
+                    .enumerate()
+                    .filter(|(peer, _)| *peer != index)
+                    .map(|(_, record)| record.to_string())
+                    .collect::<Vec<_>>(),
+                "meshing validator on the zks network",
+            );
+            config.network_config.enabled = true;
+            config.network_config.port = network_port_numbers[index];
+            config.network_config.secret_key = Some(network_secrets[index].clone());
+            // Dial in one direction only (toward higher indices): both ends
+            // dialing each other makes reth's duplicate-session teardown and
+            // the short reconnect backoffs churn sessions forever, and verify
+            // responses lose the race against session lifetime. One stable
+            // session per pair serves both directions.
+            config.network_config.boot_nodes = node_records
+                .iter()
+                .enumerate()
+                .filter(|(peer, _)| *peer > index)
+                .map(|(_, record)| (*record).into())
+                .collect();
+            let verification = &mut config.batch_verification_config;
+            verification.server_enabled = true;
+            verification.client_enabled = true;
+            verification.threshold = threshold;
+            verification.accepted_signers = verifier_addresses.clone();
+            verification.signing_key = verifier_keys[index].clone().into();
+        })
+        .await
+    }
+
     /// Like [`Self::start`], but every validator reaches L1 through a
     /// [`SeverableL1Proxy`] the test controls — sever it to emulate a shared L1
     /// RPC provider outage for the whole committee, restore it to end the outage.
@@ -570,6 +670,20 @@ impl MultiNodeTester {
         l1: crate::AnvilL1,
         overrides: impl Fn(&mut Config) + Clone + Send + 'static,
     ) -> anyhow::Result<Self> {
+        Self::start_inner_indexed(num_validators, chain_layout, l1, move |_, config| {
+            overrides(config)
+        })
+        .await
+    }
+
+    /// Like [`Self::start_inner_with`], with the validator index available to the
+    /// mutation — for per-validator facts (own signing keys, network identities).
+    async fn start_inner_indexed(
+        num_validators: usize,
+        chain_layout: ChainLayout<'static>,
+        l1: crate::AnvilL1,
+        overrides: impl Fn(usize, &mut Config) + Clone + Send + 'static,
+    ) -> anyhow::Result<Self> {
         assert!(
             num_validators >= 2,
             "a committee needs at least 2 validators"
@@ -618,7 +732,7 @@ impl MultiNodeTester {
                         config.consensus_config.validators = committee;
                         // Everything runs on localhost.
                         config.consensus_config.allow_private_ips = true;
-                        overrides(&mut config);
+                        overrides(index, &mut config);
                         Tester::launch_with_new_runtime(l1, chain_layout, config)
                             .await
                             .with_context(|| format!("failed to launch validator {index}"))

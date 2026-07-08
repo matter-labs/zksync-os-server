@@ -169,14 +169,19 @@ impl PeerSessionStore {
         required_block: BlockNumber,
     ) -> impl Iterator<Item = PeerId> + '_ {
         self.sessions.values().filter_map(move |session| {
-            let replay = session.replay.as_ref()?;
             let verifier = session.verifier.as_ref()?;
-            if !replay.can_verify(required_block) {
+            if !matches!(verifier.auth_state, VerifierAuthState::Authorized { .. }) {
                 return None;
             }
-            match verifier.auth_state {
-                VerifierAuthState::Authorized { .. } => Some(session.identity.peer_id),
-                _ => None,
+            match session.replay.as_ref() {
+                // A replay-syncing verifier (an external node) is only asked
+                // once it has synced past the batch's blocks.
+                Some(replay) if !replay.can_verify(required_block) => None,
+                // A verifier that never requested replays follows the chain by
+                // other means (a committee validator, via consensus). Its
+                // freshness is enforced downstream: the responder refuses
+                // blocks it does not yet have, and collection retries.
+                _ => Some(session.identity.peer_id),
             }
         })
     }
@@ -333,5 +338,21 @@ mod tests {
 
         let peers: Vec<_> = store.authorized_verifier_peers(10).collect();
         assert_eq!(peers, vec![eligible_peer]);
+    }
+
+    #[test]
+    fn an_authorized_verifier_without_replay_sync_is_eligible() {
+        // A committee validator: authorizes as a verifier but never requests
+        // replays (it follows the chain via consensus). Eligible regardless of
+        // the requested block — the responder itself refuses blocks it does
+        // not have yet.
+        let mut store = PeerSessionStore::default();
+        let now = Instant::now();
+        let validator_peer = peer_id();
+        store.insert(now, validator_peer, socket_addr(30306));
+        store.verifier_authorized(validator_peer, signer(0x44));
+
+        let peers: Vec<_> = store.authorized_verifier_peers(1_000_000).collect();
+        assert_eq!(peers, vec![validator_peer]);
     }
 }

@@ -194,6 +194,7 @@ where
                     MainNodeProtocolConfig {
                         accepted_verifier_signers: accepted_verifier_signers(),
                         verify_result_tx,
+                        verification: None,
                     },
                     state,
                     connection_registry.clone(),

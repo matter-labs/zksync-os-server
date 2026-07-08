@@ -201,7 +201,7 @@ impl NetworkService {
         tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let cfg_builder = RethNetworkConfig::builder(config.secret_key, runtime)
-            .boot_nodes(boot_nodes)
+            .boot_nodes(boot_nodes.clone())
             // Configure node identity
             .apply(|builder| {
                 let peer_id = builder.get_peer_id();
@@ -241,6 +241,12 @@ impl NetworkService {
             )
             .peer_config(
                 PeersConfig::default()
+                    // Boot nodes are *trusted*: a plain discovered peer is dropped
+                    // after `max_backoff_count` failed dials, so a boot peer whose
+                    // listener comes up moments after ours (nodes of one committee
+                    // or an EN and its main node starting together) would be
+                    // abandoned permanently. Trusted peers are redialed forever.
+                    .with_trusted_nodes(boot_nodes.clone())
                     // Sets peer ban duration to 1 second, effectively disabling it
                     .with_ban_duration(Duration::from_secs(1))
                     // Keep backoff durations short so that peers reconnect quickly after a

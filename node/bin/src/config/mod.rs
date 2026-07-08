@@ -1991,14 +1991,17 @@ pub struct OtlpConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct BatchVerificationConfig {
-    /// [main node] If we are collecting batch verification signatures.
+    /// [settler] If we are collecting batch verification signatures before
+    /// committing to L1.
     #[config(default_t = false)]
     #[config_validate(custom(
         |root: &Config, value: &bool| !*value || root.network_config.enabled,
         "requires `network.enabled=true`"
     ))]
     pub server_enabled: bool,
-    /// [external node] If we are signing batches.
+    /// If we are signing batches — on an external node acting as a verifier, or
+    /// on a committee validator co-signing the settler's batches (a standby
+    /// verifies; the settler itself never co-signs its own batches).
     #[config(default_t = false)]
     #[config_validate(custom(
         |root: &Config, value: &bool| !*value || root.network_config.enabled,

@@ -55,6 +55,7 @@ mod node_log;
 mod prover_tester;
 pub mod provider;
 pub mod rpc_recorder;
+pub mod settlement;
 pub mod test_config;
 pub mod upgrade;
 mod utils;
@@ -348,6 +349,10 @@ impl Tester {
         // travel into an EN cloned from its config.
         config.consensus_config = Default::default();
         config.network_config.boot_nodes = vec![self.node_record.into()];
+        // The clone carries the upstream node's network identity; an EN needs
+        // its own (a pre-set secret is preserved by `bind_runtime_config` as a
+        // deliberate identity — here it would collide with the upstream's port).
+        config.network_config.secret_key = None;
         config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
         config.gateway_provider_config = self
             .gateway_rpc_url
@@ -619,8 +624,15 @@ impl Tester {
         config.status_server_config.address = format!("0.0.0.0:{}", ports.status.port);
         config.network_config.address = Ipv4Addr::LOCALHOST;
         config.network_config.interface = None;
-        config.network_config.port = ports.network.port;
-        config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
+        // A pre-set secret key marks a deliberate network identity: peers hold
+        // boot-node records derived from (key, port) — committee meshes,
+        // restarts — so both must survive rebinding. Everything else gets the
+        // usual fresh port and a throwaway key. (The port alone can't be the
+        // signal: its config default is non-zero.)
+        if config.network_config.secret_key.is_none() {
+            config.network_config.port = ports.network.port;
+            config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
+        }
     }
 
     async fn launch_node_inner(
