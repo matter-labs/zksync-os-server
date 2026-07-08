@@ -93,15 +93,27 @@
   .journey {
     flex: none;
     width: clamp(300px, 27vw, 430px);
+    /* Clear the header badges above this column — kept small so the journey doesn't
+       stretch the row and push the metric groups below the fold. */
+    margin-top: clamp(10px, 2vh, 24px);
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 14px 20px 12px;
+    padding: 12px 20px 10px;
     display: flex;
     flex-direction: column;
   }
   @media (max-width: 1100px) { .journey { display: none; } }
-  .j-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .j-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  /* .k styling is scoped to .tile/.group elsewhere — restate it for the journey title. */
+  .journey .k {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+  }
   .j-mode {
     font-family: var(--mono);
     font-size: 11px;
@@ -136,10 +148,10 @@
   .j-link {
     position: relative;
     flex: 1;
-    min-height: 26px;
+    min-height: 18px;
     display: flex;
     align-items: center;
-    margin: 3px 0;
+    margin: 2px 0;
   }
   .j-link::before {
     content: "";
@@ -184,8 +196,8 @@
   }
   .j-lat b { color: var(--ink); font-variant-numeric: tabular-nums; }
   .j-total {
-    margin-top: 12px;
-    padding-top: 10px;
+    margin-top: 8px;
+    padding-top: 8px;
     border-top: 1px solid var(--line);
     font-family: var(--mono);
     font-size: clamp(13px, 1.1vw, 16px);
@@ -241,7 +253,7 @@
   .groups {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: clamp(14px, 1.8vh, 22px);
     flex: 1.15;
     min-width: 430px;
   }
@@ -249,10 +261,10 @@
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 16px 22px;
+    padding: clamp(16px, 2.2vh, 26px) clamp(22px, 2.2vw, 40px);
     display: flex;
     align-items: center;
-    gap: 20px;
+    gap: clamp(20px, 2.5vw, 48px);
     flex: 1;
   }
   .group .cell { flex: 1; min-width: 0; }
@@ -263,7 +275,7 @@
     text-transform: uppercase;
     color: var(--muted);
     display: block;
-    margin-bottom: 5px;
+    margin-bottom: clamp(5px, 0.9vh, 10px);
     white-space: nowrap;
   }
   .group .cell .v {
@@ -552,8 +564,12 @@
     put("j-route", jRoute);
     put("j-vm", jVm);
     put("j-seal", sealUs);
+    // Only claim an end-to-end figure when the measured stages are actually reporting
+    // (profiling envs on + rebuilt binary) — a seal-only sum would masquerade as the total.
+    var haveStages = jVerify > 0 && jVm > 0;
     var total = jVerify + jRoute + jVm + sealUs;
-    document.getElementById("j-total").textContent = active && total > 0 ? latStr(total) : "—";
+    document.getElementById("j-total").textContent =
+      active && haveStages && total > 0 ? latStr(total) : "—";
   }
 
   function setPhase(cls, text) {
