@@ -619,6 +619,7 @@
   var liveStartAt = null, lowSince = null, peakTps = 0;
   var sparkData = [];        // [t, tps]
   var everConnected = false;
+  var failStreak = 0;        // consecutive failed polls (tunnel hiccup vs real teardown)
   var lastStats = null;      // last /stats payload seen
   var lastSubmitted = null, lastSubmittedAt = null;
 
@@ -740,13 +741,22 @@
     state = "live";
     liveStartBlock = bn;
     document.body.classList.add("live");
-    document.getElementById("gate-overlay").classList.add("hidden");
     liveStartAt = now;
     cumTxs = 0;
     cumGas = 0;
     dispTxs = 0;
     peakTps = 0;
     sparkData = [];
+    // The window that detected liveness straddles the idle→live boundary — its rates are
+    // diluted. Zero the EMAs and re-baseline so the next poll measures a fully-live
+    // window; the gate overlay stays up until real rates exist (see poll()), so the
+    // audience never sees the warm-up.
+    rate = 0;
+    bps = 0;
+    lastBlock = null;
+    lastPollAt = null;
+    lastSubmitted = null;
+    lastSubmittedAt = null;
     // Journey counters restart with the run (the server zeroes its accumulators at Start).
     jVerify = 0; jRoute = 0; jVm = 0; jPrev = null;
     document.getElementById("j-mode").textContent = "measured live";
@@ -767,20 +777,28 @@
       }
 
       if (!rpcRes || !rpcRes.result) {
-        // Node unreachable. Near/past the planned end of a live run this IS the ending:
-        // the benchmark finishes, verifies receipts, and shuts the node down.
-        if (state === "live" && now - liveStartAt > (DURATION_S - 5) * 1000) {
+        // Node unreachable. Past the halfway mark of a live run this IS the ending: the
+        // benchmark stops submitting, verifies receipts, and tears the node down —
+        // teardown races the rate-collapse detection, so treat the failure as the finish
+        // rather than flashing "connection lost" over the final board.
+        if (state === "live" && now - liveStartAt > DURATION_S * 1000 * 0.6) {
           finish(now);
           return;
         }
+        failStreak += 1;
         if (state !== "done") {
-          setPhase(everConnected ? "lost" : "waiting",
-                   everConnected ? "connection lost — retrying" : "waiting for node");
+          // Mid-run, one dropped poll is tunnel noise — only admit trouble when it
+          // persists; the display keeps its last numbers meanwhile.
+          if (state !== "live" || failStreak >= 3) {
+            setPhase(everConnected ? "lost" : "waiting",
+                     everConnected ? "connection lost — retrying" : "waiting for node");
+          }
           gateStatus();
           setTimeout(poll, 700);
         }
         return;
       }
+      failStreak = 0;
 
       if (!everConnected) {
         everConnected = true;
@@ -796,18 +814,23 @@
       if (lastBlock !== null && lastPollAt !== null) {
         var dt = (now - lastPollAt) / 1000;
         var dBlocks = Math.max(0, bn - lastBlock);
-        bps = bps * 0.8 + (dBlocks / dt) * 0.2;
+        // Seed EMAs from the first measurement instead of blending up from zero — a
+        // fresh EMA otherwise shows 20-25% of the true rate for the first second.
+        var instBps = dBlocks / dt;
+        bps = bps === 0 ? instBps : bps * 0.8 + instBps * 0.2;
         if (txc > 0) txsPerBlock = txsPerBlock === 0 ? txc : txsPerBlock * 0.8 + txc * 0.2;
         if (gas > 0) gasPerBlock = gasPerBlock === 0 ? gas : gasPerBlock * 0.8 + gas * 0.2;
 
         // Rate: prefer the exact submitted counter from /stats.
+        var instRate;
         if (stats && typeof stats.submitted === "number" && lastSubmitted !== null) {
           var dSub = Math.max(0, stats.submitted - lastSubmitted);
           var sdt = (now - lastSubmittedAt) / 1000;
-          rate = rate * 0.75 + (dSub / sdt) * 0.25;
+          instRate = dSub / sdt;
         } else {
-          rate = rate * 0.75 + (dBlocks * (txsPerBlock || txc) / dt) * 0.25;
+          instRate = dBlocks * (txsPerBlock || txc) / dt;
         }
+        rate = rate === 0 ? instRate : rate * 0.75 + instRate * 0.25;
         gasRate = bps * gasPerBlock;
 
         if (state === "live") {
@@ -829,6 +852,11 @@
           var submittedLive = stats && typeof stats.submitted === "number" && stats.submitted > 1000;
           if (submittedLive || dBlocks / dt > LIVE_ENTER_BPS) goLive(now, bn);
         }
+      }
+      // Reveal the board only once real rate windows are flowing (goLive keeps the gate
+      // overlay up through the warm-up so no zeros or partial numbers are ever visible).
+      if (state === "live" && rate > 0) {
+        document.getElementById("gate-overlay").classList.add("hidden");
       }
       if (stats && typeof stats.submitted === "number") {
         lastSubmitted = stats.submitted;
@@ -949,9 +977,14 @@
       ctx.beginPath(); ctx.moveTo(0, refY); ctx.lineTo(w, refY); ctx.stroke();
       ctx.setLineDash([]);
     }
+    // Time axis grows with the run (full-width line from the first seconds) and settles
+    // into the rolling 60s window — no sliver of a chart hugging the right edge early on.
+    var span = liveStartAt !== null
+      ? Math.min(60000, Math.max(3000, now - liveStartAt))
+      : 60000;
     ctx.beginPath();
     for (var j = 0; j < sparkData.length; j++) {
-      var x = w - ((now - sparkData[j][0]) / 60000) * w;
+      var x = w - ((now - sparkData[j][0]) / span) * w;
       var y = h - (sparkData[j][1] / max) * h;
       if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
@@ -960,7 +993,7 @@
     ctx.lineJoin = "round";
     ctx.stroke();
     ctx.lineTo(w, h);
-    ctx.lineTo(w - (now - sparkData[0][0]) / 60000 * w, h);
+    ctx.lineTo(w - (now - sparkData[0][0]) / span * w, h);
     ctx.closePath();
     ctx.fillStyle = "rgba(63,143,232,0.12)";
     ctx.fill();
