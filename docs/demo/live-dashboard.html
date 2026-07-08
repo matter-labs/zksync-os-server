@@ -86,25 +86,31 @@
   /* Auto margins center the stage but collapse to zero when space runs out —
      nothing ever clips off the top of the viewport. */
   .stage { margin: auto 0; min-height: 0; }
-  .stage-top { display: flex; align-items: stretch; gap: clamp(20px, 3vw, 48px); }
+  /* Wrap lets the journey drop below the counter as a horizontal strip when the two
+     don't fit side by side (it's a wide panel now). */
+  .stage-top { display: flex; flex-wrap: wrap; align-items: stretch; gap: clamp(20px, 3vw, 48px); }
   .stage-main { flex: 1; min-width: 0; align-self: center; }
 
-  /* ---- transaction journey stepper ---- */
+  /* ---- transaction journey: two top-aligned vertical lanes + upward hand-off ----
+     Symmetric lanes, rows 2-6 each: RPC (User → Submitted → Verified) and Sequencer
+     (In lane → Executed → In block). The routed elbow leaves Verified (bottom of RPC),
+     climbs the full gap column, and enters In lane (top of Sequencer) from the left.
+     Column 4 holds the end-to-end total, vertically centered. */
   .journey {
     flex: none;
-    width: clamp(300px, 27vw, 430px);
-    /* Clear the header badges above this column — kept small so the journey doesn't
-       stretch the row and push the metric groups below the fold. */
+    width: clamp(510px, 40vw, 650px);
+    max-width: 100%;
+    /* Clear the header badges above this column. */
     margin-top: clamp(10px, 2vh, 24px);
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 12px 20px 10px;
+    padding: 12px 20px 12px;
     display: flex;
     flex-direction: column;
   }
-  @media (max-width: 1100px) { .journey { display: none; } }
-  .j-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  @media (max-width: 1080px) { .journey { display: none; } }
+  .j-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 6px; }
   /* .k styling is scoped to .tile/.group elsewhere — restate it for the journey title. */
   .journey .k {
     font-family: var(--mono);
@@ -122,10 +128,25 @@
     white-space: nowrap;
   }
   body.live .j-mode { color: var(--green); }
-  .j-node { display: flex; align-items: center; gap: 10px; flex: none; }
+  .j-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: auto minmax(64px, 1fr) auto minmax(130px, 1fr);
+    justify-items: start;
+    align-items: center;
+  }
+  .j-lane-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 3px;
+  }
+  .j-node { display: flex; align-items: center; gap: 7px; }
   .j-dot {
-    width: 12px;
-    height: 12px;
+    width: 11px;
+    height: 11px;
     border-radius: 50%;
     background: var(--muted);
     flex: none;
@@ -135,38 +156,46 @@
     background: var(--blue);
     box-shadow: 0 0 10px rgba(63, 143, 232, 0.7);
   }
-  .j-name { font-size: clamp(14px, 1.2vw, 17px); font-weight: 650; white-space: nowrap; }
+  .j-txt { display: flex; flex-direction: column; line-height: 1.15; }
+  .j-name { font-size: clamp(13px, 1.05vw, 16px); font-weight: 650; white-space: nowrap; }
   .j-sub {
     font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.06em;
     color: var(--muted);
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
-  /* Connector: a vertical track under the node dot; while live, a pulse runs down it. */
-  .j-link {
+  .j-lat {
+    font-family: var(--mono);
+    font-size: clamp(11px, 0.95vw, 14px);
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .j-lat b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  /* Vertical connector: track under the node dot, label to its right; pulses run down. */
+  .j-vlink {
     position: relative;
-    flex: 1;
-    min-height: 18px;
+    align-self: stretch;
+    min-height: 32px;
     display: flex;
     align-items: center;
     margin: 2px 0;
   }
-  .j-link::before {
+  .j-vlink::before {
     content: "";
     position: absolute;
-    left: 5px;
+    left: 4px;
     top: 0;
     bottom: 0;
     width: 2px;
     background: var(--line);
     border-radius: 1px;
   }
-  .j-link::after {
+  .j-vlink::after {
     content: "";
     position: absolute;
-    left: 2px;
+    left: 1px;
     top: 0;
     width: 8px;
     height: 8px;
@@ -175,36 +204,112 @@
     box-shadow: 0 0 8px rgba(63, 143, 232, 0.9);
     opacity: 0;
   }
-  /* All children are divs: header(1), then nodes and links alternate — links land on 3/5/7/9.
-     The stagger makes the pulses cascade down the pipeline instead of firing in sync. */
-  body.live .j-link::after { animation: jflow 1.2s linear infinite; }
-  body.live .j-link:nth-child(5)::after { animation-delay: 0.3s; }
-  body.live .j-link:nth-child(7)::after { animation-delay: 0.6s; }
-  body.live .j-link:nth-child(9)::after { animation-delay: 0.9s; }
-  @keyframes jflow {
+  body.live .j-vlink::after {
+    animation: jflow-v 1.2s linear infinite;
+    animation-delay: var(--jd, 0s);
+  }
+  @keyframes jflow-v {
     0% { top: 0; opacity: 0; }
     18% { opacity: 1; }
     82% { opacity: 1; }
     100% { top: calc(100% - 8px); opacity: 0; }
   }
-  .j-lat {
-    margin-left: 24px;
+  .j-vlink .j-lat { margin-left: 20px; }
+  /* Hand-off elbow between the lanes: leaves Verified horizontally, climbs the gap
+     column, and enters In lane from the left — the arrow moves UP so both lanes stay
+     top-aligned. The routed chip rides the vertical segment as a badge. All children
+     are absolutely positioned, so the elbow must stretch to its grid area. */
+  .j-elbow {
+    /* Reach of the bottom segment past the column edge, toward "Verified" (the column
+       is as wide as the verify chip, so the node itself ends well before the edge). */
+    --ext: 36px;
+    position: relative;
+    justify-self: stretch;
+    align-self: stretch;
+    min-width: 76px;
+    margin: 0 10px 0 6px;
+  }
+  .j-eseg { position: absolute; background: var(--line); border-radius: 1px; }
+  .j-e-bottom { left: calc(-1 * var(--ext)); width: calc(50% + var(--ext) + 1px); height: 2px; bottom: 10px; }
+  .j-e-vert { left: 50%; width: 2px; top: 11px; bottom: 10px; }
+  .j-e-top { left: 50%; right: 0; height: 2px; top: 10px; }
+  .j-e-top::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 50%;
+    margin-top: -4px;
+    border-left: 6px solid var(--muted);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+  }
+  .j-elbow .j-lat {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -90%);
+    background: var(--panel);
+    padding: 0 5px;
+    z-index: 1;
+  }
+  .j-elbow .j-cap {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, 30%);
+    background: var(--panel);
+    padding: 0 5px;
+    z-index: 1;
+  }
+  .j-elbow::after {
+    content: "";
+    position: absolute;
+    top: calc(100% - 15px);
+    left: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--blue);
+    box-shadow: 0 0 8px rgba(63, 143, 232, 0.9);
+    opacity: 0;
+  }
+  body.live .j-elbow::after {
+    animation: jflow-e 1.6s linear infinite;
+    animation-delay: var(--jd, 0s);
+  }
+  @keyframes jflow-e {
+    0% { left: calc(-1 * var(--ext, 0px)); top: calc(100% - 15px); opacity: 0; }
+    10% { opacity: 1; }
+    20% { left: calc(50% - 4px); top: calc(100% - 15px); }
+    80% { left: calc(50% - 4px); top: 7px; }
+    92% { opacity: 1; }
+    100% { left: calc(100% - 10px); top: 7px; opacity: 0; }
+  }
+  .j-cap {
     font-family: var(--mono);
-    font-size: clamp(12px, 1vw, 14px);
-    color: var(--ink-2);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
     white-space: nowrap;
   }
-  .j-lat b { color: var(--ink); font-variant-numeric: tabular-nums; }
-  .j-total {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--line);
+  /* End-to-end total: right-hand column, vertically centered beside the lanes. */
+  .j-total-box {
+    justify-self: center;
+    align-self: center;
+    text-align: center;
     font-family: var(--mono);
-    font-size: clamp(13px, 1.1vw, 16px);
-    color: var(--ink-2);
-    white-space: nowrap;
+    margin-left: 18px;
+    padding-left: 18px;
+    border-left: 1px solid var(--line);
   }
-  .j-total b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .j-total-box .j-tv {
+    display: block;
+    font-size: clamp(17px, 1.5vw, 25px);
+    font-weight: 700;
+    color: var(--ink-2);
+  }
+  .j-total-box .j-tv b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .j-total-box .j-cap { letter-spacing: 0.14em; text-transform: uppercase; }
 
   .odo-label {
     font-family: var(--mono);
@@ -415,16 +520,31 @@
             <span class="k">Transaction journey</span>
             <span class="j-mode" id="j-mode">awaiting run</span>
           </div>
-          <div class="j-node"><span class="j-dot"></span><span class="j-name">Submitted</span><span class="j-sub">JSON-RPC</span></div>
-          <div class="j-link"><span class="j-lat"><b id="j-verify">—</b> signature verified</span></div>
-          <div class="j-node"><span class="j-dot"></span><span class="j-name">Verified</span></div>
-          <div class="j-link"><span class="j-lat"><b id="j-route">—</b> routed to a lane</span></div>
-          <div class="j-node"><span class="j-dot"></span><span class="j-name">In lane</span><span class="j-sub">ZKsync OS VM</span></div>
-          <div class="j-link"><span class="j-lat"><b id="j-vm">—</b> executed</span></div>
-          <div class="j-node"><span class="j-dot"></span><span class="j-name">Executed</span></div>
-          <div class="j-link"><span class="j-lat"><b id="j-seal">—</b> sealed into a block</span></div>
-          <div class="j-node"><span class="j-dot"></span><span class="j-name">In block</span><span class="j-sub" id="j-block"></span></div>
-          <div class="j-total">&asymp; <b id="j-total">—</b> end-to-end</div>
+          <div class="j-grid">
+            <div class="j-lane-tag" style="grid-area:1/1">RPC</div>
+            <div class="j-lane-tag" style="grid-area:1/3">Sequencer</div>
+            <div class="j-node" style="grid-area:2/1"><span class="j-dot"></span><span class="j-name">User</span></div>
+            <div class="j-vlink" style="grid-area:3/1"><span class="j-lat">JSON-RPC</span></div>
+            <div class="j-node" style="grid-area:4/1"><span class="j-dot"></span><span class="j-name">Submitted</span></div>
+            <div class="j-vlink" style="grid-area:5/1; --jd:.2s"><span class="j-lat"><b id="j-verify">—</b> verify sig</span></div>
+            <div class="j-node" style="grid-area:6/1"><span class="j-dot"></span><span class="j-name">Verified</span></div>
+            <div class="j-elbow" style="grid-area:2/2/span 5/3; --jd:.4s">
+              <span class="j-eseg j-e-bottom"></span>
+              <span class="j-eseg j-e-vert"></span>
+              <span class="j-eseg j-e-top"></span>
+              <span class="j-lat"><b id="j-route">—</b></span>
+              <span class="j-cap">routed</span>
+            </div>
+            <div class="j-node" style="grid-area:2/3"><span class="j-dot"></span><span class="j-name">In lane</span></div>
+            <div class="j-vlink" style="grid-area:3/3; --jd:.6s"><span class="j-lat"><b id="j-vm">—</b> ZKsync OS VM</span></div>
+            <div class="j-node" style="grid-area:4/3"><span class="j-dot"></span><span class="j-name">Executed</span></div>
+            <div class="j-vlink" style="grid-area:5/3; --jd:.8s"><span class="j-lat"><b id="j-seal">—</b> sealed</span></div>
+            <div class="j-node" style="grid-area:6/3"><span class="j-dot"></span><span class="j-txt"><span class="j-name">In block</span><span class="j-sub" id="j-block"></span></span></div>
+            <div class="j-total-box" style="grid-area:2/4/span 5/5">
+              <span class="j-tv">&asymp; <b id="j-total">—</b></span>
+              <span class="j-cap">end-to-end</span>
+            </div>
+          </div>
         </div>
       </div>
 
