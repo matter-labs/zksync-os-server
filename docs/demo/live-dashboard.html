@@ -369,10 +369,13 @@
     padding: clamp(16px, 2.2vh, 28px) clamp(24px, 3.2vw, 62px);
     display: flex;
     align-items: center;
-    gap: clamp(22px, 4vw, 84px);
+    gap: clamp(22px, 3vw, 60px);
     flex: 1;
   }
   .group .cell { flex: 1; min-width: 0; }
+  /* Third column always holds short values (µs / ms / Mgas) — keep it narrow so the
+     seven-digit figures in the first two columns get the width. */
+  .group .cell:last-child { flex: 0.55; }
   .group .cell .k {
     font-family: var(--mono);
     font-size: clamp(11px, 1vw, 14px);
