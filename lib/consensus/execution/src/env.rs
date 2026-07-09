@@ -253,6 +253,19 @@ where
         self
     }
 
+    /// A handle to the state backend this environment reads from (the registry
+    /// derivation opens historical views on it).
+    pub fn state_backend(&self) -> S {
+        self.base.clone()
+    }
+
+    /// The applied-height watch (chain-absolute; `None` before the first applied
+    /// block) — what the registry derivation paces itself by: it may only read
+    /// state at heights the pipeline has durably applied.
+    pub fn applied_subscription(&self) -> watch::Receiver<Option<u64>> {
+        self.applied.clone()
+    }
+
     /// Attaches the node's finality store — the commit path records every finalized
     /// block's height→digest mapping in it (the certificate half arrives from the
     /// consensus activity observer).

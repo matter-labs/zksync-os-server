@@ -213,6 +213,7 @@ async fn misconfigured_validator_stalls_then_recovers_after_config_fix() -> anyh
                 .iter()
                 .map(|&i| cluster.committee_entry(i).to_string())
                 .collect(),
+            source: Default::default(),
         })
         .collect();
     cluster
@@ -303,12 +304,14 @@ async fn observer_promoted_to_validator_at_a_scheduled_boundary() -> anyhow::Res
             validators: (0..4)
                 .map(|i| cluster.committee_entry(i).to_string())
                 .collect(),
+            source: Default::default(),
         },
         CommitteeScheduleEntryConfig {
             activation_epoch,
             validators: (0..5)
                 .map(|i| cluster.committee_entry(i).to_string())
                 .collect(),
+            source: Default::default(),
         },
     ];
 

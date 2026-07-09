@@ -77,6 +77,9 @@ pub struct NodeObservation {
     /// The committee-uniform configuration fingerprint the node serves; any
     /// two healthy members must agree.
     pub chain_fingerprint: Option<String>,
+    /// The node's latest on-chain-registry derivation (`/status.consensus.registry`;
+    /// absent on nodes not running the registry in shadow or config-shadow mode).
+    pub registry: Option<zksync_os_status_server::RegistryStatus>,
     /// Log lines since the previous poll that match the forbidden patterns.
     pub suspicious_log_lines: Vec<String>,
 }
@@ -163,6 +166,17 @@ pub enum Finding {
     /// config drift, caught before an epoch boundary or upgrade makes it
     /// expensive.
     ConfigDrift { fingerprints: Vec<(usize, String)> },
+    /// The on-chain registry's derivation went wrong somewhere: a node derived
+    /// a committee its config schedule disagrees with (in shadow mode the
+    /// registry is out of sync, in config-shadow mode the config mirror is),
+    /// a derivation failed validation (rotation via the registry is blocked),
+    /// or two nodes derived different committees for the same epoch — the
+    /// failure that would split a registry-governed committee, caught here
+    /// while something else still governs or mirrors.
+    RegistryDrift {
+        what: &'static str,
+        details: Vec<(usize, String)>,
+    },
     /// The chain kept finalizing blocks but L1 settlement did not advance for the
     /// whole window, with the settler believed healthy — a dead-but-running
     /// settler, a wedged sender, or a prover pipeline stall. (A *down* settler
@@ -399,6 +413,66 @@ impl Checker {
             .collect();
         if fingerprints.windows(2).any(|pair| pair[0].1 != pair[1].1) {
             findings.push(Finding::ConfigDrift { fingerprints });
+        }
+
+        // Registry derivations, three failure directions: a node whose derivation
+        // failed validation, a node whose derivation disagrees with its own config
+        // schedule, and any two nodes deriving different committees for the same
+        // epoch (each node's answer is a pure function of chain state — cross-node
+        // disagreement is the class shadow mode exists to catch).
+        let mut refused: Vec<(usize, String)> = Vec::new();
+        let mut mismatched: Vec<(usize, String)> = Vec::new();
+        let mut hashes_by_epoch: std::collections::BTreeMap<u64, Vec<(usize, String)>> =
+            std::collections::BTreeMap::new();
+        for (index, node) in poll.nodes.iter().enumerate() {
+            let Some(registry) = &node.registry else {
+                continue;
+            };
+            if registry.outcome == "carried_refused" {
+                refused.push((
+                    index,
+                    format!(
+                        "epoch {}: {}",
+                        registry.last_epoch,
+                        registry.refusal.as_deref().unwrap_or("(no reason served)"),
+                    ),
+                ));
+            } else if !registry.matches_config {
+                mismatched.push((
+                    index,
+                    format!(
+                        "epoch {}: committee {} ({} members)",
+                        registry.last_epoch, registry.committee_hash, registry.committee_size,
+                    ),
+                ));
+            }
+            hashes_by_epoch
+                .entry(registry.last_epoch)
+                .or_default()
+                .push((
+                    index,
+                    format!("epoch {}: {}", registry.last_epoch, registry.committee_hash),
+                ));
+        }
+        if !refused.is_empty() {
+            findings.push(Finding::RegistryDrift {
+                what: "registry derivation failed validation (rotation blocked)",
+                details: refused,
+            });
+        }
+        if !mismatched.is_empty() {
+            findings.push(Finding::RegistryDrift {
+                what: "registry derivation does not match the config schedule",
+                details: mismatched,
+            });
+        }
+        for details in hashes_by_epoch.into_values() {
+            if details.windows(2).any(|pair| pair[0].1 != pair[1].1) {
+                findings.push(Finding::RegistryDrift {
+                    what: "nodes derive different committees for the same epoch",
+                    details,
+                });
+            }
         }
 
         // Progress-without-quorum: once the settle margin after losing quorum has
@@ -703,6 +777,9 @@ impl NodeProbe {
         let chain_fingerprint = consensus
             .as_ref()
             .map(|consensus| consensus.chain_fingerprint.clone());
+        let registry = consensus
+            .as_ref()
+            .and_then(|consensus| consensus.registry.clone());
 
         NodeObservation {
             running,
@@ -714,6 +791,7 @@ impl NodeProbe {
             evidence,
             verify_invalid,
             chain_fingerprint,
+            registry,
             suspicious_log_lines,
         }
     }
@@ -980,6 +1058,7 @@ mod tests {
             evidence: 0,
             verify_invalid: 0,
             chain_fingerprint: None,
+            registry: None,
             suspicious_log_lines: Vec::new(),
         }
     }
@@ -1346,6 +1425,114 @@ mod tests {
                 .iter()
                 .any(|finding| matches!(finding, Finding::ConfigDrift { .. })),
             "no drift finding: {findings:?}"
+        );
+    }
+
+    /// A healthy registry observation: derived, matching, one agreed hash.
+    fn registry_observation(epoch: u64, hash: &str) -> zksync_os_status_server::RegistryStatus {
+        zksync_os_status_server::RegistryStatus {
+            mode: "shadow".to_string(),
+            last_epoch: epoch,
+            last_lookahead_height: epoch * 100,
+            outcome: "derived".to_string(),
+            matches_config: true,
+            refusal: None,
+            committee_hash: hash.to_string(),
+            committee_size: 4,
+        }
+    }
+
+    #[test]
+    fn registry_drift_fires_on_mismatch_refusal_and_cross_node_divergence_only() {
+        let check = |registries: Vec<Option<zksync_os_status_server::RegistryStatus>>| {
+            let mut checker = Checker::new(
+                registries.len(),
+                Duration::from_secs(5),
+                Duration::from_secs(60),
+                0,
+                Duration::from_secs(120),
+            );
+            let nodes = registries
+                .into_iter()
+                .map(|registry| {
+                    let mut node = observation(10, "0x");
+                    node.registry = registry;
+                    node
+                })
+                .collect();
+            checker
+                .observe(
+                    Instant::now(),
+                    &healthy_expectations(2),
+                    &Poll {
+                        settlement: None,
+                        probe_height: None,
+                        nodes,
+                    },
+                )
+                .into_iter()
+                .filter(|finding| matches!(finding, Finding::RegistryDrift { .. }))
+                .collect::<Vec<_>>()
+        };
+
+        // Healthy: both derive the same committee and match their configs.
+        let clean = check(vec![
+            Some(registry_observation(5, "aaaa")),
+            Some(registry_observation(5, "aaaa")),
+        ]);
+        assert!(clean.is_empty(), "healthy shadow must not fire: {clean:?}");
+
+        // Nodes at different epochs (one derived ahead) is routine, not drift.
+        let staggered = check(vec![
+            Some(registry_observation(5, "aaaa")),
+            Some(registry_observation(6, "bbbb")),
+        ]);
+        assert!(
+            staggered.is_empty(),
+            "staggered epochs are routine: {staggered:?}"
+        );
+
+        // A node whose derivation disagrees with its own config.
+        let mut mismatched = registry_observation(5, "cccc");
+        mismatched.matches_config = false;
+        let findings = check(vec![
+            Some(registry_observation(5, "aaaa")),
+            Some(mismatched),
+        ]);
+        assert!(
+            findings.iter().any(|finding| matches!(
+                finding,
+                Finding::RegistryDrift { what, .. } if what.contains("does not match")
+            )),
+            "config mismatch must fire: {findings:?}"
+        );
+        // ... and the same poll also shows two nodes disagreeing for epoch 5.
+        assert!(
+            findings.iter().any(|finding| matches!(
+                finding,
+                Finding::RegistryDrift { what, .. } if what.contains("same epoch")
+            )),
+            "cross-node divergence must fire: {findings:?}"
+        );
+
+        // A refused derivation is a finding on its own (rotation is blocked).
+        let mut refused = registry_observation(5, "aaaa");
+        refused.outcome = "carried_refused".to_string();
+        refused.refusal = Some("identity 2 carries an invalid proof of possession".to_string());
+        let findings = check(vec![Some(registry_observation(5, "aaaa")), Some(refused)]);
+        assert!(
+            findings.iter().any(|finding| matches!(
+                finding,
+                Finding::RegistryDrift { what, .. } if what.contains("failed validation")
+            )),
+            "refusal must fire: {findings:?}"
+        );
+
+        // Nodes without a registry section (schedule mode) contribute nothing.
+        let absent = check(vec![None, Some(registry_observation(5, "aaaa"))]);
+        assert!(
+            absent.is_empty(),
+            "absent sections are not drift: {absent:?}"
         );
     }
 

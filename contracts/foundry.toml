@@ -1,0 +1,12 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = []
+# The registry's storage layout is hand-assigned (see ValidatorRegistry.sol) and
+# consensus nodes parse it byte-for-byte, so builds must stay reproducible:
+# pin the compiler and disable metadata variance.
+solc_version = "0.8.28"
+optimizer = true
+optimizer_runs = 200
+bytecode_hash = "none"
+cbor_metadata = false

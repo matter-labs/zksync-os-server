@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_consensus_core.workspace = true
+zksync_os_consensus_registry.workspace = true
 
 zksync_os_genesis.workspace = true
 zksync_os_mempool.workspace = true
@@ -26,6 +27,7 @@ zksync_os_interface.workspace = true
 commonware-codec.workspace = true
 commonware-consensus.workspace = true
 commonware-cryptography.workspace = true
+commonware-utils.workspace = true
 
 alloy = { workspace = true, features = ["consensus", "rlp", "std", "kzg"] }
 alloy-rlp.workspace = true

@@ -33,16 +33,16 @@ use zksync_os_consensus_core::types::{
     Activity, Attributable as _, ConsensusActivity, SchemeProvider,
 };
 use zksync_os_consensus_core::{
-    Channels, CommitteeSchedule, ScheduleEntry, StackConfig, start_validator,
+    Channels, CommitteeSchedule, CommitteeSource, ScheduleEntry, StackConfig, start_validator,
 };
 use zksync_os_consensus_execution::NodeExecutionEnv;
 use zksync_os_consensus_execution::metrics::CONSENSUS_METRICS;
 use zksync_os_mempool::subpools::l2::L2Subpool;
-use zksync_os_status_server::{ConsensusMetricsEncoder, FinalizedObservation};
+use zksync_os_status_server::{ConsensusMetricsEncoder, FinalizedObservation, RegistryStatus};
 use zksync_os_storage_api::{ReadStateHistory, WriteState};
 use zksync_os_types::L2Envelope;
 
-use crate::config::ConsensusConfig;
+use crate::config::{CommitteeEntrySource, ConsensusConfig, RegistryMode};
 
 /// Domain-separation namespace for everything this network signs and speaks,
 /// carrying the committee protocol version. Consensus messages cannot be
@@ -233,25 +233,107 @@ pub struct ConsensusSetup {
     /// peers as potential proposers). Includes this node itself when it runs as
     /// an observer.
     pub observers: Vec<ObserverPeer>,
+    /// The on-chain validator registry, when it participates
+    /// (`consensus.registry_mode` `shadow`/`config_shadow`); `None` in `schedule`
+    /// mode.
+    pub registry: Option<RegistrySetup>,
+}
+
+/// Resolved registry participation (see `consensus.registry_mode`).
+#[derive(Debug, Clone)]
+pub struct RegistrySetup {
+    pub mode: RegistryMode,
+    /// L2 address of the registry contract; its storage slots are read directly
+    /// out of applied chain state at each epoch's lookahead boundary.
+    pub address: alloy::primitives::Address,
+    /// `config_shadow` mode: the epoch recorded derivations govern from (the
+    /// `source: registry` schedule entry's activation). `None` in shadow mode —
+    /// derivations run and are recorded, consensus follows config.
+    pub flip_epoch: Option<u64>,
+    /// Proofs of possession bind to the chain id; the derivation must verify
+    /// them against the same one.
+    pub chain_id: u64,
 }
 
 impl ConsensusSetup {
-    /// Resolves keys and the committee schedule from configuration.
+    /// Resolves keys and the committee schedule from configuration. `chain_id`
+    /// scopes the registry's proofs of possession (committee-uniform, from the
+    /// genesis config).
     pub fn from_config(
         config: &ConsensusConfig,
         storage_directory: PathBuf,
+        chain_id: u64,
     ) -> anyhow::Result<Self> {
         // The schedule's entries: an explicit `committees` schedule, or the
-        // `validators` shorthand (one committee, activating at epoch 0).
+        // `validators` shorthand (one committee, activating at epoch 0). A
+        // `source: registry` entry is not a committee — it is the flip point
+        // where recorded registry derivations take over.
+        let mut registry_flip: Option<u64> = None;
         let configured: Vec<(u64, &Vec<String>)> = if config.committees.is_empty() {
             vec![(0, &config.validators)]
         } else {
-            config
-                .committees
-                .iter()
-                .map(|entry| (entry.activation_epoch, &entry.validators))
-                .collect()
+            let mut entries = Vec::new();
+            for entry in &config.committees {
+                match entry.source {
+                    CommitteeEntrySource::Validators => {
+                        entries.push((entry.activation_epoch, &entry.validators));
+                    }
+                    CommitteeEntrySource::Registry => {
+                        anyhow::ensure!(
+                            entry.validators.is_empty(),
+                            "the `source: registry` schedule entry (epoch {}) lists validators — \
+                             the registry supplies them; the entry must be empty",
+                            entry.activation_epoch,
+                        );
+                        anyhow::ensure!(
+                            registry_flip.is_none(),
+                            "multiple `source: registry` schedule entries; configure exactly one",
+                        );
+                        anyhow::ensure!(
+                            entry.activation_epoch >= 1,
+                            "the registry cannot govern epoch 0 — the first committee \
+                             bootstraps from config",
+                        );
+                        registry_flip = Some(entry.activation_epoch);
+                    }
+                }
+            }
+            entries
         };
+
+        // Registry-mode cross-validation, all directions loud: an address that
+        // silently does nothing and a mode that silently misses its address are
+        // both misconfigurations.
+        match config.registry_mode {
+            RegistryMode::Schedule => {
+                anyhow::ensure!(
+                    config.registry_address.is_none(),
+                    "`consensus.registry_address` is set but `consensus.registry_mode` is \
+                     `schedule` (the registry would be ignored) — set the mode to `shadow` or \
+                     drop the address",
+                );
+            }
+            RegistryMode::Shadow | RegistryMode::ConfigShadow => {
+                anyhow::ensure!(
+                    config.registry_address.is_some(),
+                    "`consensus.registry_mode: {}` requires `consensus.registry_address`",
+                    config.registry_mode,
+                );
+            }
+        }
+        match (config.registry_mode, registry_flip) {
+            (RegistryMode::ConfigShadow, None) => anyhow::bail!(
+                "`consensus.registry_mode: config_shadow` requires the flip point: one \
+                 `consensus.committees` entry with `source: registry`",
+            ),
+            (RegistryMode::ConfigShadow, Some(_)) => {}
+            (_, Some(epoch)) => anyhow::bail!(
+                "a `source: registry` schedule entry (epoch {epoch}) requires \
+                 `consensus.registry_mode: config_shadow` (current mode: {})",
+                config.registry_mode,
+            ),
+            (_, None) => {}
+        }
 
         // Parse every entry, building the schedule and the address-book union. A
         // validator may appear in any number of entries, but always with the same
@@ -415,12 +497,27 @@ impl ConsensusSetup {
 
         let base_namespace = namespace(config.protocol_version);
         let signing_namespace = union_unique(&base_namespace, b"_CONSENSUS");
-        let provider = SchemeProvider::new(signing_namespace, schedule.clone(), signing_key);
+        let committee_source = match registry_flip {
+            Some(flip) => CommitteeSource::with_registry_from(schedule.clone(), flip),
+            None => CommitteeSource::from_config(schedule.clone()),
+        };
+        let provider =
+            SchemeProvider::over_source(signing_namespace, committee_source, signing_key);
+        let registry = match config.registry_mode {
+            RegistryMode::Schedule => None,
+            mode => Some(RegistrySetup {
+                mode,
+                address: config.registry_address.expect("validated above"),
+                flip_epoch: registry_flip,
+                chain_id,
+            }),
+        };
 
         Ok(Self {
             committee: address_book,
             network_key,
             provider,
+            registry,
             schedule: std::sync::Arc::new(schedule),
             epoch_length: std::num::NonZeroU64::new(config.epoch_length)
                 .context("`consensus.epoch_length` must be nonzero")?,
@@ -694,6 +791,23 @@ where
 
         // The static committee is peer set 0; validator-set changes later mean
         // tracking new sets under new indices.
+        //
+        // TODO(consensus): peer tracking ignores the registry. This one call is
+        // the network's whole address book, built once at startup from the
+        // config schedule; registry derivations later change *which keys* form
+        // a committee, but never which addresses are dialable. Two concrete
+        // consequences while that holds: (1) a committee member only the
+        // registry names is unreachable — in `config_shadow` mode the config
+        // mirror is what keeps every member dialable, so a mirror that lags a
+        // registry rotation costs the new member's connectivity until the
+        // mirror deploys (the drift alarm flags the lag); (2) the registry's
+        // self-service endpoint updates (`setEndpoints`) have no effect on a
+        // running committee. Resolve when adding the future registry-only
+        // `contract` mode (no config mirror to lean on): on each derivation,
+        // register the derived committee's registry endpoints as a new peer-set
+        // generation here (`oracle.track(next_index, ...)` — tracked sets are
+        // generations, which is upstream's committee-transition mechanism), and
+        // revisit the `member_of_any` startup guard for registry-only members.
         let peers: Map<ed25519::PublicKey, Address> = setup
             .committee
             .iter()
@@ -756,6 +870,25 @@ where
 
         use commonware_cryptography::Signer as _;
         let identity = setup.network_key.public_key();
+
+        // The registry derivation trail replays into the committee source before
+        // anything resolves committees through the provider: floor selection
+        // below verifies cached finalizations, and the consensus stack verifies
+        // certificates from its first moment — under a registry flip, both are
+        // only correct once the recorded derivations are back in memory.
+        let registry_resume = setup.registry.clone().map(|registry| {
+            use zksync_os_consensus_core::{DerivationLedger as _, replay_ledger};
+            use zksync_os_consensus_execution::registry_source::RegistryLedger;
+            let ledger = RegistryLedger(observability.finality.clone());
+            // A trail that no longer decodes is corrupt storage — refuse loudly
+            // rather than silently re-deriving what may no longer be derivable.
+            let records = ledger
+                .load()
+                .expect("the registry derivation trail does not decode");
+            let newest_recorded = replay_ledger(setup.provider.source(), &records);
+            (registry, ledger, newest_recorded)
+        });
+
         let start = {
             let mut committed_probe = env.clone();
             let committed =
@@ -788,7 +921,7 @@ where
             },
             identity,
             setup.provider.clone(),
-            env,
+            env.clone(),
             oracle.clone(),
             oracle,
             channels,
@@ -797,12 +930,103 @@ where
             setup.era_anchor,
             ActivityObserver {
                 finalized: std::sync::Arc::new(observability.finalized),
-                finality: observability.finality,
-                schedule: setup.schedule.clone(),
+                finality: observability.finality.clone(),
+                committees: setup.provider.source().clone(),
             },
             start,
         )
         .await;
+
+        // The registry derivation: reads the validator registry out of applied
+        // chain state at every epoch's lookahead boundary, records the outcome
+        // durably, and feeds the committee source (which decides whether the
+        // recordings govern — `config_shadow` mode — or only shadow the config).
+        if let Some((registry, ledger, newest_recorded)) = registry_resume {
+            use zksync_os_consensus_core::{first_live_target, run_registry_derivation};
+            use zksync_os_consensus_execution::registry_source::StateDerivationSource;
+            let applied_watch = env.applied_subscription();
+            let applied_now = (*applied_watch.borrow()).unwrap_or(setup.era_anchor);
+            let initial_target = match registry.flip_epoch {
+                // `config_shadow` mode: the trail must stay dense from the flip on —
+                // resume exactly after it (state unavailability at an old
+                // boundary alarms rather than skips).
+                Some(flip) => newest_recorded.map_or(flip, |newest| (newest + 1).max(flip)),
+                // Shadow mode: coverage, not custody — boundaries that passed
+                // while this node was down are skipped (their state may be
+                // pruned; other nodes' trails cover them).
+                None => {
+                    let live = first_live_target(setup.era_anchor, setup.epoch_length, applied_now);
+                    let resume = newest_recorded.map_or(live, |newest| newest + 1);
+                    if resume < live {
+                        tracing::info!(
+                            from_epoch = resume,
+                            to_epoch = live,
+                            "shadow registry derivation skips epochs whose lookahead \
+                             boundaries passed while this node was down"
+                        );
+                    }
+                    resume.max(live)
+                }
+            };
+            let source = StateDerivationSource::new(
+                env.state_backend(),
+                registry.address,
+                registry.chain_id,
+            );
+            let committees = setup.provider.source().clone();
+            let status = observability.registry.clone();
+            let mode = registry.mode;
+            let era_anchor = setup.era_anchor;
+            let epoch_length = setup.epoch_length;
+            // Dialability is config's job (the address book above is built from
+            // it), so a derived committee reaching beyond the config mirror
+            // deserves its own warning: those members hold votes the network
+            // cannot deliver until the mirror deploys. Node-local observation
+            // only — the derivation outcome itself must never depend on this
+            // node's config timing.
+            let flip_epoch = registry.flip_epoch;
+            let address_book: std::collections::BTreeSet<ed25519::PublicKey> = setup
+                .committee
+                .iter()
+                .map(|member| member.network_key.clone())
+                .collect();
+            context.child("registry_derivation").spawn(move |ctx| {
+                run_registry_derivation(
+                    ctx,
+                    era_anchor,
+                    epoch_length,
+                    initial_target,
+                    move || *applied_watch.borrow(),
+                    source,
+                    ledger,
+                    committees,
+                    move |observation| {
+                        if flip_epoch.is_some_and(|flip| observation.epoch >= flip) {
+                            let undialable: Vec<String> = observation
+                                .committee
+                                .iter_pairs()
+                                .map(|(network_key, _)| network_key)
+                                .filter(|network_key| !address_book.contains(network_key))
+                                .map(|network_key| {
+                                    use commonware_codec::Encode as _;
+                                    alloy::hex::encode(network_key.encode())
+                                })
+                                .collect();
+                            if !undialable.is_empty() {
+                                tracing::warn!(
+                                    epoch = observation.epoch,
+                                    members = ?undialable,
+                                    "the registry-derived committee has members outside \
+                                     the config address book; they are not dialable until \
+                                     a config mirror entry listing them deploys"
+                                );
+                            }
+                        }
+                        let _ = status.send_replace(Some(registry_status(mode, &observation)));
+                    },
+                )
+            });
+        }
 
         // Any component exiting is fatal: these tasks run for the life of the node.
         // The shutdown arm (fired explicitly or by the node runtime dropping the
@@ -1020,6 +1244,41 @@ pub struct ConsensusObservability {
     /// The node's sovereign finality store: every observed finalization certificate
     /// is converted to the node's own format and persisted here.
     pub finality: std::sync::Arc<zksync_os_consensus_execution::FinalityStore>,
+    /// The latest registry derivation (shadow/config_shadow modes; stays `None` in
+    /// `schedule` mode and on nodes without a registry).
+    pub registry: tokio::sync::watch::Sender<Option<RegistryStatus>>,
+}
+
+/// The status-surface form of one derivation observation. The committee hash is
+/// the cross-node comparison handle (like the chain fingerprint: the first 8
+/// bytes of a canonical sha256, hex) — two nodes disagreeing on it for the same
+/// epoch is registry drift even when both individually report `matches_config`.
+fn registry_status(
+    mode: RegistryMode,
+    observation: &zksync_os_consensus_core::RegistryObservation,
+) -> RegistryStatus {
+    use commonware_codec::Encode as _;
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    for (network_key, bls_key) in observation.committee.iter_pairs() {
+        hasher.update(network_key.encode());
+        hasher.update(bls_key.encode());
+    }
+    RegistryStatus {
+        mode: mode.as_str().to_string(),
+        last_epoch: observation.epoch,
+        last_lookahead_height: observation.lookahead_height,
+        outcome: match observation.outcome {
+            zksync_os_consensus_core::RecordedOutcome::Derived => "derived",
+            zksync_os_consensus_core::RecordedOutcome::CarriedNoEntry => "carried_no_entry",
+            zksync_os_consensus_core::RecordedOutcome::CarriedRefused => "carried_refused",
+        }
+        .to_string(),
+        matches_config: observation.matches_config,
+        refusal: observation.refusal.clone(),
+        committee_hash: alloy::hex::encode(&Sha256::finalize(hasher)[..8]),
+        committee_size: observation.committee.len(),
+    }
 }
 
 /// Feeds consensus activity into metrics and the status tip. Fault evidence — proof a
@@ -1030,8 +1289,9 @@ struct ActivityObserver {
     finalized: std::sync::Arc<tokio::sync::watch::Sender<Option<FinalizedObservation>>>,
     finality: std::sync::Arc<zksync_os_consensus_execution::FinalityStore>,
     /// Certificates carry per-epoch signer bitmaps, and the custody records name
-    /// per-epoch committees — both resolve through the schedule.
-    schedule: std::sync::Arc<CommitteeSchedule>,
+    /// per-epoch committees — both resolve through the committee source (which,
+    /// under a registry flip, is more than the config schedule).
+    committees: CommitteeSource,
 }
 
 impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
@@ -1072,8 +1332,8 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
             Activity::Finalize(_) => "finalize",
             Activity::Finalization(finalization) => {
                 let round = finalization.round();
-                let entry = self.schedule.entry_for(round.epoch());
-                let committee_size = entry.committee.len() as u32;
+                let (epoch_committee, _) = self.committees.resolve(round.epoch());
+                let committee_size = epoch_committee.len() as u32;
                 // Finality is monotone, so the published observation must be too.
                 // Finalizations do not arrive in round order here: the tip scout
                 // re-hears certificates for already-retired epochs (a lagging peer
@@ -1152,8 +1412,7 @@ impl zksync_os_consensus_core::types::Reporter for ActivityObserver {
                 let transition = zksync_os_wire::EpochTransition {
                     epoch: round.epoch().get(),
                     scheme: zksync_os_wire::SignatureScheme::Bls12381Multisig,
-                    committee: entry
-                        .committee
+                    committee: epoch_committee
                         .iter_pairs()
                         .map(|(network_key, bls_key)| {
                             use commonware_codec::Encode as _;
@@ -1362,6 +1621,7 @@ mod tests {
         let setup = ConsensusSetup::from_config(
             &config_with(vec![a, b], vec![], a_net, a_bls),
             std::env::temp_dir(),
+            6565,
         )
         .expect("valid config");
         assert_eq!(setup.schedule.entries().len(), 1);
@@ -1378,15 +1638,18 @@ mod tests {
             crate::config::CommitteeScheduleEntryConfig {
                 activation_epoch: 0,
                 validators: vec![a.clone(), b.clone()],
+                source: Default::default(),
             },
             crate::config::CommitteeScheduleEntryConfig {
                 activation_epoch: 2,
                 validators: vec![a.clone(), b.clone(), c.clone()],
+                source: Default::default(),
             },
         ];
         let setup = ConsensusSetup::from_config(
             &config_with(vec![], committees, a_net, a_bls),
             std::env::temp_dir(),
+            6565,
         )
         .expect("valid config");
         assert_eq!(setup.schedule.entries().len(), 2);
@@ -1401,7 +1664,7 @@ mod tests {
         // Validator 3 is configured with its own keys but appears in no committee.
         let (_, outsider_net, outsider_bls) = test_validator(3, 4003);
         let config = config_with(vec![a, b], vec![], outsider_net, outsider_bls);
-        let err = ConsensusSetup::from_config(&config, std::env::temp_dir())
+        let err = ConsensusSetup::from_config(&config, std::env::temp_dir(), 6565)
             .map(|_| ())
             .expect_err("must refuse a non-member without acknowledgment");
         assert!(err.to_string().contains("acknowledge_non_member"));
@@ -1410,7 +1673,7 @@ mod tests {
             acknowledge_non_member: true,
             ..config
         };
-        ConsensusSetup::from_config(&acknowledged, std::env::temp_dir())
+        ConsensusSetup::from_config(&acknowledged, std::env::temp_dir(), 6565)
             .map(|_| ())
             .expect("acknowledged follower mode starts");
     }
@@ -1425,6 +1688,7 @@ mod tests {
         let err = ConsensusSetup::from_config(
             &config_with(vec![a, b], vec![], a_net, wrong_bls),
             std::env::temp_dir(),
+            6565,
         )
         .map(|_| ())
         .expect_err("a BLS pairing mismatch would silently never vote");
@@ -1442,15 +1706,18 @@ mod tests {
             crate::config::CommitteeScheduleEntryConfig {
                 activation_epoch: 0,
                 validators: vec![a.clone(), b],
+                source: Default::default(),
             },
             crate::config::CommitteeScheduleEntryConfig {
                 activation_epoch: 2,
                 validators: vec![a, b_moved],
+                source: Default::default(),
             },
         ];
         let err = ConsensusSetup::from_config(
             &config_with(vec![], committees, a_net, a_bls),
             std::env::temp_dir(),
+            6565,
         )
         .map(|_| ())
         .expect_err("conflicting identities must be refused");
@@ -1464,13 +1731,168 @@ mod tests {
         let committees = vec![crate::config::CommitteeScheduleEntryConfig {
             activation_epoch: 3,
             validators: vec![a, b],
+            source: Default::default(),
         }];
         let err = ConsensusSetup::from_config(
             &config_with(vec![], committees, a_net, a_bls),
             std::env::temp_dir(),
+            6565,
         )
         .map(|_| ())
         .expect_err("a schedule with a hole before its first entry must be refused");
         assert!(err.to_string().contains("committee schedule"), "got: {err}");
+    }
+
+    /// One committee entry at epoch 0 plus the registry flip at `flip`.
+    fn committees_with_flip(
+        members: Vec<String>,
+        flip: u64,
+    ) -> Vec<crate::config::CommitteeScheduleEntryConfig> {
+        vec![
+            crate::config::CommitteeScheduleEntryConfig {
+                activation_epoch: 0,
+                validators: members,
+                source: Default::default(),
+            },
+            crate::config::CommitteeScheduleEntryConfig {
+                activation_epoch: flip,
+                validators: vec![],
+                source: crate::config::CommitteeEntrySource::Registry,
+            },
+        ]
+    }
+
+    #[test]
+    fn registry_mode_validation_covers_the_matrix() {
+        let (a, a_net, a_bls) = test_validator(1, 4001);
+        let (b, _, _) = test_validator(2, 4002);
+        let registry_address = Some(alloy::primitives::Address::repeat_byte(0x42));
+        let base = |mode,
+                    committees: Option<Vec<crate::config::CommitteeScheduleEntryConfig>>,
+                    address| ConsensusConfig {
+            registry_mode: mode,
+            registry_address: address,
+            ..config_with(
+                if committees.is_none() {
+                    vec![a.clone(), b.clone()]
+                } else {
+                    vec![]
+                },
+                committees.unwrap_or_default(),
+                a_net.clone(),
+                a_bls.clone(),
+            )
+        };
+        let setup = |config: &ConsensusConfig| {
+            ConsensusSetup::from_config(config, std::env::temp_dir(), 6565).map(|_| ())
+        };
+
+        // Schedule mode: an address that would be silently ignored is refused.
+        setup(&base(RegistryMode::Schedule, None, None)).expect("plain schedule mode");
+        let err = setup(&base(RegistryMode::Schedule, None, registry_address)).unwrap_err();
+        assert!(err.to_string().contains("registry_address"), "got: {err}");
+
+        // Shadow mode: the address is required; a flip entry is refused.
+        setup(&base(RegistryMode::Shadow, None, registry_address)).expect("shadow mode");
+        let err = setup(&base(RegistryMode::Shadow, None, None)).unwrap_err();
+        assert!(err.to_string().contains("registry_address"), "got: {err}");
+        let flip = committees_with_flip(vec![a.clone(), b.clone()], 4);
+        let err = setup(&base(
+            RegistryMode::Shadow,
+            Some(flip.clone()),
+            registry_address,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("config_shadow"), "got: {err}");
+
+        // Config-shadow mode: needs both the address and exactly one flip entry.
+        setup(&base(
+            RegistryMode::ConfigShadow,
+            Some(flip.clone()),
+            registry_address,
+        ))
+        .expect("config_shadow mode");
+        let err = setup(&base(RegistryMode::ConfigShadow, None, registry_address)).unwrap_err();
+        assert!(err.to_string().contains("source: registry"), "got: {err}");
+        let mut two_flips = flip.clone();
+        two_flips.push(crate::config::CommitteeScheduleEntryConfig {
+            activation_epoch: 9,
+            validators: vec![],
+            source: crate::config::CommitteeEntrySource::Registry,
+        });
+        let err = setup(&base(
+            RegistryMode::ConfigShadow,
+            Some(two_flips),
+            registry_address,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("exactly one"), "got: {err}");
+
+        // A flip entry listing validators, or claiming epoch 0, is refused.
+        let mut listing = committees_with_flip(vec![a.clone(), b.clone()], 4);
+        listing[1].validators = vec![a.clone()];
+        let err = setup(&base(
+            RegistryMode::ConfigShadow,
+            Some(listing),
+            registry_address,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("must be empty"), "got: {err}");
+        let at_zero = committees_with_flip(vec![a.clone(), b.clone()], 0);
+        let err = setup(&base(
+            RegistryMode::ConfigShadow,
+            Some(at_zero),
+            registry_address,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("epoch 0"), "got: {err}");
+    }
+
+    #[test]
+    fn config_shadow_mode_resolves_the_flip_and_mirror_entries_do_not_override() {
+        let (a, a_net, a_bls) = test_validator(1, 4001);
+        let (b, _, _) = test_validator(2, 4002);
+        let mut committees = committees_with_flip(vec![a.clone(), b.clone()], 4);
+        // A mirror entry after the flip: config tracking a registry rotation.
+        committees.push(crate::config::CommitteeScheduleEntryConfig {
+            activation_epoch: 7,
+            validators: vec![a.clone(), b.clone()],
+            source: Default::default(),
+        });
+        let config = ConsensusConfig {
+            registry_mode: RegistryMode::ConfigShadow,
+            registry_address: Some(alloy::primitives::Address::repeat_byte(0x42)),
+            ..config_with(vec![], committees, a_net, a_bls)
+        };
+        let setup =
+            ConsensusSetup::from_config(&config, std::env::temp_dir(), 6565).expect("valid");
+        let registry = setup.registry.expect("registry participates");
+        assert_eq!(registry.flip_epoch, Some(4));
+        assert_eq!(registry.chain_id, 6565);
+        // The provider's source carries the flip: epoch 3 is config-settled;
+        // everything at or after the flip — including the epoch the mirror
+        // entry names — waits for a derivation (mirrors never override).
+        use zksync_os_consensus_core::types::Epoch;
+        assert!(setup.provider.settled_for(Epoch::new(3)));
+        assert!(!setup.provider.settled_for(Epoch::new(4)));
+        assert!(!setup.provider.settled_for(Epoch::new(7)));
+        // Shadow mode has no flip: everything stays config-settled.
+        let shadow = ConsensusSetup::from_config(
+            &ConsensusConfig {
+                registry_mode: RegistryMode::Shadow,
+                registry_address: Some(alloy::primitives::Address::repeat_byte(0x42)),
+                ..config_with(
+                    vec![a.clone(), b.clone()],
+                    vec![],
+                    config.network_key.clone().unwrap(),
+                    config.bls_key.clone().unwrap(),
+                )
+            },
+            std::env::temp_dir(),
+            6565,
+        )
+        .expect("valid shadow config");
+        assert!(shadow.registry.expect("participates").flip_epoch.is_none());
+        assert!(shadow.provider.settled_for(Epoch::new(1_000)));
     }
 }

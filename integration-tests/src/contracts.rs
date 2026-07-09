@@ -21,6 +21,16 @@ alloy::sol!(
 );
 
 alloy::sol!(
+    /// The production on-chain validator registry (source in `contracts/src/`,
+    /// artifact built by the same build script). Tests deploy it like any
+    /// contract — its address is node configuration, not a fixed system
+    /// address.
+    #[sol(rpc)]
+    ValidatorRegistry,
+    "../contracts/out/ValidatorRegistry.sol/ValidatorRegistry.json"
+);
+
+alloy::sol!(
     /// Contract that can be used as a target for force deployments
     /// during upgrade tests.
     #[sol(rpc)]

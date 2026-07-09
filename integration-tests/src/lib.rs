@@ -1224,11 +1224,7 @@ async fn wait_for_operator_l1_quiescence(l1: &AnvilL1, config: &Config) -> anyho
 
     let in_flight = |addresses: Vec<Address>| async move {
         for address in addresses {
-            let pending = l1
-                .provider
-                .get_transaction_count(address)
-                .pending()
-                .await?;
+            let pending = l1.provider.get_transaction_count(address).pending().await?;
             let latest = l1.provider.get_transaction_count(address).latest().await?;
             if pending != latest {
                 return anyhow::Ok(Some((address, pending, latest)));

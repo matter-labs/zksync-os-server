@@ -703,6 +703,8 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
     let mut announced_outside = std::collections::BTreeSet::new();
     // Epochs whose anchor-wait was already announced (same once-per-epoch rule).
     let mut announced_waiting = std::collections::BTreeSet::new();
+    // Epochs whose registry-derivation wait was already announced (same rule).
+    let mut announced_unsettled = std::collections::BTreeSet::new();
     // Epochs below this have had their storage pruned (this run; restarts
     // re-derive it by re-walking, which is idempotent).
     let mut pruned_below: u64 = 0;
@@ -752,6 +754,23 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
             if engines.lock().unwrap().contains_key(&key) {
                 continue;
             }
+            // A registry-governed epoch whose derivation has not landed yet has
+            // no committee to build an engine over — the scheme below would be a
+            // stale clamp. Wait; the derivation driver follows the applied
+            // height, which trails the committed height this rotation follows,
+            // so the gap closes as commits drain (production lookahead is a full
+            // epoch, making this gate a startup/catch-up phenomenon only).
+            if !scheme_provider.settled_for(epoch) {
+                if announced_unsettled.insert(key) {
+                    info!(
+                        epoch = key,
+                        "epoch's committee is not yet derived from the registry; \
+                         engine start waits for the derivation"
+                    );
+                }
+                continue;
+            }
+            announced_unsettled.remove(&key);
             // Committee membership gates the engine: a validator outside this
             // epoch's committee has no key in its scheme and casts no votes.
             if scheme_provider.scheme_for(epoch).me().is_none() {
@@ -839,6 +858,7 @@ async fn run_epoch_rotation<R, X, TSender, TReceiver, F>(
         });
         announced_outside.retain(|&epoch| epoch >= keep_from);
         announced_waiting.retain(|&epoch| epoch >= keep_from);
+        announced_unsettled.retain(|&epoch| epoch >= keep_from);
 
         // Prune consensus storage past the retention horizon. Only epochs the
         // chain has fully moved beyond are eligible, and the rotation never

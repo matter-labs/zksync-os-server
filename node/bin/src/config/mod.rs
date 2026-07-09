@@ -908,6 +908,61 @@ pub struct ConsensusConfig {
     /// bounds how far a leader can pre-date time-dependent logic.
     #[config(default_t = Duration::from_secs(10))]
     pub max_timestamp_skew: Duration,
+    /// How the on-chain validator registry participates in committee scheduling.
+    /// `schedule` (default): the registry is ignored; `consensus.committees` /
+    /// `consensus.validators` alone decide committees. `shadow`: consensus still
+    /// follows the config schedule, but every epoch's committee is *also* derived
+    /// from the registry contract and compared — drift surfaces in `/status` and
+    /// alarms, changing nothing else. `config_shadow`: committees follow the
+    /// registry from the flip epoch — the `committees` entry with
+    /// `source: registry` — onward, and the config schedule is kept as a mirror
+    /// of the registry: entries at or after the flip never override, they are the
+    /// drift comparison's reference and the p2p address book's source, and the
+    /// same drift alarms now cross-check the governing source. Recovery from a
+    /// broken registry is switching this mode back to `schedule` or `shadow`
+    /// (config governs again) and restarting the committee. A committee-wide
+    /// fact, fingerprinted.
+    // TODO(consensus): a future `contract` mode — the registry as the sole
+    // source, with no config mirror expected — additionally needs the p2p
+    // address book to follow registry endpoints (see the TODO at the peer-set
+    // construction in consensus.rs) and a drift comparison that does not
+    // reference config. Add it once `shadow`/`config_shadow` have produced
+    // staging evidence; until then the registry is deliberately not offered as
+    // the only source of truth.
+    #[config(default_t = RegistryMode::Schedule, with = Serde![str])]
+    pub registry_mode: RegistryMode,
+    /// L2 address of the validator registry contract. Committee-uniform,
+    /// fingerprinted; required for `registry_mode` `shadow`/`config_shadow`,
+    /// refused for `schedule` (an address that silently does nothing invites the
+    /// wrong conclusions).
+    #[config(default, with = Serde![str])]
+    pub registry_address: Option<Address>,
+}
+
+/// How the committee schedule for an epoch range is decided — see
+/// [`ConsensusConfig::registry_mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryMode {
+    Schedule,
+    Shadow,
+    ConfigShadow,
+}
+
+impl RegistryMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RegistryMode::Schedule => "schedule",
+            RegistryMode::Shadow => "shadow",
+            RegistryMode::ConfigShadow => "config_shadow",
+        }
+    }
+}
+
+impl std::fmt::Display for RegistryMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// One entry of the committee schedule (`consensus.committees`).
@@ -916,8 +971,29 @@ pub struct CommitteeScheduleEntryConfig {
     /// The epoch this committee takes over at (its first epoch).
     pub activation_epoch: u64,
     /// The committee, in agreed order (certificate signer bitmaps index into it);
-    /// same entry format as `consensus.validators`.
+    /// same entry format as `consensus.validators`. Empty for (and only for) a
+    /// `source: registry` entry.
+    #[serde(default)]
     pub validators: Vec<String>,
+    /// Where this entry's committees come from: `validators` (default — the
+    /// listed set) or `registry` (the flip: from this entry's activation epoch
+    /// on, committees are derived from the on-chain registry). Exactly one
+    /// registry entry is required in `registry_mode: config_shadow` and refused
+    /// in every other mode. `validators` entries after the flip do not override
+    /// the registry — they are the config mirror of it (the drift comparison's
+    /// reference and the address book's source), appended alongside each
+    /// registry rotation.
+    #[serde(default)]
+    pub source: CommitteeEntrySource,
+}
+
+/// The authority behind one `consensus.committees` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommitteeEntrySource {
+    #[default]
+    Validators,
+    Registry,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

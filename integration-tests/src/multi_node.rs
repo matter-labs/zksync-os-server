@@ -317,6 +317,30 @@ impl MultiNodeTester {
         Self::start_with_schedule_and_overrides(num_validators, schedule, epoch_length, &[]).await
     }
 
+    /// Like [`Self::start_with_schedule`], but every validator also runs the
+    /// on-chain registry in *shadow* mode against `registry_address`: committees
+    /// still come from the config schedule, and each node additionally derives
+    /// the would-be committee from the registry contract's storage at every
+    /// epoch's lookahead boundary, reporting match/mismatch in
+    /// `/status.consensus.registry`. The address is configuration, so tests
+    /// precompute the deployment address and deploy after startup — an
+    /// undeployed registry derives quietly as "nothing scheduled".
+    pub async fn start_with_shadow_registry(
+        num_validators: usize,
+        epoch_length: u64,
+        registry_address: alloy::primitives::Address,
+    ) -> anyhow::Result<Self> {
+        let everyone = vec![(0, (0..num_validators).collect::<Vec<_>>())];
+        Self::start_with_schedule_inner(
+            num_validators,
+            &everyone,
+            epoch_length,
+            &[],
+            Some(registry_address),
+        )
+        .await
+    }
+
     /// Like [`Self::start_with_schedule`], but the listed validators run their own
     /// (wrong) view of the schedule — the operator-error scenarios: a validator
     /// whose deployed config is missing the newest committee entry.
@@ -325,6 +349,23 @@ impl MultiNodeTester {
         schedule: &[(u64, Vec<usize>)],
         epoch_length: u64,
         schedule_overrides: &[(usize, Vec<(u64, Vec<usize>)>)],
+    ) -> anyhow::Result<Self> {
+        Self::start_with_schedule_inner(
+            num_validators,
+            schedule,
+            epoch_length,
+            schedule_overrides,
+            None,
+        )
+        .await
+    }
+
+    async fn start_with_schedule_inner(
+        num_validators: usize,
+        schedule: &[(u64, Vec<usize>)],
+        epoch_length: u64,
+        schedule_overrides: &[(usize, Vec<(u64, Vec<usize>)>)],
+        shadow_registry: Option<alloy::primitives::Address>,
     ) -> anyhow::Result<Self> {
         assert!(
             num_validators >= 2,
@@ -353,6 +394,7 @@ impl MultiNodeTester {
                 .map(|(activation_epoch, indices)| CommitteeScheduleEntryConfig {
                     activation_epoch: *activation_epoch,
                     validators: indices.iter().map(|&i| committee[i].clone()).collect(),
+                    source: Default::default(),
                 })
                 .collect()
         };
@@ -385,6 +427,11 @@ impl MultiNodeTester {
                         config.consensus_config.committees = entries;
                         config.consensus_config.epoch_length = epoch_length;
                         config.consensus_config.allow_private_ips = true;
+                        if let Some(registry_address) = shadow_registry {
+                            config.consensus_config.registry_mode =
+                                zksync_os_server::config::RegistryMode::Shadow;
+                            config.consensus_config.registry_address = Some(registry_address);
+                        }
                         Tester::launch_with_new_runtime(l1, chain_layout, config)
                             .await
                             .with_context(|| format!("failed to launch validator {index}"))
@@ -565,6 +612,7 @@ impl MultiNodeTester {
             .map(|(activation_epoch, indices)| CommitteeScheduleEntryConfig {
                 activation_epoch: *activation_epoch,
                 validators: indices.iter().map(|&i| all_entries[i].clone()).collect(),
+                source: Default::default(),
             })
             .collect();
         let observer_entries: Vec<String> = keys[num_validators..]

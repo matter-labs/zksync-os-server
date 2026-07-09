@@ -25,6 +25,33 @@ pub struct FinalizedObservation {
 /// actors) on demand. Installed by the consensus thread once its runtime is up.
 pub type ConsensusMetricsEncoder = Arc<dyn Fn() -> String + Send + Sync>;
 
+/// The latest on-chain-registry derivation this node performed (shadow and
+/// config-shadow modes). External monitors judge registry health from it two
+/// ways: `matches_config` / `outcome` on one node (drift or refusal against
+/// this node's own config), and `committee_hash` compared *across* nodes for
+/// the same `last_epoch` (two nodes deriving different committees from the
+/// same chain state would split a registry-governed committee — both modes
+/// exist to surface that while config still governs or mirrors).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistryStatus {
+    /// `"shadow"` or `"config_shadow"` (the `schedule` mode serves no section).
+    pub mode: String,
+    /// The newest epoch whose derivation completed.
+    pub last_epoch: u64,
+    /// The chain-absolute height its registry state was read at.
+    pub last_lookahead_height: u64,
+    /// `"derived"`, `"carried_no_entry"`, or `"carried_refused"`.
+    pub outcome: String,
+    /// Whether the derived committee equals the config schedule's answer.
+    pub matches_config: bool,
+    /// Human-readable refusal reason, present on `carried_refused`.
+    pub refusal: Option<String>,
+    /// Canonical hash of the committee in effect (first 8 bytes of sha256 over
+    /// the ordered member keys, hex) — compare across validators.
+    pub committee_hash: String,
+    pub committee_size: usize,
+}
+
 /// Where the status server reads consensus facts from.
 pub struct ConsensusStatusSource {
     /// `"validator"` or `"observer"` — whether this node votes or only follows.
@@ -45,6 +72,9 @@ pub struct ConsensusStatusSource {
     /// member; a mismatch is config drift caught *before* it becomes a boundary
     /// stall or a false byzantine alarm.
     pub chain_fingerprint: String,
+    /// The latest registry derivation; `None` until the first one (and forever
+    /// in `schedule` mode).
+    pub registry: watch::Receiver<Option<RegistryStatus>>,
     pub metrics_encoder: watch::Receiver<Option<ConsensusMetricsEncoder>>,
 }
 
@@ -69,6 +99,9 @@ pub struct ConsensusStatus {
     /// across validators — any mismatch is config drift.
     #[serde(default)]
     pub chain_fingerprint: String,
+    /// The latest on-chain-registry derivation (shadow/config_shadow modes only).
+    #[serde(default)]
+    pub registry: Option<RegistryStatus>,
 }
 
 impl ConsensusStatusSource {
@@ -81,6 +114,7 @@ impl ConsensusStatusSource {
             applied_height: *self.applied_height.borrow(),
             finality_certified_height: *self.finality_certified.borrow(),
             chain_fingerprint: self.chain_fingerprint.clone(),
+            registry: self.registry.borrow().clone(),
         }
     }
 }

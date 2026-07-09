@@ -30,7 +30,11 @@ use commonware_cryptography::bls12381::primitives::variant::{MinPk, Variant};
 use commonware_cryptography::ed25519::PublicKey;
 use commonware_utils::ordered::BiMap;
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+
+/// One committee: the ordered (network identity → consensus key) map. Order is
+/// part of the agreement — participant indices in certificate bitmaps follow it.
+pub type Committee = BiMap<PublicKey, <MinPk as Variant>::Public>;
 
 /// One schedule entry: the committee that holds every epoch from
 /// `activation_epoch` until a later entry supersedes it.
@@ -40,7 +44,7 @@ pub struct ScheduleEntry {
     /// The ordered (network identity → consensus key) map. Order is part of the
     /// agreement: participant indices in certificate bitmaps follow it, so every
     /// validator must configure the same members in the same order.
-    pub committee: BiMap<PublicKey, <MinPk as Variant>::Public>,
+    pub committee: Committee,
 }
 
 /// The validated schedule. Construction enforces the invariants; everything after
@@ -126,12 +130,199 @@ impl CommitteeSchedule {
     }
 }
 
-/// Per-epoch scheme provider over a [`CommitteeSchedule`].
+/// Which authority decides an epoch's committee, and — for the provider's cache —
+/// under what identity the answer may be memoized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Governance {
+    /// A config schedule entry governs the epoch; identified by its activation
+    /// epoch (many epochs share one entry).
+    Config { activation_epoch: u64 },
+    /// The registry's recorded derivation for exactly this epoch governs.
+    Derived { epoch: u64 },
+    /// The registry governs the epoch but its derivation has not been recorded
+    /// yet. The committee returned alongside is the latest known one — good
+    /// enough to *attempt* verifying an early-arriving certificate (a failure is
+    /// dropped, never a fault), never good enough to start an engine with or to
+    /// cache: the real answer may still arrive and differ.
+    Unsettled,
+}
+
+/// The committee authority for every epoch: the config schedule, optionally
+/// handing over to registry-derived committees from a flip epoch on.
+///
+/// This is the one object the whole stack asks "who holds epoch E" — the scheme
+/// provider (and through it marshal, engines, the tip scout), the epoch rotation
+/// (which refuses to start an engine for an epoch whose answer is not settled),
+/// and the custody-record observer. Derived committees are appended at runtime by
+/// the registry derivation driver ([`crate::registry`]); appending never blocks
+/// readers of other epochs.
+///
+/// Precedence: with no flip epoch the registry never governs anything (the
+/// `schedule` and `shadow` modes — shadow derivations are still appended here,
+/// they are just never consulted). With a flip epoch (`config_shadow` mode),
+/// epochs before it follow config and epochs at or after it follow the recorded
+/// derivation. Config entries at or after the flip do *not* override the
+/// registry — they are the expected mirror of it: the drift comparison's
+/// reference, the p2p address book's source, and the fallback while an epoch's
+/// derivation is pending. Recovery from a broken registry is a mode change
+/// (back to `schedule`/`shadow`, where config governs), not a config-entry
+/// override — an override that operators must also use for routine mirroring
+/// would be impossible to reserve for emergencies.
+#[derive(Clone)]
+pub struct CommitteeSource {
+    inner: Arc<SourceInner>,
+}
+
+struct SourceInner {
+    config: CommitteeSchedule,
+    /// From this epoch on, recorded derivations govern (`config_shadow` mode).
+    /// `None`: config governs everything, forever.
+    registry_from: Option<u64>,
+    /// Registry-derived committees, one per epoch, dense from the driver's first
+    /// target onward (a carried-forward committee is recorded per epoch too, so
+    /// presence means "the derivation for this epoch completed").
+    derived: RwLock<BTreeMap<u64, Committee>>,
+}
+
+impl CommitteeSource {
+    /// A source where the config schedule governs every epoch (the `schedule`
+    /// and `shadow` modes).
+    pub fn from_config(config: CommitteeSchedule) -> Self {
+        Self {
+            inner: Arc::new(SourceInner {
+                config,
+                registry_from: None,
+                derived: RwLock::new(BTreeMap::new()),
+            }),
+        }
+    }
+
+    /// A source where recorded derivations govern from `registry_from` on
+    /// (`config_shadow` mode). The config schedule's epoch-0 totality guarantees
+    /// a fallback committee below the flip.
+    pub fn with_registry_from(config: CommitteeSchedule, registry_from: u64) -> Self {
+        Self {
+            inner: Arc::new(SourceInner {
+                config,
+                registry_from: Some(registry_from),
+                derived: RwLock::new(BTreeMap::new()),
+            }),
+        }
+    }
+
+    /// The config schedule (the address book, guards, fingerprint, and drift
+    /// comparison read it; epoch resolution goes through [`Self::resolve`]).
+    pub fn config_schedule(&self) -> &CommitteeSchedule {
+        &self.inner.config
+    }
+
+    /// The epoch derivations start governing at, if any (`config_shadow` mode).
+    pub fn registry_from(&self) -> Option<u64> {
+        self.inner.registry_from
+    }
+
+    /// The committee for `epoch` and who decided it. Total — every epoch gets a
+    /// committee — but an [`Governance::Unsettled`] answer is a placeholder (see
+    /// its docs for what callers may do with one).
+    pub fn resolve(&self, epoch: Epoch) -> (Committee, Governance) {
+        let entry = self.inner.config.entry_for(epoch);
+        let config_answer = || {
+            (
+                entry.committee.clone(),
+                Governance::Config {
+                    activation_epoch: entry.activation_epoch,
+                },
+            )
+        };
+        let Some(flip) = self.inner.registry_from else {
+            return config_answer();
+        };
+        if epoch.get() < flip {
+            return config_answer();
+        }
+        let derived = self.inner.derived.read().unwrap();
+        match derived.range(..=epoch.get()).next_back() {
+            Some((&recorded, committee)) if recorded == epoch.get() => (
+                committee.clone(),
+                Governance::Derived { epoch: epoch.get() },
+            ),
+            // The derivation for this epoch is still pending: answer with the
+            // latest known committee (the newest recording, or the config
+            // schedule's answer before any exists — which may be a mirror entry
+            // at or after the flip) so verification attempts have something to
+            // try — but say so.
+            Some((_, committee)) => (committee.clone(), Governance::Unsettled),
+            None => (entry.committee.clone(), Governance::Unsettled),
+        }
+    }
+
+    /// Whether `epoch`'s committee is decided — config-governed, or covered by a
+    /// recorded derivation. The rotation refuses to start an engine for an
+    /// unsettled epoch (the answer may still change); everything else treats
+    /// unsettled as best-effort.
+    pub fn settled_for(&self, epoch: Epoch) -> bool {
+        !matches!(self.resolve(epoch).1, Governance::Unsettled)
+    }
+
+    /// Appends the registry's derivation for `epoch`. Idempotent; the first
+    /// recording wins (matching the durable ledger's first-observed-wins rule),
+    /// and a conflicting re-recording is loud — two different answers for one
+    /// epoch on one node means the derivation was not the pure function of chain
+    /// state it must be.
+    pub fn record_derivation(&self, epoch: u64, committee: Committee) {
+        let mut derived = self.inner.derived.write().unwrap();
+        if let Some(existing) = derived.get(&epoch) {
+            if *existing != committee {
+                tracing::error!(
+                    epoch,
+                    "conflicting registry derivations for one epoch on one node; \
+                     keeping the first"
+                );
+                debug_assert!(false, "conflicting registry derivations for epoch {epoch}");
+            }
+            return;
+        }
+        derived.insert(epoch, committee);
+    }
+
+    /// The newest recorded derivation strictly before `epoch`, if any — the
+    /// "last known committee" a refused or empty derivation carries forward.
+    pub fn last_derived_before(&self, epoch: u64) -> Option<Committee> {
+        let derived = self.inner.derived.read().unwrap();
+        derived
+            .range(..epoch)
+            .next_back()
+            .map(|(_, committee)| committee.clone())
+    }
+
+    /// The newest recorded derivation epoch, if any (the driver resumes after it).
+    pub fn latest_derived_epoch(&self) -> Option<u64> {
+        let derived = self.inner.derived.read().unwrap();
+        derived.keys().next_back().copied()
+    }
+
+    /// Does this network identity appear in any config entry or any recorded
+    /// derivation? The startup guard's question, now across both authorities.
+    pub fn member_of_any(&self, identity: &PublicKey) -> bool {
+        self.inner.config.member_of_any(identity)
+            || self
+                .inner
+                .derived
+                .read()
+                .unwrap()
+                .values()
+                .any(|committee| committee.get_value(identity).is_some())
+    }
+}
+
+/// Per-epoch scheme provider over a [`CommitteeSource`].
 ///
 /// For every epoch it produces a scheme over that epoch's committee: a *signer*
 /// scheme when the configured BLS key belongs to a member, a *verifier-only*
-/// scheme otherwise. Schemes are cached per schedule entry (not per epoch —
-/// thousands of epochs share one committee), so repeated lookups are a map read.
+/// scheme otherwise. Schemes are cached per governing answer (a config entry
+/// covers many epochs under one cache slot; a derived committee is per-epoch),
+/// so repeated lookups are a map read. Unsettled answers are never cached — the
+/// real committee may still arrive and differ.
 ///
 /// Cloning shares the cache; the provider is handed to the marshal (which
 /// verifies certificates from arbitrary historical epochs during backfill), to
@@ -143,43 +334,83 @@ pub struct ScheduledSchemeProvider {
     inner: Arc<ProviderInner>,
 }
 
+/// Cache key: the governing answer's identity (see [`Governance`]).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SchemeKey {
+    ConfigEntry(u64),
+    DerivedEpoch(u64),
+}
+
 struct ProviderInner {
     /// The signing namespace (protocol-versioned); every epoch's scheme signs and
     /// verifies under the same domain separation.
     namespace: Vec<u8>,
-    schedule: CommitteeSchedule,
+    source: CommitteeSource,
     /// `None` builds verifier-only providers (observers, tooling).
     bls_key: Option<group::Private>,
-    /// Keyed by the schedule entry's activation epoch.
-    cache: Mutex<BTreeMap<u64, Arc<Scheme>>>,
+    cache: Mutex<BTreeMap<SchemeKey, Arc<Scheme>>>,
 }
 
 impl ScheduledSchemeProvider {
+    /// A provider over a plain config schedule (every existing deployment shape;
+    /// registry-fed providers use [`Self::over_source`]).
     pub fn new(
         namespace: Vec<u8>,
         schedule: CommitteeSchedule,
         bls_key: Option<group::Private>,
     ) -> Self {
+        Self::over_source(namespace, CommitteeSource::from_config(schedule), bls_key)
+    }
+
+    pub fn over_source(
+        namespace: Vec<u8>,
+        source: CommitteeSource,
+        bls_key: Option<group::Private>,
+    ) -> Self {
         Self {
             inner: Arc::new(ProviderInner {
                 namespace,
-                schedule,
+                source,
                 bls_key,
                 cache: Mutex::new(BTreeMap::new()),
             }),
         }
     }
 
+    /// The config schedule behind this provider. Epoch resolution must go through
+    /// [`Self::scheme_for`] / [`Self::source`] — under a registry flip the config
+    /// schedule alone does not answer "who holds epoch E".
     pub fn schedule(&self) -> &CommitteeSchedule {
-        &self.inner.schedule
+        self.inner.source.config_schedule()
+    }
+
+    /// The committee authority this provider reads (the derivation driver appends
+    /// to it; observers and status read through it).
+    pub fn source(&self) -> &CommitteeSource {
+        &self.inner.source
+    }
+
+    /// Whether `epoch`'s committee is decided (see [`CommitteeSource::settled_for`]).
+    pub fn settled_for(&self, epoch: Epoch) -> bool {
+        self.inner.source.settled_for(epoch)
     }
 
     /// The scheme for `epoch` — signer if this validator is in that epoch's
-    /// committee, verifier otherwise. Total: every epoch resolves.
+    /// committee, verifier otherwise. Total: every epoch resolves, though an
+    /// epoch whose registry derivation is still pending resolves to the latest
+    /// known committee (uncached; see [`Governance::Unsettled`]).
     pub fn scheme_for(&self, epoch: Epoch) -> Arc<Scheme> {
-        let entry = self.inner.schedule.entry_for(epoch);
-        let mut cache = self.inner.cache.lock().unwrap();
-        if let Some(scheme) = cache.get(&entry.activation_epoch) {
+        let (committee, governance) = self.inner.source.resolve(epoch);
+        let key = match governance {
+            Governance::Config { activation_epoch } => {
+                Some(SchemeKey::ConfigEntry(activation_epoch))
+            }
+            Governance::Derived { epoch } => Some(SchemeKey::DerivedEpoch(epoch)),
+            Governance::Unsettled => None,
+        };
+        if let Some(key) = key
+            && let Some(scheme) = self.inner.cache.lock().unwrap().get(&key)
+        {
             return scheme.clone();
         }
         // Try to be a signer for this committee; fall back to verifier when the
@@ -190,10 +421,12 @@ impl ScheduledSchemeProvider {
             .inner
             .bls_key
             .clone()
-            .and_then(|key| Scheme::signer(&self.inner.namespace, entry.committee.clone(), key))
-            .unwrap_or_else(|| Scheme::verifier(&self.inner.namespace, entry.committee.clone()));
+            .and_then(|key| Scheme::signer(&self.inner.namespace, committee.clone(), key))
+            .unwrap_or_else(|| Scheme::verifier(&self.inner.namespace, committee));
         let scheme = Arc::new(scheme);
-        cache.insert(entry.activation_epoch, scheme.clone());
+        if let Some(key) = key {
+            self.inner.cache.lock().unwrap().insert(key, scheme.clone());
+        }
         scheme
     }
 }
@@ -359,6 +592,128 @@ mod tests {
                 && !schedule.is_member(Epoch::new(5), identity)
                 && schedule.member_of_any(identity)
         }
+    }
+
+    #[test]
+    fn source_precedence_covers_flip_mirror_and_carry() {
+        let mut rng = StdRng::seed_from_u64(11);
+        let all = keys(4, &mut rng);
+        let config = CommitteeSchedule::new(vec![
+            ScheduleEntry {
+                activation_epoch: 0,
+                committee: committee(&all[..2]),
+            },
+            // A mirror entry: config tracking a registry rotation at epoch 9.
+            ScheduleEntry {
+                activation_epoch: 9,
+                committee: committee(&all[..3]),
+            },
+        ])
+        .expect("valid");
+        let source = CommitteeSource::with_registry_from(config, 4);
+
+        // Below the flip: config governs, settled.
+        let (c, governance) = source.resolve(Epoch::new(3));
+        assert_eq!(
+            governance,
+            Governance::Config {
+                activation_epoch: 0
+            }
+        );
+        assert_eq!(c.len(), 2);
+        assert!(source.settled_for(Epoch::new(3)));
+
+        // At the flip with nothing derived: the config fallback answers, but the
+        // epoch is not settled — no engine may start over it.
+        let (c, governance) = source.resolve(Epoch::new(4));
+        assert_eq!(governance, Governance::Unsettled);
+        assert_eq!(c.len(), 2, "fallback is the last config committee");
+        assert!(!source.settled_for(Epoch::new(4)));
+
+        // With nothing derived, a mirror entry is the best available fallback
+        // for its epochs — still unsettled (the derivation decides).
+        let (c, governance) = source.resolve(Epoch::new(10));
+        assert_eq!(governance, Governance::Unsettled);
+        assert_eq!(c.len(), 3, "the mirror entry serves as the fallback");
+        assert!(!source.settled_for(Epoch::new(10)));
+
+        // A recorded derivation settles its epoch exactly.
+        source.record_derivation(4, committee(&all[1..4]));
+        let (c, governance) = source.resolve(Epoch::new(4));
+        assert_eq!(governance, Governance::Derived { epoch: 4 });
+        assert_eq!(c.len(), 3);
+        assert!(source.settled_for(Epoch::new(4)));
+        // The next epoch answers with the newest derivation but stays unsettled.
+        let (c, governance) = source.resolve(Epoch::new(5));
+        assert_eq!(governance, Governance::Unsettled);
+        assert_eq!(c.len(), 3);
+
+        // Mirror entries never override: the recorded derivation governs epoch 9
+        // even though a config entry names it — the entry is the comparison
+        // reference and address-book source, not an authority (recovery from a
+        // broken registry is a mode change, not a config-entry override).
+        source.record_derivation(9, committee(&all[..2]));
+        let (c, governance) = source.resolve(Epoch::new(9));
+        assert_eq!(governance, Governance::Derived { epoch: 9 });
+        assert_eq!(c.len(), 2);
+        let (c, governance) = source.resolve(Epoch::new(10));
+        assert_eq!(governance, Governance::Unsettled);
+        assert_eq!(c.len(), 2, "the newest derivation carries past its epoch");
+
+        // Carry helpers: the newest derivation strictly below an epoch.
+        assert_eq!(source.last_derived_before(9).expect("epoch 4").len(), 3);
+        assert!(source.last_derived_before(4).is_none());
+        assert_eq!(source.latest_derived_epoch(), Some(9));
+    }
+
+    #[test]
+    fn source_without_a_flip_never_consults_derivations() {
+        let mut rng = StdRng::seed_from_u64(12);
+        let all = keys(3, &mut rng);
+        let source =
+            CommitteeSource::from_config(CommitteeSchedule::single(committee(&all[..2])).unwrap());
+        // The shadow driver records; resolution ignores it entirely.
+        source.record_derivation(7, committee(&all[..3]));
+        let (c, governance) = source.resolve(Epoch::new(100));
+        assert_eq!(
+            governance,
+            Governance::Config {
+                activation_epoch: 0
+            }
+        );
+        assert_eq!(c.len(), 2);
+        assert!(source.settled_for(Epoch::new(100)));
+        // Membership spans both authorities regardless (the startup guard's view).
+        use commonware_cryptography::Signer as _;
+        assert!(source.member_of_any(&all[2].0.public_key()));
+    }
+
+    #[test]
+    fn provider_over_a_source_serves_derived_committees_and_skips_unsettled_cache() {
+        let mut rng = StdRng::seed_from_u64(13);
+        let all = keys(3, &mut rng);
+        let source = CommitteeSource::with_registry_from(
+            CommitteeSchedule::single(committee(&all[..2])).unwrap(),
+            2,
+        );
+        let provider = ScheduledSchemeProvider::over_source(
+            b"test-namespace".to_vec(),
+            source.clone(),
+            Some(all[2].1.clone()),
+        );
+
+        // Unsettled: validator 2 is not in the fallback committee — and the
+        // answer must not be cached, because the derivation may change it.
+        assert!(provider.scheme_for(Epoch::new(5)).me().is_none());
+        source.record_derivation(2, committee(&all[..2]));
+        source.record_derivation(3, committee(&all[..3]));
+        // The derivation for epoch 3 admits validator 2; a stale cache entry
+        // would still say no.
+        assert!(provider.scheme_for(Epoch::new(3)).me().is_some());
+        // Settled per-epoch answers are cached per epoch.
+        let a = provider.scheme_for(Epoch::new(3));
+        let b = provider.scheme_for(Epoch::new(3));
+        assert!(Arc::ptr_eq(&a, &b));
     }
 
     #[test]

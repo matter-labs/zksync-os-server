@@ -68,9 +68,11 @@ fn decompress_l1_states() {
 fn main() {
     decompress_l1_states();
 
-    // Rerun build script when test contracts change.
+    // Rerun build script when test contracts or production contracts change.
     println!("cargo::rerun-if-changed=test-contracts/src");
     println!("cargo::rerun-if-changed=test-contracts/foundry.toml");
+    println!("cargo::rerun-if-changed=../contracts/src");
+    println!("cargo::rerun-if-changed=../contracts/foundry.toml");
 
     // Check that `forge` is installed and is executable
     let Ok(status) = Command::new("forge").arg("--version").status() else {
@@ -84,22 +86,29 @@ fn main() {
         return;
     }
 
-    match Command::new("forge")
-        .arg("build")
-        .arg("--root")
-        .arg("test-contracts")
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            // Success, do nothing
-        }
-        Ok(output) => {
-            println!("cargo::error=`forge build` failed, see stdout/stderr below");
-            println!("cargo::error=stdout={}", from_utf8(&output.stdout).unwrap());
-            println!("cargo::error=stderr={}", from_utf8(&output.stderr).unwrap());
-        }
-        Err(err) => {
-            println!("cargo::error=could not run `forge build`: {err}");
+    // `test-contracts` holds test-only helpers; `../contracts` holds
+    // production contracts (the validator registry) whose fresh artifacts the
+    // bytecode-pin test compares against the checked-in pin.
+    for root in ["test-contracts", "../contracts"] {
+        match Command::new("forge")
+            .arg("build")
+            .arg("--root")
+            .arg(root)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                // Success, do nothing
+            }
+            Ok(output) => {
+                println!(
+                    "cargo::error=`forge build --root {root}` failed, see stdout/stderr below"
+                );
+                println!("cargo::error=stdout={}", from_utf8(&output.stdout).unwrap());
+                println!("cargo::error=stderr={}", from_utf8(&output.stderr).unwrap());
+            }
+            Err(err) => {
+                println!("cargo::error=could not run `forge build`: {err}");
+            }
         }
     }
 }

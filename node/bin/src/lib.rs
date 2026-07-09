@@ -1028,6 +1028,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let setup = consensus::ConsensusSetup::from_config(
             &config.consensus_config,
             config.general_config.rocks_db_path.join("consensus"),
+            chain_id,
         )
         .expect("invalid consensus configuration");
 
@@ -1035,11 +1036,39 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // world.
         let (finalized_sender, finalized_receiver) = tokio::sync::watch::channel(None);
         let (metrics_encoder_sender, metrics_encoder_receiver) = tokio::sync::watch::channel(None);
+        let (registry_status_sender, registry_status_receiver) = tokio::sync::watch::channel(None);
         let chain_fingerprint = chain_fingerprint::chain_fingerprint(&config);
         tracing::info!(
             chain_fingerprint,
             "committee-uniform configuration fingerprint"
         );
+        match &setup.registry {
+            Some(registry) => tracing::info!(
+                mode = %registry.mode,
+                address = ?registry.address,
+                flip_epoch = registry.flip_epoch,
+                "on-chain validator registry"
+            ),
+            // A derivation trail with the registry disabled means this chain ran
+            // a registry mode before — a deliberate recovery/rollback, or a mode
+            // misconfiguration. Either way the operator should know config is
+            // governing while registry records exist.
+            None => {
+                let recorded_derivations = finality_store
+                    .registry_derivations()
+                    .expect("the registry derivation trail does not decode")
+                    .len();
+                if recorded_derivations > 0 {
+                    tracing::warn!(
+                        recorded_derivations,
+                        "registry derivation records exist but \
+                         `consensus.registry_mode` is `schedule`: the config \
+                         schedule governs (rollback/recovery state) — switch back \
+                         to a registry mode once the registry is usable again"
+                    );
+                }
+            }
+        }
         let status_source = zksync_os_status_server::ConsensusStatusSource {
             role: setup.role.as_str(),
             committee_size: setup.committee.len(),
@@ -1052,6 +1081,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             applied_height: applied_block_number_receiver.clone(),
             finality_certified: finality_store.watermark_subscription(),
             chain_fingerprint,
+            registry: registry_status_receiver,
             metrics_encoder: metrics_encoder_receiver,
         };
 
@@ -1064,6 +1094,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 finalized: finalized_sender,
                 metrics_encoder: metrics_encoder_sender,
                 finality: finality_store,
+                registry: registry_status_sender,
             },
             consensus_shutdown,
         );

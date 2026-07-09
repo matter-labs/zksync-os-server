@@ -12,6 +12,9 @@ categories.workspace = true
 
 [dependencies]
 zksync_os_consensus_core.workspace = true
+# The registry-derivation fixtures run the production registry parser over
+# manufactured chain state.
+zksync_os_consensus_registry.workspace = true
 
 # Real-STF execution backend: the production VM entry, genesis derivation, and the
 # transaction/state types, so simulated blocks can carry actually-executed transactions.

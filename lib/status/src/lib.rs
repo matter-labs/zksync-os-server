@@ -14,6 +14,7 @@ use tokio::net::TcpListener;
 
 pub use consensus::{
     ConsensusMetricsEncoder, ConsensusStatus, ConsensusStatusSource, FinalizedObservation,
+    RegistryStatus,
 };
 pub use status::StatusResponse;
 

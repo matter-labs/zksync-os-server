@@ -36,6 +36,13 @@ struct ChainSurface {
     // The committee schedule, normalized: the `validators` shorthand and an
     // explicit `committees` list with one epoch-0 entry are the same schedule.
     schedule: Vec<(u64, Vec<String>)>,
+    // The on-chain validator registry: whether/how it participates, where it
+    // lives, when it takes over, and the lookahead rule — all facts every
+    // committee member must agree on before a rotation depends on them.
+    registry_mode: String,
+    registry_address: Option<String>,
+    registry_flip_epoch: Option<u64>,
+    registry_lookahead_epochs: u64,
     // Chain constants that verification pins (a proposal violating any of
     // these is rejected, so a drifted node false-alarms as byzantine).
     fee_collector: String,
@@ -58,6 +65,11 @@ pub fn chain_fingerprint(config: &Config) -> String {
             .map(|entry| (entry.activation_epoch, entry.validators.clone()))
             .collect()
     };
+    let registry_flip_epoch = consensus
+        .committees
+        .iter()
+        .find(|entry| entry.source == crate::config::CommitteeEntrySource::Registry)
+        .map(|entry| entry.activation_epoch);
     let surface = ChainSurface {
         l2_chain_id: config.genesis_config.chain_id,
         genesis_height: consensus.genesis_height,
@@ -67,6 +79,12 @@ pub fn chain_fingerprint(config: &Config) -> String {
         certification_timeout_ms: consensus.certification_timeout.as_millis(),
         idle_heartbeat_ms: consensus.idle_heartbeat.as_millis(),
         schedule,
+        registry_mode: consensus.registry_mode.as_str().to_string(),
+        registry_address: consensus
+            .registry_address
+            .map(|address| format!("{address:?}")),
+        registry_flip_epoch,
+        registry_lookahead_epochs: zksync_os_consensus_core::LOOKAHEAD_EPOCHS,
         fee_collector: format!("{:?}", config.sequencer_config.fee_collector_address),
         block_gas_limit: config.sequencer_config.block_gas_limit,
         block_pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
@@ -96,6 +114,10 @@ mod tests {
             certification_timeout_ms: 2000,
             idle_heartbeat_ms: 600_000,
             schedule: vec![(0, vec!["a@1:1".into(), "b@2:2".into()])],
+            registry_mode: "schedule".into(),
+            registry_address: None,
+            registry_flip_epoch: None,
+            registry_lookahead_epochs: 2,
             fee_collector: "0x00".into(),
             block_gas_limit: 1,
             block_pubdata_limit_bytes: 2,

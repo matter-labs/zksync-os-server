@@ -34,3 +34,8 @@ pub use finality_certificate::{FinalityCertificate, SignatureScheme};
 mod epoch_transition;
 #[cfg(feature = "consensus")]
 pub use epoch_transition::{CommitteeMemberKeys, EpochTransition};
+
+#[cfg(feature = "consensus")]
+mod registry_derivation;
+#[cfg(feature = "consensus")]
+pub use registry_derivation::{DerivationOutcome, RegistryDerivation};

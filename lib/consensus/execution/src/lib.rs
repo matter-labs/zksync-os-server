@@ -24,11 +24,13 @@ pub mod finality_store;
 pub use zksync_os_consensus_core::idle_policy;
 pub mod metrics;
 pub mod pending_state;
+pub mod registry_source;
 pub mod rules;
 
 pub use builder::{BuilderConfig, BuiltBlock, ConsensusBlockBuilder, ParentInfo};
 pub use env::{ChainAnchor, CommittedPayload, NodeExecutionEnv, ProposalValidation};
 pub use finality_store::FinalityStore;
 pub use pending_state::{BranchOverrides, CommittedHead, Overlay, PendingState};
+pub use registry_source::{RegistryLedger, StateDerivationSource};
 pub use rules::{LocalL1Inputs, ValidityConfig, Verdict};
 pub use zksync_os_wire::ConsensusBlock;

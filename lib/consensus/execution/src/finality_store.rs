@@ -53,6 +53,13 @@ pub enum FinalityCF {
     /// these bytes; readers must treat decode failure as "no floor" and fall
     /// back, never as an error. Pruned to the last two epochs.
     FloorCache,
+    /// Registry derivation record by epoch (u64, big-endian) — the on-chain
+    /// registry's durable derivation trail (see
+    /// [`zksync_os_wire::RegistryDerivation`]). Written first-observed-wins at
+    /// each epoch's lookahead boundary; restarts and floor rebuilds replay it
+    /// instead of re-deriving from (possibly pruned) historical state. Never
+    /// pruned, like the custody trail it parallels.
+    Derivations,
 }
 
 /// The floor-cache key for a round: epoch then view, both big-endian, so RocksDB's
@@ -72,6 +79,7 @@ impl NamedColumnFamily for FinalityCF {
         FinalityCF::Meta,
         FinalityCF::Transitions,
         FinalityCF::FloorCache,
+        FinalityCF::Derivations,
     ];
 
     fn name(&self) -> &'static str {
@@ -81,6 +89,7 @@ impl NamedColumnFamily for FinalityCF {
             FinalityCF::Meta => "meta",
             FinalityCF::Transitions => "transitions",
             FinalityCF::FloorCache => "floor_cache",
+            FinalityCF::Derivations => "registry_derivations",
         }
     }
 }
@@ -276,6 +285,44 @@ impl FinalityStore {
         let transition = EpochTransition::read_cfg(&mut bytes.as_slice(), &())
             .map_err(|err| anyhow::anyhow!("stored epoch transition does not decode: {err}"))?;
         Ok(Some(transition))
+    }
+
+    /// Records one registry derivation, at the epoch's lookahead boundary.
+    /// First-observed wins, exactly like the custody trail: the outcome at a
+    /// fixed height is a chain fact, and re-derivations (restarts, replays)
+    /// leave the original untouched. Returns whether the record was written.
+    pub fn record_registry_derivation(
+        &self,
+        derivation: &zksync_os_wire::RegistryDerivation,
+    ) -> anyhow::Result<bool> {
+        use commonware_codec::{EncodeSize, Write as _};
+        // The lock doubles as the writer serializer for check-then-put.
+        let _guard = self.watermark_lock.lock().unwrap();
+        let key = derivation.epoch.to_be_bytes();
+        if self.db.get_cf(FinalityCF::Derivations, &key)?.is_some() {
+            return Ok(false);
+        }
+        let mut encoded = Vec::with_capacity(derivation.encode_size());
+        derivation.write(&mut encoded);
+        let mut batch = self.db.new_write_batch();
+        batch.put_cf(FinalityCF::Derivations, &key, &encoded);
+        self.db.write(batch)?;
+        Ok(true)
+    }
+
+    /// Every recorded registry derivation, ascending by epoch — replayed into
+    /// the committee source at startup so recorded epochs are never re-derived.
+    pub fn registry_derivations(&self) -> anyhow::Result<Vec<zksync_os_wire::RegistryDerivation>> {
+        use commonware_codec::Read as _;
+        self.db
+            .from_iterator_cf(FinalityCF::Derivations, &[][..]..)
+            .map(|(key, bytes)| {
+                anyhow::ensure!(key.len() == 8, "derivation key is not a u64 epoch");
+                zksync_os_wire::RegistryDerivation::read_cfg(&mut bytes.as_ref(), &()).map_err(
+                    |err| anyhow::anyhow!("stored registry derivation does not decode: {err}"),
+                )
+            })
+            .collect()
     }
 
     pub fn certificate_by_digest(

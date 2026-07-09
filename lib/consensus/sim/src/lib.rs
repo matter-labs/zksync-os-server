@@ -22,11 +22,15 @@ pub mod cluster;
 pub mod execution;
 pub mod fixtures;
 pub mod links;
+pub mod registry;
 pub mod scenario;
 pub mod stf;
 
 pub use activity::ActivityLog;
 pub use block::SimBlock;
-pub use cluster::{Behavior, EraOptions, ScheduleSpec, SimCluster, SimValidator, StackTuner};
+pub use cluster::{
+    Behavior, EraOptions, RegistrySpec, ScheduleSpec, SimCluster, SimRegistry, SimValidator,
+    StackTuner,
+};
 pub use execution::{DelayedEnv, IdleWork, MockExecution, SimEnv};
 pub use scenario::{fingerprint, run_scenario};

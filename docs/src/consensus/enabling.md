@@ -243,6 +243,96 @@ Two sharp edges, both loud by design:
   default: a reconfiguration deployed in the morning activates the same day,
   while boundary handoffs (one re-proposal view each) stay rare events.
 
+## The on-chain validator registry
+
+Committee changes above are N coordinated config deploys. The registry moves
+that agreement into chain state: an L2 contract
+(`contracts/src/ValidatorRegistry.sol`) holds validator identities and an
+append-only schedule of committee changes, and every node derives each epoch's
+committee by reading the contract's storage slots directly out of its own
+finalized, applied chain state — no RPC, no `eth_call`, no settlement-layer
+dependency. A read over consensus-finalized local state is bit-identical on
+every honest node by construction: one governance transaction, observed
+identically by everyone.
+
+The derivation rule is fixed: **the committee for epoch `T` is derived from
+registry state at the last block of epoch `T − 2`** — one full epoch of
+lookahead, so the height is finalized *and applied* everywhere before the
+committee matters, and incoming validators get a full epoch of warning. The
+lookahead, the registry address, and the participation mode are
+committee-uniform facts and join the chain fingerprint. Every derivation is
+persisted (first-observed-wins, beside the finality store's custody trail), and
+restarts replay the recorded trail instead of re-deriving — chain state at old
+lookahead heights may be pruned; the trail never is.
+
+Validation happens node-side, and every failure has the same direction —
+**a broken registry blocks rotation, never the chain**: an unknown layout
+version, malformed or reused keys, colliding endpoints, an invalid proof of
+possession, or a broken schedule all make the derivation *carry the previous
+committee forward* and alarm, identically on every node. Proofs of possession
+are verified at derivation time (BLS aggregation must never trust an unproven
+key), bound to owner, chain id, and registry address. An *undeployed* registry
+(all-zero storage) reads as "nothing scheduled" without alarming — the normal
+state of a rollout until governance deploys.
+
+`consensus.registry_mode` selects the participation, in rollout order:
+
+- `schedule` (default): the registry is ignored; committees come from config
+  alone.
+- `shadow`: consensus still follows config, but every epoch's committee is
+  *also* derived from the registry and compared. Matches, mismatches, refusals,
+  and a canonical committee hash are served in `/status.consensus.registry`;
+  a mismatch is the `REGISTRY DRIFT` warning and a chaos-watcher finding.
+  Shadow mode produces the evidence for enabling `config_shadow`: run it
+  against real committee rotations until they consistently produce zero drift.
+- `config_shadow`: committees follow the recorded derivations from the flip
+  epoch — the one `consensus.committees` entry with `source: registry` —
+  onward, and the roles invert: the config schedule is now kept as a *mirror*
+  of the registry. Mirror entries (config entries at or after the flip) never
+  override the registry; they are the drift comparison's reference and the p2p
+  address book's source, appended alongside each registry rotation. The same
+  drift alarms that judged the registry in shadow mode now cross-check the
+  governing source. The flip itself is a config append plus rolling restart,
+  like any other committee change, and is a post-staging decision based on
+  shadow-mode evidence.
+
+A registry-only mode — no config mirror at all — is deliberately not offered
+yet: the p2p address book is built from config, so a mirror is what keeps
+every derived member dialable. Until the address book follows registry
+endpoints (a registered follow-up), the registry is not ready to be the only
+source of truth.
+
+The shadow rollout: pick the registry address before deploying the contract
+(a fresh deployer's first transaction has a computable address), set
+`registry_mode: shadow` and `registry_address` across the committee, then
+deploy, register each validator's identity (keys, endpoints, proof of
+possession — `tools/consensus-keygen` material), and append a schedule entry
+mirroring the config schedule. Every node's status must report `derived`,
+`matches_config: true`, and one identical `committee_hash` — cross-node hash
+disagreement for the same epoch is the failure class this mode exists to catch
+before anything depends on it.
+
+### Recovery: switching the registry off
+
+A halted chain cannot rotate itself through its own state, and a broken
+registry must never hold committee changes hostage. Recovery is a mode change,
+not a config override: set `consensus.registry_mode` back to `schedule` (or
+`shadow`, to keep deriving and alarming while the registry is repaired), put
+the desired committee in `consensus.committees`, deploy across the committee,
+and restart — the same rolling procedure as any committee change. A node
+running `schedule` over a chain that has recorded derivations warns at startup
+that config is governing while registry records exist, so the recovery state
+stays visible. Switch back to `config_shadow` once the registry is healthy and
+governance has written the correct schedule into it; entries appended during
+recovery remain valid afterwards as mirror entries, provided they match what
+the registry says.
+
+Current limits: registration is governance-gated (no self-service key
+rotation — a key change is a committee change), and in `config_shadow` the
+config mirror must be kept in step with registry rotations — a mirror that
+lags a rotation costs the incoming validator its connectivity until the
+mirror deploys, and reads as drift until then.
+
 ## Storage retention
 
 Consensus storage grows with the chain: every epoch's engine journals its votes

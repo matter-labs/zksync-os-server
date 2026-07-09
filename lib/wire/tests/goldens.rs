@@ -316,3 +316,32 @@ fn epoch_transition_encoding_is_pinned() {
         EpochTransition::read_cfg(&mut committed.as_slice(), &()).expect("fixture decodes");
     assert_eq!(decoded, transition);
 }
+
+/// The registry-derivation encoding is the on-chain registry's durable derivation
+/// trail — pinned like every other released format.
+#[cfg(feature = "consensus")]
+#[test]
+fn registry_derivation_encoding_is_pinned() {
+    use commonware_codec::{EncodeSize, Read as _, Write};
+    use zksync_os_wire::{CommitteeMemberKeys, DerivationOutcome, RegistryDerivation};
+
+    let derivation = RegistryDerivation {
+        epoch: 9,
+        lookahead_height: 345_599,
+        outcome: DerivationOutcome::Derived,
+        committee: (0u8..4)
+            .map(|i| CommitteeMemberKeys {
+                network_key: [i; 32],
+                bls_key: [0x60 + i; 48],
+            })
+            .collect(),
+    };
+    let mut encoded = Vec::with_capacity(derivation.encode_size());
+    derivation.write(&mut encoded);
+    check_golden("registry_derivation_v1.hex", &encoded);
+
+    let committed = read_golden("registry_derivation_v1.hex");
+    let decoded =
+        RegistryDerivation::read_cfg(&mut committed.as_slice(), &()).expect("fixture decodes");
+    assert_eq!(decoded, derivation);
+}

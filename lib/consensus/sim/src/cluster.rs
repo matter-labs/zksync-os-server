@@ -27,7 +27,7 @@ use commonware_runtime::{Clock, Handle, Quota, Spawner as _, Supervisor as _, de
 use commonware_utils::{NZUsize, TryFromIterator as _};
 use rand08::Rng as _;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use zksync_os_consensus_core::types::{Scheme, SchemeProvider};
 use zksync_os_consensus_core::{
@@ -64,6 +64,9 @@ pub struct EraOptions {
     /// (a validator whose config is missing the newest entry). Each listed
     /// validator builds its scheme provider from its own spec instead.
     pub schedule_overrides: Vec<(usize, ScheduleSpec)>,
+    /// Runs the registry-derivation driver on every honest validator, over a
+    /// manufactured registry chain state (see [`RegistrySpec`]).
+    pub registry: Option<RegistrySpec>,
 }
 
 impl Default for EraOptions {
@@ -74,8 +77,36 @@ impl Default for EraOptions {
             stack_tuner: Arc::new(|_| {}),
             schedule: Vec::new(),
             schedule_overrides: Vec::new(),
+            registry: None,
         }
     }
+}
+
+/// Builds the registry's chain-state timeline from the cluster's minted keys —
+/// keys exist only once the seeded runtime mints them, so states referencing
+/// real identities must be built inside `start_era`.
+pub type RegistryTimelineFactory =
+    Arc<dyn Fn(&[(ed25519::PrivateKey, group::Private)]) -> crate::registry::RegistryTimeline>;
+
+/// How a scenario runs the on-chain registry: the flip epoch (config-shadow
+/// mode — derivations govern from it on; `None` is shadow, where they run and
+/// record but never govern) and the timeline factory.
+pub struct RegistrySpec {
+    pub flip_epoch: Option<u64>,
+    pub timeline: RegistryTimelineFactory,
+}
+
+/// One validator's registry-derivation fixtures: shared with the driver task,
+/// surviving restarts like a node's disk (the scenario assertion surface).
+pub struct SimRegistry {
+    pub flip_epoch: Option<u64>,
+    timeline: Arc<crate::registry::RegistryTimeline>,
+    pub ledger: crate::registry::MemoryLedger,
+    /// Every `(epoch, lookahead_height)` the driver asked the source to derive,
+    /// across all incarnations.
+    pub derive_calls: Arc<Mutex<Vec<(u64, u64)>>>,
+    /// Every completed derivation the driver reported, across all incarnations.
+    pub observations: Arc<Mutex<Vec<zksync_os_consensus_core::RegistryObservation>>>,
 }
 
 /// Domain-separation namespace for all consensus signatures in simulation.
@@ -141,6 +172,8 @@ pub struct SimValidator<X: SimEnv> {
     /// empty: the era genesis (default — full backfill), or a floor finalization
     /// (see [`zksync_os_consensus_core::StackStart`] and [`SimCluster::set_floor`]).
     start: StackStart<Sha256Digest>,
+    /// Registry-derivation fixtures, when the era runs the registry.
+    pub registry: Option<SimRegistry>,
 }
 
 impl SimCluster<MockExecution> {
@@ -220,6 +253,7 @@ where
             stack_tuner,
             schedule: schedule_spec,
             schedule_overrides,
+            registry: registry_spec,
         } = options;
         // Mint the validators' keys from the seeded runtime — deterministic per
         // seed, and the same construction path production uses (no fixture): each
@@ -270,6 +304,13 @@ where
         };
         cluster.link_full_mesh_between(&participants, link).await;
 
+        // One shared timeline: every validator's derivation reads the identical
+        // registry chain state, exactly as identical replicas would.
+        let registry_timeline = registry_spec
+            .as_ref()
+            .map(|spec| Arc::new((spec.timeline)(&cluster.keys)));
+        let registry_flip = registry_spec.as_ref().and_then(|spec| spec.flip_epoch);
+
         for (index, identity) in participants.iter().enumerate() {
             // A validator with a schedule override runs its *own* (wrong) view of
             // the committee history — the operator-error scenarios.
@@ -278,12 +319,12 @@ where
                 .find(|(overridden, _)| *overridden == index)
                 .map(|(_, spec)| spec);
             let provider = match spec {
-                None => SchemeProvider::new(
-                    NAMESPACE.to_vec(),
+                None => Self::provider_over(
                     schedule.clone(),
+                    registry_flip,
                     Some(cluster.keys[index].1.clone()),
                 ),
-                Some(spec) => cluster.provider_for(index, spec),
+                Some(spec) => cluster.provider_for(index, spec, registry_flip),
             };
             let mut validator = SimValidator {
                 identity: identity.clone(),
@@ -297,6 +338,13 @@ where
                 partition_prefix: format!("{storage_prefix}-{index}"),
                 incarnation: 0,
                 start: StackStart::Genesis,
+                registry: registry_timeline.as_ref().map(|timeline| SimRegistry {
+                    flip_epoch: registry_flip,
+                    timeline: timeline.clone(),
+                    ledger: crate::registry::MemoryLedger::default(),
+                    derive_calls: Arc::new(Mutex::new(Vec::new())),
+                    observations: Arc::new(Mutex::new(Vec::new())),
+                }),
             };
             if !stopped.contains(&index) {
                 Self::spawn(
@@ -313,28 +361,52 @@ where
         cluster
     }
 
+    /// A provider over a config schedule plus an optional registry flip — the
+    /// sim spelling of the node's `ConsensusSetup` provider construction.
+    fn provider_over(
+        schedule: CommitteeSchedule,
+        registry_flip: Option<u64>,
+        bls_key: Option<group::Private>,
+    ) -> SchemeProvider {
+        let source = match registry_flip {
+            Some(flip) => {
+                zksync_os_consensus_core::CommitteeSource::with_registry_from(schedule, flip)
+            }
+            None => zksync_os_consensus_core::CommitteeSource::from_config(schedule),
+        };
+        SchemeProvider::over_source(NAMESPACE.to_vec(), source, bls_key)
+    }
+
     /// Builds one validator's scheme provider over the given spec — used for
     /// schedule overrides at start and for fixing a validator's configuration
     /// between [`Self::crash`] and [`Self::restart`] (the config-fix-and-rejoin
     /// choreography).
-    fn provider_for(&self, index: usize, spec: &ScheduleSpec) -> SchemeProvider {
+    fn provider_for(
+        &self,
+        index: usize,
+        spec: &ScheduleSpec,
+        registry_flip: Option<u64>,
+    ) -> SchemeProvider {
         let schedule = Self::build_schedule(&self.keys, spec, self.keys.len());
-        SchemeProvider::new(
-            NAMESPACE.to_vec(),
-            schedule,
-            Some(self.keys[index].1.clone()),
-        )
+        Self::provider_over(schedule, registry_flip, Some(self.keys[index].1.clone()))
     }
 
     /// Replaces a stopped validator's schedule (its "deployed configuration") so
     /// the next [`Self::restart`] runs with the corrected committee history.
+    /// Registry-derived committees recorded in memory are dropped with the old
+    /// provider — the restart replays them from the validator's ledger, exactly
+    /// like a node process restart replays its durable trail.
     pub fn reconfigure_schedule(&mut self, index: usize, spec: &ScheduleSpec) {
         assert!(
             self.validators[index].running.is_none(),
             "reconfigure a validator only while it is stopped (config changes are \
              deploy-and-restart operations)"
         );
-        self.validators[index].provider = self.provider_for(index, spec);
+        let flip = self.validators[index]
+            .registry
+            .as_ref()
+            .and_then(|registry| registry.flip_epoch);
+        self.validators[index].provider = self.provider_for(index, spec, flip);
     }
 
     /// Orphans a stopped validator's consensus scratch state (engine journals,
@@ -516,7 +588,22 @@ where
             Behavior::Honest => {
                 let mut stack_config = StackConfig::new(validator.partition_prefix.clone());
                 stack_tuner(&mut stack_config);
-                let stack = start_validator(
+                let epoch_length = stack_config.epoch_length;
+                // Replay the derivation trail before the stack exists, exactly
+                // like the node: everything that resolves committees through the
+                // provider (marshal from its first moment included) must see the
+                // recorded derivations.
+                let registry_resume = validator.registry.as_ref().map(|registry| {
+                    use zksync_os_consensus_core::registry::DerivationLedger as _;
+                    use zksync_os_consensus_core::registry::replay_ledger;
+                    let records = registry.ledger.load().expect("memory ledger never fails");
+                    let newest = replay_ledger(validator.provider.source(), &records);
+                    match registry.flip_epoch {
+                        Some(flip) => newest.map_or(flip, |seen| (seen + 1).max(flip)),
+                        None => newest.map_or(0, |seen| seen + 1),
+                    }
+                });
+                let mut stack = start_validator(
                     context
                         .child("validator")
                         .with_attribute("index", index.to_string())
@@ -533,6 +620,42 @@ where
                     validator.start.clone(),
                 )
                 .await;
+                // The registry-derivation driver, exactly as the node runs it:
+                // the trail replayed above, live derivation from the next target
+                // on. Its handle joins the stack's support tasks so a crash
+                // kills it with everything else.
+                if let (Some(registry), Some(initial_target)) =
+                    (&validator.registry, registry_resume)
+                {
+                    use zksync_os_consensus_core::registry::run_registry_derivation;
+                    let source = crate::registry::SlotMapSource {
+                        timeline: registry.timeline.clone(),
+                        derive_calls: registry.derive_calls.clone(),
+                    };
+                    let env = validator.env.clone();
+                    let ledger = registry.ledger.clone();
+                    let committees = validator.provider.source().clone();
+                    let observations = registry.observations.clone();
+                    let era_anchor = validator.env.era_anchor();
+                    let handle = context
+                        .child("registry_derivation")
+                        .with_attribute("index", index.to_string())
+                        .with_attribute("run", incarnation.to_string())
+                        .spawn(move |driver_context| {
+                            run_registry_derivation(
+                                driver_context,
+                                era_anchor,
+                                epoch_length,
+                                initial_target,
+                                move || env.committed_tip(),
+                                source,
+                                ledger,
+                                committees,
+                                move |observation| observations.lock().unwrap().push(observation),
+                            )
+                        });
+                    stack.support_tasks.push(handle);
+                }
                 Running::Full(stack)
             }
             // The byzantine engines only speak the vote channel; the other channels sit
@@ -752,6 +875,29 @@ where
     pub async fn wait_for_committed_height_all(&self, height: u64) {
         self.wait_for_committed_height(&self.honest_indices(), height)
             .await;
+    }
+
+    /// Waits until every *running* honest validator's derivation ledger has a
+    /// record for `epoch`. The driver trails the chain by up to one poll tick,
+    /// so scenarios asserting on trails wait here rather than on a height.
+    pub async fn wait_for_derivations(&self, epoch: u64) {
+        loop {
+            let reached = self.validators.iter().all(|validator| {
+                validator.behavior != Behavior::Honest
+                    || validator.running.is_none()
+                    || validator.registry.as_ref().is_none_or(|registry| {
+                        registry
+                            .ledger
+                            .records()
+                            .iter()
+                            .any(|record| record.epoch >= epoch)
+                    })
+            });
+            if reached {
+                return;
+            }
+            self.context.sleep(Duration::from_millis(100)).await;
+        }
     }
 
     /// Asserts that no listed validator commits anything new for `duration` of virtual
