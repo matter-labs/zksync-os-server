@@ -25,6 +25,7 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::{
+    DEFAULT_NONCE_ERROR_MAX_ATTEMPTS, DEFAULT_NONCE_ERROR_RETRY_BACKOFF,
     DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY, DEFAULT_REQUIRED_CONFIRMATIONS_L1,
 };
 use zksync_os_mempool::SubPoolLimit;
@@ -1263,6 +1264,16 @@ pub struct L1SenderConfig {
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_L1)]
     pub required_confirmations: u64,
 
+    /// Max submission attempts per L1 transaction when the L1 node rejects it with a
+    /// nonce-class error.
+    #[config(default_t = DEFAULT_NONCE_ERROR_MAX_ATTEMPTS)]
+    pub nonce_error_max_attempts: usize,
+
+    /// Backoff between attempts after a nonce-class rejection. Gives the L1 node time to
+    /// settle its pool/state view after a block import.
+    #[config(default_t = DEFAULT_NONCE_ERROR_RETRY_BACKOFF)]
+    pub nonce_error_retry_backoff: Duration,
+
     /// Whether L1 senders are enabled.
     /// Only affects the Main Node.
     /// Only useful for debug. When L1 senders are disabled,
@@ -1361,6 +1372,16 @@ pub struct GatewaySenderConfig {
     /// Gateway blocks (inclusive of the inclusion block) before a transaction is confirmed.
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY)]
     pub required_confirmations: u64,
+
+    /// Max submission attempts per Gateway transaction when the Gateway node rejects it with
+    /// a nonce-class error.
+    #[config(default_t = DEFAULT_NONCE_ERROR_MAX_ATTEMPTS)]
+    pub nonce_error_max_attempts: usize,
+
+    /// Backoff between attempts after a nonce-class rejection. Gives the Gateway node time
+    /// to settle its pool/state view after a block import.
+    #[config(default_t = DEFAULT_NONCE_ERROR_RETRY_BACKOFF)]
+    pub nonce_error_retry_backoff: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -2127,6 +2148,8 @@ impl L1SenderConfig {
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
+            nonce_error_max_attempts: self.nonce_error_max_attempts,
+            nonce_error_retry_backoff: self.nonce_error_retry_backoff,
             phantom_data: Default::default(),
         }
     }
@@ -2185,6 +2208,8 @@ impl GatewaySenderConfig {
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
+            nonce_error_max_attempts: self.nonce_error_max_attempts,
+            nonce_error_retry_backoff: self.nonce_error_retry_backoff,
             phantom_data: Default::default(),
         }
     }
@@ -2576,6 +2601,8 @@ mod tests {
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
                 required_confirmations: DEFAULT_REQUIRED_CONFIRMATIONS_L1,
+                nonce_error_max_attempts: DEFAULT_NONCE_ERROR_MAX_ATTEMPTS,
+                nonce_error_retry_backoff: DEFAULT_NONCE_ERROR_RETRY_BACKOFF,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
                 max_batch_diff_to_upstream: None,
