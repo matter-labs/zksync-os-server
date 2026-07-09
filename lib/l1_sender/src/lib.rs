@@ -298,9 +298,11 @@ where
                         }
                         tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
 
-                        // Fusaka is active on all real chains, so send the EIP-7594 blob format by
-                        // default. Anvil does not support EIP-7594 yet, so fall back to EIP-4844
-                        // there (see https://github.com/foundry-rs/foundry/issues/12222).
+                        // Send the EIP-7594 blob format when the chain's active fork accepts it
+                        // (probed via `eth_config`, falling back to a chain-id heuristic — see
+                        // `ProviderCapabilities::supports_eip7594`). Pre-Fusaka chains and Anvil
+                        // get the legacy EIP-4844 format
+                        // (see https://github.com/foundry-rs/foundry/issues/12222).
                         if self.provider.capabilities().supports_eip7594 {
                             tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip7594(
                                 blob_sidecar.try_into_7594(EnvKzgSettings::Default.get())?,
@@ -729,8 +731,9 @@ where
             )
             .build();
 
-        // Mirror the submission path: EIP-7594 by default, EIP-4844 only on Anvil. Only consumed
-        // by `build_l1_simulation_request` when a command actually carries a blob sidecar.
+        // Mirror the submission path: EIP-7594 if the chain's active fork accepts it, EIP-4844
+        // otherwise. Only consumed by `build_l1_simulation_request` when a command actually
+        // carries a blob sidecar.
         let use_eip7594_sidecar = self.provider.capabilities().supports_eip7594;
 
         let block_state_calls = commands
