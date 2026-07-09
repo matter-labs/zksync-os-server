@@ -128,6 +128,34 @@ impl FullDiffsStorage {
         Ok(())
     }
 
+    /// Truncates the state to `new_latest`: every diff above it is deleted and
+    /// the latest pointer moves back, in one atomic batch. Ordinary operation
+    /// only ever appends (or rolls back as a side effect of *rewriting* a
+    /// block, which persists its own pointer) — this standalone form is the
+    /// disaster-fork tool's primitive, run on a stopped node.
+    pub fn truncate_to(&self, new_latest: u64) -> anyhow::Result<()> {
+        let latest = self.latest_block();
+        anyhow::ensure!(
+            new_latest <= latest,
+            "cannot truncate to {new_latest}: the state ends at {latest}"
+        );
+        let mut batch = self.rocks.new_write_batch();
+        for (k, _v) in self.rocks.prefix_iterator_cf(StorageCF::Data, &[]) {
+            let key_block_number = u64::from_be_bytes(k[32..40].try_into()?);
+            if key_block_number > new_latest {
+                batch.delete_cf(StorageCF::Data, &k);
+            }
+        }
+        batch.put_cf(
+            StorageCF::Meta,
+            StorageCF::latest_block_key(),
+            new_latest.to_be_bytes().as_ref(),
+        );
+        self.rocks.write(batch)?;
+        self.latest_block.store(new_latest, Ordering::Relaxed);
+        Ok(())
+    }
+
     pub fn read_at(&self, block_number: u64, key: B256) -> Option<B256> {
         if block_number > self.latest_block() {
             return None;

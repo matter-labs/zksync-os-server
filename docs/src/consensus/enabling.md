@@ -443,6 +443,14 @@ and treat the in-flight tail as lost: rollback is a disaster procedure, and a
 few hundred milliseconds of blocks is its honest cost. (Settled blocks are never
 in that gap — the batcher only settles blocks that reached a log.)
 
+Rolling back to the single sequencer keeps every finalized block — it changes
+who *extends* the chain, never what the chain contains. Discarding finalized
+blocks is a different act entirely: the disaster hardfork, an
+operator-coordinated era change with its own tool, guards, and acknowledgment
+([disaster.md](disaster.md) has the taxonomy and the runbook; the
+`truncate-to` subcommand and `consensus.acknowledge_fork` are its mechanics).
+
+
 ## Migrating again
 
 A rolled-back chain can be migrated a second time at a new cutover. The era guard

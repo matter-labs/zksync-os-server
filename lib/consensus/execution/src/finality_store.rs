@@ -25,6 +25,14 @@
 //! while coverage heals at the first live certificate after catch-up. The
 //! watermark only advances, and on a healthy chain it tracks the tip — a stall
 //! is an honest end-to-end health signal (surfaced in `/status`).
+//!
+//! Everything keyed by *epoch* is additionally scoped by the consensus era
+//! (the era digest's first 8 bytes): epoch numbering restarts per era, so a
+//! disaster fork or re-migration would otherwise collide with the dead era's
+//! records. The digest-keyed certificates are deliberately not scoped — they
+//! are the permanent trail every era leaves behind — and the height→digest
+//! index is dropped above the anchor when a different era is adopted (above a
+//! fork's anchor, the new chain has no finalized heights yet).
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -41,11 +49,16 @@ pub enum FinalityCF {
     HeightIndex,
     /// Small bookkeeping values; currently only the certified watermark.
     Meta,
-    /// Epoch transition record by epoch (u64, big-endian) — the committee custody
-    /// trail (see [`EpochTransition`]).
+    /// Epoch transition record by era-scoped epoch (era digest prefix ‖ epoch,
+    /// big-endian) — the committee custody trail (see [`EpochTransition`]).
+    /// Era-scoped because epoch numbering restarts per era: without the prefix,
+    /// first-observed-wins would keep a dead era's records after a fork or
+    /// re-migration.
     Transitions,
-    /// Raw consensus-library-encoded finalizations by round (epoch ‖ view, both
-    /// u64 big-endian), value = block digest (32 bytes) ‖ encoded finalization.
+    /// Raw consensus-library-encoded finalizations by era-scoped round (era
+    /// digest prefix ‖ epoch ‖ view, u64s big-endian), value = block digest
+    /// (32 bytes) ‖ encoded finalization. Era-scoped so a dead era's cached
+    /// floor can never hijack a fork's fresh start.
     /// A local cache, not a sovereign format: it exists so a restart with empty
     /// consensus storage can hand marshal a floor finalization (which the
     /// sovereign [`FinalityCertificate`] cannot reconstruct — it deliberately
@@ -53,8 +66,9 @@ pub enum FinalityCF {
     /// these bytes; readers must treat decode failure as "no floor" and fall
     /// back, never as an error. Pruned to the last two epochs.
     FloorCache,
-    /// Registry derivation record by epoch (u64, big-endian) — the on-chain
-    /// registry's durable derivation trail (see
+    /// Registry derivation record by era-scoped epoch (era digest prefix ‖
+    /// epoch, big-endian) — the on-chain registry's durable derivation trail
+    /// (see
     /// [`zksync_os_wire::RegistryDerivation`]). Written first-observed-wins at
     /// each epoch's lookahead boundary; restarts and floor rebuilds replay it
     /// instead of re-deriving from (possibly pruned) historical state. Never
@@ -62,12 +76,22 @@ pub enum FinalityCF {
     Derivations,
 }
 
-/// The floor-cache key for a round: epoch then view, both big-endian, so RocksDB's
-/// lexical key order is the round order (range-prunable, reverse-iterable).
-fn round_key(epoch: u64, view: u64) -> [u8; 16] {
+/// The floor-cache key for a round: era prefix, then epoch, then view (both
+/// big-endian), so RocksDB's lexical key order is the round order within an
+/// era (range-prunable, reverse-iterable).
+fn round_key(era: [u8; 8], epoch: u64, view: u64) -> [u8; 24] {
+    let mut key = [0u8; 24];
+    key[..8].copy_from_slice(&era);
+    key[8..16].copy_from_slice(&epoch.to_be_bytes());
+    key[16..].copy_from_slice(&view.to_be_bytes());
+    key
+}
+
+/// An era-scoped epoch key (transitions, registry derivations).
+fn epoch_key(era: [u8; 8], epoch: u64) -> [u8; 16] {
     let mut key = [0u8; 16];
-    key[..8].copy_from_slice(&epoch.to_be_bytes());
-    key[8..].copy_from_slice(&view.to_be_bytes());
+    key[..8].copy_from_slice(&era);
+    key[8..].copy_from_slice(&epoch.to_be_bytes());
     key
 }
 
@@ -113,6 +137,10 @@ pub struct FinalityStore {
     watermark_lock: Mutex<u64>,
     /// Broadcasts watermark advances to the status surface.
     watermark_watch: watch::Sender<Option<u64>>,
+    /// The recorded consensus era's digest prefix, scoping every epoch-keyed
+    /// entry (see the module docs on eras). Zero before an era is recorded —
+    /// the legacy shape; node startup records the era before consensus runs.
+    era: Mutex<[u8; 8]>,
 }
 
 impl FinalityStore {
@@ -122,7 +150,11 @@ impl FinalityStore {
             db,
             watermark_lock: Mutex::new(0),
             watermark_watch: watch::channel(None).0,
+            era: Mutex::new([0u8; 8]),
         };
+        if let Some(era) = store.consensus_era()? {
+            *store.era.lock().unwrap() = era[..8].try_into().expect("8 of 32 bytes");
+        }
         // Re-publish the persisted watermark so the status surface is right from the
         // first observation after a restart. (`send_replace`, not `send`: a plain
         // send is dropped while nobody subscribes yet, and late subscribers would
@@ -137,6 +169,14 @@ impl FinalityStore {
     /// is certified.
     pub fn watermark_subscription(&self) -> watch::Receiver<Option<u64>> {
         self.watermark_watch.subscribe()
+    }
+
+    /// The current era's key prefix. Epoch numbering restarts per era
+    /// (a fork or re-migration restarts epochs at zero), so every epoch-keyed
+    /// entry is scoped by it — otherwise first-observed-wins would keep a dead
+    /// era's records and a dead era's cached floor could hijack a fork start.
+    fn era_prefix(&self) -> [u8; 8] {
+        *self.era.lock().unwrap()
     }
 
     /// Stores a certificate under its block digest. Idempotent; called by the
@@ -192,12 +232,50 @@ impl FinalityStore {
         genesis_digest: [u8; 32],
         anchor_height: u64,
     ) -> anyhow::Result<()> {
+        let era_changed = self
+            .consensus_era()?
+            .is_some_and(|recorded| recorded != genesis_digest);
         let mut batch = self.db.new_write_batch();
         batch.put_cf(FinalityCF::Meta, ERA_KEY, &genesis_digest);
         self.db.write(batch)?;
+        *self.era.lock().unwrap() = genesis_digest[..8].try_into().expect("8 of 32 bytes");
         {
             let _guard = self.watermark_lock.lock().unwrap();
-            if anchor_height > 0 && self.certified_watermark()?.unwrap_or(0) < anchor_height {
+            let current = self.certified_watermark()?.unwrap_or(0);
+            // Adopting a *different* era (a fork or re-migration): coverage
+            // above its anchor belonged to the dead era, so the watermark
+            // resets to the anchor — the one sanctioned downward move — and
+            // the covering probe's cursor resets with it. Same era (or the
+            // first recording): the anchor only floors it, as on any migrated
+            // chain.
+            let reset_to_anchor = era_changed && anchor_height > 0 && current != anchor_height;
+            if era_changed {
+                // The height→digest index answers "what is finalized at height
+                // h on this chain" — above a fork's anchor, nothing is, yet.
+                // Dropping the dead era's index entries is what lets the
+                // watermark hold at the anchor (the walk would otherwise chain
+                // through them to the dead era's certificates). The
+                // certificates themselves are digest-keyed and remain forever:
+                // that is the auditable trail a fork must never touch.
+                let mut batch = self.db.new_write_batch();
+                batch.delete_range_cf(
+                    FinalityCF::HeightIndex,
+                    (&(anchor_height + 1).to_be_bytes()[..])..(&u64::MAX.to_be_bytes()[..]),
+                );
+                self.db.write(batch)?;
+                let mut probe_cursor = _guard;
+                *probe_cursor = anchor_height;
+                if reset_to_anchor {
+                    let mut batch = self.db.new_write_batch();
+                    batch.put_cf(
+                        FinalityCF::Meta,
+                        WATERMARK_KEY,
+                        &anchor_height.to_be_bytes(),
+                    );
+                    self.db.write(batch)?;
+                    self.watermark_watch.send_replace(Some(anchor_height));
+                }
+            } else if anchor_height > 0 && current < anchor_height {
                 let mut batch = self.db.new_write_batch();
                 batch.put_cf(
                     FinalityCF::Meta,
@@ -234,14 +312,16 @@ impl FinalityStore {
         value.extend_from_slice(&epoch.to_be_bytes());
         value.extend_from_slice(&view.to_be_bytes());
         let mut batch = self.db.new_write_batch();
-        batch.put_cf(FinalityCF::Meta, OBSERVED_ROUND_KEY, &value);
+        let key = [OBSERVED_ROUND_KEY, &self.era_prefix()[..]].concat();
+        batch.put_cf(FinalityCF::Meta, &key, &value);
         self.db.write(batch)?;
         Ok(())
     }
 
     /// The highest `(epoch, view)` ever observed by this validator, if any.
     pub fn highest_observed_round(&self) -> anyhow::Result<Option<(u64, u64)>> {
-        let Some(bytes) = self.db.get_cf(FinalityCF::Meta, OBSERVED_ROUND_KEY)? else {
+        let key = [OBSERVED_ROUND_KEY, &self.era_prefix()[..]].concat();
+        let Some(bytes) = self.db.get_cf(FinalityCF::Meta, &key)? else {
             return Ok(None);
         };
         anyhow::ensure!(bytes.len() == 16, "stored observed round is not two u64s");
@@ -260,7 +340,7 @@ impl FinalityStore {
         // The lock doubles as the writer serializer for check-then-put (both
         // observer threads route through the same store instance).
         let _guard = self.watermark_lock.lock().unwrap();
-        let key = transition.epoch.to_be_bytes();
+        let key = epoch_key(self.era_prefix(), transition.epoch);
         if self.db.get_cf(FinalityCF::Transitions, &key)?.is_some() {
             return Ok(false);
         }
@@ -278,7 +358,7 @@ impl FinalityStore {
         use commonware_codec::Read as _;
         let Some(bytes) = self
             .db
-            .get_cf(FinalityCF::Transitions, &epoch.to_be_bytes())?
+            .get_cf(FinalityCF::Transitions, &epoch_key(self.era_prefix(), epoch))?
         else {
             return Ok(None);
         };
@@ -298,7 +378,7 @@ impl FinalityStore {
         use commonware_codec::{EncodeSize, Write as _};
         // The lock doubles as the writer serializer for check-then-put.
         let _guard = self.watermark_lock.lock().unwrap();
-        let key = derivation.epoch.to_be_bytes();
+        let key = epoch_key(self.era_prefix(), derivation.epoch);
         if self.db.get_cf(FinalityCF::Derivations, &key)?.is_some() {
             return Ok(false);
         }
@@ -314,10 +394,12 @@ impl FinalityStore {
     /// the committee source at startup so recorded epochs are never re-derived.
     pub fn registry_derivations(&self) -> anyhow::Result<Vec<zksync_os_wire::RegistryDerivation>> {
         use commonware_codec::Read as _;
+        let era = self.era_prefix();
         self.db
-            .from_iterator_cf(FinalityCF::Derivations, &[][..]..)
+            .from_iterator_cf(FinalityCF::Derivations, &era[..]..)
+            .take_while(|(key, _)| key.starts_with(&era))
             .map(|(key, bytes)| {
-                anyhow::ensure!(key.len() == 8, "derivation key is not a u64 epoch");
+                anyhow::ensure!(key.len() == 16, "derivation key is not era-scoped");
                 zksync_os_wire::RegistryDerivation::read_cfg(&mut bytes.as_ref(), &()).map_err(
                     |err| anyhow::anyhow!("stored registry derivation does not decode: {err}"),
                 )
@@ -368,7 +450,11 @@ impl FinalityStore {
         value.extend_from_slice(&digest);
         value.extend_from_slice(raw);
         let mut batch = self.db.new_write_batch();
-        batch.put_cf(FinalityCF::FloorCache, &round_key(epoch, view), &value);
+        batch.put_cf(
+            FinalityCF::FloorCache,
+            &round_key(self.era_prefix(), epoch, view),
+            &value,
+        );
         self.db.write(batch)?;
         Ok(())
     }
@@ -377,10 +463,11 @@ impl FinalityStore {
     /// transition is first observed, keeping the cache to roughly two epochs
     /// (a floor older than that fails the freshness policy anyway).
     pub fn prune_raw_finalizations_below(&self, epoch: u64) -> anyhow::Result<()> {
+        let era = self.era_prefix();
         let mut batch = self.db.new_write_batch();
         batch.delete_range_cf(
             FinalityCF::FloorCache,
-            (&[0u8; 16][..])..(&round_key(epoch, 0)[..]),
+            (&round_key(era, 0, 0)[..])..(&round_key(era, epoch, 0)[..]),
         );
         self.db.write(batch)?;
         Ok(())
@@ -394,15 +481,17 @@ impl FinalityStore {
         &self,
         limit: usize,
     ) -> Vec<(u64, u64, [u8; 32], Vec<u8>)> {
+        let era = self.era_prefix();
         self.db
-            .to_iterator_cf(FinalityCF::FloorCache, ..=&[0xff_u8; 16][..])
+            .to_iterator_cf(FinalityCF::FloorCache, ..=&round_key(era, u64::MAX, u64::MAX)[..])
+            .take_while(|(key, _)| key.starts_with(&era))
             .take(limit)
             .filter_map(|(key, value)| {
-                if key.len() != 16 || value.len() < 32 {
+                if key.len() != 24 || value.len() < 32 {
                     return None;
                 }
-                let epoch = u64::from_be_bytes(key[..8].try_into().expect("checked length"));
-                let view = u64::from_be_bytes(key[8..].try_into().expect("checked length"));
+                let epoch = u64::from_be_bytes(key[8..16].try_into().expect("checked length"));
+                let view = u64::from_be_bytes(key[16..].try_into().expect("checked length"));
                 let digest: [u8; 32] = value[..32].try_into().expect("checked length");
                 Some((epoch, view, digest, value[32..].to_vec()))
             })
@@ -412,10 +501,12 @@ impl FinalityStore {
     /// The newest epoch with a recorded transition (committee custody entry) —
     /// the reference point for the floor freshness policy.
     pub fn latest_transition_epoch(&self) -> Option<u64> {
+        let era = self.era_prefix();
         self.db
-            .to_iterator_cf(FinalityCF::Transitions, ..=&[0xff_u8; 8][..])
+            .to_iterator_cf(FinalityCF::Transitions, ..=&epoch_key(era, u64::MAX)[..])
             .next()
-            .and_then(|(key, _)| key.as_ref().try_into().ok().map(u64::from_be_bytes))
+            .filter(|(key, _)| key.starts_with(&era))
+            .and_then(|(key, _)| key[8..].try_into().ok().map(u64::from_be_bytes))
     }
 
     /// The digest finalized at `height`, if the commit path has indexed it.
@@ -765,6 +856,109 @@ mod tests {
         assert_eq!(stored.first_finalized_digest, [0xAA; 32]);
         assert_eq!(stored.committee.len(), 2);
         assert!(store.epoch_transition(4).expect("read").is_none());
+    }
+
+    /// The fork/re-migration shape (plan F1): a new era restarts epochs at
+    /// zero, so every epoch-keyed trail must be invisible across eras — while
+    /// the certificates and the height index (the permanent, digest-keyed
+    /// trail) survive untouched, and the watermark resets to the new anchor.
+    #[test]
+    fn a_new_era_scopes_the_epoch_keyed_trails_and_resets_the_watermark() {
+        use zksync_os_wire::{CommitteeMemberKeys, EpochTransition};
+
+        let transition = |epoch: u64, digest: [u8; 32]| EpochTransition {
+            epoch,
+            scheme: SignatureScheme::Bls12381Multisig,
+            committee: vec![CommitteeMemberKeys {
+                network_key: [1; 32],
+                bls_key: [2; 48],
+            }],
+            first_finalized_digest: digest,
+            first_finalized_view: 1,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FinalityStore::open(dir.path()).expect("open");
+
+        // Era A lives: certificates, custody, floor cache, observed rounds.
+        store.record_consensus_era([0xA; 32], 0).expect("era A");
+        for height in 1..=5u64 {
+            store
+                .index_height(height, [height as u8; 32])
+                .expect("write");
+            store
+                .put_certificate(&certificate(height, [height as u8; 32]))
+                .expect("write");
+        }
+        assert!(
+            store
+                .record_epoch_transition(&transition(0, [0xA1; 32]))
+                .expect("write")
+        );
+        store
+            .put_raw_finalization(0, 7, [0xA2; 32], b"era-a-floor")
+            .expect("write");
+        store.note_observed_round(0, 40).expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(5));
+
+        // The fork: a different era anchored at 3. Epoch-keyed trails must
+        // read empty; the certificate trail must not.
+        store.record_consensus_era([0xB; 32], 3).expect("era B");
+        assert_eq!(
+            store.certified_watermark().expect("read"),
+            Some(3),
+            "coverage above the anchor belonged to the dead era"
+        );
+        assert!(
+            store.epoch_transition(0).expect("read").is_none(),
+            "era A's epoch-0 custody record must not answer for era B"
+        );
+        assert!(store.latest_transition_epoch().is_none());
+        assert!(store.raw_finalizations_newest_first(10).is_empty());
+        assert_eq!(
+            store.highest_observed_round().expect("read"),
+            None,
+            "era A's observed-round floor must not gate era B"
+        );
+        assert!(
+            store.certificate_by_height(5).expect("read").is_none(),
+            "above the fork anchor, this chain has no finalized heights yet"
+        );
+        assert!(
+            store.certificate_by_digest(&[5; 32]).expect("read").is_some(),
+            "the abandoned era's certificates remain, forever, by digest"
+        );
+
+        // Era B's own trails land under fresh keys — first-observed-wins is
+        // now per era.
+        assert!(
+            store
+                .record_epoch_transition(&transition(0, [0xB1; 32]))
+                .expect("write")
+        );
+        assert_eq!(
+            store
+                .epoch_transition(0)
+                .expect("read")
+                .expect("present")
+                .first_finalized_digest,
+            [0xB1; 32]
+        );
+        store.note_observed_round(0, 2).expect("write");
+        assert_eq!(store.highest_observed_round().expect("read"), Some((0, 2)));
+
+        // Reopening lands back in era B, not the zero era.
+        drop(store);
+        let store = FinalityStore::open(dir.path()).expect("reopen");
+        assert_eq!(store.latest_transition_epoch(), Some(0));
+        assert_eq!(
+            store
+                .epoch_transition(0)
+                .expect("read")
+                .expect("present")
+                .first_finalized_digest,
+            [0xB1; 32]
+        );
     }
 
     #[test]

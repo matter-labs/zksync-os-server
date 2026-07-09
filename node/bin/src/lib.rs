@@ -19,6 +19,7 @@ pub mod prover_api;
 mod prover_block;
 mod prover_input_generator;
 mod provider;
+pub mod truncate;
 mod state_initializer;
 pub mod tree_manager;
 pub mod util;
@@ -393,6 +394,27 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_proved_block,
         last_l1_executed_block,
     };
+
+    // The disaster-fork backstop: a settler whose L1 has committed batches past
+    // its local chain would faithfully recreate them from recovery — recreating
+    // exactly the poisoned batches a fork just discarded. This state cannot
+    // arise in normal operation (the batcher only commits blocks it has); it
+    // means a truncated node restarted before the L1 revert step of the fork
+    // runbook, so the guard names that step instead of letting the recovery
+    // machinery work against the fork.
+    if config.batcher_config.enabled {
+        assert!(
+            node_startup_state.last_l1_committed_block
+                <= node_startup_state.block_replay_storage_last_block,
+            "L1 has committed batches past this node's chain (last committed block on L1: \
+             {}, local tip: {}). If this follows a disaster-fork truncation, the \
+             committed-but-unexecuted batches above the fork point must be reverted on L1 \
+             before the settler restarts — refusing to start rather than recreate and \
+             re-commit discarded blocks",
+            node_startup_state.last_l1_committed_block,
+            node_startup_state.block_replay_storage_last_block,
+        );
+    }
 
     if let Some(from_block_number) = rebuild_options.as_ref().map(|o| o.from_block_number)
         && node_role.is_main()
@@ -984,12 +1006,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             let recorded = finality_store
                 .consensus_era()
                 .expect("failed to read the consensus era");
+            let acknowledged_fork =
+                consensus::parse_acknowledge_fork(&config.consensus_config.acknowledge_fork)
+                    .expect("invalid `consensus.acknowledge_fork`");
             let decision = consensus::decide_consensus_era(
                 recorded,
                 era,
                 engine_state_is_fresh,
                 committed_height,
                 anchor.genesis_height,
+                acknowledged_fork,
+                anchor.genesis_block_hash,
             )
             .unwrap_or_else(|err| {
                 panic!("{err} (consensus engine state: {})", engine_dir.display())

@@ -38,6 +38,21 @@ const PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 enum CliCommand {
     /// Configuration-related tools.
     Config(ConfigArgs),
+    /// Disaster-fork tooling: truncates the local chain to a height on a
+    /// stopped node, exporting the discarded suffix to a tombstone archive
+    /// first. See `docs/src/consensus/` for the fork runbook this belongs to.
+    TruncateTo(TruncateToArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct TruncateToArgs {
+    /// The height the local chain will end at.
+    #[arg(long)]
+    to_block: u64,
+    /// Where to export the discarded blocks (default: `<rocks>/tombstone-<N>`;
+    /// the tool refuses to overwrite an existing directory).
+    #[arg(long)]
+    tombstone_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -158,12 +173,16 @@ pub async fn main() {
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
 
     // =========== handle the CLI subcommand if any ===========
+    // `truncate-to` needs the fully-loaded config (storage paths, L1), so it
+    // defers past config loading; `config` runs on the raw repository.
+    let mut deferred_truncate = None;
     if let Some(cmd) = opt.cmd {
         match cmd {
             CliCommand::Config(args) => {
                 args.run(config_repo, "").unwrap();
                 return;
             }
+            CliCommand::TruncateTo(args) => deferred_truncate = Some(args),
         }
     }
 
@@ -171,6 +190,13 @@ pub async fn main() {
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
     config.validate().await.expect("invalid config");
+
+    if let Some(args) = deferred_truncate {
+        zksync_os_server::truncate::run_truncate(config, args.to_block, args.tombstone_dir)
+            .await
+            .expect("truncation failed");
+        return;
+    }
 
     if opt.no_run {
         tracing::info!("Node config was loaded successfully, exiting due to --no-run flag");

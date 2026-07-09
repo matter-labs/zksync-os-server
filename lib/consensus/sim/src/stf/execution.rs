@@ -151,6 +151,51 @@ impl RealStfExecution {
         }
     }
 
+    /// The sim side of the disaster-fork truncation on the real backend:
+    /// discards every committed block above `height`, re-anchors the
+    /// environment there (that block becomes the new era's genesis), and drops
+    /// the speculative pending layers. Run between eras on a stopped validator —
+    /// a live stack would race the mutation. Mirrors [`MockExecution::fork_to`],
+    /// but carries the real state with it: the committed state *layer* at
+    /// `height` becomes the new anchor layer, so the forked era re-executes
+    /// `height+1..` onto exactly the state the pre-fork chain had at `height` —
+    /// the deterministic re-convergence a real fork relies on.
+    ///
+    /// [`MockExecution::fork_to`]: crate::MockExecution::fork_to
+    pub fn fork_to(&self, height: u64) {
+        let mut inner = self.inner.lock().unwrap();
+        let tip = inner.anchor_height + inner.committed.len() as u64;
+        assert!(
+            height >= inner.anchor_height && height <= tip,
+            "cannot fork to {height}: this chain covers {}..={tip}",
+            inner.anchor_height
+        );
+        // Walk the committed layer chain back to the state at `height`: each
+        // commit stacked one layer on the previous tip, so `tip - height` steps
+        // down lands on the layer the block at `height` produced (or the
+        // existing anchor layer when forking to the anchor itself).
+        let mut layer = inner.committed_layer.clone();
+        for _ in 0..(tip - height) {
+            layer = layer
+                .expect("a committed layer exists for every height above the anchor")
+                .parent
+                .clone();
+        }
+        // Above the old anchor, `height` names a committed era block, and that
+        // block is the new era's genesis. At the old anchor itself there is no
+        // era block to read — the existing genesis already stands for its state.
+        if height > inner.anchor_height {
+            let block = &inner.committed[(height - inner.anchor_height - 1) as usize];
+            let (timestamp, header_hash) = (block.timestamp(), block.header_hash());
+            inner.genesis_block = StfBlock::anchor(height, timestamp, header_hash);
+        }
+        inner.anchor_height = height;
+        inner.anchor_layer = layer.clone();
+        inner.committed_layer = layer;
+        inner.committed.clear();
+        inner.pending.clear();
+    }
+
     /// A chain with `pre_blocks` blocks of real pre-consensus history: the same
     /// one-transfer-per-block schedule the consensus-era builder produces, executed
     /// directly (no consensus involved — this *is* the single-sequencer era), with

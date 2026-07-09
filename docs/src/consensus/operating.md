@@ -55,7 +55,10 @@ Logged once at consensus startup, and derivable from config:
   *finalized* L1 blocks. This is deliberate, not a knob: every validator
   verifies included L1 content against its own L1 view before voting, and a
   BFT-finalized block is irrevocable — the deep-reorg remedy a single
-  sequencer had (roll back and re-sequence) no longer exists.
+  sequencer had (roll back and re-sequence) no longer exists as a routine
+  tool. The non-routine path — an operator-coordinated era change for a
+  finalized-but-unsettleable suffix, floor-guarded at L1-executed state —
+  is the disaster runbook ([disaster.md](disaster.md)).
 
 Chains expected to idle should size `epoch_length` small enough that the
 sprint bound is acceptable for incident response, and raise `epoch_retention`

@@ -109,6 +109,24 @@ impl MockExecution {
         Self::default()
     }
 
+    /// The sim side of the disaster-fork truncation: discards every committed
+    /// block above `height` and re-anchors the environment there, so the next
+    /// era starts with `height` as its consensus genesis. Run between eras on
+    /// a stopped validator (a live stack would race the mutation). The mock's
+    /// pre-consensus history is opaque — kept blocks simply become part of it,
+    /// exactly like [`Self::anchored`] treats a migrated chain's past.
+    pub fn fork_to(&self, height: u64) {
+        let mut inner = self.inner.lock().unwrap();
+        let tip = inner.anchor_height + inner.committed.len() as u64;
+        assert!(
+            height >= inner.anchor_height && height <= tip,
+            "cannot fork to {height}: this chain covers {}..={tip}",
+            inner.anchor_height
+        );
+        inner.anchor_height = height;
+        inner.committed.clear();
+    }
+
     /// A chain with `anchor_height` blocks of pre-consensus history; consensus starts
     /// at `anchor_height + 1` on top of the anchored genesis.
     pub fn anchored(anchor_height: u64) -> Self {

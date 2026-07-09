@@ -33,6 +33,19 @@ than by letting new semantics leak into stored or gossiped data. The goldens cat
 encoding drift; the simulation corpus and its migration scenarios catch semantic
 drift.
 
+**The finality store's own schema** sits between the two worlds above: it is our
+format (not upstream's), but it is node storage rather than a released wire
+encoding, and it is the one store the runbooks never wipe. Its epoch-keyed
+entries — custody transitions, registry derivations, the floor cache, the
+observed-round floor — are scoped by the consensus era (epoch numbering restarts
+per era, so a fork or re-migration would otherwise collide with a dead era's
+records); digest-keyed certificates are global and permanent. Pre-launch, schema
+changes here follow the same policy as the journals below (the 2026-07-09
+era-scoping change was one: stores written before it read as empty trails under
+the current era, and a pre-launch chain that cares re-syncs). Post-launch, a
+schema change needs an in-place migration, exactly because this store is never
+rebuilt.
+
 **The journal-compatibility policy.** The engine's vote journals and marshal's
 archives are commonware's own on-disk formats, and upstream may change them between
 releases. Our policy, pre-launch: **cross-version journal compatibility is not

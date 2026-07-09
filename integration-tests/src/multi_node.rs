@@ -847,6 +847,15 @@ impl MultiNodeTester {
         self.validators.is_empty()
     }
 
+    /// The stopped validator at `index` — how offline tooling (the disaster-fork
+    /// truncation) reaches its configuration and storage between stop and start.
+    pub fn stopped(&self, index: usize) -> &crate::StoppedTester {
+        match &self.validators[index] {
+            Validator::Stopped(stopped) => stopped,
+            _ => panic!("validator {index} is not stopped"),
+        }
+    }
+
     /// Gracefully stops one validator; its state, keys, and port reservation stay
     /// around for [`Self::start_validator`].
     pub async fn stop_validator(&mut self, index: usize) -> anyhow::Result<()> {

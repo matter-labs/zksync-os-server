@@ -908,6 +908,17 @@ pub struct ConsensusConfig {
     /// bounds how far a leader can pre-date time-dependent logic.
     #[config(default_t = Duration::from_secs(10))]
     pub max_timestamp_skew: Duration,
+    /// Acknowledges starting this node into a *different* consensus era over a
+    /// chain that already ran one — a disaster fork or a re-migration, both of
+    /// which abandon finalized history. Format: `"<height>:<block hash at
+    /// height>"`, naming exactly the new anchor. Without it (or with a height
+    /// or hash that does not match this node's chain at the anchor), the era
+    /// guard refuses to start. The first consensus start of a chain needs no
+    /// acknowledgment; this exists so nobody forks by configuration accident,
+    /// and so a botched truncation is caught before the node forms a lonely
+    /// era of its own.
+    #[config(default)]
+    pub acknowledge_fork: Option<String>,
     /// How the on-chain validator registry participates in committee scheduling.
     /// `schedule` (default): the registry is ignored; `consensus.committees` /
     /// `consensus.validators` alone decide committees. `shadow`: consensus still

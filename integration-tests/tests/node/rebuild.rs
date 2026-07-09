@@ -55,7 +55,7 @@ async fn fetch_on_chain_batch_hash(tester: &Tester, batch_number: u64) -> anyhow
 
 /// Fetches the hash of the L1 transaction that currently commits `batch_number`. Used to populate
 /// the `l1_revert` guard (`from_batch_commit_tx_hash`).
-async fn fetch_on_chain_batch_commit_tx_hash(
+pub(crate) async fn fetch_on_chain_batch_commit_tx_hash(
     tester: &Tester,
     batch_number: u64,
 ) -> anyhow::Result<B256> {
@@ -139,7 +139,7 @@ async fn wait_for_rebuild_to_reach_tip(
     .await
 }
 
-fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
+pub(crate) fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
     let chain_id = stopped
         .config()
         .genesis_config

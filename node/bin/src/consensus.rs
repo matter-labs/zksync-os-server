@@ -144,6 +144,13 @@ pub fn decide_consensus_era(
     engine_state_is_fresh: bool,
     wal_tip: u64,
     anchor_height: u64,
+    // The operator's `consensus.acknowledge_fork`, parsed: the anchor height
+    // and block hash being deliberately forked/re-migrated to.
+    acknowledged_fork: Option<(u64, alloy::primitives::B256)>,
+    // The hash this node's own chain has at the anchor height — what the
+    // acknowledgment must name (catches a truncation that landed on the wrong
+    // chain *before* this node quietly forms its own lonely era).
+    local_hash_at_anchor: alloy::primitives::B256,
 ) -> anyhow::Result<EraDecision> {
     match (recorded, engine_state_is_fresh) {
         (Some(era), _) if era == configured => Ok(EraDecision::Proceed),
@@ -153,12 +160,42 @@ pub fn decide_consensus_era(
              re-migration after a rollback, clear the consensus engine state and restart; \
              otherwise fix the configured genesis height"
         ),
-        // A different era over deliberately cleared engine state (re-migration), or
-        // no era at all over fresh state (the first consensus start of this chain):
-        // either way this is an era's first start and must happen exactly at the
-        // agreed cutover — a write-ahead log that ran past the anchor means the
-        // committee's agreed anchor is stale.
-        (_, true) => {
+        // A different era over deliberately cleared engine state: a disaster
+        // fork or a re-migration. Either way finalized history is being
+        // overridden, so the operator must acknowledge exactly what they are
+        // starting into — the anchor height and its hash — and the chain must
+        // end exactly there.
+        (Some(_), true) => {
+            let (acknowledged_height, acknowledged_hash) = acknowledged_fork.context(
+                "this chain previously ran consensus under a different era; starting into \
+                 a new anchor abandons finalized history and requires \
+                 `consensus.acknowledge_fork = \"<height>:<block hash at height>\"` \
+                 naming the new anchor",
+            )?;
+            anyhow::ensure!(
+                acknowledged_height == anchor_height,
+                "`consensus.acknowledge_fork` names height {acknowledged_height} but \
+                 `consensus.genesis_height` is {anchor_height} — the acknowledgment must \
+                 name exactly the anchor being started into"
+            );
+            anyhow::ensure!(
+                acknowledged_hash == local_hash_at_anchor,
+                "`consensus.acknowledge_fork` names hash {acknowledged_hash} at height \
+                 {anchor_height}, but this node's chain has {local_hash_at_anchor} there — \
+                 the truncation on this node did not land on the agreed block; do not \
+                 start it (re-check the truncation and the agreed anchor)"
+            );
+            anyhow::ensure!(
+                wal_tip == anchor_height,
+                "a consensus era must start exactly at the agreed cutover: the write-ahead \
+                 log ends at {wal_tip} but `consensus.genesis_height` is {anchor_height}"
+            );
+            Ok(EraDecision::Adopt)
+        }
+        // No era at all over fresh state: the first consensus start of this
+        // chain (fresh chain or first migration) — nothing finalized is being
+        // overridden, no acknowledgment needed; the cutover must still be exact.
+        (None, true) => {
             anyhow::ensure!(
                 wal_tip == anchor_height,
                 "a consensus era must start exactly at the agreed cutover: the write-ahead \
@@ -171,6 +208,27 @@ pub fn decide_consensus_era(
         // broken consensus itself long before this check).
         (None, false) => Ok(EraDecision::Adopt),
     }
+}
+
+/// Parses `consensus.acknowledge_fork`: `"<height>:<block hash at height>"`.
+pub fn parse_acknowledge_fork(
+    value: &Option<String>,
+) -> anyhow::Result<Option<(u64, alloy::primitives::B256)>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let (height, hash) = value.split_once(':').context(
+        "`consensus.acknowledge_fork` must be `\"<height>:<block hash at height>\"`",
+    )?;
+    let height: u64 = height
+        .trim()
+        .parse()
+        .context("`consensus.acknowledge_fork` height is not a number")?;
+    let hash: alloy::primitives::B256 = hash
+        .trim()
+        .parse()
+        .context("`consensus.acknowledge_fork` hash is not a 32-byte hex hash")?;
+    Ok(Some((height, hash)))
 }
 
 /// The rollback guard: single-sequencer operation over existing consensus state
@@ -1498,38 +1556,119 @@ mod tests {
 
     #[test]
     fn era_guard_covers_the_whole_matrix() {
+        let hash_at_anchor = alloy::primitives::B256::repeat_byte(0x1D);
+        let wrong_hash = alloy::primitives::B256::repeat_byte(0x2E);
+        let no_fork = || (None, hash_at_anchor);
+
         // Normal operation: the recorded era matches, at any WAL tip.
         assert_eq!(
-            decide_consensus_era(Some(ERA_A), ERA_A, false, 500, 0).unwrap(),
+            decide_consensus_era(Some(ERA_A), ERA_A, false, 500, 0, no_fork().0, no_fork().1)
+                .unwrap(),
             EraDecision::Proceed
         );
 
-        // First consensus start: fresh everything, exactly at the cutover.
+        // First consensus start: fresh everything, exactly at the cutover — no
+        // acknowledgment needed, nothing finalized is being overridden.
         assert_eq!(
-            decide_consensus_era(None, ERA_A, true, 20, 20).unwrap(),
+            decide_consensus_era(None, ERA_A, true, 20, 20, None, hash_at_anchor).unwrap(),
             EraDecision::Adopt
         );
         // ... but never off the cutover (the sequencer ran past the agreed anchor,
         // or the node is missing history).
-        assert!(decide_consensus_era(None, ERA_A, true, 25, 20).is_err());
-        assert!(decide_consensus_era(None, ERA_A, true, 15, 20).is_err());
+        assert!(decide_consensus_era(None, ERA_A, true, 25, 20, None, hash_at_anchor).is_err());
+        assert!(decide_consensus_era(None, ERA_A, true, 15, 20, None, hash_at_anchor).is_err());
 
-        // Deliberate re-migration: a different era over cleared engine state, at
-        // the new cutover.
+        // A fork / re-migration: a different era over cleared engine state.
+        // Overriding finalized history demands the acknowledgment, naming
+        // exactly this anchor and this node's hash there.
+        let err = decide_consensus_era(Some(ERA_A), ERA_B, true, 40, 40, None, hash_at_anchor)
+            .unwrap_err();
+        assert!(err.to_string().contains("acknowledge_fork"), "got: {err}");
+        assert!(
+            decide_consensus_era(
+                Some(ERA_A),
+                ERA_B,
+                true,
+                40,
+                40,
+                Some((39, hash_at_anchor)),
+                hash_at_anchor,
+            )
+            .is_err(),
+            "an acknowledgment naming the wrong height must refuse"
+        );
+        assert!(
+            decide_consensus_era(
+                Some(ERA_A),
+                ERA_B,
+                true,
+                40,
+                40,
+                Some((40, wrong_hash)),
+                hash_at_anchor,
+            )
+            .is_err(),
+            "an acknowledgment naming a hash this chain does not have must refuse \
+             (the truncation landed wrong)"
+        );
         assert_eq!(
-            decide_consensus_era(Some(ERA_A), ERA_B, true, 40, 40).unwrap(),
+            decide_consensus_era(
+                Some(ERA_A),
+                ERA_B,
+                true,
+                40,
+                40,
+                Some((40, hash_at_anchor)),
+                hash_at_anchor,
+            )
+            .unwrap(),
             EraDecision::Adopt
         );
-        assert!(decide_consensus_era(Some(ERA_A), ERA_B, true, 41, 40).is_err());
+        // Even acknowledged, the cutover must be exact.
+        assert!(
+            decide_consensus_era(
+                Some(ERA_A),
+                ERA_B,
+                true,
+                41,
+                40,
+                Some((40, hash_at_anchor)),
+                hash_at_anchor,
+            )
+            .is_err()
+        );
 
-        // Era mixing: a different era over EXISTING engine state is always fatal.
-        assert!(decide_consensus_era(Some(ERA_A), ERA_B, false, 40, 40).is_err());
+        // Era mixing: a different era over EXISTING engine state is always fatal,
+        // acknowledged or not.
+        assert!(
+            decide_consensus_era(
+                Some(ERA_A),
+                ERA_B,
+                false,
+                40,
+                40,
+                Some((40, hash_at_anchor)),
+                hash_at_anchor,
+            )
+            .is_err()
+        );
 
         // Legacy instance from before era tracking: adopt regardless of tip.
         assert_eq!(
-            decide_consensus_era(None, ERA_A, false, 500, 0).unwrap(),
+            decide_consensus_era(None, ERA_A, false, 500, 0, None, hash_at_anchor).unwrap(),
             EraDecision::Adopt
         );
+    }
+
+    #[test]
+    fn acknowledge_fork_parses_and_rejects_garbage() {
+        assert_eq!(parse_acknowledge_fork(&None).unwrap(), None);
+        let hash = alloy::primitives::B256::repeat_byte(0xAB);
+        let parsed = parse_acknowledge_fork(&Some(format!("42:{hash}"))).unwrap();
+        assert_eq!(parsed, Some((42, hash)));
+        assert!(parse_acknowledge_fork(&Some("42".to_string())).is_err());
+        assert!(parse_acknowledge_fork(&Some("x:0xab".to_string())).is_err());
+        assert!(parse_acknowledge_fork(&Some("42:nothex".to_string())).is_err());
     }
 
     #[test]

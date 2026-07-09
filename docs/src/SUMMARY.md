@@ -40,6 +40,7 @@
   - [How it is tested](consensus/testing.md)
   - [Running it](consensus/enabling.md)
   - [Operating a committee](consensus/operating.md)
+  - [Disaster recovery](consensus/disaster.md)
   - [Upgrading commonware](consensus/upgrading.md)
 
 ---

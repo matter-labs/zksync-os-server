@@ -2,6 +2,7 @@ mod batcher;
 mod committee_verification;
 mod consensus;
 mod external_node;
+mod fork;
 mod mempool;
 mod migration;
 mod rebuild;
