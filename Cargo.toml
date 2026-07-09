@@ -82,7 +82,7 @@ aws-sdk-s3 = { version = "1.133.0", default-features = false, features = [
     "rt-tokio",
     "default-https-client",
 ] }
-google-cloud-auth = "0.16.0"
+google-cloud-auth = { version = "0.16.0", features = ["external-account"] }
 google-cloud-storage = "0.20.0"
 google-cloud-token = "0.1.2"
 serde = { version = "1", features = ["derive"] }

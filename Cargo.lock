@@ -5913,15 +5913,21 @@ dependencies = [
  "base64 0.21.7",
  "google-cloud-metadata",
  "google-cloud-token",
+ "hex",
+ "hmac 0.12.1",
  "home",
  "jsonwebtoken 9.3.1",
+ "path-clean",
+ "percent-encoding",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
  "time",
  "tokio",
  "tracing",
+ "url",
  "urlencoding",
 ]
 
@@ -8635,6 +8641,12 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "path-clean"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
 
 [[package]]
 name = "path-tree"

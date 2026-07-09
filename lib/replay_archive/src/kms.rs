@@ -24,7 +24,13 @@ use rsa::{Oaep, RsaPublicKey};
 use serde::Deserialize;
 use sha2::Sha256;
 
-const KMS_SCOPE: &str = "https://www.googleapis.com/auth/cloudkms";
+/// `cloud-platform` must come along with the KMS scope: under workload identity federation
+/// the federated STS token itself calls `iamcredentials.generateAccessToken`, which rejects
+/// tokens that only carry service-specific scopes.
+const KMS_SCOPES: [&str; 2] = [
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/cloudkms",
+];
 const KMS_ENDPOINT: &str = "https://cloudkms.googleapis.com/v1";
 /// age header stanza tag for file keys wrapped with a GCP KMS RSA-OAEP key.
 const GCP_KMS_STANZA_TAG: &str = "gcp-kms-rsa-oaep";
@@ -75,7 +81,7 @@ impl GcpKmsClient {
     pub async fn new(config: &GcpKmsConfig) -> anyhow::Result<Self> {
         let auth_config = AuthConfig {
             audience: None,
-            scopes: Some(&[KMS_SCOPE]),
+            scopes: Some(&KMS_SCOPES),
             sub: None,
         };
         let provider = match &config.auth_mode {
