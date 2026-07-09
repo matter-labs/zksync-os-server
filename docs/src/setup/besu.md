@@ -73,13 +73,13 @@ A complete Besu QBFT genesis with forks enabled through Cancun, ready to copy in
                 "balance": "90000000000000000000000"
             },
             "a61464658afeaf65cccaafd3a512b69a83b77618": {
-                "privateKey": "ae6ae8e5ccbfb04590405997ee2d52d2b330726137b875053c36d94e974d162f",
-                "comment": "zksync-os-scripts rich account",
+                "privateKey": "ac1e735be8536c6534bb4f17f06f6afc73b2b5ba84ac2cfb12f7461b20c0bbe3",
+                "comment": "zksync-os-scripts rich account. Besu ignores this privateKey field in alloc.",
                 "balance": "90000000000000000000000"
             },
             "36615cf349d7f6344891b1e7ca7c72883f5dc049": {
-                "privateKey": "ae6ae8e5ccbfb04590405997ee2d52d2b330726137b875053c36d94e974d162f",
-                "comment": "zksync-os-scripts rich account",
+                "privateKey": "7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110",
+                "comment": "zksync-os-scripts rich account. Besu ignores this privateKey field in alloc.",
                 "balance": "90000000000000000000000"
             },
             "4e59b44847b379578588920cA78FbF26c0B4956C": {
