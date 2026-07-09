@@ -1,0 +1,11 @@
+# intent.yaml — ZKsync OS chain settling on the local Besu QBFT network.
+schema_version: 1
+
+# Besu QBFT L1 (chainId 31337). Setting this bypasses the auto-managed Anvil.
+# On a localhost L1, the deployer auto-funds operator/bundle-signer addresses via
+# transfers from the --private-key (which must be a Besu-genesis-funded account).
+l1_rpc_url: "http://localhost:8545"
+
+chains:
+  - chain_id: 6565
+    da_mode: rollup           # rollup + Blobs; Besu accepts EIP-4844 type-3 txs

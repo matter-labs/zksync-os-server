@@ -1,0 +1,172 @@
+# ZKsync OS dev stack settling on a private Besu QBFT L1.
+#
+#   docker compose up --build
+#
+# Brings up: genesis derivation -> 4 Besu QBFT validators -> one-shot ecosystem
+# deployer (zk-deployer bootstrap/apply/server-config) -> zksync-os-server built
+# from the local sources, started with exactly:
+#   --config local-chains/local_dev.yaml --config /deployment/server.yaml
+#
+# Everything except the deployment handoff volume is ephemeral by design:
+# `docker compose down && docker compose up` = brand-new L1 + full redeploy
+# (the deployer self-heals the stale volume). See README.md.
+
+name: zksync-os-besu-qbft
+
+x-besu-node: &besu-node
+  image: hyperledger/besu:26.6.1
+  volumes:
+    - ./besu:/config:ro
+    - genesis:/genesis:ro
+  depends_on:
+    genesis-init:
+      condition: service_completed_successfully
+  restart: "no"
+
+services:
+  # Rebuilds genesis.json from qbftConfigFile.json + committed validator
+  # extraData on every `up`, so genesis-config edits need no manual step.
+  genesis-init:
+    image: python:3.12-slim
+    command: ["python3", "/config/mkgenesis.py", "/config/qbftConfigFile.json", "/config/extraData.txt", "/genesis/genesis.json"]
+    volumes:
+      - ./besu:/config:ro
+      - genesis:/genesis
+    networks:
+      - qbft
+    restart: "no"
+
+  besu-node-1:
+    <<: *besu-node
+    command:
+      - --genesis-file=/genesis/genesis.json
+      - --node-private-key-file=/config/keys/node-1/key
+      - --data-path=/opt/besu/data
+      - --min-gas-price=0
+      - --data-storage-format=FOREST
+      - --rpc-http-enabled
+      - --rpc-http-api=ETH,NET,QBFT
+      - --rpc-http-host=0.0.0.0
+      - --rpc-http-cors-origins=all
+      - --host-allowlist=*
+      - --p2p-host=10.100.36.11
+    ports:
+      - "8545:8545"
+    networks:
+      qbft:
+        ipv4_address: 10.100.36.11
+
+  besu-node-2:
+    <<: *besu-node
+    command:
+      - --genesis-file=/genesis/genesis.json
+      - --node-private-key-file=/config/keys/node-2/key
+      - --data-path=/opt/besu/data
+      - --min-gas-price=0
+      - --data-storage-format=FOREST
+      - --p2p-host=10.100.36.12
+      - --bootnodes=enode://6f825bcde1b986bdbc41fb3a90788a5fa467c28552f980fb50f47dfdd09f5802ab6f8c1dd3163e576f970f71baf7233cf18a972ea377ad3c3ca81fdda1995951@10.100.36.11:30303
+    networks:
+      qbft:
+        ipv4_address: 10.100.36.12
+
+  besu-node-3:
+    <<: *besu-node
+    command:
+      - --genesis-file=/genesis/genesis.json
+      - --node-private-key-file=/config/keys/node-3/key
+      - --data-path=/opt/besu/data
+      - --min-gas-price=0
+      - --data-storage-format=FOREST
+      - --p2p-host=10.100.36.13
+      - --bootnodes=enode://6f825bcde1b986bdbc41fb3a90788a5fa467c28552f980fb50f47dfdd09f5802ab6f8c1dd3163e576f970f71baf7233cf18a972ea377ad3c3ca81fdda1995951@10.100.36.11:30303
+    networks:
+      qbft:
+        ipv4_address: 10.100.36.13
+
+  besu-node-4:
+    <<: *besu-node
+    command:
+      - --genesis-file=/genesis/genesis.json
+      - --node-private-key-file=/config/keys/node-4/key
+      - --data-path=/opt/besu/data
+      - --min-gas-price=0
+      - --data-storage-format=FOREST
+      - --p2p-host=10.100.36.14
+      - --bootnodes=enode://6f825bcde1b986bdbc41fb3a90788a5fa467c28552f980fb50f47dfdd09f5802ab6f8c1dd3163e576f970f71baf7233cf18a972ea377ad3c3ca81fdda1995951@10.100.36.11:30303
+    networks:
+      qbft:
+        ipv4_address: 10.100.36.14
+
+  # One-shot ecosystem deployment. Shares besu-node-1's network namespace so
+  # the L1 is reachable at http://localhost:8545 — zk-deployer only auto-funds
+  # operator/bundle-signer wallets when the RPC URL is a localhost one
+  # (is_local_rpc in protocol-ops), and this keeps intent.yaml byte-identical
+  # to the manually validated flow.
+  deployer:
+    build:
+      context: ./deployer
+      args:
+        ZK_ITESTS_REPO: ${ZK_ITESTS_REPO:-https://github.com/matter-labs/zksync-os-integration-tests}
+        ZK_ITESTS_REF: ${ZK_ITESTS_REF:-main}
+    network_mode: "service:besu-node-1"
+    environment:
+      # Besu tutorial dev key (account 0x627306...ef57, prefunded in genesis).
+      DEPLOYER_PK: ${DEPLOYER_PK:-0xc87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0f44dc0d3}
+    volumes:
+      - deployment:/deployment
+    depends_on:
+      besu-node-1:
+        condition: service_started
+      besu-node-2:
+        condition: service_started
+      besu-node-3:
+        condition: service_started
+      besu-node-4:
+        condition: service_started
+    restart: "no"
+
+  server:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["--config", "local-chains/local_dev.yaml", "--config", "/deployment/server.yaml"]
+    environment:
+      # server-config intentionally omits the L1 RPC URL from server.yaml and
+      # documents passing it via env (see `zk-deployer server-config` output).
+      L1_PROVIDER_RPC_URL: http://besu-node-1:8545
+      # The server's writable dirs default to ./db/* under WORKDIR /app, which the
+      # stock image leaves root-owned. Point them at the app-owned /db volume the
+      # image already provides, so the shared root Dockerfile needs no changes.
+      general_rocks_db_path: /db/node1
+      prover_api_proof_storage_path: /db/fri_proofs
+      sequencer_block_dump_path: /db/block_dumps
+    volumes:
+      - ../../local-chains/local_dev.yaml:/app/local-chains/local_dev.yaml:ro
+      - deployment:/deployment:ro
+    depends_on:
+      deployer:
+        condition: service_completed_successfully
+    ports:
+      - "3050:3050" # L2 JSON-RPC (HTTP + WS)
+      - "3124:3124" # prover API
+      - "3312:3312" # Prometheus metrics
+    networks:
+      - qbft
+    restart: "no"
+
+networks:
+  qbft:
+    ipam:
+      config:
+        - subnet: 10.100.36.0/24
+          # Dynamic allocations stay out of the validators' static range.
+          ip_range: 10.100.36.128/25
+
+volumes:
+  # Hands server.yaml + the L2 genesis input from the deployer to the server.
+  # Mounted at /deployment in BOTH containers: server-config embeds the
+  # absolute genesis path, so the mount point must match.
+  deployment:
+  # Derived Besu genesis (rewritten by genesis-init on every `up`).
+  genesis:
