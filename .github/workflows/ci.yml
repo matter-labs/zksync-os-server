@@ -107,7 +107,6 @@ jobs:
     # as it slows down PR testing significantly (2m -> 15m for tests execution)
     # due to overhead with LLVM instrumentation.
     # So, we keep the main numbers, but not force every PR to wait for it.
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: matterlabs-ci-runner-high-performance
     env:
       RUSTC_BOOTSTRAP: 1
