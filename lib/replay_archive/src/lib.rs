@@ -35,7 +35,7 @@ pub use init::{
     init_replay_archive,
 };
 pub use kms::{GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
-pub use reader::{ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveStorageReader};
+pub use reader::{ReplayArchiveKeyPage, ReplayArchiveStorageReader};
 pub use recovery::{
     ArchiveIdentity, DEFAULT_DECRYPT_CONCURRENCY, download_all_replay_archive_objects,
     parse_age_x25519_identity, read_age_x25519_identity, recover_replay_records_to_rocksdb,
@@ -171,9 +171,6 @@ fn validate_node_id(node_id: &str) -> Result<(), InvalidReplayArchiveSession> {
 fn format_block_hash(block_hash: BlockHash) -> String {
     alloy::hex::encode_prefixed(block_hash.0)
 }
-
-/// Channel size used by object-store backends to stream listed objects to callers.
-pub(crate) const REPLAY_ARCHIVE_OBJECT_LIST_CHANNEL_SIZE: usize = 128;
 
 /// Marker object name written under `<session>/` to mark a session as created.
 pub(crate) const SESSION_MARKER_FILE_NAME: &str = ".session";

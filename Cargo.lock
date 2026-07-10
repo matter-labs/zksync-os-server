@@ -16438,6 +16438,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "tracing-subscriber 0.3.22",
  "vise",
  "zksync_os_interface",
  "zksync_os_l1_sender",

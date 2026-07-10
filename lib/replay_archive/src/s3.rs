@@ -1,6 +1,6 @@
 use crate::{
-    ReplayArchiveKey, ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveSession,
-    ReplayArchiveStorage, ReplayArchiveStorageReader,
+    ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveSession, ReplayArchiveStorage,
+    ReplayArchiveStorageReader,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
@@ -8,10 +8,7 @@ use async_trait::async_trait;
 use aws_config::{BehaviorVersion, ConfigLoader, Region, meta::region::RegionProviderChain};
 use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
 use aws_sdk_s3::{Client, primitives::ByteStream};
-use futures::StreamExt as _;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 
 /// Authentication mode for S3 replay archive access.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,16 +182,66 @@ impl S3ReplayArchiveReader {
 
 #[async_trait]
 impl ReplayArchiveStorageReader for S3ReplayArchiveReader {
-    async fn list_objects(&self) -> ReplayArchiveObjectStream {
-        let config = self.config.clone();
-        let client = self.client.clone();
-        let (sender, receiver) = mpsc::channel(crate::REPLAY_ARCHIVE_OBJECT_LIST_CHANNEL_SIZE);
-        tokio::spawn(async move {
-            if let Err(err) = list_objects(config, client, sender.clone()).await {
-                let _ = sender.send(Err(err)).await;
+    async fn list_keys_page(
+        &self,
+        page_token: Option<String>,
+    ) -> anyhow::Result<ReplayArchiveKeyPage> {
+        let mut request = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.config.bucket_base_url);
+        if let Some(token) = page_token {
+            request = request.continuation_token(token);
+        }
+        let response = request.send().await.with_context(|| {
+            format!(
+                "failed to list replay archive S3 objects in s3://{}",
+                self.config.bucket_base_url
+            )
+        })?;
+
+        let mut keys = Vec::new();
+        for object in response.contents() {
+            let Some(object_key) = object.key() else {
+                continue;
+            };
+            if let Some(key) = crate::parse_archive_object_key(object_key)? {
+                keys.push(key);
             }
-        });
-        ReceiverStream::new(receiver).boxed()
+        }
+        Ok(ReplayArchiveKeyPage {
+            keys,
+            next_page_token: response.next_continuation_token().map(str::to_owned),
+        })
+    }
+
+    async fn fetch_object(&self, key: &ReplayArchiveKey) -> anyhow::Result<Vec<u8>> {
+        let object_key = key.object_path();
+        let bytes = self
+            .client
+            .get_object()
+            .bucket(&self.config.bucket_base_url)
+            .key(&object_key)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to read replay archive S3 object s3://{}/{}",
+                    self.config.bucket_base_url, object_key
+                )
+            })?
+            .body
+            .collect()
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to collect replay archive S3 object s3://{}/{}",
+                    self.config.bucket_base_url, object_key
+                )
+            })?
+            .into_bytes()
+            .to_vec();
+        Ok(bytes)
     }
 }
 
@@ -223,75 +270,6 @@ fn get_client_config(auth_mode: S3ReplayArchiveAuthMode) -> ConfigLoader {
             aws_config::defaults(BehaviorVersion::latest()).no_credentials()
         }
     }
-}
-
-async fn list_objects(
-    config: S3ReplayArchiveConfig,
-    client: Client,
-    sender: mpsc::Sender<anyhow::Result<ReplayArchiveObject>>,
-) -> anyhow::Result<()> {
-    let mut continuation_token = None;
-
-    loop {
-        let mut request = client.list_objects_v2().bucket(&config.bucket_base_url);
-        if let Some(token) = &continuation_token {
-            request = request.continuation_token(token);
-        }
-
-        let response = request.send().await.with_context(|| {
-            format!(
-                "failed to list replay archive S3 objects in s3://{}",
-                config.bucket_base_url
-            )
-        })?;
-
-        for object in response.contents() {
-            let Some(object_key) = object.key() else {
-                continue;
-            };
-            let Some(key) = crate::parse_archive_object_key(object_key)? else {
-                continue;
-            };
-            let bytes = client
-                .get_object()
-                .bucket(&config.bucket_base_url)
-                .key(object_key)
-                .send()
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to read replay archive S3 object s3://{}/{}",
-                        config.bucket_base_url, object_key
-                    )
-                })?
-                .body
-                .collect()
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to collect replay archive S3 object s3://{}/{}",
-                        config.bucket_base_url, object_key
-                    )
-                })?
-                .into_bytes()
-                .to_vec();
-
-            if sender
-                .send(Ok(ReplayArchiveObject { key, bytes }))
-                .await
-                .is_err()
-            {
-                return Ok(());
-            }
-        }
-
-        let Some(next_token) = response.next_continuation_token() else {
-            break;
-        };
-        continuation_token = Some(next_token.to_owned());
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

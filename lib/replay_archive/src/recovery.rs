@@ -1,10 +1,12 @@
 use crate::kms::GcpKmsIdentity;
-use crate::{ReplayArchiveKey, ReplayArchiveStorageReader, format_block_hash};
+use crate::{
+    ReplayArchiveKey, ReplayArchiveSession, ReplayArchiveStorageReader, format_block_hash,
+};
 use age_core::format::{FileKey, Stanza};
 use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
@@ -20,6 +22,9 @@ use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 /// ```
 ///
 /// This keeps all session copies for the same replay record next to each other.
+///
+/// Objects already present under `output_root` are skipped without re-downloading, so an
+/// interrupted download can be restarted with the same arguments.
 pub async fn download_all_replay_archive_objects<Reader>(
     reader: &Reader,
     output_root: &Path,
@@ -31,16 +36,38 @@ where
         output_root = %output_root.display(),
         "Starting replay archive object download"
     );
-    let mut objects = reader.list_objects().await;
+    let existing = scan_existing_downloaded_objects(output_root).await?;
+    if !existing.is_empty() {
+        tracing::info!(
+            existing = existing.len(),
+            "Resuming download; objects already present locally are skipped"
+        );
+    }
+
+    // Listing and downloading are interleaved page by page: downloads start right after the
+    // first listing page instead of waiting for a full listing of a large archive.
+    let mut page_token = None;
     let mut downloaded = 0;
 
-    while let Some(object) = objects.next().await {
-        let object = object?;
-        write_downloaded_object(output_root, &object.key, object.bytes).await?;
-        downloaded += 1;
-        log_recovery_progress(downloaded, || {
-            tracing::info!(downloaded, "Downloaded replay archive objects");
-        });
+    loop {
+        let page = reader.list_keys_page(page_token.take()).await?;
+
+        for key in page.keys {
+            if existing.contains(&key) {
+                continue;
+            }
+            let bytes = reader.fetch_object(&key).await?;
+            write_downloaded_object(output_root, &key, bytes).await?;
+            downloaded += 1;
+            log_recovery_progress(downloaded, || {
+                tracing::info!(downloaded, "Downloaded replay archive objects");
+            });
+        }
+
+        match page.next_page_token {
+            Some(token) => page_token = Some(token),
+            None => break,
+        }
     }
 
     tracing::info!(downloaded, "Finished replay archive object download");
@@ -244,9 +271,76 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
 }
 
 fn log_recovery_progress(count: usize, log: impl FnOnce()) {
-    if count <= 10 || count.is_power_of_two() || count.is_multiple_of(1_000) {
+    if count.is_multiple_of(50) {
         log();
     }
+}
+
+/// Scans an existing download output root for already-downloaded objects.
+///
+/// Entries that do not parse as `<block_number>/<block_hash>/<session>` are ignored,
+/// including `.partial` files left behind by an interrupted write: they get re-downloaded
+/// and overwritten.
+async fn scan_existing_downloaded_objects(
+    output_root: &Path,
+) -> anyhow::Result<HashSet<ReplayArchiveKey>> {
+    let mut existing = HashSet::new();
+    if !tokio::fs::try_exists(output_root).await? {
+        return Ok(existing);
+    }
+
+    let mut block_entries = tokio::fs::read_dir(output_root).await.with_context(|| {
+        format!(
+            "failed to read replay archive recovery root {}",
+            output_root.display()
+        )
+    })?;
+    while let Some(block_entry) = block_entries.next_entry().await? {
+        let Ok(block_number) = block_entry
+            .file_name()
+            .to_string_lossy()
+            .parse::<BlockNumber>()
+        else {
+            continue;
+        };
+        if !block_entry.file_type().await?.is_dir() {
+            continue;
+        }
+
+        let mut hash_entries = tokio::fs::read_dir(block_entry.path()).await?;
+        while let Some(hash_entry) = hash_entries.next_entry().await? {
+            let Ok(block_hash) = hash_entry
+                .file_name()
+                .to_string_lossy()
+                .parse::<BlockHash>()
+            else {
+                continue;
+            };
+            if !hash_entry.file_type().await?.is_dir() {
+                continue;
+            }
+
+            let mut session_entries = tokio::fs::read_dir(hash_entry.path()).await?;
+            while let Some(session_entry) = session_entries.next_entry().await? {
+                let file_name = session_entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                // Session node ids may contain dots, so a `.partial` leftover would parse
+                // as a session; exclude it explicitly.
+                if file_name.ends_with(".partial") {
+                    continue;
+                }
+                let Ok(session) = file_name.parse::<ReplayArchiveSession>() else {
+                    continue;
+                };
+                if !session_entry.file_type().await?.is_file() {
+                    continue;
+                }
+                existing.insert(ReplayArchiveKey::new(session, block_number, block_hash));
+            }
+        }
+    }
+
+    Ok(existing)
 }
 
 async fn write_downloaded_object(
@@ -269,29 +363,43 @@ async fn write_downloaded_object(
         )
     })?;
 
+    // Write to a temporary name and rename so that an object file only exists under its
+    // final name once fully written; interrupted downloads leave `.partial` files that the
+    // resume scan ignores and the next attempt overwrites.
+    let partial_path = output_path.with_file_name(format!("{}.partial", key.session.folder_name()));
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
-        .create_new(true)
-        .open(&output_path)
+        .create(true)
+        .truncate(true)
+        .open(&partial_path)
         .await
         .with_context(|| {
             format!(
                 "failed to create replay archive recovery object {}",
-                output_path.display()
+                partial_path.display()
             )
         })?;
     file.write_all(&object).await.with_context(|| {
         format!(
             "failed to write replay archive recovery object {}",
-            output_path.display()
+            partial_path.display()
         )
     })?;
     file.flush().await.with_context(|| {
         format!(
             "failed to flush replay archive recovery object {}",
-            output_path.display()
+            partial_path.display()
         )
     })?;
+    drop(file);
+    tokio::fs::rename(&partial_path, &output_path)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to finalize replay archive recovery object {}",
+                output_path.display()
+            )
+        })?;
     Ok(())
 }
 
@@ -568,6 +676,66 @@ mod tests {
             .await
             .unwrap(),
             b"second"
+        );
+    }
+
+    #[tokio::test]
+    async fn restarted_download_skips_complete_objects_and_redownloads_partial_ones() {
+        let archive_root = tempfile::tempdir().unwrap();
+        let output_root = tempfile::tempdir().unwrap();
+        let block_hash = B256::with_last_byte(1);
+
+        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
+        let storage =
+            FileSystemReplayArchiveStorage::init(archive_root.path().to_path_buf(), session)
+                .await
+                .unwrap();
+        storage
+            .append_object(7, block_hash, b"first".to_vec())
+            .await
+            .unwrap();
+        storage
+            .append_object(8, block_hash, b"second".to_vec())
+            .await
+            .unwrap();
+
+        let reader = FileSystemReplayArchiveReader::new(archive_root.path().to_path_buf());
+        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
+            .await
+            .unwrap();
+        assert_eq!(downloaded, 2);
+
+        // A fully downloaded tree is a no-op to re-download.
+        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
+            .await
+            .unwrap();
+        assert_eq!(downloaded, 0);
+
+        // Simulate an interrupted download: one object exists only as a truncated
+        // `.partial` leftover. It must be re-downloaded, not treated as complete.
+        let hash_dir = output_root
+            .path()
+            .join("8")
+            .join(crate::format_block_hash(block_hash));
+        tokio::fs::remove_file(hash_dir.join("42-node-a"))
+            .await
+            .unwrap();
+        tokio::fs::write(hash_dir.join("42-node-a.partial"), b"sec")
+            .await
+            .unwrap();
+
+        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
+            .await
+            .unwrap();
+        assert_eq!(downloaded, 1);
+        assert_eq!(
+            tokio::fs::read(hash_dir.join("42-node-a")).await.unwrap(),
+            b"second"
+        );
+        assert!(
+            !tokio::fs::try_exists(hash_dir.join("42-node-a.partial"))
+                .await
+                .unwrap()
         );
     }
 
