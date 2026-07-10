@@ -89,13 +89,22 @@ jobs:
         run: |
           geth --dev --http --http.api eth,web3,net \
             --datadir data --miner.gaslimit 9000000000000 \
-            --rpc.allow-unprotected-txs --mine &
+            --rpc.allow-unprotected-txs &
 
       - name: Wait for geth to start
         run: |
+          TIMEOUT=300
+          INTERVAL=3
+          START_TIME=$(date +%s)
           while ! nc -z localhost 8545; do
-            echo "Waiting for geth to start..."
-            sleep 3
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
+            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+              echo "Timed out after ${TIMEOUT}s waiting for geth on port 8545"
+              exit 1
+            fi
+            echo "Waiting for geth to start... (${ELAPSED}s elapsed)"
+            sleep $INTERVAL
           done
           echo "Geth is up and running."
 
