@@ -245,11 +245,14 @@ fn real_stf_partition_heals_with_identical_state() {
             // Cut one validator off mid-flight. Proposals in the air around the cut
             // get abandoned — their speculative state layers must be discarded, never
             // adopted. The isolated validator stalls; the quorum side keeps going.
+            // Short windows on purpose: the quorum side keeps executing real
+            // blocks through them, and the isolated validator re-executes all
+            // of it after the heal.
             cluster.partition(&[&[0], &[1, 2, 3, 4]]).await;
             cluster.wait_for_committed_height(&[1, 2, 3, 4], 9).await;
-            cluster.settle(Duration::from_secs(10)).await;
+            cluster.settle(Duration::from_secs(3)).await;
             cluster
-                .assert_no_progress_for(&[0], Duration::from_secs(15))
+                .assert_no_progress_for(&[0], Duration::from_secs(8))
                 .await;
 
             // Heal: the isolated validator backfills, re-executes what it missed, and

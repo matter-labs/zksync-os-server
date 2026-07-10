@@ -97,13 +97,13 @@ fn retired_epochs_are_pruned_and_live_ones_kept() {
             // settle drains in-flight backfill before each crash — crashing a
             // peer with resolver traffic in flight trips the registered
             // fingerprint determinism gap (`boundary_crash_determinism_gap`).
-            cluster.settle(Duration::from_secs(30)).await;
+            cluster.settle(Duration::from_secs(5)).await;
             cluster.crash(4);
             cluster.restart(4).await;
             cluster
                 .wait_for_committed_height_all(6 * EPOCH_LENGTH)
                 .await;
-            cluster.settle(Duration::from_secs(30)).await;
+            cluster.settle(Duration::from_secs(5)).await;
             cluster.crash(0);
             let with_restarted: Vec<usize> = vec![1, 2, 3, 4];
             cluster

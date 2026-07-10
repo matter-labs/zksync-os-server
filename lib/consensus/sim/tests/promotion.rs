@@ -121,8 +121,9 @@ async fn wipe_and_return_across_boundaries(context: commonware_runtime::determin
 
     // Vote-proof: with one other member stopped, the remaining four include the
     // rebuilt validator, and at n=5 quorum is four — further finality requires
-    // its votes. The settle lets its residual archive backfill drain first.
-    cluster.settle(Duration::from_secs(30)).await;
+    // its votes. The settle lets its residual archive backfill drain first
+    // (a few fetch rounds; the chain keeps producing, so longer is pure cost).
+    cluster.settle(Duration::from_secs(5)).await;
     cluster.crash(0);
     let with_rebuilt: Vec<usize> = vec![1, 2, 3, 4];
     cluster
@@ -293,7 +294,7 @@ fn floor_started_rebuild_across_epoch_boundaries() {
             );
 
             // Vote-proof.
-            cluster.settle(Duration::from_secs(30)).await;
+            cluster.settle(Duration::from_secs(5)).await;
             cluster.crash(0);
             let with_rebuilt: Vec<usize> = vec![1, 2, 3, 4];
             cluster

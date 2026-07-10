@@ -391,6 +391,41 @@ commonware-storage = { git = "https://github.com/popzxc/commonware-monorepo", ta
 commonware-stream = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
 commonware-utils = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
 
+# The deterministic-simulation tests drive the consensus library hard (the
+# simulated runtime, network and storage process millions of virtual-time
+# events per scenario, plus real BLS math per finalized view); at opt-level 0
+# that library dominates the suite's wall clock. Optimizing the vendored
+# consensus/crypto crates keeps our own code fully debuggable while the
+# machinery under it runs at production speed.
+[profile.dev.package.commonware-actor]
+opt-level = 3
+[profile.dev.package.commonware-broadcast]
+opt-level = 3
+[profile.dev.package.commonware-codec]
+opt-level = 3
+[profile.dev.package.commonware-consensus]
+opt-level = 3
+[profile.dev.package.commonware-cryptography]
+opt-level = 3
+[profile.dev.package.commonware-macros]
+opt-level = 3
+[profile.dev.package.commonware-math]
+opt-level = 3
+[profile.dev.package.commonware-p2p]
+opt-level = 3
+[profile.dev.package.commonware-parallel]
+opt-level = 3
+[profile.dev.package.commonware-resolver]
+opt-level = 3
+[profile.dev.package.commonware-runtime]
+opt-level = 3
+[profile.dev.package.commonware-storage]
+opt-level = 3
+[profile.dev.package.commonware-utils]
+opt-level = 3
+[profile.dev.package.blst]
+opt-level = 3
+
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
 overflow-checks = true

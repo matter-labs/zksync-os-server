@@ -69,8 +69,9 @@ fn slow_committer_keeps_voting_and_converges() {
                 |index, context| {
                     let env = MockExecution::new();
                     if index == 0 {
-                        // Each commit takes multiple block times.
-                        DelayedEnv::slow_commit(env, context, Duration::from_secs(2))
+                        // Each commit takes multiple block times (a block lands
+                        // every ~100ms on healthy links).
+                        DelayedEnv::slow_commit(env, context, Duration::from_millis(500))
                     } else {
                         DelayedEnv::slow_commit(env, context, Duration::ZERO)
                     }

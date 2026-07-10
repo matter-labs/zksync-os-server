@@ -98,7 +98,8 @@ fn a_quorum_fork_abandons_the_suffix_and_lives() {
             // epoch boundaries counted from the fork anchor. (Waits speak
             // chain-absolute heights; the agreement assert counts the era's
             // own blocks.)
-            fork.wait_for_committed_height_all(9 + EPOCH_LENGTH + 4).await;
+            fork.wait_for_committed_height_all(9 + EPOCH_LENGTH + 4)
+                .await;
             fork.assert_committed_chains_agree(EPOCH_LENGTH + 4);
             fork.assert_no_faults();
             fork.assert_no_blocked_peers().await;
@@ -170,10 +171,10 @@ fn adoption_below_quorum_freezes_both_eras_until_a_quorum_forms() {
             // votes, the dead era holds two. This is D-HF1's teeth — with no
             // in-protocol override, a disputed fork halts rather than forks
             // the network in two.
-            fork.assert_no_progress_for(&[0, 1, 2], Duration::from_secs(60))
+            fork.assert_no_progress_for(&[0, 1, 2], Duration::from_secs(15))
                 .await;
             doomed
-                .assert_no_progress_for(&[3, 4], Duration::from_secs(60))
+                .assert_no_progress_for(&[3, 4], Duration::from_secs(15))
                 .await;
 
             // A fourth operator comes around: stop its dead-era node, run the
@@ -187,8 +188,11 @@ fn adoption_below_quorum_freezes_both_eras_until_a_quorum_forms() {
             // chain — agreement is asserted between the adopters.
             fork.assert_committed_chains_agree_between(&[0, 1, 2, 3], 5);
             fork.assert_no_faults();
+            // The straggler check runs while the fork era produces at full
+            // cadence on its own network — a window a few timeouts wide proves
+            // the freeze without paying for hundreds of unrelated blocks.
             doomed
-                .assert_no_progress_for(&[4], Duration::from_secs(30))
+                .assert_no_progress_for(&[4], Duration::from_secs(10))
                 .await;
         });
     }

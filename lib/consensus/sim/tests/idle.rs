@@ -14,7 +14,10 @@ use zksync_os_consensus_sim::{
     Behavior, EraOptions, IdleWork, MockExecution, SimCluster, links, run_scenario,
 };
 
-const EPOCH_LENGTH: u64 = 8;
+// Small on purpose: idle scenarios cross epoch boundaries one heartbeat at a
+// time, so wall-clock cost scales with heartbeats-per-epoch. Four blocks is
+// the smallest epoch that still exercises a handoff mid-scenario.
+const EPOCH_LENGTH: u64 = 4;
 
 fn short_epochs() -> zksync_os_consensus_sim::StackTuner {
     std::sync::Arc::new(|config| {
@@ -60,7 +63,10 @@ fn an_idle_chain_declines_then_heartbeats() {
         |context| async move {
             let behaviors = vec![Behavior::Honest; 4];
             let policy = IdlePolicy::heartbeat(
-                Duration::from_secs(120),
+                // Several nullified-view lengths (5s timeouts): long enough
+                // that "no block inside the interval" is a real claim, short
+                // enough that the scenario stays cheap.
+                Duration::from_secs(24),
                 NonZeroU64::new(EPOCH_LENGTH).expect("nonzero"),
                 Vec::new(),
             );
@@ -82,7 +88,7 @@ fn an_idle_chain_declines_then_heartbeats() {
             cluster.wait_for_committed_height_all(3).await;
 
             // Well inside the heartbeat interval: no new blocks.
-            cluster.settle(Duration::from_secs(80)).await;
+            cluster.settle(Duration::from_secs(12)).await;
             for validator in 0..4 {
                 assert_eq!(
                     cluster.validators[validator].env.committed_tip(),
@@ -91,9 +97,10 @@ fn an_idle_chain_declines_then_heartbeats() {
                 );
             }
 
-            // Past the interval: the heartbeat block, and only it.
+            // Past the interval: the heartbeat block, and only it (the next
+            // beat is a full interval away).
             cluster.wait_for_committed_height_all(4).await;
-            cluster.settle(Duration::from_secs(80)).await;
+            cluster.settle(Duration::from_secs(12)).await;
             for validator in 0..4 {
                 assert_eq!(
                     cluster.validators[validator].env.committed_tip(),
@@ -138,7 +145,7 @@ fn work_wakes_an_idle_chain_promptly() {
 
             work.enqueue(1);
             cluster.wait_for_committed_height_all(1).await;
-            cluster.settle(Duration::from_secs(60)).await;
+            cluster.settle(Duration::from_secs(12)).await;
 
             // Idle, then one more unit of work: one more block, promptly.
             for validator in 0..4 {
@@ -146,7 +153,7 @@ fn work_wakes_an_idle_chain_promptly() {
             }
             work.enqueue(1);
             cluster.wait_for_committed_height_all(2).await;
-            cluster.settle(Duration::from_secs(60)).await;
+            cluster.settle(Duration::from_secs(12)).await;
             for validator in 0..4 {
                 assert_eq!(cluster.validators[validator].env.committed_tip(), Some(2));
             }
@@ -197,7 +204,7 @@ fn a_pending_activation_sprints_an_idle_chain_to_its_boundary() {
             cluster.wait_for_committed_height_all(boundary).await;
 
             // ...and stops: the entry is active, normal idle rules resume.
-            cluster.settle(Duration::from_secs(120)).await;
+            cluster.settle(Duration::from_secs(24)).await;
             for validator in 0..4 {
                 assert_eq!(
                     cluster.validators[validator].env.committed_tip(),
@@ -225,7 +232,7 @@ fn heartbeats_cross_epoch_boundaries_at_a_crawl() {
         |context| async move {
             let behaviors = vec![Behavior::Honest; 4];
             let policy = IdlePolicy::heartbeat(
-                Duration::from_secs(45),
+                Duration::from_secs(12),
                 NonZeroU64::new(EPOCH_LENGTH).expect("nonzero"),
                 Vec::new(),
             );

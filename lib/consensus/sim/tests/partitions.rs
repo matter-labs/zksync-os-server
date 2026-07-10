@@ -31,12 +31,14 @@ fn isolated_validator_stalls_while_majority_continues() {
 
             // Blocks finalized just before the cut may still be in flight to the
             // isolated validator; let those drain before demanding stillness.
-            cluster.settle(Duration::from_secs(10)).await;
+            // (The majority keeps producing through these windows, so every
+            // second here costs real traffic — keep them a few timeouts wide.)
+            cluster.settle(Duration::from_secs(3)).await;
 
             // The isolated validator must stand still: it can neither produce blocks
             // (no quorum for its proposals) nor learn of new finalizations.
             cluster
-                .assert_no_progress_for(&[0], Duration::from_secs(20))
+                .assert_no_progress_for(&[0], Duration::from_secs(10))
                 .await;
 
             // Heal. The isolated validator backfills what it missed and rejoins.
@@ -66,9 +68,9 @@ fn even_split_halts_everyone_then_heals() {
             // the safety property.
             cluster.partition(&[&[0, 1], &[2, 3, 4]]).await;
             let everyone: Vec<usize> = (0..NUM_VALIDATORS as usize).collect();
-            cluster.settle(Duration::from_secs(10)).await;
+            cluster.settle(Duration::from_secs(3)).await;
             cluster
-                .assert_no_progress_for(&everyone, Duration::from_secs(30))
+                .assert_no_progress_for(&everyone, Duration::from_secs(15))
                 .await;
 
             // Heal: liveness must come back, and everyone converges on one chain.

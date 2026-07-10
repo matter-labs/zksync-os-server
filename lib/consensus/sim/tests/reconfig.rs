@@ -315,19 +315,19 @@ fn deep_catch_up_across_retired_epochs_and_a_committee_change() {
             )
             .await;
 
-            // ~37 retired epochs deep — far beyond what gossip buffers hold, so
+            // ~18 retired epochs deep — far beyond what gossip buffers hold, so
             // the joiner must rely entirely on backfill.
             let members: Vec<usize> = vec![0, 1, 2, 4];
-            cluster.wait_for_committed_height(&members, 300).await;
+            cluster.wait_for_committed_height(&members, 150).await;
             cluster.restart(3).await;
-            cluster.wait_for_committed_height(&[3], 300).await;
+            cluster.wait_for_committed_height(&[3], 150).await;
 
             // Participation, not just observation: epoch-2+ committee is 5
             // (quorum 4) — with one other member stopped, progress requires the
             // late joiner's votes. Let the joiner's backfill traffic drain first:
             // crashing a peer with resolver fetches in flight trips the registered
             // teardown determinism gap (`boundary_crash_determinism_gap`).
-            cluster.settle(Duration::from_secs(30)).await;
+            cluster.settle(Duration::from_secs(5)).await;
             cluster.crash(0);
             let with_joiner: Vec<usize> = vec![1, 2, 3, 4];
             let target = cluster.committed_height(1) + 2 * EPOCH_LENGTH;
