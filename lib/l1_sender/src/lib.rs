@@ -244,9 +244,12 @@ where
                 .pending()
                 .await
                 .context("get pending nonce for L1 sender cycle")?;
-            // Resolved once per cycle and reused for both simulation and every send below:
-            // L1 fees move at most once per L1 block, slower than a send cycle, and each
-            // resolution costs an RPC round-trip per command otherwise.
+            // Resolved once per cycle and reused for both simulation and every send below.
+            // Freshness is not load-bearing: the submitted max-fee/blob-fee caps are
+            // config-bound (`apply_fee_caps` only trims the priority tip by the estimate),
+            // and fee adequacy is decided at inclusion time — txs sit in the pool longer
+            // than any intra-cycle drift. Re-resolving per command would cost an RPC
+            // round-trip per tx without adding protection.
             let fee_params = self
                 .resolve_fee_params(fee_config, force_transaction_resubmission)
                 .await?;
