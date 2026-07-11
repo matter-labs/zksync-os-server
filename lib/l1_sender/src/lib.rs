@@ -244,11 +244,14 @@ where
                 .pending()
                 .await
                 .context("get pending nonce for L1 sender cycle")?;
-            let sim_fee_params = self
+            // Resolved once per cycle and reused for both simulation and every send below:
+            // L1 fees move at most once per L1 block, slower than a send cycle, and each
+            // resolution costs an RPC round-trip per command otherwise.
+            let fee_params = self
                 .resolve_fee_params(fee_config, force_transaction_resubmission)
                 .await?;
             let gas_limits = self
-                .estimate_gas_limits(&commands, operator_address, sim_fee_params, base_nonce)
+                .estimate_gas_limits(&commands, operator_address, fee_params, base_nonce)
                 .await?;
             tracing::info!(
                 command_name,
@@ -256,6 +259,16 @@ where
                 ?gas_limits,
                 "estimated gas limits via eth_simulateV1",
             );
+
+            // Blob base fee applies only to commands carrying blob sidecars (commit path);
+            // fetch it once per cycle instead of once per command.
+            let blob_base_fee = if commands.iter().any(|cmd| cmd.blob_sidecar().is_some()) {
+                let fee = self.provider.get_blob_base_fee().await?;
+                L1_SENDER_METRICS.report_blob_base_fee(fee)?;
+                Some(fee)
+            } else {
+                None
+            };
 
             // It's important to preserve the order of commands -
             // so that we send them downstream also in order.
@@ -266,12 +279,6 @@ where
                 .then(|(nonce_offset, (mut cmd, gas_limit))| {
                     let range = range.clone();
                     async move {
-                    let fee_params = self
-                        .resolve_fee_params(
-                        fee_config,
-                        force_transaction_resubmission,
-                    )
-                    .await?;
                     let mut tx_request = TransactionRequest::default()
                         .with_from(operator_address)
                         .with_nonce(base_nonce + nonce_offset as u64)
@@ -284,9 +291,8 @@ where
                     let mut blob_gas_limit = 0;
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
                         blob_gas_limit = blob_sidecar.blobs.len() as u64 * DATA_GAS_PER_BLOB;
-                        let fee_per_blob_gas = self.provider.get_blob_base_fee().await?;
-                        L1_SENDER_METRICS
-                            .report_blob_base_fee(fee_per_blob_gas)?;
+                        let fee_per_blob_gas = blob_base_fee
+                            .context("blob base fee not prefetched for a cycle with blob sidecars")?;
                         let max_fee_per_blob_gas = fee_params.max_fee_per_blob_gas;
 
                         if fee_per_blob_gas > max_fee_per_blob_gas {
@@ -692,7 +698,6 @@ where
         let configured_params = fee_config.configured_fee_params();
         let estimated = self.provider.estimate_eip1559_fees().await?;
         L1_SENDER_METRICS.report_l1_eip_1559_estimation(estimated)?;
-        self.report_custom_priority_fee_metrics().await?;
 
         tracing::debug!(
             max_priority_fee_per_gas_gwei = ?format_units(estimated.max_priority_fee_per_gas, "gwei"),
@@ -840,6 +845,14 @@ where
                 .await?;
             L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
             L1_SENDER_METRICS.nonce[&command_name].set(nonce);
+            // Dashboard-only estimates; a failed poll must not take the sender down.
+            if let Err(err) = self.report_custom_priority_fee_metrics().await {
+                tracing::warn!(
+                    command_name,
+                    %err,
+                    "failed to report priority-fee estimate metrics"
+                );
+            }
         }
     }
 
