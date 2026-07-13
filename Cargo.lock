@@ -21,9 +21,9 @@ dependencies = [
 
 [[package]]
 name = "actix-http"
-version = "3.11.2"
+version = "3.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7926860314cbe2fb5d1f13731e387ab43bd32bca224e82e6e2db85de0a3dba49"
+checksum = "48e2faa3e7418ed780cca54829d32782a4008a077230f67457caa063415e99c2"
 dependencies = [
  "actix-codec",
  "actix-rt",
@@ -35,7 +35,7 @@ dependencies = [
  "bytestring",
  "derive_more 2.1.1",
  "encoding_rs",
- "foldhash 0.1.5",
+ "foldhash 0.2.0",
  "futures-core",
  "http 0.2.12",
  "httparse",
@@ -46,8 +46,8 @@ dependencies = [
  "mime",
  "percent-encoding",
  "pin-project-lite",
- "rand 0.9.2",
- "sha1 0.10.6",
+ "rand 0.10.1",
+ "sha1 0.11.0",
  "smallvec",
  "tokio",
  "tokio-util",
@@ -236,7 +236,7 @@ dependencies = [
  "lazy_static",
  "nom",
  "pin-project",
- "rand 0.8.5",
+ "rand 0.8.7",
  "rust-embed",
  "scrypt",
  "sha2 0.10.9",
@@ -257,7 +257,7 @@ dependencies = [
  "hkdf",
  "io_tee",
  "nom",
- "rand 0.8.5",
+ "rand 0.8.7",
  "secrecy",
  "sha2 0.10.9",
 ]
@@ -401,7 +401,7 @@ dependencies = [
  "either",
  "k256",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.8.7",
  "secp256k1 0.30.0",
  "serde",
  "serde_json",
@@ -488,7 +488,7 @@ dependencies = [
  "alloy-rlp",
  "arbitrary",
  "crc",
- "rand 0.8.5",
+ "rand 0.8.7",
  "serde",
  "thiserror 2.0.17",
 ]
@@ -503,7 +503,7 @@ dependencies = [
  "alloy-rlp",
  "arbitrary",
  "borsh",
- "rand 0.8.5",
+ "rand 0.8.7",
  "serde",
 ]
 
@@ -518,7 +518,7 @@ dependencies = [
  "arbitrary",
  "borsh",
  "k256",
- "rand 0.8.5",
+ "rand 0.8.7",
  "serde",
  "serde_with",
  "thiserror 2.0.17",
@@ -743,7 +743,7 @@ dependencies = [
  "alloy-signer-local",
  "k256",
  "libc",
- "rand 0.8.5",
+ "rand 0.8.7",
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
@@ -773,7 +773,7 @@ dependencies = [
  "paste",
  "proptest",
  "proptest-derive 0.8.0",
- "rand 0.9.2",
+ "rand 0.9.5",
  "rapidhash",
  "ruint",
  "rustc-hash 2.1.1",
@@ -978,7 +978,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-serde 2.0.5",
  "derive_more 2.1.1",
- "rand 0.8.5",
+ "rand 0.8.7",
  "serde",
  "strum",
 ]
@@ -1140,7 +1140,7 @@ dependencies = [
  "alloy-signer",
  "async-trait",
  "k256",
- "rand 0.8.5",
+ "rand 0.8.7",
  "thiserror 2.0.17",
 ]
 
@@ -1750,7 +1750,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1df2c09229cbc5a028b1d70e00fdb2acee28b1055dfb5ca73eea49c5a25c4e7c"
 dependencies = [
  "num-traits",
- "rand 0.8.5",
+ "rand 0.8.7",
 ]
 
 [[package]]
@@ -1760,7 +1760,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94893f1e0c6eeab764ade8dc4c0db24caf4fe7cbbaafc0eba0a9030f447b5185"
 dependencies = [
  "num-traits",
- "rand 0.8.5",
+ "rand 0.8.7",
 ]
 
 [[package]]
@@ -1770,7 +1770,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
 dependencies = [
  "num-traits",
- "rand 0.8.5",
+ "rand 0.8.7",
 ]
 
 [[package]]
@@ -1931,8 +1931,8 @@ dependencies = [
  "aws-runtime",
  "aws-sdk-sts",
  "aws-smithy-async",
- "aws-smithy-http 0.63.6",
- "aws-smithy-json 0.62.6",
+ "aws-smithy-http",
+ "aws-smithy-json",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-schema",
@@ -1991,7 +1991,7 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-async",
  "aws-smithy-eventstream",
- "aws-smithy-http 0.63.6",
+ "aws-smithy-http",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
@@ -2011,15 +2011,17 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-kms"
-version = "1.79.0"
+version = "1.109.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5603bd5e0487e90acdef4a9be019f55c841e8eb72d3cb2e88c1c112c67a59db"
+checksum = "35ae42a03fd0308c178015426a5e2ab0909a11f33c0efc56aea95caf92dc38b0"
 dependencies = [
+ "arc-swap",
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.62.3",
- "aws-smithy-json 0.61.6",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
@@ -2027,6 +2029,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "http 0.2.12",
+ "http 1.3.1",
  "regex-lite",
  "tracing",
 ]
@@ -2043,8 +2046,8 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-checksums",
  "aws-smithy-eventstream",
- "aws-smithy-http 0.63.6",
- "aws-smithy-json 0.62.6",
+ "aws-smithy-http",
+ "aws-smithy-json",
  "aws-smithy-observability",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
@@ -2075,8 +2078,8 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-smithy-async",
- "aws-smithy-http 0.63.6",
- "aws-smithy-json 0.62.6",
+ "aws-smithy-http",
+ "aws-smithy-json",
  "aws-smithy-observability",
  "aws-smithy-query",
  "aws-smithy-runtime",
@@ -2099,7 +2102,7 @@ checksum = "b7083fb918b38474ac65ffbf8a69fc8792d36879f4ac5f1667b43aec61efe9a5"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-eventstream",
- "aws-smithy-http 0.63.6",
+ "aws-smithy-http",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes",
@@ -2131,7 +2134,7 @@ version = "0.64.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9e8e65f4f81fcccdeb6c3eca2af17ac21d421a1786a26a394aecf421d616d3a"
 dependencies = [
- "aws-smithy-http 0.63.6",
+ "aws-smithy-http",
  "aws-smithy-types",
  "bytes",
  "crc-fast",
@@ -2155,26 +2158,6 @@ dependencies = [
  "aws-smithy-types",
  "bytes",
  "crc32fast",
-]
-
-[[package]]
-name = "aws-smithy-http"
-version = "0.62.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c4dacf2d38996cf729f55e7a762b30918229917eca115de45dfa8dfb97796c9"
-dependencies = [
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "bytes",
- "bytes-utils",
- "futures-core",
- "http 0.2.12",
- "http 1.3.1",
- "http-body 0.4.6",
- "percent-encoding",
- "pin-project-lite",
- "pin-utils",
- "tracing",
 ]
 
 [[package]]
@@ -2225,15 +2208,6 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-json"
-version = "0.61.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cff418fc8ec5cadf8173b10125f05c2e7e1d46771406187b2c878557d4503390"
-dependencies = [
- "aws-smithy-types",
-]
-
-[[package]]
-name = "aws-smithy-json"
 version = "0.62.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "517089205f18ab4adc5a3e02888cb139bbbbb2e168eac9f396216925d1fbeaf5"
@@ -2269,7 +2243,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8e6f5caf6fea86f8c2206541ab5857cfcda9013426cdbe8fa0098b9e2d32182"
 dependencies = [
  "aws-smithy-async",
- "aws-smithy-http 0.63.6",
+ "aws-smithy-http",
  "aws-smithy-http-client",
  "aws-smithy-observability",
  "aws-smithy-runtime-api",
@@ -2624,7 +2598,7 @@ dependencies = [
  "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
  "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
  "paste",
- "rand 0.9.2",
+ "rand 0.9.5",
  "ruint",
  "serde",
  "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3)",
@@ -2649,7 +2623,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "paste",
- "rand 0.9.2",
+ "rand 0.9.5",
  "ruint",
  "serde",
  "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3)",
@@ -2674,7 +2648,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "paste",
- "rand 0.9.2",
+ "rand 0.9.5",
  "ruint",
  "serde",
  "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3)",
@@ -2721,7 +2695,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "paste",
- "rand 0.9.2",
+ "rand 0.9.5",
  "ruint",
  "serde",
  "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
@@ -3032,7 +3006,7 @@ dependencies = [
  "num_enum",
  "paste",
  "portable-atomic",
- "rand 0.9.2",
+ "rand 0.9.5",
  "regress",
  "rustc-hash 2.1.1",
  "ryu-js",
@@ -3652,9 +3626,9 @@ dependencies = [
 
 [[package]]
 name = "cmov"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f88a43d011fc4a6876cb7344703e297c71dda42494fee094d5f7c76bf13f746"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "coins-ledger"
@@ -4673,7 +4647,7 @@ dependencies = [
  "more-asserts",
  "multiaddr",
  "parking_lot",
- "rand 0.8.5",
+ "rand 0.8.7",
  "smallvec",
  "socket2 0.6.3",
  "tokio",
@@ -4862,7 +4836,7 @@ dependencies = [
  "hex",
  "k256",
  "log",
- "rand 0.8.5",
+ "rand 0.8.7",
  "secp256k1 0.30.0",
  "serde",
  "sha3 0.10.8",
@@ -5182,7 +5156,7 @@ name = "field"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3#c23fd0085ee87872e25ff83f780d2d0ee102a166"
 dependencies = [
- "rand 0.9.2",
+ "rand 0.9.5",
  "seq-macro",
  "serde",
 ]
@@ -5192,7 +5166,7 @@ name = "field"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2#b93c285d292891f3c27a3cf0110be09cde30ac4f"
 dependencies = [
- "rand 0.9.2",
+ "rand 0.9.5",
  "seq-macro",
  "serde",
 ]
@@ -5276,7 +5250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835c052cb0c08c1acf6ffd71c022172e18723949c8282f2b9f27efbc51e64534"
 dependencies = [
  "byteorder",
- "rand 0.8.5",
+ "rand 0.8.7",
  "rustc-hex",
  "static_assertions",
 ]
@@ -5918,7 +5892,7 @@ dependencies = [
  "parking_lot",
  "portable-atomic",
  "quanta",
- "rand 0.8.5",
+ "rand 0.8.7",
  "smallvec",
  "spinning_top",
 ]
@@ -6430,7 +6404,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "system-configuration 0.6.1",
  "tokio",
  "tower-service",
@@ -7121,7 +7095,7 @@ dependencies = [
  "jsonrpsee-types",
  "parking_lot",
  "pin-project",
- "rand 0.9.2",
+ "rand 0.9.5",
  "rustc-hash 2.1.1",
  "serde",
  "serde_json",
@@ -7365,7 +7339,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.53.5",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -8200,7 +8174,7 @@ dependencies = [
  "futures",
  "maplit",
  "openraft-macros",
- "rand 0.8.5",
+ "rand 0.8.7",
  "serde",
  "thiserror 1.0.69",
  "tokio",
@@ -8224,15 +8198,14 @@ dependencies = [
 
 [[package]]
 name = "openssl"
-version = "0.10.73"
+version = "0.10.81"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8505734d46c8ab1e19a1dce3aef597ad87dcb4c37e7188231769bd6bd51cebf8"
+checksum = "77823a27f0babb03091cb9ed9ef80af3b39dbc82f97e8fa530374b7dafd87a45"
 dependencies = [
  "bitflags 2.11.0",
  "cfg-if",
  "foreign-types",
  "libc",
- "once_cell",
  "openssl-macros",
  "openssl-sys",
 ]
@@ -8256,9 +8229,9 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.109"
+version = "0.9.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90096e2e47630d78b7d1c20952dc621f957103f8bc2c8359ec81290d75238571"
+checksum = "b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695"
 dependencies = [
  "cc",
  "libc",
@@ -8354,7 +8327,7 @@ dependencies = [
  "futures-util",
  "opentelemetry",
  "percent-encoding",
- "rand 0.9.2",
+ "rand 0.9.5",
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
@@ -8775,7 +8748,7 @@ source = "git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3#c23fd00
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "non_determinism_source 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
- "rand 0.9.2",
+ "rand 0.9.5",
  "unroll",
 ]
 
@@ -8786,7 +8759,7 @@ source = "git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2#b93
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
  "non_determinism_source 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
- "rand 0.9.2",
+ "rand 0.9.5",
  "unroll",
 ]
 
@@ -8930,7 +8903,7 @@ dependencies = [
  "bitflags 2.11.0",
  "lazy_static",
  "num-traits",
- "rand 0.9.2",
+ "rand 0.9.5",
  "rand_chacha 0.9.0",
  "rand_xorshift",
  "regex-syntax",
@@ -9204,7 +9177,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -9221,7 +9194,7 @@ dependencies = [
  "bytes",
  "getrandom 0.3.3",
  "lru-slab",
- "rand 0.9.2",
+ "rand 0.9.5",
  "ring",
  "rustc-hash 2.1.1",
  "rustls",
@@ -9242,7 +9215,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -9276,9 +9249,9 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "rand"
-version = "0.8.5"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -9288,9 +9261,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.2"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
@@ -9383,7 +9356,7 @@ version = "4.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e48930979c155e2f33aa36ab3119b5ee81332beb6482199a8ecd6029b80b59"
 dependencies = [
- "rand 0.9.2",
+ "rand 0.9.5",
  "rustversion",
 ]
 
@@ -9686,7 +9659,7 @@ dependencies = [
  "metrics",
  "parking_lot",
  "pin-project",
- "rand 0.9.2",
+ "rand 0.9.5",
  "reth-chainspec",
  "reth-errors",
  "reth-ethereum-primitives",
@@ -9851,7 +9824,7 @@ dependencies = [
  "enr",
  "itertools 0.14.0",
  "parking_lot",
- "rand 0.8.5",
+ "rand 0.8.7",
  "reth-ethereum-forks",
  "reth-net-banlist",
  "reth-net-nat",
@@ -9878,7 +9851,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "metrics",
- "rand 0.9.2",
+ "rand 0.9.5",
  "reth-chainspec",
  "reth-ethereum-forks",
  "reth-metrics",
@@ -9928,7 +9901,7 @@ dependencies = [
  "futures",
  "hmac 0.12.1",
  "pin-project",
- "rand 0.8.5",
+ "rand 0.8.7",
  "reth-network-peers",
  "secp256k1 0.30.0",
  "sha2 0.10.9",
@@ -10233,8 +10206,8 @@ dependencies = [
  "metrics",
  "parking_lot",
  "pin-project",
- "rand 0.8.5",
- "rand 0.9.2",
+ "rand 0.8.7",
+ "rand 0.9.5",
  "rayon",
  "reth-chainspec",
  "reth-consensus",
@@ -10565,7 +10538,7 @@ dependencies = [
  "jsonrpsee-core",
  "jsonrpsee-types",
  "metrics",
- "rand 0.9.2",
+ "rand 0.9.5",
  "reqwest 0.13.3",
  "reth-chain-state",
  "reth-chainspec",
@@ -10781,7 +10754,7 @@ dependencies = [
  "parking_lot",
  "paste",
  "pin-project",
- "rand 0.9.2",
+ "rand 0.9.5",
  "reth-chain-state",
  "reth-chainspec",
  "reth-eth-wire-types",
@@ -11435,7 +11408,7 @@ dependencies = [
  "memmap2",
  "object 0.37.3",
  "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
- "rand 0.9.2",
+ "rand 0.9.5",
  "ringbuffer",
  "ruint",
  "serde",
@@ -11454,7 +11427,7 @@ dependencies = [
  "memmap2",
  "object 0.37.3",
  "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender.git?tag=v0.5.2)",
- "rand 0.9.2",
+ "rand 0.9.5",
  "ringbuffer",
  "ruint",
  "serde",
@@ -11554,8 +11527,8 @@ dependencies = [
  "parity-scale-codec",
  "primitive-types",
  "proptest",
- "rand 0.8.5",
- "rand 0.9.2",
+ "rand 0.8.7",
+ "rand 0.9.5",
  "rlp",
  "ruint-macro",
  "serde_core",
@@ -11623,7 +11596,7 @@ dependencies = [
  "borsh",
  "bytes",
  "num-traits",
- "rand 0.8.5",
+ "rand 0.8.7",
  "rkyv",
  "serde",
  "serde_json",
@@ -11648,7 +11621,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
 dependencies = [
- "rand 0.8.5",
+ "rand 0.8.7",
 ]
 
 [[package]]
@@ -11976,7 +11949,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b50c5943d326858130af85e049f2661ba3c78b26589b8ab98e65e80ae44a1252"
 dependencies = [
  "bitcoin_hashes",
- "rand 0.8.5",
+ "rand 0.8.7",
  "secp256k1-sys 0.10.1",
  "serde",
 ]
@@ -11988,7 +11961,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c3c81b43dc2d8877c216a3fccf76677ee1ebccd429566d3e67447290d0c42b2"
 dependencies = [
  "bitcoin_hashes",
- "rand 0.9.2",
+ "rand 0.9.5",
  "secp256k1-sys 0.11.0",
 ]
 
@@ -12199,7 +12172,7 @@ version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67600a47b5aa005cb701454d56a289135a80654eebf1c1d9f076c3817a249bb8"
 dependencies = [
- "rand 0.9.2",
+ "rand 0.9.5",
  "sentry-types",
  "serde",
  "serde_json",
@@ -12247,7 +12220,7 @@ checksum = "aa369b6dc823ba5bddd69d16620f19229eb5df865b9483cf4dabb608891bb9c2"
 dependencies = [
  "debugid",
  "hex",
- "rand 0.9.2",
+ "rand 0.9.5",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -12755,7 +12728,7 @@ dependencies = [
  "http 1.3.1",
  "httparse",
  "log",
- "rand 0.8.5",
+ "rand 0.8.7",
  "sha1 0.10.6",
 ]
 
@@ -13122,9 +13095,9 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tar"
-version = "0.4.45"
+version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
@@ -13908,7 +13881,7 @@ dependencies = [
  "http 1.3.1",
  "httparse",
  "log",
- "rand 0.9.2",
+ "rand 0.9.5",
  "rustls",
  "rustls-pki-types",
  "sha1 0.10.6",
@@ -14636,7 +14609,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -15757,7 +15730,7 @@ dependencies = [
  "chrono",
  "httpmock",
  "num",
- "rand 0.9.2",
+ "rand 0.9.5",
  "reqwest 0.12.28",
  "secrecy",
  "serde",
@@ -15987,7 +15960,7 @@ dependencies = [
  "leb128",
  "once_cell",
  "proptest",
- "rand 0.9.2",
+ "rand 0.9.5",
  "rayon",
  "serde",
  "serde_with",
@@ -16008,7 +15981,7 @@ dependencies = [
  "anyhow",
  "assert_matches",
  "insta",
- "rand 0.9.2",
+ "rand 0.9.5",
  "serde",
  "zksync_os_crypto",
 ]
@@ -16486,7 +16459,7 @@ dependencies = [
  "http 1.3.1",
  "jsonrpsee",
  "num",
- "rand 0.9.2",
+ "rand 0.9.5",
  "reth-net-nat",
  "reth-network-peers",
  "reth-tasks",
