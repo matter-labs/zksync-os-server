@@ -35,8 +35,7 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
             (30, 2) => Ok(ProvingVersion::V6),
             (31, 0) => Ok(ProvingVersion::V7),
             (31, 1) => Ok(ProvingVersion::V7),
-            (32, 0) => Ok(ProvingVersion::V7),
-            (32, 1) => Ok(ProvingVersion::V8),
+            (32, 0) => Ok(ProvingVersion::V8),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
@@ -71,9 +70,10 @@ impl ProvingVersion {
     const V7_VK_HASH: &'static str =
         "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
 
-    /// verification key hash generated from zksync-os v0.4.0, zksync-airbender 73d69b5 and zkos-wrapper a9eec62
+    /// verification key hash generated from zksync-os v0.4.0, zksync-airbender e0a5b6d3
+    /// (combined recursion layers) and zkos-wrapper a676ded
     const V8_VK_HASH: &'static str =
-        "0x87293b7f26e6c40111d512e13d8d06fe868b3ef764bc7d3a42058efc0f73bd9e";
+        "0x2215af6cf294eed41e66f7052ab776fd0f0222b08841523fc85e442a1ce0e085";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
@@ -129,8 +129,7 @@ mod tests {
             ((0, 30, 1), ProvingVersion::V6),
             ((0, 31, 0), ProvingVersion::V7),
             ((0, 31, 1), ProvingVersion::V7),
-            ((0, 32, 0), ProvingVersion::V7),
-            ((0, 32, 1), ProvingVersion::V8),
+            ((0, 32, 0), ProvingVersion::V8),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -140,7 +139,7 @@ mod tests {
             assert_eq!(&proving_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 33, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 32, 1), (0, 33, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);

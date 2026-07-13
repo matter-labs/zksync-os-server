@@ -231,7 +231,7 @@ mod tests {
             vec![],
             10,
             Version::new(0, 0, 0),
-            ProtocolSemanticVersion::new(0, 32, 1),
+            ProtocolSemanticVersion::new(0, 32, 0),
             B256::ZERO,
             vec![],
             BlockStartCursors::default(),

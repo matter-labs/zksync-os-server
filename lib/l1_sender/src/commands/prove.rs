@@ -145,6 +145,8 @@ impl ProofCommand {
             Some(5) => 5,
             Some(6) => 6,
             Some(7) => 0,
+            // todo: map V8 to its verifier version once the V8 verifier is deployed;
+            //       until then real V8 SNARK proofs will panic here
             Some(execution_version) => panic!(
                 "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
             ),

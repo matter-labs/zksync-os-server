@@ -18,6 +18,8 @@ fn parse_git_reference(package_id: &PackageId) -> anyhow::Result<String> {
     Ok(reference.to_string())
 }
 
+// TODO: the `antonio/compat-nightly-*` branch references are temporary - repin to the
+//       proper zksync-os release tags (and drop the branch aliases) once they are cut.
 fn binary_source_config(reference: &str) -> Option<BinarySourceConfig> {
     match reference {
         "v0.2.10-interface-v0.1.3"
