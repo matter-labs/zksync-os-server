@@ -56,7 +56,7 @@ jobs:
     steps:
 
       - name: Checkout tests
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Romsters/boojumos-e2e-tests
           submodules: recursive
@@ -89,13 +89,22 @@ jobs:
         run: |
           geth --dev --http --http.api eth,web3,net \
             --datadir data --miner.gaslimit 9000000000000 \
-            --rpc.allow-unprotected-txs --mine &
+            --rpc.allow-unprotected-txs &
 
       - name: Wait for geth to start
         run: |
+          TIMEOUT=300
+          INTERVAL=3
+          START_TIME=$(date +%s)
           while ! nc -z localhost 8545; do
-            echo "Waiting for geth to start..."
-            sleep 3
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
+            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+              echo "Timed out after ${TIMEOUT}s waiting for geth on port 8545"
+              exit 1
+            fi
+            echo "Waiting for geth to start... (${ELAPSED}s elapsed)"
+            sleep $INTERVAL
           done
           echo "Geth is up and running."
 
@@ -146,7 +155,7 @@ jobs:
 
       - name: Upload test results
         if: (!cancelled())
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-results-geth
           path: |
@@ -168,7 +177,7 @@ jobs:
     steps:
 
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
@@ -208,14 +217,14 @@ jobs:
           echo "Sequencer is up and running."
 
       - name: Checkout solidity tests
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: antonbaliasnikov/solidity-tester
           ref: main # use latest main branch to get test updates on early stages
           path: solidity-tester
 
       - name: Install NodeJS
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
 
@@ -224,7 +233,7 @@ jobs:
         run: cargo nextest run --retries 3
 
       - name: Checkout tests
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: Romsters/boojumos-e2e-tests
           submodules: recursive
@@ -260,14 +269,14 @@ jobs:
 
       - name: Upload server logs
         if: (!cancelled())
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: zksync-os-server-logs
           path: ${{ env.SERVER_LOGFILE }}
 
       - name: Upload test results
         if: (!cancelled())
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-results-zk-os
           path: |
@@ -275,7 +284,7 @@ jobs:
             ${{ env.TESTS_WORKING_DIR }}/lib/execution-spec-tests/report*.json
 
       - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action@v2
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3 # v2.24.0
         if: (!cancelled())
         with:
           check_name: "ZK OS Execution Spec Tests"
@@ -292,7 +301,7 @@ jobs:
     steps:
 
       - name: Download reports
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: test-results-*
           path: data

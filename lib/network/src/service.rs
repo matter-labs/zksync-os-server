@@ -24,7 +24,7 @@ use reth_network_peers::PeerId;
 use reth_network_peers::{NodeRecord, TrustedPeer};
 use reth_provider::BlockNumReader;
 use reth_tasks::Runtime;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io;
 use std::net::{
@@ -346,6 +346,8 @@ impl NetworkService {
         let boot_nodes = resolve_boot_nodes_with_retry(config.boot_nodes.clone()).await?;
         tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
+        // ENs only sync/verify against trusted peers; a main node must still accept untrusted ENs.
+        let trusted_nodes_only = matches!(protocol_config, ZksProtocolConfig::ExternalNode(_));
         let cfg_builder = RethNetworkConfig::builder(config.secret_key, runtime)
             .boot_nodes(boot_nodes)
             // Configure node identity
@@ -400,7 +402,11 @@ impl NetworkService {
                     })
                     // Peers' fork id must match, otherwise we could discover peers from other
                     // chains.
-                    .with_enforce_enr_fork_id(true),
+                    .with_enforce_enr_fork_id(true)
+                    // Treat boot nodes as trusted peers: always keep and redial them (e.g. an EN
+                    // pinning the main node) so replay sync never gets stranded on non-serving peers.
+                    .with_trusted_nodes(config.boot_nodes.clone())
+                    .with_trusted_nodes_only(trusted_nodes_only),
             )
             .discovery_addr(rlpx_address)
             // Disable transaction gossip as it is unsupported by ZKsync OS
@@ -412,6 +418,9 @@ impl NetworkService {
             // Use genesis as chain head
             .set_head(genesis);
         let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+        // Boot nodes double as trusted peers, exempt from the connection cap on outgoing dials.
+        let trusted_peer_ids: HashSet<PeerId> =
+            config.boot_nodes.iter().map(|peer| peer.id).collect();
         let mut cfg_builder = match protocol_config {
             ZksProtocolConfig::MainNode(protocol) => Self::register_main_node_rlpx_sub_protocols(
                 cfg_builder,
@@ -419,6 +428,7 @@ impl NetworkService {
                 replay,
                 protocol_tx,
                 connection_registry.clone(),
+                trusted_peer_ids,
             ),
             ZksProtocolConfig::ExternalNode(protocol) => {
                 Self::register_external_node_rlpx_sub_protocols(
@@ -427,6 +437,7 @@ impl NetworkService {
                     replay,
                     protocol_tx,
                     connection_registry.clone(),
+                    trusted_peer_ids,
                 )
             }
         };
@@ -468,8 +479,9 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         protocol_tx: mpsc::UnboundedSender<ProtocolEvent>,
         connection_registry: ConnectionRegistry,
+        trusted_peers: HashSet<PeerId>,
     ) -> NetworkConfigBuilder {
-        let state = HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS);
+        let state = HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS, trusted_peers);
         builder
             // Support for v1 must be dropped before upgrade to protocol version v31.0. Otherwise,
             // we might send invalid record to ENs that are still using v1 protocol (`starting_migration_number`
@@ -506,8 +518,9 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         protocol_tx: mpsc::UnboundedSender<ProtocolEvent>,
         connection_registry: ConnectionRegistry,
+        trusted_peers: HashSet<PeerId>,
     ) -> NetworkConfigBuilder {
-        let state = HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS);
+        let state = HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS, trusted_peers);
         builder
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _>::for_external_node(
                 replay.clone(),

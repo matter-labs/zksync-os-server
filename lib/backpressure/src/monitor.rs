@@ -2,6 +2,7 @@ use crate::config::{BackpressureConfig, ComponentId, is_pipeline_stage};
 use crate::gate::{PipelineAdmissionGate, PipelineAdmissionReceiver};
 use crate::metrics::MONITOR_METRICS;
 use reth_tasks::Runtime;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -14,16 +15,19 @@ use zksync_os_types::{
 pub type PipelineSnapshot = Vec<(ComponentId, ComponentState)>;
 
 /// Lag between two adjacent pipeline stages: how far the downstream component is behind its upstream neighbor.
+#[derive(Clone, Serialize)]
 pub struct AdjacentSnapshot {
     /// Number of blocks the downstream stage is behind the upstream stage.
     pub block_diff: u64,
     /// Diff between the last processed block timestamps of the two stages.
+    #[serde(skip)]
     pub time_diff: Option<Duration>,
     /// Number of batches the downstream stage is behind the upstream stage.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_diff: Option<u64>,
 }
 
-fn compute_adjacent_snapshots(
+pub fn compute_adjacent_snapshots(
     snapshot: &PipelineSnapshot,
 ) -> HashMap<ComponentId, AdjacentSnapshot> {
     snapshot

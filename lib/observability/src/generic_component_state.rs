@@ -1,7 +1,9 @@
+use serde::Serialize;
 use vise::EncodeLabelValue;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue, Serialize)]
 #[metrics(label = "state", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum GenericComponentState {
     /// No work available — waiting for upstream.
     Idle,
