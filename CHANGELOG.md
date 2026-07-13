@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.11](https://github.com/matter-labs/zksync-os-server/compare/v0.20.10...v0.20.11) (2026-07-13)
+
+
+### Performance Improvements
+
+* **l1_sender:** improve fees and metrics usage ([#1443](https://github.com/matter-labs/zksync-os-server/issues/1443)) ([e23a088](https://github.com/matter-labs/zksync-os-server/commit/e23a0882265deabc5f5b4a7a5ac922ef480a06c3))
+
 ## [0.20.10](https://github.com/matter-labs/zksync-os-server/compare/v0.20.9...v0.20.10) (2026-07-13)
 
 
