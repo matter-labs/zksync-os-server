@@ -244,10 +244,12 @@ where
                 .pending()
                 .await
                 .context("get pending nonce for L1 sender cycle")?;
-            // Resolved once per cycle, not per command: fee caps are config-bound and
-            // whether a fee is high enough is decided when the tx is mined, not now. So
-            // re-reading fees between sends wouldn't change what we submit — it would only
-            // add an RPC round-trip per tx.
+            // The only fee read per send cycle (one drain of up to `command_limit`
+            // commands); the send loop below reuses these params for every command instead
+            // of resolving again per tx. That's safe because fee caps are config-bound and
+            // whether a fee is high enough is decided when the tx is mined, not now — so
+            // per-command reads would only add an RPC round-trip per tx without changing
+            // what we submit.
             let fee_params = self
                 .resolve_fee_params(fee_config, force_transaction_resubmission)
                 .await?;
