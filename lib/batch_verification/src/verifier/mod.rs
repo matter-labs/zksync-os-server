@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 use zksync_os_batch_types::{BatchSignature, PendingBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
-use zksync_os_native_pig::generate_batch_run;
+use zksync_os_native_pig::{NativeBatchBlock, generate_batch_run};
 use zksync_os_network::{
     PeerVerifyBatch, PeerVerifyBatchResult, VerifyBatch, VerifyBatchOutcome, VerifyBatchResult,
 };
@@ -107,10 +107,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
                     .block_cache
                     .get(block_number)
                     .ok_or(BatchVerificationError::MissingBlock(block_number))?;
-                let (block_output, replay_record, tree_data) =
-                    (&cached.output, &cached.record, &cached.tree);
-                let tree_output = tree_data.output;
-                Ok((block_output, replay_record, tree_output))
+                Ok((&cached.output, &cached.record, &cached.tree))
             })
             .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
@@ -124,17 +121,26 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
         let (batch_info, _) = if proving_version >= ProvingVersion::V8 {
             // Native batch PIG re-executes the whole batch - run it on a blocking
             // thread to avoid stalling the async runtime.
-            let replay_records = blocks
+            let native_run_inputs = blocks
                 .iter()
-                .map(|(_, replay_record, _)| (*replay_record).clone())
+                .map(|(_, replay_record, tree_data)| {
+                    ((*replay_record).clone(), (*tree_data).clone())
+                })
                 .collect::<Vec<_>>();
             let read_state = self.read_state.clone();
             let merkle_tree = self.merkle_tree.clone();
             let pubdata_mode = request.pubdata_mode;
             let native_batch_run = tokio::task::spawn_blocking(move || {
+                let native_blocks = native_run_inputs
+                    .iter()
+                    .map(|(replay_record, tree_data)| NativeBatchBlock {
+                        replay_record,
+                        tree_data,
+                    })
+                    .collect::<Vec<_>>();
                 generate_batch_run(
                     proving_version,
-                    &replay_records,
+                    &native_blocks,
                     &read_state,
                     merkle_tree,
                     pubdata_mode,
@@ -155,19 +161,25 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
                 canonical_pubdata_bytes = native_batch_run.pubdata.len(),
                 "Using native batch PIG for batch verification",
             );
-            PendingBatchInfo::build_from_canonical_output(
+            native_batch_run.build_batch_info(
                 request.batch_number,
+                request.first_block_number,
+                request.last_block_number,
                 request.pubdata_mode,
                 &protocol_version,
-                native_batch_run
-                    .canonical_commit_data(request.first_block_number, request.last_block_number),
+                self.chain_id,
+                self.l1_state.sl_chain_id,
             )?
         } else {
             PendingBatchInfo::build(
                 blocks
                     .iter()
-                    .map(|(block_output, replay_record, tree)| {
-                        (*block_output, replay_record.transactions.as_slice(), tree)
+                    .map(|(block_output, replay_record, tree_data)| {
+                        (
+                            *block_output,
+                            replay_record.transactions.as_slice(),
+                            &tree_data.output,
+                        )
                     })
                     .collect(),
                 self.chain_id,
@@ -286,10 +298,10 @@ mod tests {
     use super::*;
     use crate::tests::DummyFinality;
     use crate::verify_batch_wire::encode_verify_batch_request;
-    use alloy::consensus::{EMPTY_OMMER_ROOT_HASH, Header, Sealable};
+    use alloy::consensus::{Header, Sealable};
     use alloy::eips::eip1559::INITIAL_BASE_FEE;
     use alloy::network::EthereumWallet;
-    use alloy::primitives::{Address, B64, B256, Bloom, U256, address, keccak256};
+    use alloy::primitives::{Address, B256, U256, address, keccak256};
     use alloy::providers::ProviderBuilder;
     use alloy::rpc::json_rpc::ErrorPayload;
     use alloy::transports::mock::Asserter;
@@ -300,17 +312,13 @@ mod tests {
     use std::path::PathBuf;
     use std::str::FromStr;
     use std::sync::Arc;
-    use zk_os_api::helpers::{set_properties_code, set_properties_nonce};
-    use zk_os_basic_system::system_implementation::flat_storage_model::{
-        ACCOUNT_PROPERTIES_STORAGE_ADDRESS, AccountProperties,
-    };
     use zksync_os_batch_types::BlockMerkleTreeData;
     use zksync_os_batch_types::PendingBatchInfo;
     use zksync_os_batch_types::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
     use zksync_os_contract_interface::models::{BatchDaInputMode, StoredBatchInfo};
     use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
     use zksync_os_contract_interface::{Bridgehub, ZkChain};
-    use zksync_os_genesis::{GenesisInput, GenesisState};
+    use zksync_os_genesis::{FileGenesisInputSource, GenesisState, build_genesis};
     use zksync_os_interface::traits::{PreimageSource, ReadStorage};
     use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper, TreeBatchOutput, TreeEntry};
     use zksync_os_merkle_tree_api::BatchTreeProof;
@@ -320,7 +328,7 @@ mod tests {
     };
     use zksync_os_types::{
         BlockOutput, BlockPubdata, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
-        PubdataMode,
+        PubdataMode, SystemTxEnvelope, ZkTransaction,
     };
 
     const CHAIN_ID: u64 = 270;
@@ -398,7 +406,7 @@ mod tests {
     #[tokio::test]
     async fn v8_verifier_approves_batch_built_from_native_run() {
         let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
-        let genesis_state = build_genesis_state_for_test(&protocol_version);
+        let genesis_state = build_genesis_state_for_test(&protocol_version).await;
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
         let temp_dir = tempfile::tempdir().unwrap();
@@ -464,10 +472,10 @@ mod tests {
     /// `fri_proof_verifier::verify_fri_proof_v8`) must match the public input the zksync-os
     /// 0.4.0 batch program computes natively:
     /// `keccak(state_before || state_after || chain_config_hash || batch_output)`.
-    #[test]
-    fn v8_public_input_reconstruction_matches_native_run() {
+    #[tokio::test]
+    async fn v8_public_input_reconstruction_matches_native_run() {
         let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
-        let genesis_state = build_genesis_state_for_test(&protocol_version);
+        let genesis_state = build_genesis_state_for_test(&protocol_version).await;
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
         let temp_dir = tempfile::tempdir().unwrap();
@@ -476,7 +484,10 @@ mod tests {
 
         let native_batch_run = generate_batch_run(
             ProvingVersion::V8,
-            std::slice::from_ref(&tree_block.record),
+            &[NativeBatchBlock {
+                replay_record: &tree_block.record,
+                tree_data: &tree_block.tree,
+            }],
             &read_state,
             tree.clone(),
             PubdataMode::Calldata,
@@ -518,11 +529,11 @@ mod tests {
     ///   V8_PROVER_INPUT_OUT=/home/claude/v8-prover-input \
     ///   cargo test -p zksync_os_batch_verification dump_v8_simplest_batch_prover_input \
     ///     -- --ignored --nocapture
-    #[test]
+    #[tokio::test]
     #[ignore = "utility: dumps the V8 simplest-batch prover input to files"]
-    fn dump_v8_simplest_batch_prover_input() {
+    async fn dump_v8_simplest_batch_prover_input() {
         let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
-        let genesis_state = build_genesis_state_for_test(&protocol_version);
+        let genesis_state = build_genesis_state_for_test(&protocol_version).await;
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
         let temp_dir = tempfile::tempdir().unwrap();
@@ -531,7 +542,10 @@ mod tests {
 
         let native_batch_run = generate_batch_run(
             ProvingVersion::V8,
-            std::slice::from_ref(&tree_block.record),
+            &[NativeBatchBlock {
+                replay_record: &tree_block.record,
+                tree_data: &tree_block.tree,
+            }],
             &read_state,
             tree.clone(),
             PubdataMode::Calldata,
@@ -580,7 +594,10 @@ mod tests {
     ) -> zksync_os_batch_types::batcher_model::BatchForSigning<ProverInput> {
         let native_batch_run = generate_batch_run(
             ProvingVersion::V8,
-            std::slice::from_ref(&tree_block.record),
+            &[NativeBatchBlock {
+                replay_record: &tree_block.record,
+                tree_data: &tree_block.tree,
+            }],
             read_state,
             tree.clone(),
             PubdataMode::Calldata,
@@ -684,7 +701,13 @@ mod tests {
                 execution_version: ExecutionVersion::V7 as u32,
                 blob_fee: U256::ONE,
             },
-            vec![],
+            // A fresh chain establishes the settlement-layer chain id in its first block
+            // (see the sequencer's SetSLChainId injection); the V8 batch program reads it
+            // from state, and batch-info construction cross-checks it against the node.
+            vec![ZkTransaction::from(SystemTxEnvelope::set_sl_chain_id(
+                SL_CHAIN_ID,
+                u64::MAX,
+            ))],
             0,
             semver::Version::new(0, 0, 0),
             protocol_version,
@@ -750,100 +773,15 @@ mod tests {
         }
     }
 
-    fn build_genesis_state_for_test(protocol_version: &ProtocolSemanticVersion) -> GenesisState {
+    async fn build_genesis_state_for_test(
+        protocol_version: &ProtocolSemanticVersion,
+    ) -> GenesisState {
         let genesis_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../local-chains/v31.0/default/genesis.json");
-        let genesis_input = GenesisInput::load_from_file(&genesis_path).unwrap();
-
-        let mut storage_logs: BTreeMap<B256, B256> = BTreeMap::new();
-        let mut preimages = vec![];
-
-        for (address, deployed_code) in genesis_input.initial_contracts {
-            let mut account_properties = AccountProperties::default();
-            set_properties_nonce(&mut account_properties, 1);
-            let bytecode_preimage = set_properties_code(&mut account_properties, &deployed_code);
-            let bytecode_hash = account_properties.bytecode_hash;
-
-            let flat_storage_key = account_properties_flat_key(address);
-            let account_properties_hash = account_properties.compute_hash();
-            storage_logs.insert(
-                flat_storage_key,
-                account_properties_hash.as_u8_array().into(),
-            );
-
-            preimages.push((bytecode_hash.as_u8_array().into(), bytecode_preimage));
-            preimages.push((
-                account_properties_hash.as_u8_array().into(),
-                account_properties.encoding().to_vec(),
-            ));
-        }
-
-        for (key, value) in genesis_input.additional_storage_raw {
-            let duplicate = storage_logs.insert(key, value).is_some();
-            assert!(
-                !duplicate,
-                "duplicate key in additional_storage_raw: {key:?}"
-            );
-        }
-        for (key, value, address_and_key) in genesis_input.additional_storage.into_storage_slots() {
-            let duplicate = storage_logs.insert(key, value).is_some();
-            assert!(
-                !duplicate,
-                "duplicate flattened key in additional_storage: {address_and_key:?}"
-            );
-        }
-        for (hash, preimage) in genesis_input.additional_preimages {
-            preimages.push((hash, alloy::hex::decode(preimage).unwrap()));
-        }
-
-        let header = Header {
-            parent_hash: B256::ZERO,
-            ommers_hash: EMPTY_OMMER_ROOT_HASH,
-            beneficiary: Address::ZERO,
-            state_root: B256::ZERO,
-            transactions_root: B256::ZERO,
-            receipts_root: B256::ZERO,
-            logs_bloom: Bloom::ZERO,
-            difficulty: U256::ZERO,
-            number: 0,
-            gas_limit: 5_000,
-            gas_used: 0,
-            timestamp: 0,
-            extra_data: Default::default(),
-            mix_hash: B256::ZERO,
-            nonce: B64::ZERO,
-            base_fee_per_gas: Some(INITIAL_BASE_FEE),
-            withdrawals_root: None,
-            blob_gas_used: None,
-            excess_blob_gas: None,
-            parent_beacon_block_root: None,
-            requests_hash: None,
-            block_access_list_hash: None,
-            slot_number: None,
-        }
-        .seal_slow();
-
-        GenesisState {
-            storage_logs: storage_logs.into_iter().collect(),
-            preimages,
-            header,
-            context: BlockContext {
-                chain_id: CHAIN_ID,
-                block_number: 0,
-                block_hashes: Default::default(),
-                timestamp: 0,
-                eip1559_basefee: U256::from(INITIAL_BASE_FEE),
-                pubdata_price: U256::ZERO,
-                native_price: U256::ONE,
-                coinbase: Address::ZERO,
-                gas_limit: 100_000_000,
-                pubdata_limit: 100_000_000,
-                mix_hash: U256::ZERO,
-                execution_version: ExecutionVersion::try_from(protocol_version).unwrap() as u32,
-                blob_fee: U256::ONE,
-            },
-            expected_genesis_root: genesis_input.genesis_root,
-        }
+        let source = FileGenesisInputSource::new(genesis_path);
+        build_genesis(&source, CHAIN_ID, protocol_version)
+            .await
+            .unwrap()
     }
 
     fn genesis_tree(
@@ -899,21 +837,5 @@ mod tests {
             commitment: B256::from(U256::ONE.to_be_bytes()),
             last_block_timestamp: Some(0),
         }
-    }
-
-    fn account_properties_flat_key(address: Address) -> B256 {
-        let mut bytes = [0u8; 32];
-        bytes[12..32].copy_from_slice(address.as_slice());
-        flat_storage_key_for_contract(
-            ACCOUNT_PROPERTIES_STORAGE_ADDRESS.to_be_bytes().into(),
-            bytes.into(),
-        )
-    }
-
-    fn flat_storage_key_for_contract(address: Address, key: B256) -> B256 {
-        let mut bytes = [0u8; 64];
-        bytes[12..32].copy_from_slice(address.as_slice());
-        bytes[32..64].copy_from_slice(key.as_slice());
-        B256::from_slice(Blake2s256::digest(bytes).as_slice())
     }
 }

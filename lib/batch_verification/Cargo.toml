@@ -37,8 +37,6 @@ alloy = { workspace = true, default-features = false, features = ["providers", "
 blake2.workspace = true
 semver.workspace = true
 tempfile.workspace = true
-zk_os_api.workspace = true
-zk_os_basic_system.workspace = true
 zksync_os_genesis.workspace = true
 zksync_os_merkle_tree_api.workspace = true
 zksync_os_provider.workspace = true

@@ -3,13 +3,22 @@
 //! This crate isolates version-specific zksync-os native batching APIs from the rest of the
 //! server so `multivm` can stay focused on block execution and transaction simulation.
 
-use alloy::primitives::B256;
-use zksync_os_batch_types::CanonicalBatchCommitData;
+use alloy::consensus::BlobTransactionSidecar;
+use alloy::primitives::{B256, keccak256};
+use zksync_os_batch_types::{BlockMerkleTreeData, CanonicalBatchCommitData, PendingBatchInfo};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ProvingVersion, PubdataMode};
+use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataMode};
 
+pub mod tree;
 mod v8;
+
+/// Per-block input to [`generate_batch_run`].
+#[derive(Debug, Clone, Copy)]
+pub struct NativeBatchBlock<'a> {
+    pub replay_record: &'a ReplayRecord,
+    pub tree_data: &'a BlockMerkleTreeData,
+}
 
 #[derive(Debug)]
 pub struct NativeBatchRunOutput {
@@ -61,26 +70,83 @@ impl NativeBatchRunOutput {
             pubdata: self.pubdata.clone(),
         }
     }
+
+    /// Builds the batch commit info from this run, cross-checking the run output against the
+    /// node-side expectations so that a divergence fails at seal/verification time rather than
+    /// as an opaque proof mismatch hours later.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_batch_info(
+        &self,
+        batch_number: u64,
+        first_block_number: u64,
+        last_block_number: u64,
+        pubdata_mode: PubdataMode,
+        protocol_version: &ProtocolSemanticVersion,
+        chain_id: u64,
+        sl_chain_id: u64,
+    ) -> anyhow::Result<(PendingBatchInfo, Option<BlobTransactionSidecar>)> {
+        anyhow::ensure!(
+            self.chain_id == chain_id,
+            "native batch run chain id mismatch: node has {chain_id}, batch program used {}",
+            self.chain_id,
+        );
+        anyhow::ensure!(
+            self.sl_chain_id == sl_chain_id,
+            "native batch run SL chain id mismatch: node has {sl_chain_id}, state has {}",
+            self.sl_chain_id,
+        );
+
+        let (batch_info, blob_sidecar) = PendingBatchInfo::build_from_canonical_output(
+            batch_number,
+            pubdata_mode,
+            protocol_version,
+            self.canonical_commit_data(first_block_number, last_block_number),
+        )?;
+
+        // Reconstruct the batch public input exactly as `verify_fri_proof_v8` will and compare
+        // it with the value the batch program computed; catches batch-output layout drift.
+        let chain_config_hash = v8::chain_config_hash(chain_id)?;
+        let reconstructed_public_input_hash = keccak256(
+            [
+                self.previous_state_commitment.0,
+                batch_info.commit_info.new_state_commitment.0,
+                chain_config_hash.0,
+                batch_info.v8_batch_output_hash().0,
+            ]
+            .concat(),
+        );
+        anyhow::ensure!(
+            reconstructed_public_input_hash == self.batch_public_input_hash,
+            "batch public input hash mismatch: server-side reconstruction {reconstructed_public_input_hash}, batch program {}",
+            self.batch_public_input_hash,
+        );
+
+        Ok((batch_info, blob_sidecar))
+    }
 }
 
-/// keccak256 commitment of the chain config used by V8 native batch runs (and thus committed
-/// to in the V8 batch public input). Must stay in sync with the `ChainConfig` constructed in
-/// [`v8::generate_batch_run`].
+/// The chain config all V8 executions (block and native batch) run with. Its hash is part of
+/// the V8 batch public input, so every construction site must go through this function.
+pub fn v8_chain_config(
+    chain_id: u64,
+) -> anyhow::Result<zk_ee_0_4_0::system::metadata::chain_config::ChainConfig> {
+    v8::chain_config(chain_id)
+}
+
+/// keccak256 commitment of [`v8_chain_config`], as committed to in the V8 batch public input.
 pub fn v8_chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
     v8::chain_config_hash(chain_id)
 }
 
 pub fn generate_batch_run<ReadState: ReadStateHistory>(
     proving_version: ProvingVersion,
-    replay_records: &[ReplayRecord],
+    blocks: &[NativeBatchBlock<'_>],
     read_state: &ReadState,
     merkle_tree: MerkleTree<RocksDBWrapper>,
     pubdata_mode: PubdataMode,
 ) -> anyhow::Result<NativeBatchRunOutput> {
     match proving_version {
-        ProvingVersion::V8 => {
-            v8::generate_batch_run(replay_records, read_state, merkle_tree, pubdata_mode)
-        }
+        ProvingVersion::V8 => v8::generate_batch_run(blocks, read_state, merkle_tree, pubdata_mode),
         _ => anyhow::bail!("native batch proving is unsupported for {proving_version:?}"),
     }
 }

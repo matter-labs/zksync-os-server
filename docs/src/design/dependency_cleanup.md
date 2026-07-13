@@ -60,7 +60,7 @@ That is acceptable while the integration is in flight, but it should not be the 
 
 The V8 VK hash in `lib/types/src/protocol/proving_version.rs` is real (no longer a placeholder), but its provenance is raw revs, not releases:
 
-- zksync-os `draft-0.4.0` + zksync-airbender rev `73d69b5` + zkos-wrapper rev `a9eec62` (security_80)
+- zksync-os `draft-0.4.0` + zksync-airbender rev `4e8701d5` + zkos-wrapper rev `0a833652` (security_80, combined recursion layers; matches the V8 entry in zksync-airbender-prover PR #137)
 
 The V8 `multiblock_batch` app binary used for proving / VK generation is built locally from `draft-0.4.0` (`dump_bin.sh`); no release-tagged V8 app binary is published yet. Once tagged releases of zksync-os / zksync-airbender / zkos-wrapper exist for this lane, the VK provenance should reference them.
 
