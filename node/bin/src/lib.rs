@@ -61,7 +61,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use zksync_os_backpressure::{BackpressureMonitor, PipelineTracker};
+use zksync_os_backpressure::{BackpressureMonitor, PipelineSnapshot, PipelineTracker};
 use zksync_os_base_token_adjuster::{BaseTokenPriceHandle, BaseTokenPriceUpdater};
 use zksync_os_batch_verification::{
     BatchVerificationConfig as BatchVerificationPolicyConfig, BatchVerificationPipelineStep,
@@ -110,7 +110,7 @@ use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::{EthCallHandler, RpcStorage};
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
-use zksync_os_status_server::run_status_server;
+use zksync_os_status_server::{StatusServerState, run_status_server};
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
 use zksync_os_storage::lazy::RepositoryManager;
@@ -894,6 +894,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let PipelineHandles {
         backpressure_acceptance_rx,
+        pipeline_snapshot_rx,
         prover_api_port,
     } = if node_role.is_main() {
         run_main_node_pipeline(
@@ -926,28 +927,25 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         )
         .await
     } else {
-        PipelineHandles {
-            backpressure_acceptance_rx: run_en_pipeline(
-                &config,
-                replays_for_sequencer,
-                committed_batch_provider.clone(),
-                node_startup_state,
-                archiving_block_replay_storage,
-                runtime,
-                block_context_provider,
-                state.clone(),
-                tree_db,
-                repositories.clone(),
-                finality_storage.clone(),
-                stop_receiver.clone(),
-                tx_acceptance_state_sender,
-                chain_id,
-                verify_batch_rx,
-                outgoing_verify_results.clone(),
-            )
-            .await,
-            prover_api_port: None, // EN has no prover server
-        }
+        run_en_pipeline(
+            &config,
+            replays_for_sequencer,
+            committed_batch_provider.clone(),
+            node_startup_state,
+            archiving_block_replay_storage,
+            runtime,
+            block_context_provider,
+            state.clone(),
+            tree_db,
+            repositories.clone(),
+            finality_storage.clone(),
+            stop_receiver.clone(),
+            tx_acceptance_state_sender,
+            chain_id,
+            verify_batch_rx,
+            outgoing_verify_results.clone(),
+        )
+        .await
     };
 
     // Aggregate all "not accepting" signals into a single combined receiver for the RPC server.
@@ -968,10 +966,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .local_addr()
             .expect("status server local_addr")
             .port();
+        let status_state = StatusServerState {
+            pipeline_snapshot: pipeline_snapshot_rx,
+            consensus_raft_status_rx: raft_status_rx,
+        };
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
             |shutdown| async move {
-                run_status_server(status_listener, shutdown, raft_status_rx)
+                run_status_server(status_listener, shutdown, status_state)
                     .await
                     .expect("failed to run status server");
             },
@@ -1132,6 +1134,8 @@ async fn fetch_l1_state_with_startup_revert(
 struct PipelineHandles {
     /// Registered into the `TxAcceptanceGate`.
     backpressure_acceptance_rx: watch::Receiver<TransactionAcceptanceState>,
+    /// Per-component pipeline state, exposed via the status server's `/status/pipeline`.
+    pipeline_snapshot_rx: watch::Receiver<PipelineSnapshot>,
     /// Prover API port, reported by the status server. `None` on external nodes.
     prover_api_port: Option<u16>,
 }
@@ -1238,7 +1242,8 @@ async fn run_main_node_pipeline(
         );
         let snapshot_rx = PipelineTracker::spawn(runtime, components);
         return PipelineHandles {
-            backpressure_acceptance_rx: monitor.spawn(runtime, snapshot_rx),
+            backpressure_acceptance_rx: monitor.spawn(runtime, snapshot_rx.clone()),
+            pipeline_snapshot_rx: snapshot_rx,
             prover_api_port: None,
         };
     }
@@ -1416,7 +1421,8 @@ async fn run_main_node_pipeline(
     pipeline.spawn();
     let snapshot_rx = PipelineTracker::spawn(runtime, components);
     PipelineHandles {
-        backpressure_acceptance_rx: monitor.spawn(runtime, snapshot_rx),
+        backpressure_acceptance_rx: monitor.spawn(runtime, snapshot_rx.clone()),
+        pipeline_snapshot_rx: snapshot_rx,
         prover_api_port,
     }
 }
@@ -1441,7 +1447,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
-) -> watch::Receiver<TransactionAcceptanceState> {
+) -> PipelineHandles {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
             .general_config
@@ -1541,7 +1547,11 @@ async fn run_en_pipeline(
         "clear failing block config",
         clear_failing_block_config_task(finality, internal_config_manager),
     );
-    monitor.spawn(runtime, snapshot_rx)
+    PipelineHandles {
+        backpressure_acceptance_rx: monitor.spawn(runtime, snapshot_rx.clone()),
+        pipeline_snapshot_rx: snapshot_rx,
+        prover_api_port: None, // EN has no prover server
+    }
 }
 
 fn init_and_report_internal_config_manager(

@@ -25,6 +25,7 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::{
+    DEFAULT_NONCE_ERROR_MAX_ATTEMPTS, DEFAULT_NONCE_ERROR_RETRY_BACKOFF,
     DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY, DEFAULT_REQUIRED_CONFIRMATIONS_L1,
 };
 use zksync_os_mempool::SubPoolLimit;
@@ -607,6 +608,10 @@ pub struct NetworkConfig {
     /// `enode://<node ID>@<IP address>:<port>` or `enode://<node ID>@<DNS name>:<port>`
     /// delimited by commas (`,`). DNS names are resolved by the networking stack. For example:
     /// `enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060`
+    ///
+    /// Boot nodes are also treated as trusted peers: always kept connected and admitted to the zks
+    /// subprotocol regardless of the active-connection cap. On an external node, listing the main
+    /// node here keeps replay sync from getting stranded on non-serving peers.
     #[config(
         default,
         with = Delimited::repeat(Serde![str], ",")
@@ -1263,6 +1268,16 @@ pub struct L1SenderConfig {
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_L1)]
     pub required_confirmations: u64,
 
+    /// Max submission attempts per L1 transaction when the L1 node rejects it with a
+    /// nonce-class error.
+    #[config(default_t = DEFAULT_NONCE_ERROR_MAX_ATTEMPTS)]
+    pub nonce_error_max_attempts: usize,
+
+    /// Backoff between attempts after a nonce-class rejection. Gives the L1 node time to
+    /// settle its pool/state view after a block import.
+    #[config(default_t = DEFAULT_NONCE_ERROR_RETRY_BACKOFF)]
+    pub nonce_error_retry_backoff: Duration,
+
     /// Whether L1 senders are enabled.
     /// Only affects the Main Node.
     /// Only useful for debug. When L1 senders are disabled,
@@ -1361,6 +1376,16 @@ pub struct GatewaySenderConfig {
     /// Gateway blocks (inclusive of the inclusion block) before a transaction is confirmed.
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY)]
     pub required_confirmations: u64,
+
+    /// Max submission attempts per Gateway transaction when the Gateway node rejects it with
+    /// a nonce-class error.
+    #[config(default_t = DEFAULT_NONCE_ERROR_MAX_ATTEMPTS)]
+    pub nonce_error_max_attempts: usize,
+
+    /// Backoff between attempts after a nonce-class rejection. Gives the Gateway node time
+    /// to settle its pool/state view after a block import.
+    #[config(default_t = DEFAULT_NONCE_ERROR_RETRY_BACKOFF)]
+    pub nonce_error_retry_backoff: Duration,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -2127,6 +2152,8 @@ impl L1SenderConfig {
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
+            nonce_error_max_attempts: self.nonce_error_max_attempts,
+            nonce_error_retry_backoff: self.nonce_error_retry_backoff,
             phantom_data: Default::default(),
         }
     }
@@ -2185,6 +2212,8 @@ impl GatewaySenderConfig {
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
+            nonce_error_max_attempts: self.nonce_error_max_attempts,
+            nonce_error_retry_backoff: self.nonce_error_retry_backoff,
             phantom_data: Default::default(),
         }
     }
@@ -2576,6 +2605,8 @@ mod tests {
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
                 required_confirmations: DEFAULT_REQUIRED_CONFIRMATIONS_L1,
+                nonce_error_max_attempts: DEFAULT_NONCE_ERROR_MAX_ATTEMPTS,
+                nonce_error_retry_backoff: DEFAULT_NONCE_ERROR_RETRY_BACKOFF,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
                 max_batch_diff_to_upstream: None,

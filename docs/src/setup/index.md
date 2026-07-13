@@ -2,6 +2,7 @@
 
 * [Prerequisites](prerequisites.md)
 * [Local Run](local_run.md)
+* [Besu Network](besu.md)
 * [Docker Setup](docker.md)
 * [Multi-Node Consensus](multi_node_consensus.md)
 * [Otterscan (Local Explorer)](local_explorer.md)

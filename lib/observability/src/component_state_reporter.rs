@@ -1,20 +1,23 @@
 use crate::generic_component_state::GenericComponentState;
 use crate::metrics::GENERAL_METRICS;
 use crate::state_label::StateLabel;
+use serde::Serialize;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
 /// Coordinates for a pipeline item
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TrackingCoordinates {
     pub block_number: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_number: Option<u64>,
 }
 
 /// State snapshot reported by a pipeline component on every state transition.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ComponentState {
     /// Component state - Idle or Active.
     pub state: GenericComponentState,
@@ -23,12 +26,15 @@ pub struct ComponentState {
     pub specific_state: &'static str,
 
     /// When the current state was entered.
+    #[serde(skip)]
     pub state_entered_at: Instant,
 
     /// Last item picked from the input channel.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub picked: Option<TrackingCoordinates>,
 
     /// Last item fully handled/forwarded downstream.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub processed: Option<TrackingCoordinates>,
 }
 
