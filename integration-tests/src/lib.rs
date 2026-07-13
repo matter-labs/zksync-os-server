@@ -1229,9 +1229,28 @@ impl AnvilL1 {
 
         tracing::info!("L1 chain started on {}", address);
 
+        // `NodeProvider::new` probes Anvil's capabilities over a transport with no request
+        // timeout; an Anvil that wedges right after passing the readiness check above would
+        // otherwise hang the test until nextest's terminate timeout.
+        let provider = (|| async {
+            tokio::time::timeout(Duration::from_secs(10), NodeProvider::new(provider.clone()))
+                .await
+                .context("timed out probing L1 node capabilities")?
+                .context("failed to probe L1 node capabilities")
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_millis(200))
+                .with_max_times(5),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(%err, ?dur, "retrying L1 node capability probing");
+        })
+        .await?;
+
         Ok(Self {
             address,
-            provider: NodeProvider::new(provider).await?,
+            provider,
             wallet,
             _tempdir: Arc::new(tempdir),
         })
