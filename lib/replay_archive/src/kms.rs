@@ -6,6 +6,7 @@
 //! call per object; the private key never leaves KMS.
 
 use std::collections::HashSet;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -58,11 +59,21 @@ pub struct GcpKmsConfig {
 }
 
 /// Minimal GCP KMS REST client covering the two methods the replay archive needs.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GcpKmsClient {
     http: reqwest::Client,
     token_source: Arc<dyn TokenSource>,
     key_version: String,
+}
+
+impl fmt::Debug for GcpKmsClient {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GcpKmsClient")
+            .field("key_version", &self.key_version)
+            // Skip `http` / `token_source` as their representations may contain sensitive info.
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Deserialize)]
