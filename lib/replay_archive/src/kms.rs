@@ -108,10 +108,13 @@ impl GcpKmsClient {
                     .context("failed to read GCP KMS credentials file")?;
                 DefaultTokenSourceProvider::new_with_credentials(auth_config, Box::new(credentials))
                     .await
+                    .context("failed to initialize GCP KMS token source from credentials file")?
             }
-            GcpKmsAuthMode::Authenticated => DefaultTokenSourceProvider::new(auth_config).await,
-        }
-        .context("failed to initialize GCP KMS token source")?;
+            GcpKmsAuthMode::Authenticated => DefaultTokenSourceProvider::new(auth_config)
+                .await
+                .context(crate::GCP_CREDENTIALS_HINT)
+                .context("failed to initialize GCP KMS token source")?,
+        };
         Ok(Self {
             http: reqwest::Client::new(),
             token_source: provider.token_source(),
@@ -133,7 +136,9 @@ impl GcpKmsClient {
             .token_source
             .token()
             .await
-            .map_err(|err| anyhow::anyhow!("failed to obtain GCP access token: {err}"))?;
+            .map_err(|err| anyhow::anyhow!("{err}"))
+            .context(crate::GCP_CREDENTIALS_HINT)
+            .context("failed to obtain GCP access token")?;
         let mut request = self
             .http
             .request(method, &url)

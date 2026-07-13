@@ -2,6 +2,9 @@
 // https://github.com/paradigmxyz/reth/blob/fcf58cb5acc2825e7c046f6741e90a8c5dab7847/crates/rpc/rpc-api/src/web3.rs
 
 use alloy::primitives::{B256, Bytes};
+// In client-only mode the `rpc` macro replaces `RpcResult` return types with
+// `Result<_, ClientError>`, leaving this import unused.
+#[cfg(feature = "server")]
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 

@@ -78,19 +78,8 @@ Other storage backends should implement:
 
 ## Encryption
 
-Encrypted archives use the age format with one of two recipient types.
-
-With age X25519, the node needs only the public recipient key:
-
-```text
-age1...
-```
-
-The private identity should be stored separately and used only during recovery:
-
-```text
-AGE-SECRET-KEY-...
-```
+Encrypted archives use the age format with one of two recipient types. GCP KMS is the primary
+mode for our deployments; age X25519 is available as a KMS-independent alternative.
 
 With GCP KMS, the node is configured with the resource name of an `ASYMMETRIC_DECRYPT` key version
 using an `RSA_DECRYPT_OAEP_*_SHA256` algorithm:
@@ -106,6 +95,27 @@ every record takes one KMS `AsymmetricDecrypt` call (requiring
 `cloudkms.cryptoKeyVersions.useToDecrypt`), so key access can be revoked and audited per record.
 Note that KMS-encrypted objects use a custom age stanza and can only be decrypted by the recovery
 tool, not by the stock `age` CLI.
+
+The key version resource name is embedded in the age header of every archived object, so it can be
+recovered from the archive itself even if the node configuration is lost:
+
+```console
+$ head -c 300 <downloaded_object> | strings | head -2
+age-encryption.org/v1
+-> gcp-kms-rsa-oaep projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
+```
+
+With age X25519, the node needs only the public recipient key:
+
+```text
+age1...
+```
+
+The private identity should be stored separately and used only during recovery:
+
+```text
+AGE-SECRET-KEY-...
+```
 
 Encryption is randomized, so archive presence checks verify object existence only. They do not
 re-encrypt a replay record and compare bytes.
@@ -126,9 +136,14 @@ Second, rebuild the node replay RocksDB from a canonical anchor:
 anchor = (latest_block_number, latest_block_hash)
 ```
 
-If the archive was encrypted, recovery decrypts downloaded objects in memory when an age identity
-file (`--identity-file` / `--age-secret-key`) or a GCP KMS key version (`--kms-key-version`, with
-optional `--kms-credential-file-path`) is provided. Decrypted replay records are not written to
+The anchor must come from a trusted source, e.g. `eth_getBlockByNumber("latest")` on a healthy
+replica, or a block explorer. When testing recovery (rather than responding to actual data loss),
+the highest `<block_number>/<block_hash>` in the downloaded layout can be used as the anchor: it
+is the latest record the archive contains.
+
+If the archive was encrypted, recovery decrypts downloaded objects in memory when a GCP KMS key
+version (`--kms-key-version`, with optional `--kms-credential-file-path`) or an age identity
+(`--identity-file` / `--age-secret-key`) is provided. Decrypted replay records are not written to
 disk.
 
 The recovery logic starts from the anchor, reads the replay record for that block, extracts the
@@ -162,7 +177,9 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --output-root ./replay_archive_downloaded
 ```
 
-Download archive objects from GCS using ambient authentication, e.g. workload identity:
+Download archive objects from GCS using ambient authentication (workload identity, or local
+`gcloud auth application-default login` credentials). The caller needs `storage.objects.list` and
+`storage.objects.get` on the bucket:
 
 ```bash
 cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
@@ -181,7 +198,25 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --output-root ./replay_archive_downloaded
 ```
 
-Rebuild replay RocksDB:
+Rebuild replay RocksDB from a KMS-encrypted archive (the primary mode for our deployments). The
+caller needs `cloudkms.cryptoKeyVersions.useToDecrypt` on the key version; with ambient
+authentication no credential flags are required:
+
+```bash
+cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
+  recover-rocksdb \
+  --input-root ./replay_archive_downloaded \
+  --replay-db-path ./db/block_replay_wal \
+  --anchor-block-number 123 \
+  --anchor-block-hash 0x... \
+  --kms-key-version projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
+```
+
+Pass `--kms-credential-file-path` to authenticate with a credentials file instead of ambient
+credentials. Every record costs one KMS `AsymmetricDecrypt` call; `--decrypt-concurrency`
+(default 32) bounds the number of in-flight KMS requests.
+
+Rebuild replay RocksDB from an unencrypted archive:
 
 ```bash
 cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
@@ -192,7 +227,7 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --anchor-block-hash 0x...
 ```
 
-For encrypted archives, pass the age identity file to `recover-rocksdb`:
+For age-X25519-encrypted archives, pass the age identity file to `recover-rocksdb`:
 
 ```bash
 cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
@@ -261,16 +296,22 @@ configured credentials file, `endpoint` overrides S3 API endpoint for S3-compati
 providers, and `region` is used as the first region provider before falling back to the SDK
 defaults and then `auto`.
 
-GCS archive with workload identity / ambient GCP authentication:
+GCS archive with workload identity / ambient GCP authentication and GCP KMS encryption (the
+primary mode for our deployments):
 
 ```yaml
 replay_archive:
   type: Gcs
   bucket_base_url: my-replay-archive
   encryption:
-    type: AgeX25519
-    recipient: age1...
+    type: GcpKms
+    kms_key_version: projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
 ```
+
+The `GcpKmsWithCredentialFile` encryption variant additionally takes `kms_credential_file_path`
+for deployments without ambient GCP credentials. The node only ever uses the KMS public key, so
+its service account needs `cloudkms.cryptoKeyVersions.viewPublicKey` and should not be granted
+`useToDecrypt`.
 
 GCS archive with a credentials file:
 

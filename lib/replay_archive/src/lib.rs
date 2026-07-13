@@ -37,7 +37,8 @@ pub use init::{
 pub use kms::{GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
 pub use reader::{ReplayArchiveKeyPage, ReplayArchiveStorageReader};
 pub use recovery::{
-    ArchiveIdentity, DEFAULT_DECRYPT_CONCURRENCY, download_all_replay_archive_objects,
+    ArchiveIdentity, DEFAULT_DECRYPT_CONCURRENCY, DEFAULT_DOWNLOAD_CONCURRENCY,
+    download_all_replay_archive_objects, download_all_replay_archive_objects_with_concurrency,
     parse_age_x25519_identity, read_age_x25519_identity, recover_replay_records_to_rocksdb,
     recover_replay_records_to_rocksdb_with_optional_decryption,
 };
@@ -48,6 +49,12 @@ pub use s3::{
 pub use write_replay::ReplayArchivingWriteReplay;
 
 pub const REPLAY_ARCHIVE_QUEUE_SIZE: usize = 128;
+
+/// Attached to GCP authentication failures, whose raw error messages are cryptic (an expired
+/// local login surfaces as `missing field access_token`).
+pub(crate) const GCP_CREDENTIALS_HINT: &str = "GCP credentials are missing or expired; \
+     if running outside Google Cloud with user credentials, \
+     (re)authenticate with `gcloud auth application-default login`";
 
 /// Replay archive layout:
 ///

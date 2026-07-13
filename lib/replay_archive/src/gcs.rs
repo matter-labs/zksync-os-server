@@ -196,7 +196,10 @@ async fn get_client_config(auth_mode: GcsReplayArchiveAuthMode) -> anyhow::Resul
             let cred_file = CredentialsFile::new_from_file(path).await?;
             Ok(ClientConfig::default().with_credentials(cred_file).await?)
         }
-        GcsReplayArchiveAuthMode::Authenticated => Ok(ClientConfig::default().with_auth().await?),
+        GcsReplayArchiveAuthMode::Authenticated => Ok(ClientConfig::default()
+            .with_auth()
+            .await
+            .context(crate::GCP_CREDENTIALS_HINT)?),
         GcsReplayArchiveAuthMode::Anonymous => Ok(ClientConfig::default().anonymous()),
     }
 }

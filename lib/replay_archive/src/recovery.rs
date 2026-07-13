@@ -32,6 +32,27 @@ pub async fn download_all_replay_archive_objects<Reader>(
 where
     Reader: ReplayArchiveStorageReader + Sync,
 {
+    download_all_replay_archive_objects_with_concurrency(
+        reader,
+        output_root,
+        DEFAULT_DOWNLOAD_CONCURRENCY,
+    )
+    .await
+}
+
+/// Default number of archive objects fetched concurrently during download.
+pub const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 32;
+
+/// Same as [`download_all_replay_archive_objects`] with an explicit bound on the number of
+/// objects fetched from the archive concurrently.
+pub async fn download_all_replay_archive_objects_with_concurrency<Reader>(
+    reader: &Reader,
+    output_root: &Path,
+    download_concurrency: usize,
+) -> anyhow::Result<usize>
+where
+    Reader: ReplayArchiveStorageReader + Sync,
+{
     tracing::info!(
         output_root = %output_root.display(),
         "Starting replay archive object download"
@@ -52,11 +73,19 @@ where
     loop {
         let page = reader.list_keys_page(page_token.take()).await?;
 
-        for key in page.keys {
-            if existing.contains(&key) {
-                continue;
-            }
-            let bytes = reader.fetch_object(&key).await?;
+        let mut objects = futures::stream::iter(
+            page.keys
+                .into_iter()
+                .filter(|key| !existing.contains(key))
+                .map(|key| async move {
+                    let bytes = reader.fetch_object(&key).await?;
+                    anyhow::Ok((key, bytes))
+                }),
+        )
+        .buffer_unordered(download_concurrency.max(1));
+
+        while let Some(object) = objects.next().await {
+            let (key, bytes) = object?;
             write_downloaded_object(output_root, &key, bytes).await?;
             downloaded += 1;
             log_recovery_progress(downloaded, || {

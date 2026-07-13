@@ -4,8 +4,8 @@ use zksync_os_replay_archive::{
     ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig,
     GcpKmsIdentity, GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
     S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader,
-    download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
-    recover_replay_records_to_rocksdb_with_optional_decryption,
+    download_all_replay_archive_objects_with_concurrency, parse_age_x25519_identity,
+    read_age_x25519_identity, recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 
 #[derive(Debug, Parser)]
@@ -61,6 +61,9 @@ enum Command {
         /// Local folder where downloaded objects should be written.
         #[arg(long)]
         output_root: PathBuf,
+        /// Number of archive objects fetched concurrently.
+        #[arg(long, default_value_t = zksync_os_replay_archive::DEFAULT_DOWNLOAD_CONCURRENCY)]
+        download_concurrency: usize,
     },
     /// Rebuild node replay RocksDB from downloaded replay records.
     RecoverRocksdb {
@@ -127,10 +130,16 @@ async fn main() -> anyhow::Result<()> {
             gcs_credential_file_path,
             gcs_anonymous,
             output_root,
+            download_concurrency,
         } => {
             let downloaded = if let Some(archive_root) = archive_root {
                 let reader = FileSystemReplayArchiveReader::new(archive_root);
-                download_all_replay_archive_objects(&reader, &output_root).await?
+                download_all_replay_archive_objects_with_concurrency(
+                    &reader,
+                    &output_root,
+                    download_concurrency,
+                )
+                .await?
             } else if let Some(gcs_bucket_base_url) = gcs_bucket_base_url {
                 let auth_mode = gcs_download_auth_mode(gcs_credential_file_path, gcs_anonymous);
                 let reader = GcsReplayArchiveReader::new(GcsReplayArchiveConfig {
@@ -138,7 +147,12 @@ async fn main() -> anyhow::Result<()> {
                     auth_mode,
                 })
                 .await?;
-                download_all_replay_archive_objects(&reader, &output_root).await?
+                download_all_replay_archive_objects_with_concurrency(
+                    &reader,
+                    &output_root,
+                    download_concurrency,
+                )
+                .await?
             } else {
                 let auth_mode = if let Some(path) = s3_credential_file_path {
                     S3ReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path)
@@ -157,7 +171,12 @@ async fn main() -> anyhow::Result<()> {
                     region: s3_region,
                 })
                 .await;
-                download_all_replay_archive_objects(&reader, &output_root).await?
+                download_all_replay_archive_objects_with_concurrency(
+                    &reader,
+                    &output_root,
+                    download_concurrency,
+                )
+                .await?
             };
             println!("Downloaded {downloaded} replay archive objects");
         }
