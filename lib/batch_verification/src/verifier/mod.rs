@@ -50,7 +50,7 @@ enum BatchVerificationError {
     Internal(#[from] anyhow::Error),
 }
 
-impl<Finality: ReadFinality, ReadState: ReadStateHistory>
+impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
     BatchVerificationResponder<Finality, ReadState>
 {
     #[allow(clippy::too_many_arguments)]
@@ -122,16 +122,26 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             ProvingVersion::try_from(protocol_version.clone()).map_err(anyhow::Error::from)?;
 
         let (batch_info, _) = if proving_version >= ProvingVersion::V8 {
-            let native_batch_run = generate_batch_run(
-                proving_version,
-                &blocks
-                    .iter()
-                    .map(|(_, replay_record, _)| (*replay_record).clone())
-                    .collect::<Vec<_>>(),
-                &self.read_state,
-                self.merkle_tree.clone(),
-                request.pubdata_mode,
-            )?;
+            // Native batch PIG re-executes the whole batch - run it on a blocking
+            // thread to avoid stalling the async runtime.
+            let replay_records = blocks
+                .iter()
+                .map(|(_, replay_record, _)| (*replay_record).clone())
+                .collect::<Vec<_>>();
+            let read_state = self.read_state.clone();
+            let merkle_tree = self.merkle_tree.clone();
+            let pubdata_mode = request.pubdata_mode;
+            let native_batch_run = tokio::task::spawn_blocking(move || {
+                generate_batch_run(
+                    proving_version,
+                    &replay_records,
+                    &read_state,
+                    merkle_tree,
+                    pubdata_mode,
+                )
+            })
+            .await
+            .map_err(anyhow::Error::from)??;
             tracing::info!(
                 batch_number = request.batch_number,
                 request_id = request.request_id,
@@ -220,7 +230,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 }
 
 #[async_trait]
-impl<Finality: ReadFinality, ReadState: ReadStateHistory> PipelineComponent
+impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone> PipelineComponent
     for BatchVerificationResponder<Finality, ReadState>
 {
     type Input = VerificationInput;
@@ -387,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn v8_verifier_approves_batch_built_from_native_run() {
-        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
         let genesis_state = build_genesis_state_for_test(&protocol_version);
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
@@ -456,7 +466,7 @@ mod tests {
     /// `keccak(state_before || state_after || chain_config_hash || batch_output)`.
     #[test]
     fn v8_public_input_reconstruction_matches_native_run() {
-        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
         let genesis_state = build_genesis_state_for_test(&protocol_version);
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
@@ -500,7 +510,7 @@ mod tests {
     }
 
     /// Utility (not a real test): runs the V8 native batch PIG for the simplest possible batch
-    /// (a single empty block at protocol v32.1) and dumps the resulting prover input in the
+    /// (a single empty block at protocol v32.0) and dumps the resulting prover input in the
     /// formats the `zksync-airbender` CLI understands, so it can be proven/verified on CPU
     /// elsewhere (e.g. `cli prove --bin multiblock_batch.bin --input-file <hex> --backend cpu`).
     ///
@@ -511,7 +521,7 @@ mod tests {
     #[test]
     #[ignore = "utility: dumps the V8 simplest-batch prover input to files"]
     fn dump_v8_simplest_batch_prover_input() {
-        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
         let genesis_state = build_genesis_state_for_test(&protocol_version);
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
@@ -545,7 +555,7 @@ mod tests {
         std::fs::write(&bin_path, &bytes).unwrap();
 
         println!("=== V8 simplest-batch prover input ===");
-        println!("protocol_version: v32.1  proving_version: V8  pubdata_mode: Calldata");
+        println!("protocol_version: v32.0  proving_version: V8  pubdata_mode: Calldata");
         println!(
             "prover_input words: {}  ({} bytes)",
             words.len(),

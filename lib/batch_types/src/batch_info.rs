@@ -289,7 +289,7 @@ impl PendingBatchInfo {
     /// pre-V8 [`Self::public_input_hash`] layout, it does NOT include the leading `chain_id` —
     /// the chain id is committed through the chain config hash in the outer batch public input
     /// instead. Used for server-side verification of V8 FRI proofs; the L1-facing commitment
-    /// (`public_input_hash`) is intentionally left unchanged until v32.1 contracts define the
+    /// (`public_input_hash`) is intentionally left unchanged until v32.0 contracts define the
     /// on-chain layout.
     pub fn v8_batch_output_hash(&self) -> B256 {
         let commit_info = &self.commit_info;
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn builds_commit_info_from_canonical_batch_output() {
-        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
         let batch = canonical_batch_data(PubdataMode::Calldata);
         let expected_da_fields = calculate_da_fields(&batch.pubdata, PubdataMode::Calldata);
 
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn detects_canonical_da_commitment_mismatch() {
-        let protocol_version = ProtocolSemanticVersion::new(0, 32, 1);
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
         let mut batch = canonical_batch_data(PubdataMode::Blobs);
         batch.da_commitment = B256::ZERO;
 

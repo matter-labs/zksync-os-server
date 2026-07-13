@@ -36,7 +36,23 @@ pub fn verify_fri_proof(
 
     let expected_hash_u32s: [u32; 8] = batch_output_hash_as_register_values(&expected_pi);
 
-    let proof_final_register_values: [u32; 16] = extract_final_register_values(proof);
+    // The statement verifier asserts (panics) on malformed proofs; catch it so a bad
+    // proof is reported - and persisted for debugging - as a verification failure.
+    let proof_final_register_values: [u32; 16] =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            extract_final_register_values(proof)
+        }))
+        .map_err(|_| {
+            tracing::warn!(
+                batch_number = stored_batch_info.batch_number,
+                "proof verifier panicked on a malformed proof"
+            );
+            SubmitError::FriProofVerificationError {
+                expected_hash_u32s,
+                // The verifier failed before producing register values.
+                proof_final_register_values: [0u32; 16],
+            }
+        })?;
 
     tracing::debug!(
         batch_number = stored_batch_info.batch_number,
@@ -92,8 +108,21 @@ pub fn verify_fri_proof_v8(
     );
     let expected_hash_u32s: [u32; 8] = hash_as_register_values(expected_pi_hash);
 
+    // The unified-layer verifier returns Err on invalid proofs, but its internals can
+    // still assert (panic) on malformed input; catch it so a bad proof is reported -
+    // and persisted for debugging - as a verification failure.
     let proof_final_register_values: [u32; 16] =
-        extract_final_register_values_v8(&proof).map_err(|()| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            extract_final_register_values_v8(&proof)
+        }))
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                batch_number,
+                "V8 unified-layer verifier panicked on a malformed proof"
+            );
+            Err(())
+        })
+        .map_err(|()| {
             tracing::warn!(
                 batch_number,
                 "V8 unified-layer proof failed cryptographic verification"

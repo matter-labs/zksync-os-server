@@ -227,6 +227,13 @@ fn compute_batch_prover_input(
     use zk_os_forward_system::run::generate_batch_proof_input;
     use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
 
+    // Pre-V8 batch PIG stitches together the per-block prover inputs, so a single fake
+    // block input makes the real batch input impossible to build - the whole batch
+    // falls back to a fake input.
+    // V8 intentionally skips this: the native batch run has already been executed from
+    // replay records in `seal_batch` (it is required for the canonical batch commit
+    // data regardless of proving) and never reads per-block inputs, so its real prover
+    // input comes for free even when block inputs are fake.
     if proving_version < ProvingVersion::V8
         && blocks
             .iter()
@@ -358,7 +365,7 @@ mod tests {
             vec![],
             10,
             Version::new(0, 0, 0),
-            ProtocolSemanticVersion::new(0, 32, 1),
+            ProtocolSemanticVersion::new(0, 32, 0),
             B256::ZERO,
             vec![],
             BlockStartCursors::default(),
@@ -381,6 +388,8 @@ mod tests {
             Some(NativeBatchRunOutput {
                 prover_input: vec![7, 8, 9],
                 pubdata: vec![],
+                previous_state_commitment: B256::ZERO,
+                batch_public_input_hash: B256::ZERO,
                 new_state_commitment: B256::ZERO,
                 da_commitment: B256::ZERO,
                 number_of_layer1_txs: 0,

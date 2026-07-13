@@ -79,6 +79,14 @@ impl JobMetadata {
         self.assigned_to_prover_id = Some(assigned_to_prover_id);
         self.current_attempt += 1;
     }
+
+    /// Clear the assignment so the job can be picked up again immediately
+    /// (e.g. after the assigned prover submitted a proof that failed verification).
+    /// `current_attempt` is preserved as assignment history.
+    pub fn unassign(&mut self) {
+        self.assigned_at = None;
+        self.assigned_to_prover_id = None;
+    }
 }
 
 /// Statistics about a batch of jobs for logging and metrics

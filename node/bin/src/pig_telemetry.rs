@@ -1,8 +1,9 @@
-use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+use vise::{Buckets, EncodeLabelValue, Histogram, LabeledFamily, Metrics, Unit};
 use zksync_os_types::ProvingVersion;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
+#[metrics(label = "mode", rename_all = "snake_case")]
 pub enum BatchPigMode {
     LegacyBatch,
     NativeBatch,
@@ -30,42 +31,37 @@ pub struct BlockPigTelemetry {
     pub elapsed: Duration,
 }
 
-static BATCH_PIG_TELEMETRY: OnceLock<Mutex<Vec<BatchPigTelemetry>>> = OnceLock::new();
-static BLOCK_PIG_TELEMETRY: OnceLock<Mutex<Vec<BlockPigTelemetry>>> = OnceLock::new();
-
-fn batch_pig_telemetry() -> &'static Mutex<Vec<BatchPigTelemetry>> {
-    BATCH_PIG_TELEMETRY.get_or_init(|| Mutex::new(Vec::new()))
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "pig")]
+pub struct PigMetrics {
+    /// Time spent generating the proof input for a whole batch.
+    #[metrics(unit = Unit::Seconds, labels = ["mode"], buckets = Buckets::LATENCIES)]
+    pub batch_elapsed: LabeledFamily<BatchPigMode, Histogram<Duration>>,
+    /// Batch proof-input generation time normalized by millions of computational native used.
+    #[metrics(unit = Unit::Seconds, labels = ["mode"], buckets = Buckets::LATENCIES)]
+    pub batch_elapsed_per_million_native: LabeledFamily<BatchPigMode, Histogram<Duration>>,
+    /// Size of the generated batch prover input in u32 words.
+    #[metrics(labels = ["mode"], buckets = Buckets::exponential(100_000.0..=10_000_000_000.0, 4.0))]
+    pub batch_prover_input_words: LabeledFamily<BatchPigMode, Histogram<u64>>,
+    /// Time spent generating the proof input for a single block.
+    #[metrics(unit = Unit::Seconds, buckets = Buckets::LATENCIES)]
+    pub block_elapsed: Histogram<Duration>,
+    /// Size of the generated block prover input in u32 words.
+    #[metrics(buckets = Buckets::exponential(100_000.0..=10_000_000_000.0, 4.0))]
+    pub block_prover_input_words: Histogram<u64>,
 }
 
-fn block_pig_telemetry() -> &'static Mutex<Vec<BlockPigTelemetry>> {
-    BLOCK_PIG_TELEMETRY.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-pub fn clear_batch_pig_telemetry() {
-    batch_pig_telemetry().lock().unwrap().clear();
-}
-
-pub fn take_batch_pig_telemetry() -> Vec<BatchPigTelemetry> {
-    let mut telemetry = batch_pig_telemetry().lock().unwrap();
-    std::mem::take(&mut *telemetry)
-}
-
-pub fn clear_block_pig_telemetry() {
-    block_pig_telemetry().lock().unwrap().clear();
-}
-
-pub fn take_block_pig_telemetry() -> Vec<BlockPigTelemetry> {
-    let mut telemetry = block_pig_telemetry().lock().unwrap();
-    std::mem::take(&mut *telemetry)
-}
+#[vise::register]
+pub(crate) static PIG_METRICS: vise::Global<PigMetrics> = vise::Global::new();
 
 pub(crate) fn record_batch_pig_telemetry(telemetry: BatchPigTelemetry) {
-    let elapsed_per_million_native_ms = if telemetry.computational_native_used == 0 {
+    let elapsed_per_million_native = if telemetry.computational_native_used == 0 {
         None
     } else {
         Some(
-            telemetry.elapsed.as_secs_f64() * 1000.0
-                / (telemetry.computational_native_used as f64 / 1_000_000.0),
+            telemetry
+                .elapsed
+                .div_f64(telemetry.computational_native_used as f64 / 1_000_000.0),
         )
     };
     tracing::info!(
@@ -78,10 +74,15 @@ pub(crate) fn record_batch_pig_telemetry(telemetry: BatchPigTelemetry) {
         prover_input_words = telemetry.prover_input_words,
         computational_native_used = telemetry.computational_native_used,
         elapsed_ms = telemetry.elapsed.as_millis(),
-        elapsed_per_million_native_ms = ?elapsed_per_million_native_ms,
+        elapsed_per_million_native_ms = ?elapsed_per_million_native.map(|d| d.as_millis()),
         "Batch PIG completed",
     );
-    batch_pig_telemetry().lock().unwrap().push(telemetry);
+    PIG_METRICS.batch_elapsed[&telemetry.mode].observe(telemetry.elapsed);
+    if let Some(per_million) = elapsed_per_million_native {
+        PIG_METRICS.batch_elapsed_per_million_native[&telemetry.mode].observe(per_million);
+    }
+    PIG_METRICS.batch_prover_input_words[&telemetry.mode]
+        .observe(telemetry.prover_input_words as u64);
 }
 
 pub(crate) fn record_block_pig_telemetry(telemetry: BlockPigTelemetry) {
@@ -93,5 +94,8 @@ pub(crate) fn record_block_pig_telemetry(telemetry: BlockPigTelemetry) {
         elapsed_ms = telemetry.elapsed.as_millis(),
         "Block PIG completed",
     );
-    block_pig_telemetry().lock().unwrap().push(telemetry);
+    PIG_METRICS.block_elapsed.observe(telemetry.elapsed);
+    PIG_METRICS
+        .block_prover_input_words
+        .observe(telemetry.prover_input_words as u64);
 }

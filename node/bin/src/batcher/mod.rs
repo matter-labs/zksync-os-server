@@ -317,21 +317,34 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         accumulator.report_accumulated_resources_to_metrics();
 
         let protocol_version = &blocks.first().as_ref().unwrap().1.protocol_version;
+        // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
+        let pubdata_mode = self
+            .pubdata_mode
+            .adapt_for_protocol_version(protocol_version);
 
         /* ---------- seal the batch ---------- */
-        let batch_envelope = batch_builder::seal_batch(
-            &blocks,
-            prev_batch_info.clone(),
-            batch_number,
-            self.chain_id,
-            self.chain_address_sl,
-            // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
-            self.pubdata_mode
-                .adapt_for_protocol_version(protocol_version),
-            self.sl_chain_id,
-            &self.read_state,
-            &self.merkle_tree,
-        )?;
+        // Sealing runs batch PIG (for V8 - a full native re-execution of the batch),
+        // so run it on a blocking thread to avoid stalling the async runtime.
+        let prev_batch_info = prev_batch_info.clone();
+        let chain_id = self.chain_id;
+        let chain_address_sl = self.chain_address_sl;
+        let sl_chain_id = self.sl_chain_id;
+        let read_state = self.read_state.clone();
+        let merkle_tree = self.merkle_tree.clone();
+        let batch_envelope = tokio::task::spawn_blocking(move || {
+            batch_builder::seal_batch(
+                &blocks,
+                prev_batch_info,
+                batch_number,
+                chain_id,
+                chain_address_sl,
+                pubdata_mode,
+                sl_chain_id,
+                &read_state,
+                &merkle_tree,
+            )
+        })
+        .await??;
         Ok(Some(batch_envelope))
     }
 
@@ -392,19 +405,31 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             "Block number mismatch in last block of a rebuilt batch"
         );
 
-        // Rebuild the batch from blocks
-        let rebuilt_batch = batch_builder::seal_batch(
-            &blocks,
-            prev_batch_info.clone(),
-            batch_number,
-            self.chain_id,
-            self.chain_address_sl,
-            // Assume pubdata mode does not change
-            self.pubdata_mode,
-            self.sl_chain_id,
-            &self.read_state,
-            &self.merkle_tree,
-        )?;
+        // Rebuild the batch from blocks.
+        // Sealing runs batch PIG (for V8 - a full native re-execution of the batch),
+        // so run it on a blocking thread to avoid stalling the async runtime.
+        let prev_batch_info = prev_batch_info.clone();
+        let chain_id = self.chain_id;
+        let chain_address_sl = self.chain_address_sl;
+        // Assume pubdata mode does not change
+        let pubdata_mode = self.pubdata_mode;
+        let sl_chain_id = self.sl_chain_id;
+        let read_state = self.read_state.clone();
+        let merkle_tree = self.merkle_tree.clone();
+        let rebuilt_batch = tokio::task::spawn_blocking(move || {
+            batch_builder::seal_batch(
+                &blocks,
+                prev_batch_info,
+                batch_number,
+                chain_id,
+                chain_address_sl,
+                pubdata_mode,
+                sl_chain_id,
+                &read_state,
+                &merkle_tree,
+            )
+        })
+        .await??;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
         if self.batcher_config.assert_rebuilt_batch_hashes {

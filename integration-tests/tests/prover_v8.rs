@@ -1,8 +1,8 @@
-//! Live end-to-end test for the zksync-os 0.4.0 lane (protocol v32.1, execution V7,
+//! Live end-to-end test for the zksync-os 0.4.0 lane (protocol v32.0, execution V7,
 //! proving V8, native batch PIG):
 //!
 //! 1. Start a v31.0 gateway + one settling chain with fake FRI/SNARK provers, then perform
-//!    a protocol upgrade of the chain to v32.1.
+//!    a protocol upgrade of the chain to v32.0.
 //!    (The gateway topology is used because the v31.0 `local-chains` L1 state only contains
 //!    the gateway/multi-chain deployment — the `default` single-chain layout is stale.)
 //! 2. Wait for the fake pipeline to settle everything produced so far.
@@ -55,14 +55,13 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
         .await?;
     let tester = gateway_tester.chain(0);
 
-    // Upgrade v31.0 -> v32.1 (execution V7 / proving V8).
+    // Upgrade v31.0 -> v32.0 (execution V7 / proving V8).
     {
         let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
         let protocol_upgrade = upgrade_tester
             .protocol_upgrade_builder()
             .await?
             .bump_minor(1)
-            .bump_patch(1)
             .with_force_deployments(BTreeMap::new())
             .with_timestamp(U256::from(1))
             .build();
@@ -70,10 +69,10 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
             .execute_default_upgrade(&protocol_upgrade, U256::MAX, U256::from(1), false, vec![])
             .await?;
     }
-    tracing::info!("protocol upgrade to v32.1 executed");
+    tracing::info!("protocol upgrade to v32.0 executed");
 
     // Flush the fake-proven tail: a post-upgrade tx must execute on L1 before we switch to
-    // real proving, so every batch produced so far (v31.0 and early v32.1) is settled.
+    // real proving, so every batch produced so far (v31.0 and early v32.0) is settled.
     tester
         .l2_provider
         .send_transaction(
