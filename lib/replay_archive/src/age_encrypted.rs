@@ -1,23 +1,45 @@
+use crate::kms::GcpKmsRecipient;
 use crate::metrics::REPLAY_ARCHIVE_METRICS;
 use crate::replay_record::encode_replay_record;
 use crate::{ReplayArchiveStorage, ReplayArchiver};
+use age_core::format::{FileKey, Stanza};
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
 use async_trait::async_trait;
+use std::collections::HashSet;
 use std::time::Instant;
 use zksync_os_storage_api::ReplayRecord;
 
 const BYTES_PER_MEGABYTE: f64 = 1024.0 * 1024.0;
 
-/// Replay archiver that stores age/X25519-encrypted JSON replay records.
+/// age recipient used for replay archive record encryption.
+#[derive(Debug, Clone)]
+pub enum ArchiveRecipient {
+    X25519(age::x25519::Recipient),
+    GcpKms(GcpKmsRecipient),
+}
+
+impl age::Recipient for ArchiveRecipient {
+    fn wrap_file_key(
+        &self,
+        file_key: &FileKey,
+    ) -> Result<(Vec<Stanza>, HashSet<String>), age::EncryptError> {
+        match self {
+            Self::X25519(recipient) => recipient.wrap_file_key(file_key),
+            Self::GcpKms(recipient) => recipient.wrap_file_key(file_key),
+        }
+    }
+}
+
+/// Replay archiver that stores age-encrypted JSON replay records.
 #[derive(Debug, Clone)]
 pub struct AgeEncryptedReplayArchiver<Storage> {
     storage: Storage,
-    recipient: age::x25519::Recipient,
+    recipient: ArchiveRecipient,
 }
 
 impl<Storage> AgeEncryptedReplayArchiver<Storage> {
-    pub fn new(storage: Storage, recipient: age::x25519::Recipient) -> Self {
+    pub fn new(storage: Storage, recipient: ArchiveRecipient) -> Self {
         Self { storage, recipient }
     }
 
@@ -25,7 +47,7 @@ impl<Storage> AgeEncryptedReplayArchiver<Storage> {
         let recipient = recipient
             .parse()
             .map_err(|err| anyhow::anyhow!("failed to parse age X25519 recipient: {err}"))?;
-        Ok(Self::new(storage, recipient))
+        Ok(Self::new(storage, ArchiveRecipient::X25519(recipient)))
     }
 
     pub(crate) fn encrypt_replay_record(
@@ -38,7 +60,7 @@ impl<Storage> AgeEncryptedReplayArchiver<Storage> {
 
         let started_at = Instant::now();
         let encrypted = age::encrypt(&self.recipient, encoded.as_slice())
-            .context("failed to encrypt replay record with age X25519")?;
+            .context("failed to encrypt replay record with age")?;
         let elapsed = started_at.elapsed();
         REPLAY_ARCHIVE_METRICS.encryption_time.observe(elapsed);
         if encoded_len > 0 {

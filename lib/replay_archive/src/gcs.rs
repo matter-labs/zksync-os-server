@@ -1,11 +1,10 @@
 use crate::{
-    ReplayArchiveKey, ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveSession,
-    ReplayArchiveStorage, ReplayArchiveStorageReader,
+    ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveSession, ReplayArchiveStorage,
+    ReplayArchiveStorageReader,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
 use async_trait::async_trait;
-use futures::StreamExt as _;
 use google_cloud_auth::credentials::CredentialsFile;
 use google_cloud_storage::client::{Client, ClientConfig};
 use google_cloud_storage::http::objects::download::Range;
@@ -14,9 +13,12 @@ use google_cloud_storage::http::objects::list::ListObjectsRequest;
 use google_cloud_storage::http::objects::upload::{Media, UploadObjectRequest, UploadType};
 use http::StatusCode;
 use std::fmt;
+use std::future::Future;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use std::time::Duration;
+
+const DOWNLOAD_RETRY_ATTEMPTS: u32 = 4;
+const DOWNLOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 
 /// Authentication mode for GCS replay archive access.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +213,46 @@ fn is_not_found(err: &google_cloud_storage::http::Error) -> bool {
     }
 }
 
+/// Follows the GCS retry guidance: HTTP 408/429/5xx and transport-level failures are
+/// transient; other client errors are permanent.
+fn is_transient(err: &google_cloud_storage::http::Error) -> bool {
+    match err {
+        google_cloud_storage::http::Error::Response(response) => response.is_retriable(),
+        google_cloud_storage::http::Error::HttpClient(err) => err
+            .status()
+            .is_none_or(|status| matches!(status.as_u16(), 408 | 429 | 500..=599)),
+        _ => true,
+    }
+}
+
+/// Retries a GCS call on transient failures with exponential backoff.
+async fn with_download_retries<T, Fut>(
+    description: &str,
+    operation: impl Fn() -> Fut,
+) -> Result<T, google_cloud_storage::http::Error>
+where
+    Fut: Future<Output = Result<T, google_cloud_storage::http::Error>>,
+{
+    let mut attempt = 1;
+    loop {
+        match operation().await {
+            Ok(value) => return Ok(value),
+            Err(err) if attempt < DOWNLOAD_RETRY_ATTEMPTS && is_transient(&err) => {
+                let delay = DOWNLOAD_RETRY_BASE_DELAY * 2u32.pow(attempt - 1);
+                tracing::warn!(
+                    attempt,
+                    delay_ms = delay.as_millis() as u64,
+                    error = %err,
+                    "transient GCS error while {description}; retrying"
+                );
+                tokio::time::sleep(delay).await;
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 /// GCS implementation of [`ReplayArchiveStorageReader`].
 #[derive(Clone)]
 pub struct GcsReplayArchiveReader {
@@ -240,77 +282,58 @@ impl GcsReplayArchiveReader {
 
 #[async_trait]
 impl ReplayArchiveStorageReader for GcsReplayArchiveReader {
-    async fn list_objects(&self) -> ReplayArchiveObjectStream {
-        let config = self.config.clone();
-        let client = self.client.clone();
-        let (sender, receiver) = mpsc::channel(crate::REPLAY_ARCHIVE_OBJECT_LIST_CHANNEL_SIZE);
-        tokio::spawn(async move {
-            if let Err(err) = list_objects(config, client, sender.clone()).await {
-                let _ = sender.send(Err(err)).await;
-            }
-        });
-        ReceiverStream::new(receiver).boxed()
-    }
-}
-
-async fn list_objects(
-    config: GcsReplayArchiveConfig,
-    client: Client,
-    sender: mpsc::Sender<anyhow::Result<ReplayArchiveObject>>,
-) -> anyhow::Result<()> {
-    let mut page_token = None;
-
-    loop {
+    async fn list_keys_page(
+        &self,
+        page_token: Option<String>,
+    ) -> anyhow::Result<ReplayArchiveKeyPage> {
         let request = ListObjectsRequest {
-            bucket: config.bucket_base_url.clone(),
-            page_token: page_token.clone(),
+            bucket: self.config.bucket_base_url.clone(),
+            page_token,
             ..Default::default()
         };
-
-        let response = client.list_objects(&request).await.with_context(|| {
+        let response = with_download_retries("listing replay archive objects", || {
+            self.client.list_objects(&request)
+        })
+        .await
+        .with_context(|| {
             format!(
                 "failed to list replay archive GCS objects in gs://{}",
-                config.bucket_base_url
+                self.config.bucket_base_url
             )
         })?;
 
+        let mut keys = Vec::new();
         for object in response.items.into_iter().flatten() {
-            let object_key = object.name;
-            let Some(key) = crate::parse_archive_object_key(&object_key)? else {
-                continue;
-            };
-
-            let get_request = GetObjectRequest {
-                bucket: config.bucket_base_url.clone(),
-                object: object_key.clone(),
-                ..Default::default()
-            };
-            let bytes = client
-                .download_object(&get_request, &Range::default())
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to read replay archive GCS object gs://{}/{}",
-                        config.bucket_base_url, object_key
-                    )
-                })?;
-
-            if sender
-                .send(Ok(ReplayArchiveObject { key, bytes }))
-                .await
-                .is_err()
-            {
-                return Ok(());
+            if let Some(key) = crate::parse_archive_object_key(&object.name)? {
+                keys.push(key);
             }
         }
-
-        let Some(next_token) = response.next_page_token else {
-            break;
-        };
-        page_token = Some(next_token);
+        Ok(ReplayArchiveKeyPage {
+            keys,
+            next_page_token: response.next_page_token,
+        })
     }
 
-    Ok(())
+    async fn fetch_object(&self, key: &ReplayArchiveKey) -> anyhow::Result<Vec<u8>> {
+        let object_key = key.object_path();
+        let get_request = GetObjectRequest {
+            bucket: self.config.bucket_base_url.clone(),
+            object: object_key.clone(),
+            ..Default::default()
+        };
+        let range = Range::default();
+        with_download_retries(
+            &format!("downloading replay archive object {object_key}"),
+            || self.client.download_object(&get_request, &range),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "failed to read replay archive GCS object gs://{}/{}",
+                self.config.bucket_base_url, object_key
+            )
+        })
+    }
 }
 
 #[cfg(test)]

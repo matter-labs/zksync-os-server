@@ -38,7 +38,10 @@ jobs:
           # `inferno` (flamegraph generation) and `plist` -> `os_info` -> `sentry-contexts` (local OS metadata for
           # Sentry). Neither path parses untrusted/remote XML. No released version of `inferno` or `plist` depends
           # on quick-xml >=0.41 yet, so this cannot be resolved by updating. Revisit once upstream bumps land.
-          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0194,RUSTSEC-2026-0195'
+          # 'RUSTSEC-2023-0071': Marvin timing sidechannel in `rsa` private-key operations. Production code only
+          # performs public-key RSA-OAEP encryption (wrapping the age file key to the GCP KMS public key);
+          # private-key decryption happens inside GCP KMS, never locally. No patched version exists yet.
+          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0194,RUSTSEC-2026-0195,RUSTSEC-2023-0071'
   cargo-deny:
     runs-on: ubuntu-latest
     steps:

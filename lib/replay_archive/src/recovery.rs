@@ -1,8 +1,14 @@
-use crate::{ReplayArchiveKey, ReplayArchiveStorageReader, format_block_hash};
+use crate::kms::GcpKmsIdentity;
+use crate::{
+    ReplayArchiveKey, ReplayArchiveSession, ReplayArchiveStorageReader, format_block_hash,
+};
+use age_core::format::{FileKey, Stanza};
 use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context as _;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage_api::{ReplayRecord, WriteReplay};
@@ -16,6 +22,9 @@ use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 /// ```
 ///
 /// This keeps all session copies for the same replay record next to each other.
+///
+/// Objects already present under `output_root` are skipped without re-downloading, so an
+/// interrupted download can be restarted with the same arguments.
 pub async fn download_all_replay_archive_objects<Reader>(
     reader: &Reader,
     output_root: &Path,
@@ -27,16 +36,38 @@ where
         output_root = %output_root.display(),
         "Starting replay archive object download"
     );
-    let mut objects = reader.list_objects().await;
+    let existing = scan_existing_downloaded_objects(output_root).await?;
+    if !existing.is_empty() {
+        tracing::info!(
+            existing = existing.len(),
+            "Resuming download; objects already present locally are skipped"
+        );
+    }
+
+    // Listing and downloading are interleaved page by page: downloads start right after the
+    // first listing page instead of waiting for a full listing of a large archive.
+    let mut page_token = None;
     let mut downloaded = 0;
 
-    while let Some(object) = objects.next().await {
-        let object = object?;
-        write_downloaded_object(output_root, &object.key, object.bytes).await?;
-        downloaded += 1;
-        log_recovery_progress(downloaded, || {
-            tracing::info!(downloaded, "Downloaded replay archive objects");
-        });
+    loop {
+        let page = reader.list_keys_page(page_token.take()).await?;
+
+        for key in page.keys {
+            if existing.contains(&key) {
+                continue;
+            }
+            let bytes = reader.fetch_object(&key).await?;
+            write_downloaded_object(output_root, &key, bytes).await?;
+            downloaded += 1;
+            log_recovery_progress(downloaded, || {
+                tracing::info!(downloaded, "Downloaded replay archive objects");
+            });
+        }
+
+        match page.next_page_token {
+            Some(token) => page_token = Some(token),
+            None => break,
+        }
     }
 
     tracing::info!(downloaded, "Finished replay archive object download");
@@ -61,21 +92,32 @@ pub async fn recover_replay_records_to_rocksdb(
         anchor_block_number,
         anchor_block_hash,
         None,
+        DEFAULT_DECRYPT_CONCURRENCY,
     )
     .await
 }
+
+/// Default number of replay records decoded concurrently during recovery.
+pub const DEFAULT_DECRYPT_CONCURRENCY: usize = 32;
 
 /// Rebuilds node replay RocksDB from downloaded replay records.
 ///
 /// If `identity` is provided, every downloaded object is decrypted in memory before replay record
 /// decoding. No decrypted archive objects are written to disk.
+///
+/// Records are decoded up to `decrypt_concurrency` blocks at a time. The canonical chain walk is
+/// inherently sequential (the parent hash lives inside the decrypted record), so it decodes
+/// windows of consecutive block numbers speculatively and then verifies linkage in memory. This
+/// matters for identities whose file key unwrap is a network call, like GCP KMS.
 pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
     input_root: &Path,
     replay_db_path: &Path,
     anchor_block_number: BlockNumber,
     anchor_block_hash: BlockHash,
-    identity: Option<age::x25519::Identity>,
+    identity: Option<ArchiveIdentity>,
+    decrypt_concurrency: usize,
 ) -> anyhow::Result<usize> {
+    anyhow::ensure!(decrypt_concurrency > 0, "decrypt concurrency must be > 0");
     tracing::info!(
         input_root = %input_root.display(),
         replay_db_path = %replay_db_path.display(),
@@ -83,16 +125,25 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
         %anchor_block_hash,
         "Starting replay archive RocksDB recovery"
     );
-    if let Some(identity) = &identity {
-        tracing::info!(
+    match &identity {
+        Some(ArchiveIdentity::X25519(identity)) => tracing::info!(
             "Replay archive RocksDB recovery will decrypt objects in memory, public key: {}",
             identity.to_public(),
-        );
+        ),
+        Some(ArchiveIdentity::GcpKms(identity)) => tracing::info!(
+            "Replay archive RocksDB recovery will decrypt objects in memory \
+             via GCP KMS key version {}",
+            identity.key_version(),
+        ),
+        None => {}
     }
-    let decoder = ReplayRecordDecoder { identity };
+    let decoder = Arc::new(ReplayRecordDecoder { identity });
+    // Keep the decode pipeline saturated while bounding how many decoded records are held in
+    // memory at once.
+    let window_size = (decrypt_concurrency as u64) * 2;
 
     let mut canonical_chain = Vec::new();
-    let mut block_number = anchor_block_number;
+    let mut window_top = anchor_block_number;
     let mut block_hash = anchor_block_hash;
 
     tracing::info!(
@@ -101,35 +152,62 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
         "Walking canonical replay archive chain from anchor"
     );
     loop {
-        let replay_record =
-            read_verified_replay_record(input_root, block_number, block_hash, &decoder)
-                .await
-                .with_context(|| {
-                    format!("failed to recover replay record #{block_number}, {block_hash}")
-                })?;
-        anyhow::ensure!(
-            replay_record.block_context.block_number == block_number,
-            "replay record path block number {block_number} does not match record block number {}",
-            replay_record.block_context.block_number
-        );
-        let previous_block_hash = replay_record.block_context.block_hashes.0[255]
-            .to_be_bytes()
-            .into();
+        let window_start = (window_top + 1).saturating_sub(window_size);
+        let mut window: HashMap<BlockNumber, Vec<(BlockHash, ReplayRecord)>> =
+            futures::stream::iter(window_start..=window_top)
+                .map(|block_number| {
+                    let decoder = decoder.clone();
+                    let input_root = input_root.to_path_buf();
+                    async move {
+                        let candidates =
+                            read_candidate_records(&input_root, block_number, &decoder)
+                                .await
+                                .with_context(|| {
+                                    format!("failed to recover replay record #{block_number}")
+                                })?;
+                        anyhow::Ok((block_number, candidates))
+                    }
+                })
+                .buffer_unordered(decrypt_concurrency)
+                .try_collect()
+                .await?;
 
-        canonical_chain.push((block_number, block_hash));
-        log_recovery_progress(canonical_chain.len(), || {
-            tracing::info!(
-                records = canonical_chain.len(),
-                block_number,
-                %block_hash,
-                "Walked canonical replay archive records"
+        for block_number in (window_start..=window_top).rev() {
+            let candidates = window
+                .remove(&block_number)
+                .context("replay archive recovery window is missing a block")?;
+            let replay_record = candidates
+                .into_iter()
+                .find_map(|(hash, record)| (hash == block_hash).then_some(record))
+                .with_context(|| {
+                    format!(
+                        "missing replay archive records for block #{block_number}, {block_hash}"
+                    )
+                })?;
+            anyhow::ensure!(
+                replay_record.block_context.block_number == block_number,
+                "replay record path block number {block_number} does not match record block number {}",
+                replay_record.block_context.block_number
             );
-        });
-        if block_number == 0 {
+            let previous_block_hash = replay_record.block_context.block_hashes.0[255]
+                .to_be_bytes()
+                .into();
+
+            canonical_chain.push((block_number, block_hash));
+            log_recovery_progress(canonical_chain.len(), || {
+                tracing::info!(
+                    records = canonical_chain.len(),
+                    block_number,
+                    %block_hash,
+                    "Walked canonical replay archive records"
+                );
+            });
+            block_hash = previous_block_hash;
+        }
+        if window_start == 0 {
             break;
         }
-        block_number -= 1;
-        block_hash = previous_block_hash;
+        window_top = window_start - 1;
     }
 
     tracing::info!(
@@ -144,15 +222,31 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
         replay_db_path = %replay_db_path.display(),
         "Writing recovered replay records to RocksDB"
     );
-    for (block_number, block_hash) in canonical_chain {
-        let replay_record =
-            read_verified_replay_record(input_root, block_number, block_hash, &decoder)
+    // `buffered` keeps up to `decrypt_concurrency` records decoding ahead of the sequential
+    // writes while preserving the genesis-upward order.
+    let mut records = futures::stream::iter(canonical_chain)
+        .map(|(block_number, block_hash)| {
+            let decoder = decoder.clone();
+            let input_root = input_root.to_path_buf();
+            async move {
+                let replay_record = read_verified_replay_record(
+                    &input_root,
+                    block_number,
+                    block_hash,
+                    &decoder,
+                )
                 .await
                 .with_context(|| {
                     format!(
                         "failed to read replay record #{block_number}, {block_hash} for writing"
                     )
                 })?;
+                anyhow::Ok((block_number, block_hash, replay_record))
+            }
+        })
+        .buffered(decrypt_concurrency);
+    while let Some(record) = records.next().await {
+        let (block_number, block_hash, replay_record) = record?;
         anyhow::ensure!(
             replay_storage
                 .write(Sealed::new_unchecked(replay_record, block_hash), false)
@@ -177,9 +271,76 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
 }
 
 fn log_recovery_progress(count: usize, log: impl FnOnce()) {
-    if count <= 10 || count.is_power_of_two() || count.is_multiple_of(1_000) {
+    if count.is_multiple_of(50) {
         log();
     }
+}
+
+/// Scans an existing download output root for already-downloaded objects.
+///
+/// Entries that do not parse as `<block_number>/<block_hash>/<session>` are ignored,
+/// including `.partial` files left behind by an interrupted write: they get re-downloaded
+/// and overwritten.
+async fn scan_existing_downloaded_objects(
+    output_root: &Path,
+) -> anyhow::Result<HashSet<ReplayArchiveKey>> {
+    let mut existing = HashSet::new();
+    if !tokio::fs::try_exists(output_root).await? {
+        return Ok(existing);
+    }
+
+    let mut block_entries = tokio::fs::read_dir(output_root).await.with_context(|| {
+        format!(
+            "failed to read replay archive recovery root {}",
+            output_root.display()
+        )
+    })?;
+    while let Some(block_entry) = block_entries.next_entry().await? {
+        let Ok(block_number) = block_entry
+            .file_name()
+            .to_string_lossy()
+            .parse::<BlockNumber>()
+        else {
+            continue;
+        };
+        if !block_entry.file_type().await?.is_dir() {
+            continue;
+        }
+
+        let mut hash_entries = tokio::fs::read_dir(block_entry.path()).await?;
+        while let Some(hash_entry) = hash_entries.next_entry().await? {
+            let Ok(block_hash) = hash_entry
+                .file_name()
+                .to_string_lossy()
+                .parse::<BlockHash>()
+            else {
+                continue;
+            };
+            if !hash_entry.file_type().await?.is_dir() {
+                continue;
+            }
+
+            let mut session_entries = tokio::fs::read_dir(hash_entry.path()).await?;
+            while let Some(session_entry) = session_entries.next_entry().await? {
+                let file_name = session_entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                // Session node ids may contain dots, so a `.partial` leftover would parse
+                // as a session; exclude it explicitly.
+                if file_name.ends_with(".partial") {
+                    continue;
+                }
+                let Ok(session) = file_name.parse::<ReplayArchiveSession>() else {
+                    continue;
+                };
+                if !session_entry.file_type().await?.is_file() {
+                    continue;
+                }
+                existing.insert(ReplayArchiveKey::new(session, block_number, block_hash));
+            }
+        }
+    }
+
+    Ok(existing)
 }
 
 async fn write_downloaded_object(
@@ -202,37 +363,102 @@ async fn write_downloaded_object(
         )
     })?;
 
+    // Write to a temporary name and rename so that an object file only exists under its
+    // final name once fully written; interrupted downloads leave `.partial` files that the
+    // resume scan ignores and the next attempt overwrites.
+    let partial_path = output_path.with_file_name(format!("{}.partial", key.session.folder_name()));
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
-        .create_new(true)
-        .open(&output_path)
+        .create(true)
+        .truncate(true)
+        .open(&partial_path)
         .await
         .with_context(|| {
             format!(
                 "failed to create replay archive recovery object {}",
-                output_path.display()
+                partial_path.display()
             )
         })?;
     file.write_all(&object).await.with_context(|| {
         format!(
             "failed to write replay archive recovery object {}",
-            output_path.display()
+            partial_path.display()
         )
     })?;
     file.flush().await.with_context(|| {
         format!(
             "failed to flush replay archive recovery object {}",
-            output_path.display()
+            partial_path.display()
         )
     })?;
+    drop(file);
+    tokio::fs::rename(&partial_path, &output_path)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to finalize replay archive recovery object {}",
+                output_path.display()
+            )
+        })?;
     Ok(())
+}
+
+/// Reads and decodes all `(block_hash, record)` candidates present for a block number.
+async fn read_candidate_records(
+    input_root: &Path,
+    block_number: BlockNumber,
+    decoder: &Arc<ReplayRecordDecoder>,
+) -> anyhow::Result<Vec<(BlockHash, ReplayRecord)>> {
+    let block_dir = input_root.join(block_number.to_string());
+    let mut entries = tokio::fs::read_dir(&block_dir).await.with_context(|| {
+        format!(
+            "missing replay archive records for block #{block_number} at {}",
+            block_dir.display()
+        )
+    })?;
+
+    let mut candidates = Vec::new();
+    while let Some(entry) = entries.next_entry().await.with_context(|| {
+        format!(
+            "failed to read replay archive block directory {}",
+            block_dir.display()
+        )
+    })? {
+        let file_type = entry.file_type().await.with_context(|| {
+            format!(
+                "failed to read replay archive entry file type {}",
+                entry.path().display()
+            )
+        })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let block_hash: BlockHash = file_name
+            .to_str()
+            .and_then(|name| name.parse().ok())
+            .with_context(|| {
+                format!(
+                    "replay archive directory entry {} is not a block hash",
+                    entry.path().display()
+                )
+            })?;
+        let record =
+            read_verified_replay_record(input_root, block_number, block_hash, decoder).await?;
+        candidates.push((block_hash, record));
+    }
+    anyhow::ensure!(
+        !candidates.is_empty(),
+        "no replay archive records found for block #{block_number}"
+    );
+    Ok(candidates)
 }
 
 async fn read_verified_replay_record(
     input_root: &Path,
     block_number: BlockNumber,
     block_hash: BlockHash,
-    decoder: &ReplayRecordDecoder,
+    decoder: &Arc<ReplayRecordDecoder>,
 ) -> anyhow::Result<ReplayRecord> {
     let replay_record_dir = input_root
         .join(block_number.to_string())
@@ -271,7 +497,9 @@ async fn read_verified_replay_record(
                 entry.path().display()
             )
         })?;
-        let record = decoder.decode(record_bytes, &entry.path())?;
+        let record = decoder
+            .decode_off_thread(record_bytes, entry.path())
+            .await?;
         if let Some(canonical_record) = &canonical_record {
             anyhow::ensure!(
                 canonical_record == &record,
@@ -293,11 +521,39 @@ async fn read_verified_replay_record(
     canonical_record.context("replay archive record count was non-zero but no record was loaded")
 }
 
+/// age identity used for replay archive record decryption.
+pub enum ArchiveIdentity {
+    X25519(age::x25519::Identity),
+    GcpKms(GcpKmsIdentity),
+}
+
+impl age::Identity for ArchiveIdentity {
+    fn unwrap_stanza(&self, stanza: &Stanza) -> Option<Result<FileKey, age::DecryptError>> {
+        match self {
+            Self::X25519(identity) => identity.unwrap_stanza(stanza),
+            Self::GcpKms(identity) => identity.unwrap_stanza(stanza),
+        }
+    }
+}
+
 struct ReplayRecordDecoder {
-    identity: Option<age::x25519::Identity>,
+    identity: Option<ArchiveIdentity>,
 }
 
 impl ReplayRecordDecoder {
+    /// Decodes on the blocking thread pool: a `GcpKms` identity blocks on a KMS call while
+    /// unwrapping the file key, which must not happen on an async worker thread.
+    async fn decode_off_thread(
+        self: &Arc<Self>,
+        record_bytes: Vec<u8>,
+        path: PathBuf,
+    ) -> anyhow::Result<ReplayRecord> {
+        let decoder = self.clone();
+        tokio::task::spawn_blocking(move || decoder.decode(record_bytes, &path))
+            .await
+            .context("replay archive record decode task panicked")?
+    }
+
     fn decode(&self, mut record_bytes: Vec<u8>, path: &Path) -> anyhow::Result<ReplayRecord> {
         if let Some(identity) = &self.identity {
             record_bytes = age::decrypt(identity, record_bytes.as_slice()).with_context(|| {
@@ -424,6 +680,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restarted_download_skips_complete_objects_and_redownloads_partial_ones() {
+        let archive_root = tempfile::tempdir().unwrap();
+        let output_root = tempfile::tempdir().unwrap();
+        let block_hash = B256::with_last_byte(1);
+
+        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
+        let storage =
+            FileSystemReplayArchiveStorage::init(archive_root.path().to_path_buf(), session)
+                .await
+                .unwrap();
+        storage
+            .append_object(7, block_hash, b"first".to_vec())
+            .await
+            .unwrap();
+        storage
+            .append_object(8, block_hash, b"second".to_vec())
+            .await
+            .unwrap();
+
+        let reader = FileSystemReplayArchiveReader::new(archive_root.path().to_path_buf());
+        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
+            .await
+            .unwrap();
+        assert_eq!(downloaded, 2);
+
+        // A fully downloaded tree is a no-op to re-download.
+        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
+            .await
+            .unwrap();
+        assert_eq!(downloaded, 0);
+
+        // Simulate an interrupted download: one object exists only as a truncated
+        // `.partial` leftover. It must be re-downloaded, not treated as complete.
+        let hash_dir = output_root
+            .path()
+            .join("8")
+            .join(crate::format_block_hash(block_hash));
+        tokio::fs::remove_file(hash_dir.join("42-node-a"))
+            .await
+            .unwrap();
+        tokio::fs::write(hash_dir.join("42-node-a.partial"), b"sec")
+            .await
+            .unwrap();
+
+        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
+            .await
+            .unwrap();
+        assert_eq!(downloaded, 1);
+        assert_eq!(
+            tokio::fs::read(hash_dir.join("42-node-a")).await.unwrap(),
+            b"second"
+        );
+        assert!(
+            !tokio::fs::try_exists(hash_dir.join("42-node-a.partial"))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn recover_records_to_rocksdb_walks_from_anchor_and_writes_node_format() {
         let input_root = tempfile::tempdir().unwrap();
         let replay_db = tempfile::tempdir().unwrap();
@@ -518,7 +834,8 @@ mod tests {
             replay_db.path(),
             1,
             block_hash,
-            Some(identity),
+            Some(ArchiveIdentity::X25519(identity)),
+            DEFAULT_DECRYPT_CONCURRENCY,
         )
         .await
         .unwrap();

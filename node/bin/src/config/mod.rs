@@ -1669,6 +1669,24 @@ pub enum ReplayArchiveEncryptionConfig {
         /// age X25519 recipient public key. The node only needs this public key.
         recipient: String,
     },
+    /// GCP KMS encryption using ambient authentication (workload identity). This is the
+    /// recommended mode when the node runs on GCP.
+    GcpKms {
+        /// GCP KMS key version resource name
+        /// (`projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..`).
+        /// The key must have purpose `ASYMMETRIC_DECRYPT` and an `RSA_DECRYPT_OAEP_*_SHA256`
+        /// algorithm. The node only fetches the public key and encrypts locally; it does not
+        /// need decrypt permissions.
+        kms_key_version: String,
+    },
+    /// GCP KMS encryption authenticating via a credentials file, for deployments not running
+    /// on GCP.
+    GcpKmsWithCredentialFile {
+        /// GCP KMS key version resource name; see `GcpKms`.
+        kms_key_version: String,
+        /// Path to the GCP credentials file.
+        kms_credential_file_path: PathBuf,
+    },
 }
 
 impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig {
@@ -1739,6 +1757,26 @@ impl From<ReplayArchiveEncryptionConfig>
             ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
             }
+            ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
+                    config: zksync_os_replay_archive::GcpKmsConfig {
+                        key_version: kms_key_version,
+                        auth_mode: zksync_os_replay_archive::GcpKmsAuthMode::Authenticated,
+                    },
+                }
+            }
+            ReplayArchiveEncryptionConfig::GcpKmsWithCredentialFile {
+                kms_key_version,
+                kms_credential_file_path,
+            } => zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
+                config: zksync_os_replay_archive::GcpKmsConfig {
+                    key_version: kms_key_version,
+                    auth_mode:
+                        zksync_os_replay_archive::GcpKmsAuthMode::AuthenticatedWithCredentialFile(
+                            kms_credential_file_path,
+                        ),
+                },
+            },
         }
     }
 }
@@ -2601,9 +2639,33 @@ mod tests {
                 ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                     assert_eq!(recipient, "age1recipient");
                 }
-                ReplayArchiveEncryptionConfig::Noop => {
-                    panic!("expected age X25519 replay archive encryption")
+                _ => panic!("expected age X25519 replay archive encryption"),
+            },
+            _ => panic!("expected file system replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcp_kms_encryption() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
+            ("REPLAY_ARCHIVE_ROOT_PATH", "/tmp/replay-archive"),
+            ("REPLAY_ARCHIVE_ENCRYPTION_TYPE", "GcpKms"),
+            (
+                "REPLAY_ARCHIVE_ENCRYPTION_KMS_KEY_VERSION",
+                "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+            ),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::FileSystem { encryption, .. } => match encryption {
+                ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                    assert_eq!(
+                        kms_key_version,
+                        "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"
+                    );
                 }
+                _ => panic!("expected GCP KMS replay archive encryption"),
             },
             _ => panic!("expected file system replay archive config"),
         }

@@ -12,6 +12,7 @@ mod filesystem;
 mod gate_component;
 mod gcs;
 mod init;
+mod kms;
 mod metrics;
 mod reader;
 mod recovery;
@@ -19,7 +20,7 @@ mod replay_record;
 mod s3;
 mod write_replay;
 
-pub use age_encrypted::AgeEncryptedReplayArchiver;
+pub use age_encrypted::{AgeEncryptedReplayArchiver, ArchiveRecipient};
 pub use component::{ReplayArchiveComponent, ReplayArchiveRecord, ReplayArchiveSender};
 pub use filesystem::{
     FileSystemReplayArchiveReader, FileSystemReplayArchiveStorage, FileSystemReplayArchiver,
@@ -33,10 +34,12 @@ pub use init::{
     InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
     init_replay_archive,
 };
-pub use reader::{ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveStorageReader};
+pub use kms::{GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
+pub use reader::{ReplayArchiveKeyPage, ReplayArchiveStorageReader};
 pub use recovery::{
-    download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
-    recover_replay_records_to_rocksdb, recover_replay_records_to_rocksdb_with_optional_decryption,
+    ArchiveIdentity, DEFAULT_DECRYPT_CONCURRENCY, download_all_replay_archive_objects,
+    parse_age_x25519_identity, read_age_x25519_identity, recover_replay_records_to_rocksdb,
+    recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 pub use replay_record::ReplayRecordArchiver;
 pub use s3::{
@@ -168,9 +171,6 @@ fn validate_node_id(node_id: &str) -> Result<(), InvalidReplayArchiveSession> {
 fn format_block_hash(block_hash: BlockHash) -> String {
     alloy::hex::encode_prefixed(block_hash.0)
 }
-
-/// Channel size used by object-store backends to stream listed objects to callers.
-pub(crate) const REPLAY_ARCHIVE_OBJECT_LIST_CHANNEL_SIZE: usize = 128;
 
 /// Marker object name written under `<session>/` to mark a session as created.
 pub(crate) const SESSION_MARKER_FILE_NAME: &str = ".session";
@@ -393,7 +393,7 @@ mod tests {
     fn age_encrypted_archive_encrypts_replay_record_for_recipient() {
         let identity = age::x25519::Identity::generate();
         let recipient = identity.to_public();
-        let archive = AgeEncryptedReplayArchiver::new((), recipient);
+        let archive = AgeEncryptedReplayArchiver::new((), ArchiveRecipient::X25519(recipient));
         let replay_record = test_replay_record(7);
 
         let encrypted = archive.encrypt_replay_record(&replay_record).unwrap();
