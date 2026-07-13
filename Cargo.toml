@@ -52,7 +52,7 @@ resolver = "3"
 default-members = ["node/bin"]
 
 [workspace.package]
-version = "0.20.9"
+version = "0.20.10"
 edition = "2024"
 authors = ["The Matter Labs Team <hello@matterlabs.dev>"]
 homepage = "https://zksync.io/"

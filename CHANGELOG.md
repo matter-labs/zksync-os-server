@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.20.10](https://github.com/matter-labs/zksync-os-server/compare/v0.20.9...v0.20.10) (2026-07-13)
+
+
+### Features
+
+* **network:** restrict external nodes to trusted peers only ([#1438](https://github.com/matter-labs/zksync-os-server/issues/1438)) ([9b57b36](https://github.com/matter-labs/zksync-os-server/commit/9b57b36161304fa203731e92f367a6870942bf96))
+* **network:** treat boot nodes as trusted peers to keep ENs synced ([#1432](https://github.com/matter-labs/zksync-os-server/issues/1432)) ([c37f7b8](https://github.com/matter-labs/zksync-os-server/commit/c37f7b87091d1be82b23fd520a31d7aa240be9f0))
+* **status:** add pipeline status endpoint ([#1269](https://github.com/matter-labs/zksync-os-server/issues/1269)) ([07641b7](https://github.com/matter-labs/zksync-os-server/commit/07641b7d16d9a3a6e07bb506225710f94ff23c5b))
+
+
+### Bug Fixes
+
+* **deps:** update crossbeam-epoch to 0.9.20 ([#1439](https://github.com/matter-labs/zksync-os-server/issues/1439)) ([521a705](https://github.com/matter-labs/zksync-os-server/commit/521a70588587845f5e322fe759d90ea0a54fd580))
+* **l1-sender:** retry nonce-class L1 rejections instead of crashing the node ([#1436](https://github.com/matter-labs/zksync-os-server/issues/1436)) ([e1039e4](https://github.com/matter-labs/zksync-os-server/commit/e1039e44c77628eabfb14f3f60da0683d89c53d7))
+* **sequencer:** detect EIP-7594 blob support via eth_config ([#1434](https://github.com/matter-labs/zksync-os-server/issues/1434)) ([81f719c](https://github.com/matter-labs/zksync-os-server/commit/81f719c551114bc9ebf05c861f6fc5b523d50973))
+
 ## [0.20.9](https://github.com/matter-labs/zksync-os-server/compare/v0.20.8...v0.20.9) (2026-07-03)
 
 
