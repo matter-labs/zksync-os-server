@@ -105,7 +105,7 @@ runs:
         echo "${PWD}" >> "${GITHUB_PATH}"
 
     - name: Install Rust toolchain
-      uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
+      uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3 # v1.3.0
       env:
         # To fix rate limiting issues with GitHub API
         GITHUB_TOKEN: ${{ github.token }}
@@ -117,7 +117,7 @@ runs:
 
     - name: Rust cache
       if: inputs.enable_cache == 'true'
-      uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       id: rust-cache
       with:
         shared-key: "${{ inputs.cache_shared_key }}"
@@ -126,6 +126,6 @@ runs:
         save-if: ${{ inputs.save_cache == 'true' }}
 
     - name: Install Foundry
-      uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
+      uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
       with:
         version: ${{ inputs.foundry_version }}
