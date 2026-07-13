@@ -280,8 +280,8 @@ impl MultiNodeTester {
                         // Exactly one batcher, as before the migration.
                         config.batcher_config.enabled = index == 0;
                         config.consensus_config.enabled = true;
-                        config.consensus_config.network_key = Some(network_key);
-                        config.consensus_config.bls_key = Some(bls_key);
+                        config.consensus_config.network_key = Some(network_key.into());
+                        config.consensus_config.bls_key = Some(bls_key.into());
                         config.consensus_config.listen_address = listen_address;
                         config.consensus_config.validators = committee;
                         config.consensus_config.allow_private_ips = true;
@@ -421,8 +421,8 @@ impl MultiNodeTester {
                         config.sequencer_config.fee_collector_address = fee_collector;
                         config.batcher_config.enabled = index == 0;
                         config.consensus_config.enabled = true;
-                        config.consensus_config.network_key = Some(network_key);
-                        config.consensus_config.bls_key = Some(bls_key);
+                        config.consensus_config.network_key = Some(network_key.into());
+                        config.consensus_config.bls_key = Some(bls_key.into());
                         config.consensus_config.listen_address = listen_address;
                         config.consensus_config.committees = entries;
                         config.consensus_config.epoch_length = epoch_length;
@@ -520,8 +520,8 @@ impl MultiNodeTester {
                     config.sequencer_config.fee_collector_address = fee_collector;
                     config.batcher_config.enabled = index == 0;
                     config.consensus_config.enabled = true;
-                    config.consensus_config.network_key = Some(network_key);
-                    config.consensus_config.bls_key = Some(bls_key);
+                    config.consensus_config.network_key = Some(network_key.into());
+                    config.consensus_config.bls_key = Some(bls_key.into());
                     config.consensus_config.listen_address = listen_address;
                     config.consensus_config.validators = committee;
                     config.consensus_config.observers = observer_entries;
@@ -552,7 +552,7 @@ impl MultiNodeTester {
             config.batcher_config.enabled = false;
             config.consensus_config.enabled = true;
             config.consensus_config.role = ConsensusRole::Observer;
-            config.consensus_config.network_key = Some(network_key);
+            config.consensus_config.network_key = Some(network_key.into());
             config.consensus_config.listen_address = listen_address;
             config.consensus_config.validators = committee.clone();
             config.consensus_config.observers = observer_entries.clone();
@@ -647,8 +647,8 @@ impl MultiNodeTester {
                     config.sequencer_config.fee_collector_address = fee_collector;
                     config.batcher_config.enabled = index == 0;
                     config.consensus_config.enabled = true;
-                    config.consensus_config.network_key = Some(network_key);
-                    config.consensus_config.bls_key = Some(bls_key);
+                    config.consensus_config.network_key = Some(network_key.into());
+                    config.consensus_config.bls_key = Some(bls_key.into());
                     config.consensus_config.listen_address = listen_address;
                     config.consensus_config.committees = entries;
                     config.consensus_config.epoch_length = epoch_length;
@@ -680,7 +680,7 @@ impl MultiNodeTester {
             config.batcher_config.enabled = false;
             config.consensus_config.enabled = true;
             config.consensus_config.role = ConsensusRole::Observer;
-            config.consensus_config.network_key = Some(network_key);
+            config.consensus_config.network_key = Some(network_key.into());
             config.consensus_config.listen_address = listen_address;
             config.consensus_config.committees = entries.clone();
             config.consensus_config.epoch_length = epoch_length;
@@ -774,8 +774,8 @@ impl MultiNodeTester {
                         // Exactly one batcher; every other validator is sequencing-only.
                         config.batcher_config.enabled = index == 0;
                         config.consensus_config.enabled = true;
-                        config.consensus_config.network_key = Some(network_key);
-                        config.consensus_config.bls_key = Some(bls_key);
+                        config.consensus_config.network_key = Some(network_key.into());
+                        config.consensus_config.bls_key = Some(bls_key.into());
                         config.consensus_config.listen_address = listen_address;
                         config.consensus_config.validators = committee;
                         // Everything runs on localhost.
@@ -938,8 +938,21 @@ impl MultiNodeTester {
                 }
             }
         }
-        self.validators[index] = Validator::Running(stopped.start_with_overrides(configure).await?);
-        Ok(())
+        // A start the node itself refuses (a startup guard panicking) consumes
+        // the instance; restore the slot from the backup so expected-refusal
+        // choreography — assert the error, adjust config, start again — can
+        // continue against the same stopped state.
+        let backup = stopped.backup();
+        match stopped.start_with_overrides(configure).await {
+            Ok(node) => {
+                self.validators[index] = Validator::Running(node);
+                Ok(())
+            }
+            Err(error) => {
+                self.validators[index] = Validator::Stopped(backup.restore().await?);
+                Err(error)
+            }
+        }
     }
 
     /// The highest block height any running validator currently reports.

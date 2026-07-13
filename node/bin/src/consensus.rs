@@ -26,6 +26,7 @@ use commonware_runtime::{Metrics as _, Quota, Runner as _, Spawner as _, Supervi
 use commonware_utils::TryCollect as _;
 use commonware_utils::ordered::{BiMap, Map};
 use commonware_utils::union_unique;
+use smart_config::value::ExposeSecret as _;
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -217,9 +218,9 @@ pub fn parse_acknowledge_fork(
     let Some(value) = value else {
         return Ok(None);
     };
-    let (height, hash) = value.split_once(':').context(
-        "`consensus.acknowledge_fork` must be `\"<height>:<block hash at height>\"`",
-    )?;
+    let (height, hash) = value
+        .split_once(':')
+        .context("`consensus.acknowledge_fork` must be `\"<height>:<block hash at height>\"`")?;
     let height: u64 = height
         .trim()
         .parse()
@@ -271,7 +272,7 @@ pub struct ConsensusSetup {
     pub era_anchor: u64,
     pub listen_address: SocketAddr,
     pub allow_private_ips: bool,
-    pub max_message_size: usize,
+    pub max_message_size: NonZeroU32,
     pub storage_directory: PathBuf,
     /// The protocol-versioned base namespace (see [`namespace`]); the signing
     /// namespace already baked it into the scheme provider, the p2p stack derives
@@ -475,7 +476,8 @@ impl ConsensusSetup {
             config
                 .network_key
                 .as_ref()
-                .context("`consensus.network_key` is required")?,
+                .context("`consensus.network_key` is required")?
+                .expose_secret(),
         )
         .context("invalid `consensus.network_key`")?;
         use commonware_cryptography::Signer as _;
@@ -491,7 +493,8 @@ impl ConsensusSetup {
                     config
                         .bls_key
                         .as_ref()
-                        .context("`consensus.bls_key` is required for validators")?,
+                        .context("`consensus.bls_key` is required for validators")?
+                        .expose_secret(),
                 )
                 .context("invalid `consensus.bls_key`")?;
 
@@ -818,7 +821,7 @@ where
             namespace: union_unique(&setup.namespace, b"_P2P"),
             crypto: setup.network_key.clone(),
             listen: setup.listen_address,
-            max_message_size: setup.max_message_size as u32,
+            max_message_size: setup.max_message_size.get(),
             mailbox_size: commonware_utils::NZUsize!(16_384),
             send_batch_size: commonware_utils::NZUsize!(8),
             bypass_ip_check: false,
@@ -1151,7 +1154,7 @@ fn start_tx_gossip<C, P, TxSender, TxReceiver>(
     pool: P,
     sender: TxSender,
     mut receiver: TxReceiver,
-    max_message_size: usize,
+    max_message_size: NonZeroU32,
     role: crate::config::ConsensusRole,
 ) where
     C: commonware_runtime::Spawner + commonware_runtime::Metrics,
@@ -1161,7 +1164,7 @@ fn start_tx_gossip<C, P, TxSender, TxReceiver>(
 {
     // Leave generous headroom under the network's message cap; a batch is cut early
     // when it grows past this.
-    let byte_budget = max_message_size / 2;
+    let byte_budget = max_message_size.get() as usize / 2;
 
     // Observers receive gossip (the channel is registered either way — an
     // unrecognized channel would get the *sender* banned) but do not broadcast:
@@ -1280,6 +1283,28 @@ fn start_tx_gossip_out<C, P, TxSender>(
 /// instance (with everything it holds) is alive on this storage.
 pub fn instance_lock_path(storage_directory: &std::path::Path) -> PathBuf {
     storage_directory.join(".instance-lock")
+}
+
+/// Marker the truncate tool plants inside a consensus engine state directory
+/// whose recorded progress extends past a chain truncation: marshal would
+/// resume delivery above the truncated tip and die on the delivery-order
+/// assert, so startup refuses to run consensus over a flagged directory.
+/// The runbook's "clear the consensus engine state" step removes the flag
+/// together with the state it poisons.
+pub fn truncation_flag_path(storage_directory: &std::path::Path) -> PathBuf {
+    storage_directory.join(".predates-truncation")
+}
+
+/// The truncation point recorded in [`truncation_flag_path`]'s marker, when
+/// one is present.
+pub fn read_truncation_flag(
+    storage_directory: &std::path::Path,
+) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(truncation_flag_path(storage_directory)) {
+        Ok(contents) => Ok(Some(contents.trim().to_string())),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
 }
 
 /// The canonical wire form of one gossiped transaction: its EIP-2718 encoding — the
@@ -1555,6 +1580,26 @@ mod tests {
     const ERA_B: [u8; 32] = [0xB; 32];
 
     #[test]
+    fn truncation_flag_roundtrips_and_absence_reads_none() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let engine = root.path().join("consensus");
+        // Absent directory and absent flag both read as "not flagged".
+        assert!(read_truncation_flag(&engine).expect("absent dir").is_none());
+        std::fs::create_dir(&engine).expect("create directory");
+        assert!(
+            read_truncation_flag(&engine)
+                .expect("absent flag")
+                .is_none()
+        );
+
+        std::fs::write(truncation_flag_path(&engine), "1234\n").expect("write flag");
+        assert_eq!(
+            read_truncation_flag(&engine).expect("present").as_deref(),
+            Some("1234")
+        );
+    }
+
+    #[test]
     fn era_guard_covers_the_whole_matrix() {
         let hash_at_anchor = alloy::primitives::B256::repeat_byte(0x1D);
         let wrong_hash = alloy::primitives::B256::repeat_byte(0x2E);
@@ -1740,13 +1785,13 @@ mod tests {
     fn config_with(
         validators: Vec<String>,
         committees: Vec<crate::config::CommitteeScheduleEntryConfig>,
-        network_key: String,
-        bls_key: String,
+        network_key: impl Into<smart_config::value::SecretString>,
+        bls_key: impl Into<smart_config::value::SecretString>,
     ) -> ConsensusConfig {
         ConsensusConfig {
             enabled: true,
-            network_key: Some(network_key),
-            bls_key: Some(bls_key),
+            network_key: Some(network_key.into()),
+            bls_key: Some(bls_key.into()),
             validators,
             committees,
             ..ConsensusConfig::default()

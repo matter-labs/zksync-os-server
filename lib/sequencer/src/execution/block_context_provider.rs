@@ -242,7 +242,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
         if self.last_block.is_none() {
             // As this is the first block we are replaying, we need to initialize the mempool.
-            self.pool.init(&record).await;
+            // The replay drains the pool starting with this very record, so the watchers feed
+            // from its own starting cursors.
+            self.pool
+                .init(&record, record.starting_cursors.clone())
+                .await;
         }
 
         if record.block_context.block_number == 0 {
@@ -294,7 +298,14 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
         if self.last_block.is_none() {
             // As this is the first block we are rebuilding, we need to initialize the mempool.
-            self.pool.init(&rebuild.replay_record).await;
+            // Like replay: the rebuild drains from this record on, so the watchers feed from
+            // its own starting cursors.
+            self.pool
+                .init(
+                    &rebuild.replay_record,
+                    rebuild.replay_record.starting_cursors.clone(),
+                )
+                .await;
         }
 
         let (previous_block_timestamp, next_cursors, block_hashes) =

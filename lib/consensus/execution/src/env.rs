@@ -681,14 +681,13 @@ where
             .as_ref()
             .try_into()
             .expect("sha256 digests are 32 bytes");
-        let committed = {
+        let (pipeline_closed, committed) = {
             let shared = self.shared.lock().unwrap();
-            if shared.pipeline_closed {
-                warn!(height, "node is shutting down; dropping commit");
-                return;
-            }
-            shared.pending.committed()
+            (shared.pipeline_closed, shared.pending.committed())
         };
+        if pipeline_closed {
+            hold_undeliverable_commit(height).await;
+        }
 
         if height < committed.height {
             // At-least-once delivery legitimately reaches *below* the tip:
@@ -736,21 +735,35 @@ where
             // Redelivery of the exact tip after an unclean shutdown. The
             // in-memory digest is unknown right after a restart (adoption from
             // the archive may not have happened yet); the finality index still
-            // holds the evidence then.
-            match committed.digest {
-                Some(digest) => assert_eq!(
+            // holds the evidence then. Validate every available source before
+            // recreating a missing index; contradictory evidence must never be
+            // overwritten by redelivery.
+            if let Some(digest) = committed.digest {
+                assert_eq!(
                     digest,
                     block.digest(),
                     "consensus re-delivered a different block at the committed height"
-                ),
-                None => {
-                    if let Some(finality) = &self.finality
-                        && let Ok(Some(indexed)) = finality.digest_at_height(height)
-                    {
+                );
+            }
+            if let Some(finality) = &self.finality {
+                match finality.digest_at_height(height) {
+                    Ok(Some(indexed)) => {
                         assert_eq!(
                             indexed, digest_bytes,
                             "consensus re-delivered a different block at the committed height"
                         );
+                    }
+                    Ok(None) => {
+                        if let Err(err) = finality.index_height(height, digest_bytes) {
+                            error!(
+                                height,
+                                ?err,
+                                "failed to recreate the finality index for the committed tip"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        error!(height, ?err, "failed to read the finality index");
                     }
                 }
             }
@@ -827,9 +840,8 @@ where
         // through — only after this returns: the node is the pacer.
         //
         // The pipeline disappearing means the node is shutting down (its own guards
-        // make a mid-flight pipeline death fatal to the process). Returning without
-        // the durability wait is safe here: nothing below persists an acknowledgement,
-        // and after a restart consensus re-delivers from the durable height anyway.
+        // make a mid-flight pipeline death fatal to the process). The commit is
+        // *held*, not abandoned: see [`hold_undeliverable_commit`].
         let sent = self
             .committed_sink
             .send(BlockPayload {
@@ -842,9 +854,8 @@ where
             })
             .await;
         if sent.is_err() {
-            warn!(height, "persistence pipeline closed; dropping commit");
             self.shared.lock().unwrap().pipeline_closed = true;
-            return;
+            hold_undeliverable_commit(height).await;
         }
         let mut applied = self.applied.clone();
         if applied
@@ -852,9 +863,8 @@ where
             .await
             .is_err()
         {
-            warn!(height, "applier watch closed; dropping commit");
             self.shared.lock().unwrap().pipeline_closed = true;
-            return;
+            hold_undeliverable_commit(height).await;
         }
 
         let mut shared = self.shared.lock().unwrap();
@@ -872,4 +882,20 @@ where
             .speculative_blocks
             .set(pending.len() as u64);
     }
+}
+
+/// Holds a commit whose durability path is gone, forever, instead of
+/// returning. `commit`'s return is what the committer acknowledges to
+/// marshal, and an acknowledgment for a block that never became durable would
+/// let marshal's delivery marker run ahead of the write-ahead log — after the
+/// restart it would resume delivery *above* the missing block, and the
+/// redelivery that should heal the gap would never come. The pipeline only
+/// closes while the node is shutting down, so the parked delivery is torn
+/// down with everything else and redelivered on the next start.
+async fn hold_undeliverable_commit(height: u64) {
+    warn!(
+        height,
+        "persistence pipeline closed; holding the commit until teardown"
+    );
+    std::future::pending::<()>().await;
 }

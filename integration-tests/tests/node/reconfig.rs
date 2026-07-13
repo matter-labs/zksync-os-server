@@ -336,7 +336,7 @@ async fn observer_promoted_to_validator_at_a_scheduled_boundary() -> anyhow::Res
     cluster
         .start_validator_with_config_overrides(CANDIDATE, move |config| {
             config.consensus_config.role = zksync_os_server::config::ConsensusRole::Validator;
-            config.consensus_config.bls_key = Some(bls_key);
+            config.consensus_config.bls_key = Some(bls_key.into());
             config.consensus_config.committees = entries;
             config.consensus_config.observers = vec![];
             config.consensus_config.tx_forward_rpc_urls = vec![];

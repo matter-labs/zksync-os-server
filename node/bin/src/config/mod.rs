@@ -703,10 +703,12 @@ pub struct ConsensusConfig {
     #[config(secret)]
     #[config(default)]
     #[config_validate(custom(
-        |root: &Config, value: &Option<String>| !root.consensus_config.enabled || value.is_some(),
+        |root: &Config, value: &Option<SecretString>| {
+            !root.consensus_config.enabled || value.is_some()
+        },
         "is required when `consensus.enabled=true`"
     ))]
-    pub network_key: Option<String>,
+    pub network_key: Option<SecretString>,
     /// This validator's BLS12-381 consensus signing key (hex). Signs votes and
     /// certificates; distinct from the network identity. Validators only —
     /// an observer holds no signing key, and configuring one for it is refused
@@ -714,13 +716,13 @@ pub struct ConsensusConfig {
     #[config(secret)]
     #[config(default)]
     #[config_validate(custom(
-        |root: &Config, value: &Option<String>| {
+        |root: &Config, value: &Option<SecretString>| {
             let consensus = &root.consensus_config;
             !consensus.enabled || (consensus.role.is_validator() == value.is_some())
         },
         "is required for `consensus.role=validator` and must be absent for `consensus.role=observer`"
     ))]
-    pub bls_key: Option<String>,
+    pub bls_key: Option<SecretString>,
     /// Address the consensus p2p stack listens on.
     #[config(default_t = "127.0.0.1:3054".into())]
     pub listen_address: String,
@@ -876,8 +878,8 @@ pub struct ConsensusConfig {
     #[config(default_t = 1)]
     pub protocol_version: u32,
     /// Upper bound on a consensus network message (must fit the largest block).
-    #[config(default_t = 16 * 1024 * 1024)]
-    pub max_message_size: usize,
+    #[config(default_t = NonZeroU32::new(16 * 1024 * 1024).unwrap())]
+    pub max_message_size: NonZeroU32,
     /// How many *retired* epochs of consensus storage this node keeps; older
     /// epochs are pruned — vote-journal partitions removed, marshal's finalized
     /// block/certificate archives pruned below the horizon. `0` disables pruning.
@@ -1250,6 +1252,12 @@ pub struct SequencerConfig {
     /// Only affects the Main Node.
     /// Useful for mitigation/operations.
     #[config(default_t = None)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<u64>| {
+            !root.consensus_config.enabled || value.is_none()
+        },
+        "is not supported when `consensus.enabled=true`"
+    ))]
     pub max_blocks_to_produce: Option<u64>,
 
     /// Max number of interop roots to be included in a single transaction
@@ -1275,6 +1283,19 @@ pub struct SequencerConfig {
 
     /// Block rebuild / L1 revert options. See [`RebuildConfig`] for the three modes.
     #[config(nest)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<RebuildConfig>| {
+            !root.consensus_config.enabled
+                || !matches!(
+                    value,
+                    Some(
+                        RebuildConfig::BlockRebuild { .. }
+                            | RebuildConfig::DangerBlockRebuildWithL1Revert { .. }
+                    )
+                )
+        },
+        "cannot rebuild local blocks when `consensus.enabled=true`; only `l1_revert` is supported"
+    ))]
     pub rebuild: Option<RebuildConfig>,
 
     /// If set, external node will sync up to and including this block number and then stop processing blocks.
@@ -2694,6 +2715,22 @@ mod tests {
     const TEST_SECRET_KEY: &str =
         "0x1111111111111111111111111111111111111111111111111111111111111111";
 
+    #[test]
+    fn consensus_secret_keys_are_redacted_from_debug_output() {
+        const NETWORK_SENTINEL: &str = "network-secret-sentinel";
+        const BLS_SENTINEL: &str = "bls-secret-sentinel";
+        let config = ConsensusConfig {
+            network_key: Some(NETWORK_SENTINEL.into()),
+            bls_key: Some(BLS_SENTINEL.into()),
+            ..ConsensusConfig::default()
+        };
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains(NETWORK_SENTINEL));
+        assert!(!debug.contains(BLS_SENTINEL));
+        assert!(debug.contains("[REDACTED]"));
+    }
+
     fn loopback_interface() -> &'static str {
         ["lo", "lo0"]
             .into_iter()
@@ -2716,6 +2753,14 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap()
+    }
+
+    fn parse_consensus_config<const N: usize>(
+        env_vars: [(&str, &str); N],
+    ) -> Result<ConsensusConfig, ParseErrors> {
+        let schema = ConfigSchema::new(&ConsensusConfig::DESCRIPTION, "consensus");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<ConsensusConfig>().unwrap().parse()
     }
 
     #[test]
@@ -2976,6 +3021,48 @@ mod tests {
         let err = config.validate().await.unwrap_err().to_string();
 
         assert!(err.contains("cannot be enabled on a consensus observer"));
+    }
+
+    #[test]
+    fn consensus_message_size_is_nonzero_u32_by_construction() {
+        let default = parse_consensus_config([]).unwrap();
+        assert_eq!(default.max_message_size.get(), 16 * 1024 * 1024);
+
+        assert!(parse_consensus_config([("CONSENSUS_MAX_MESSAGE_SIZE", "0")]).is_err());
+
+        assert!(
+            parse_consensus_config([(
+                "CONSENSUS_MAX_MESSAGE_SIZE",
+                &(u64::from(u32::MAX) + 1).to_string(),
+            )])
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn consensus_rejects_local_rebuild_and_local_production_limit() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.consensus_config.enabled = true;
+        config.consensus_config.network_key = Some("network-secret".into());
+        config.consensus_config.bls_key = Some("bls-secret".into());
+        config.consensus_config.validators = vec!["validator-a".into(), "validator-b".into()];
+        config.sequencer_config.max_blocks_to_produce = Some(1);
+        config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
+            bounds: RebuildBounds {
+                from_block_number: 1,
+                from_block_hash: B256::ZERO,
+                blocks_to_empty: vec![],
+                reset_timestamps: false,
+            },
+        });
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(err.contains(
+            "`sequencer.max_blocks_to_produce` is not supported when `consensus.enabled=true`"
+        ));
+        assert!(err.contains(
+            "`sequencer.rebuild` cannot rebuild local blocks when `consensus.enabled=true`"
+        ));
     }
 
     #[tokio::test]

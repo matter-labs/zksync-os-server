@@ -10,9 +10,11 @@
 //! real startups, the batcher against a real L1.
 
 use alloy::eips::BlockId;
-use alloy::primitives::Address;
+use alloy::primitives::{Address, B256};
 use alloy::providers::Provider as _;
 use std::time::Duration;
+use zksync_os_alloy_ext::provider::ZksyncApi as _;
+use zksync_os_integration_tests::Tester;
 use zksync_os_integration_tests::l1_helpers::wait_for_l1_state;
 use zksync_os_integration_tests::multi_node::MultiNodeTester;
 use zksync_os_integration_tests::settlement::{CONVERGENCE_TIMEOUT, send_transfer};
@@ -45,13 +47,13 @@ fn read_manifest(tombstone: &std::path::Path) -> anyhow::Result<(u64, String, Ve
 
 /// The last block of the last batch executed on L1, read the way the tool
 /// reads it: L1 names the batch, a node's own batch store maps it to a block.
-/// Reads from the first *stopped* node that has the batch persisted — the
-/// persist watcher trails the execute watcher slightly, so a node stopped
-/// right at the drain point may not have written the mapping yet while its
-/// longer-running peers have.
-fn executed_floor_block(cluster: &MultiNodeTester, indices: &[usize], batch: u64) -> u64 {
+/// Reads from the first *stopped* node that has the batch persisted; `None`
+/// when no listed node does — the persist watcher trails the execute watcher
+/// slightly, so a node stopped right at the drain point may not have written
+/// the mapping yet.
+fn executed_floor_block(cluster: &MultiNodeTester, indices: &[usize], batch: u64) -> Option<u64> {
     if batch == 0 {
-        return 0;
+        return Some(0);
     }
     for &index in indices {
         let rocks = cluster
@@ -65,10 +67,36 @@ fn executed_floor_block(cluster: &MultiNodeTester, indices: &[usize], batch: u64
             .get_batch_by_number(batch)
             .expect("batch store readable")
         {
-            return persisted.last_block_number();
+            return Some(persisted.last_block_number());
         }
     }
-    panic!("no stopped node has batch {batch} persisted; rerun (persist watcher raced the stops)");
+    None
+}
+
+/// Waits until `node` has the batch→blocks mapping for `batch` on its own
+/// disk. Both the floor read above and the truncate tool's executed-floor
+/// guard read that mapping from a *stopped* node's store, and the persist
+/// watcher trails the execute watcher slightly — pinning the mapping down
+/// while the node still runs removes the race against its stop.
+async fn wait_for_batch_persisted(node: &Tester, batch: u64) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let persisted: Result<B256, _> = node
+            .l2_provider
+            .client()
+            .request("unstable_getLocalRoot", (batch,))
+            .await;
+        match persisted {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                anyhow::ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "batch {batch} was not persisted in time: {err}"
+                );
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
 }
 
 #[test_log::test(tokio::test)]
@@ -90,11 +118,40 @@ async fn the_fork_drill_truncates_reconfigures_and_resumes() -> anyhow::Result<(
     for _ in 0..2 {
         send_transfer(&cluster, 1, recipient).await?;
     }
-    let drained = wait_for_l1_state(cluster.node(0), "settlement fully drained", |state| {
-        state.last_executed_batch >= 1
-            && state.last_executed_batch == state.last_committed_batch
-    })
-    .await?;
+    // Fully drained AND stable: everything committed is executed and the
+    // executed batch covers the chain tip. The drained point alone is
+    // momentary — a sealed-but-unsettled batch can commit right behind it,
+    // and the stops below would race it.
+    let drained = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            let state = wait_for_l1_state(cluster.node(0), "settlement fully drained", |state| {
+                state.last_executed_batch >= 1
+                    && state.last_executed_batch == state.last_committed_batch
+            })
+            .await?;
+            let tip = cluster.node(0).l2_provider.get_block_number().await?;
+            let batch_at_tip = cluster
+                .node(0)
+                .l2_zk_provider
+                .get_batch_number_by_block_number(tip)
+                .await;
+            if batch_at_tip.is_ok_and(|batch| batch == state.last_executed_batch) {
+                break state;
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "settlement did not stabilize at the chain tip in time",
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    };
+    // Every node gets truncated below, and both the truncation guard and the
+    // fork-point read need the executed batch's block mapping on the node's
+    // own disk — pin it down on all of them while they still run.
+    for index in 0..4 {
+        wait_for_batch_persisted(cluster.node(index), drained.last_executed_batch).await?;
+    }
 
     // The settler goes down first (the runbook's "stop the settler and hold it
     // down"); the surviving quorum keeps producing the suffix that will be
@@ -107,7 +164,8 @@ async fn the_fork_drill_truncates_reconfigures_and_resumes() -> anyhow::Result<(
     cluster.stop_validator(1).await?;
     cluster.stop_validator(2).await?;
     cluster.stop_validator(3).await?;
-    let fork_point = executed_floor_block(&cluster, &[0, 1, 2, 3], drained.last_executed_batch);
+    let fork_point = executed_floor_block(&cluster, &[0, 1, 2, 3], drained.last_executed_batch)
+        .expect("every node persisted the executed batch before the stops");
     assert!(
         doomed_tip > fork_point,
         "the doomed suffix must extend past the fork point ({doomed_tip} vs {fork_point})"
@@ -118,12 +176,9 @@ async fn the_fork_drill_truncates_reconfigures_and_resumes() -> anyhow::Result<(
     let node1_config = cluster.stopped(1).config().clone();
     let node1_rocks = node1_config.general_config.rocks_db_path.clone();
     zksync_os_integration_tests::wait_for_rocksdb_locks_released(&node1_rocks).await?;
-    let above_tip = zksync_os_server::truncate::run_truncate(
-        node1_config.clone(),
-        doomed_tip + 1_000,
-        None,
-    )
-    .await;
+    let above_tip =
+        zksync_os_server::truncate::run_truncate(node1_config.clone(), doomed_tip + 1_000, None)
+            .await;
     assert!(
         above_tip.is_err(),
         "truncating above the tip must refuse: {above_tip:?}"
@@ -143,13 +198,6 @@ async fn the_fork_drill_truncates_reconfigures_and_resumes() -> anyhow::Result<(
         let rocks = config.general_config.rocks_db_path.clone();
         zksync_os_integration_tests::wait_for_rocksdb_locks_released(&rocks).await?;
         zksync_os_server::truncate::run_truncate(config, fork_point, None).await?;
-        // The fork start requires cleared consensus engine state — the era
-        // guards refuse otherwise. (The documented operator step; the tool
-        // deliberately leaves consensus storage alone.)
-        let consensus_dir = rocks.join("consensus");
-        if consensus_dir.exists() {
-            std::fs::remove_dir_all(&consensus_dir)?;
-        }
     }
 
     // The settler ended exactly at the fork point (its chain never saw the
@@ -159,7 +207,42 @@ async fn the_fork_drill_truncates_reconfigures_and_resumes() -> anyhow::Result<(
     let (truncated_to, anchor_hash, old_hashes) =
         read_manifest(&node1_rocks.join(format!("tombstone-{fork_point}")))?;
     assert_eq!(truncated_to, fork_point);
-    assert!(!old_hashes.is_empty(), "the tombstone names the discarded blocks");
+    assert!(
+        !old_hashes.is_empty(),
+        "the tombstone names the discarded blocks"
+    );
+
+    // Restarting over pre-truncation consensus engine state must refuse by
+    // name: the tool flags the state it invalidated, and running consensus
+    // over it would die mid-run on the delivery-order assert instead.
+    let refusal_hash = anchor_hash.clone();
+    let refused = cluster
+        .start_validator_with_config_overrides(1, move |config| {
+            config.consensus_config.genesis_height = fork_point;
+            config.consensus_config.protocol_version = 2;
+            config.consensus_config.acknowledge_fork = Some(format!("{fork_point}:{refusal_hash}"));
+        })
+        .await;
+    let refusal = refused.expect_err("pre-truncation consensus state must refuse to start");
+    assert!(
+        refusal.to_string().contains("truncated"),
+        "the refusal names the truncation: {refusal:#}"
+    );
+
+    // The fork start requires cleared consensus engine state — the documented
+    // operator step; the tool deliberately leaves consensus storage alone
+    // (flag included).
+    for index in 0..4 {
+        let consensus_dir = cluster
+            .stopped(index)
+            .config()
+            .general_config
+            .rocks_db_path
+            .join("consensus");
+        if consensus_dir.exists() {
+            std::fs::remove_dir_all(&consensus_dir)?;
+        }
+    }
 
     // The fork configuration: new anchor, bumped protocol version, the
     // acknowledgment naming exactly what is being started into. Settler last
@@ -234,16 +317,22 @@ async fn a_truncated_settler_refuses_to_restart_while_l1_is_ahead() -> anyhow::R
                 .rocks_db_path
                 .clone();
             zksync_os_integration_tests::wait_for_rocksdb_locks_released(&rocks).await?;
-            // Re-check after the stop: execution may have landed mid-stop.
-            let after = wait_for_l1_state(cluster.node(1), "settle-state re-read", |_| true).await?;
-            if after.last_committed_batch > after.last_executed_batch {
-                caught = Some(after);
+            // Re-check after the stop: execution may have landed mid-stop. The
+            // truncation below also reads the executed floor from the stopped
+            // settler's own disk, so a stop that outran the persist watcher
+            // re-arms like a missed window.
+            let after =
+                wait_for_l1_state(cluster.node(1), "settle-state re-read", |_| true).await?;
+            if after.last_committed_batch > after.last_executed_batch
+                && let Some(floor) = executed_floor_block(&cluster, &[0], after.last_executed_batch)
+            {
+                caught = Some((after, floor));
                 break;
             }
             cluster.start_validator(0).await?;
         }
     }
-    let Some(caught) = caught else {
+    let Some((caught, floor)) = caught else {
         // The commit→execute window never survived a stop on this machine —
         // the guard's logic is still pinned by its message assertion below
         // being unreachable; bail out loudly rather than pretend.
@@ -252,7 +341,6 @@ async fn a_truncated_settler_refuses_to_restart_while_l1_is_ahead() -> anyhow::R
 
     // Truncate the settler to the executed floor: legal per the guards, but it
     // leaves committed-but-unexecuted batches above the local chain on L1.
-    let floor = executed_floor_block(&cluster, &[0], caught.last_executed_batch);
     let config = cluster.stopped(0).config().clone();
     zksync_os_server::truncate::run_truncate(config, floor, None).await?;
 
@@ -268,13 +356,23 @@ async fn a_truncated_settler_refuses_to_restart_while_l1_is_ahead() -> anyhow::R
     // The runbook's revert step needs no new tooling: the standalone
     // `L1Revert` rebuild mode reverts the committed-but-unexecuted batches at
     // startup, after which the very same restart passes the guard and the
-    // settler resumes from the truncated chain.
+    // settler resumes from the truncated chain. Like every truncated node
+    // (the runbook's "clear the consensus engine state" step), it restarts
+    // with cleared consensus storage — the engine's journals and archives
+    // still reference the heights above the truncated write-ahead log.
+    let consensus_dir = cluster
+        .stopped(0)
+        .config()
+        .general_config
+        .rocks_db_path
+        .join("consensus");
+    if consensus_dir.exists() {
+        std::fs::remove_dir_all(&consensus_dir)?;
+    }
     let first_reverted = caught.last_executed_batch + 1;
-    let commit_tx_hash = crate::node::rebuild::fetch_on_chain_batch_commit_tx_hash(
-        cluster.node(1),
-        first_reverted,
-    )
-    .await?;
+    let commit_tx_hash =
+        crate::node::rebuild::fetch_on_chain_batch_commit_tx_hash(cluster.node(1), first_reverted)
+            .await?;
     let reverter = crate::node::rebuild::make_reverter_config(cluster.stopped(0))?;
     cluster
         .start_validator_with_config_overrides(0, move |config| {

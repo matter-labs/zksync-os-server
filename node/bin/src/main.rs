@@ -307,6 +307,12 @@ async fn handle_delayed_termination(runtime: Runtime) {
     tokio::select! {
         _ = sigterm.recv() => {
             tracing::info!("received SIGTERM: shutting down immediately");
+            // Fire the shutdown signal before dropping the runtime: the drop
+            // cancels tasks in arbitrary order, and a task that errors because a
+            // neighbor is already gone must be able to tell teardown from a live
+            // failure (the pipeline harness checks exactly this signal). Nothing
+            // waits on it — the drop below proceeds immediately either way.
+            drop(runtime.initiate_graceful_shutdown());
             let (tx, rx) = mpsc::channel();
             std::thread::Builder::new()
                 .name("rt-shutdown".to_string())

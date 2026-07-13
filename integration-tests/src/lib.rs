@@ -8,7 +8,7 @@ use crate::test_config::{
 };
 use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
-use alloy::primitives::U256;
+use alloy::primitives::{Address, B256, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{
     DynProvider, Identity, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
@@ -320,6 +320,39 @@ pub struct StoppedTester {
     owned_supporting_nodes: Vec<SupportingNode>,
 }
 
+/// The durable parts of a stopped node, cloned via [`StoppedTester::backup`]
+/// before a start attempt that a test *expects* the node to refuse: the node's
+/// startup guards panic, and the launch consumes the `StoppedTester` — but the
+/// database directory, the L1 handle and the config all survive the refusal,
+/// so [`Self::restore`] puts a working `StoppedTester` back together.
+///
+/// Port reservations are released by the failed launch and re-acquired from
+/// the (unchanged) config on restore. Supporting nodes owned by the failed
+/// launch are shut down by its drop and are not restored — expected-refusal
+/// starts are for plain clusters, which own none.
+#[derive(Debug)]
+pub struct StoppedTesterBackup {
+    l1: AnvilL1,
+    config: Config,
+    tempdir: Arc<tempfile::TempDir>,
+    log_state: NodeLogState,
+    chain_layout: ChainLayout<'static>,
+}
+
+impl StoppedTesterBackup {
+    pub async fn restore(self) -> anyhow::Result<StoppedTester> {
+        Ok(StoppedTester {
+            ports: Ports::from_config(&self.config).await?,
+            l1: self.l1,
+            config: self.config,
+            tempdir: self.tempdir,
+            log_state: self.log_state,
+            chain_layout: self.chain_layout,
+            owned_supporting_nodes: Vec::new(),
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct SupportingNode {
     runtime: Runtime,
@@ -475,6 +508,18 @@ impl Tester {
         .await?
         .error_for_status()?;
         Ok(response.text().await?)
+    }
+
+    /// One L1→L2 deposit through this node (see [`deposit_l1_to_l2`]).
+    pub async fn deposit(&self, beneficiary: Address, amount: U256) -> anyhow::Result<B256> {
+        deposit_l1_to_l2(
+            &self.l1,
+            &self.l2_provider,
+            &self.l2_zk_provider,
+            beneficiary,
+            amount,
+        )
+        .await
     }
 
     pub async fn wait_for_initial_deposit(&self) -> anyhow::Result<()> {
@@ -867,6 +912,18 @@ impl Tester {
 impl StoppedTester {
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Clones the parts a refused start leaves recoverable (see
+    /// [`StoppedTesterBackup`]).
+    pub fn backup(&self) -> StoppedTesterBackup {
+        StoppedTesterBackup {
+            l1: self.l1.clone(),
+            config: self.config.clone(),
+            tempdir: self.tempdir.clone(),
+            log_state: self.log_state.clone(),
+            chain_layout: self.chain_layout,
+        }
     }
 
     pub fn l1_provider(&self) -> &NodeProvider {
@@ -1286,7 +1343,6 @@ async fn ensure_test_wallet_funded(
     l2_zk_provider: &DynProvider<Zksync>,
     l2_wallet: &EthereumWallet,
 ) -> anyhow::Result<()> {
-    use crate::assert_traits::ReceiptAssert as _;
     // One funding at a time per test process: concurrently starting testers (a
     // multi-node cluster) share the L2 wallet *and* the L1 rich wallet, so
     // parallel deposits race nonces and fee estimates — the loser's deposit
@@ -1301,6 +1357,36 @@ async fn ensure_test_wallet_funded(
         return Ok(());
     }
 
+    let amount = U256::from(1_000_000_000_000_000_000u128) * U256::from(1_000u64);
+    deposit_l1_to_l2(l1, l2_provider, l2_zk_provider, beneficiary, amount).await?;
+
+    (|| async {
+        let balance = l2_provider.get_balance(beneficiary).await?;
+        if balance > U256::ZERO {
+            Ok(())
+        } else {
+            anyhow::bail!("L2 wallet is still unfunded")
+        }
+    })
+    .retry(
+        ConstantBuilder::default()
+            .with_delay(Duration::from_secs(1))
+            .with_max_times(10),
+    )
+    .await
+}
+
+/// One L1→L2 deposit — a priority transaction — of `amount` to `beneficiary`,
+/// waited through to its L2 receipt. Returns the L2 transaction hash the
+/// priority op is included under.
+pub async fn deposit_l1_to_l2(
+    l1: &AnvilL1,
+    l2_provider: &NodeProvider,
+    l2_zk_provider: &DynProvider<Zksync>,
+    beneficiary: Address,
+    amount: U256,
+) -> anyhow::Result<B256> {
+    use crate::assert_traits::ReceiptAssert as _;
     let chain_id = l2_provider.get_chain_id().await?;
     let bridgehub = Bridgehub::new(
         l2_zk_provider.get_bridgehub_contract().await?,
@@ -1371,20 +1457,7 @@ async fn ensure_test_wallet_funded(
         .get_receipt()
         .await?;
 
-    (|| async {
-        let balance = l2_provider.get_balance(beneficiary).await?;
-        if balance > U256::ZERO {
-            Ok(())
-        } else {
-            anyhow::bail!("L2 wallet is still unfunded")
-        }
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_secs(1))
-            .with_max_times(10),
-    )
-    .await
+    Ok(l2_tx_hash)
 }
 
 /// Multi-node owner for gateway-settling tests.

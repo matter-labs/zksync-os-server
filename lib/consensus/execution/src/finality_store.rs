@@ -232,60 +232,57 @@ impl FinalityStore {
         genesis_digest: [u8; 32],
         anchor_height: u64,
     ) -> anyhow::Result<()> {
+        // Serialize the persistent transition with watermark writers. The era
+        // marker, the height-index cut, and the watermark are one recovery
+        // decision: after a crash RocksDB must expose either all of the old era
+        // or all of the new one, never a mixture of the two.
+        let mut probe_cursor = self.watermark_lock.lock().unwrap();
         let era_changed = self
             .consensus_era()?
             .is_some_and(|recorded| recorded != genesis_digest);
+        let current = self.certified_watermark()?.unwrap_or(0);
+        let era_anchor_watermark = (anchor_height > 0).then_some(anchor_height);
+        let floor_to_anchor = !era_changed && anchor_height > 0 && current < anchor_height;
+
         let mut batch = self.db.new_write_batch();
         batch.put_cf(FinalityCF::Meta, ERA_KEY, &genesis_digest);
-        self.db.write(batch)?;
-        *self.era.lock().unwrap() = genesis_digest[..8].try_into().expect("8 of 32 bytes");
-        {
-            let _guard = self.watermark_lock.lock().unwrap();
-            let current = self.certified_watermark()?.unwrap_or(0);
-            // Adopting a *different* era (a fork or re-migration): coverage
-            // above its anchor belonged to the dead era, so the watermark
-            // resets to the anchor — the one sanctioned downward move — and
-            // the covering probe's cursor resets with it. Same era (or the
-            // first recording): the anchor only floors it, as on any migrated
-            // chain.
-            let reset_to_anchor = era_changed && anchor_height > 0 && current != anchor_height;
-            if era_changed {
-                // The height→digest index answers "what is finalized at height
-                // h on this chain" — above a fork's anchor, nothing is, yet.
-                // Dropping the dead era's index entries is what lets the
-                // watermark hold at the anchor (the walk would otherwise chain
-                // through them to the dead era's certificates). The
-                // certificates themselves are digest-keyed and remain forever:
-                // that is the auditable trail a fork must never touch.
-                let mut batch = self.db.new_write_batch();
-                batch.delete_range_cf(
-                    FinalityCF::HeightIndex,
-                    (&(anchor_height + 1).to_be_bytes()[..])..(&u64::MAX.to_be_bytes()[..]),
-                );
-                self.db.write(batch)?;
-                let mut probe_cursor = _guard;
-                *probe_cursor = anchor_height;
-                if reset_to_anchor {
-                    let mut batch = self.db.new_write_batch();
-                    batch.put_cf(
-                        FinalityCF::Meta,
-                        WATERMARK_KEY,
-                        &anchor_height.to_be_bytes(),
-                    );
-                    self.db.write(batch)?;
-                    self.watermark_watch.send_replace(Some(anchor_height));
-                }
-            } else if anchor_height > 0 && current < anchor_height {
-                let mut batch = self.db.new_write_batch();
-                batch.put_cf(
-                    FinalityCF::Meta,
-                    WATERMARK_KEY,
-                    &anchor_height.to_be_bytes(),
-                );
-                self.db.write(batch)?;
-                self.watermark_watch.send_replace(Some(anchor_height));
+        if era_changed {
+            // The height→digest index answers "what is finalized at height h
+            // on this chain" — above a fork's anchor, nothing is, yet. Drop
+            // the dead era's entries in the same batch that records the new
+            // era and its exact watermark. Certificates are digest-keyed and
+            // remain forever as the immutable audit trail.
+            batch.delete_range_cf(
+                FinalityCF::HeightIndex,
+                (&(anchor_height + 1).to_be_bytes()[..])..(&u64::MAX.to_be_bytes()[..]),
+            );
+            if let Some(watermark) = era_anchor_watermark {
+                batch.put_cf(FinalityCF::Meta, WATERMARK_KEY, &watermark.to_be_bytes());
+            } else {
+                batch.delete_cf(FinalityCF::Meta, WATERMARK_KEY);
             }
+        } else if floor_to_anchor {
+            // First recording or the same era: the anchor is a monotonic floor,
+            // never a reason to discard already certified progress.
+            batch.put_cf(
+                FinalityCF::Meta,
+                WATERMARK_KEY,
+                &anchor_height.to_be_bytes(),
+            );
         }
+        self.db.write(batch)?;
+
+        // Publish the new in-memory view only after the complete persistent
+        // transition succeeded.
+        *self.era.lock().unwrap() = genesis_digest[..8].try_into().expect("8 of 32 bytes");
+        if era_changed {
+            *probe_cursor = anchor_height;
+            self.watermark_watch.send_replace(era_anchor_watermark);
+        } else if floor_to_anchor {
+            self.watermark_watch.send_replace(Some(anchor_height));
+        }
+        drop(probe_cursor);
+
         // Certificates observed before the era was recorded may already continue
         // past the floor — including covering ones above a gap.
         self.advance_watermark(true)
@@ -356,9 +353,10 @@ impl FinalityStore {
     /// it on this node.
     pub fn epoch_transition(&self, epoch: u64) -> anyhow::Result<Option<EpochTransition>> {
         use commonware_codec::Read as _;
-        let Some(bytes) = self
-            .db
-            .get_cf(FinalityCF::Transitions, &epoch_key(self.era_prefix(), epoch))?
+        let Some(bytes) = self.db.get_cf(
+            FinalityCF::Transitions,
+            &epoch_key(self.era_prefix(), epoch),
+        )?
         else {
             return Ok(None);
         };
@@ -483,7 +481,10 @@ impl FinalityStore {
     ) -> Vec<(u64, u64, [u8; 32], Vec<u8>)> {
         let era = self.era_prefix();
         self.db
-            .to_iterator_cf(FinalityCF::FloorCache, ..=&round_key(era, u64::MAX, u64::MAX)[..])
+            .to_iterator_cf(
+                FinalityCF::FloorCache,
+                ..=&round_key(era, u64::MAX, u64::MAX)[..],
+            )
             .take_while(|(key, _)| key.starts_with(&era))
             .take(limit)
             .filter_map(|(key, value)| {
@@ -788,6 +789,39 @@ mod tests {
     }
 
     #[test]
+    fn a_new_era_at_genesis_clears_the_watermark() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FinalityStore::open(dir.path()).expect("open");
+        store.record_consensus_era([0xA; 32], 0).expect("era A");
+        store.index_height(1, [1; 32]).expect("write");
+        store
+            .put_certificate(&certificate(1, [1; 32]))
+            .expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(1));
+        let watch = store.watermark_subscription();
+
+        store.record_consensus_era([0xB; 32], 0).expect("era B");
+
+        assert_eq!(store.certified_watermark().expect("read"), None);
+        assert_eq!(*watch.borrow(), None);
+        assert!(store.digest_at_height(1).expect("read").is_none());
+
+        drop(store);
+        let store = FinalityStore::open(dir.path()).expect("reopen");
+        assert_eq!(store.consensus_era().expect("read"), Some([0xB; 32]));
+        assert_eq!(store.certified_watermark().expect("read"), None);
+        assert_eq!(*store.watermark_subscription().borrow(), None);
+        assert!(store.digest_at_height(1).expect("read").is_none());
+        assert!(
+            store
+                .certificate_by_digest(&[1; 32])
+                .expect("read")
+                .is_some(),
+            "era adoption never deletes the immutable certificate trail"
+        );
+    }
+
+    #[test]
     fn survives_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");
         {
@@ -859,9 +893,9 @@ mod tests {
     }
 
     /// The fork/re-migration shape (plan F1): a new era restarts epochs at
-    /// zero, so every epoch-keyed trail must be invisible across eras — while
-    /// the certificates and the height index (the permanent, digest-keyed
-    /// trail) survive untouched, and the watermark resets to the new anchor.
+    /// zero, so every epoch-keyed trail must be invisible across eras. The
+    /// height index above the anchor is discarded and the watermark resets,
+    /// while digest-keyed certificates remain as the immutable audit trail.
     #[test]
     fn a_new_era_scopes_the_epoch_keyed_trails_and_resets_the_watermark() {
         use zksync_os_wire::{CommitteeMemberKeys, EpochTransition};
@@ -904,6 +938,9 @@ mod tests {
         // The fork: a different era anchored at 3. Epoch-keyed trails must
         // read empty; the certificate trail must not.
         store.record_consensus_era([0xB; 32], 3).expect("era B");
+        drop(store);
+        let store = FinalityStore::open(dir.path()).expect("reopen after era adoption");
+        assert_eq!(store.consensus_era().expect("read"), Some([0xB; 32]));
         assert_eq!(
             store.certified_watermark().expect("read"),
             Some(3),
@@ -925,7 +962,10 @@ mod tests {
             "above the fork anchor, this chain has no finalized heights yet"
         );
         assert!(
-            store.certificate_by_digest(&[5; 32]).expect("read").is_some(),
+            store
+                .certificate_by_digest(&[5; 32])
+                .expect("read")
+                .is_some(),
             "the abandoned era's certificates remain, forever, by digest"
         );
 

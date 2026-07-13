@@ -100,6 +100,12 @@ impl ProviderCapabilities {
             }
         };
         // Probe the finalized tag with whichever block-fetch method we just confirmed works.
+        // TODO(consensus): a transient failure here (a rate limit, a proxy error) reads
+        // as "finalized unsupported" and silently downgrades every consumer to `latest`
+        // for the process lifetime — for consensus-mode L1 ingestion that means
+        // finalizing deposits read from reorgable L1 blocks. Distinguish
+        // unsupported-method responses from transient failures (retrying the latter),
+        // and refuse consensus-mode startup without a confirmed finalized read.
         let finalized_tag = if get_header {
             provider.get_header(BlockId::finalized()).await.is_ok()
         } else {

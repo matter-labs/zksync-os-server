@@ -452,6 +452,60 @@ async fn commit_reexecutes_when_the_block_was_never_verified_locally() {
     assert_eq!(rig.env.committed_height().await.map(|h| h.get()), Some(1));
 }
 
+#[tokio::test]
+async fn exact_tip_redelivery_recreates_a_missing_finality_index() {
+    let mut rig = Rig::new().await;
+    let (record, committed_el_hash, _diff) = rig
+        .produce_record(
+            None,
+            rig.genesis.header_hash,
+            None,
+            rig.genesis.context.timestamp + 1,
+            vec![transfer(&rig.genesis, 0)],
+        )
+        .await;
+    let block = ConsensusBlock::from_record(&rig.genesis_block, record);
+    rig.env.commit(block.clone()).await;
+
+    // Restart at the durable tip with a rebuilt, empty auxiliary finality store.
+    let anchor = ChainAnchor {
+        genesis_height: 0,
+        genesis_block_hash: rig.genesis.header_hash,
+        genesis_timestamp: rig.genesis.context.timestamp,
+        genesis_protocol_version: "0.31.0".parse().expect("valid version"),
+        genesis_next_cursors: Default::default(),
+        genesis_block_hashes: Default::default(),
+        genesis_carries_upgrade_tx: false,
+        genesis_fee_params: zksync_os_sequencer::execution::FeeParams {
+            eip1559_basefee: rig.genesis.context.eip1559_basefee,
+            native_price: rig.genesis.context.native_price,
+            pubdata_price: rig.genesis.context.pubdata_price,
+        },
+    };
+    let (sink, _payloads) = mpsc::channel::<CommittedPayload>(1);
+    let (_applied_sender, applied) = watch::channel(Some(1));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let finality = Arc::new(
+        zksync_os_consensus_execution::finality_store::FinalityStore::open(dir.path())
+            .expect("open finality store"),
+    );
+    let mut restarted = NodeExecutionEnv::new(
+        rig.base.clone(),
+        anchor,
+        1,
+        Some(committed_el_hash),
+        sink,
+        applied,
+        0,
+    )
+    .with_finality_store(finality.clone());
+
+    restarted.commit(block.clone()).await;
+
+    let digest: [u8; 32] = block.digest().as_ref().try_into().expect("32-byte digest");
+    assert_eq!(finality.digest_at_height(1).expect("read"), Some(digest));
+}
+
 #[test]
 fn consensus_block_codec_roundtrips() {
     let genesis = ConsensusBlock::genesis(B256::repeat_byte(7));

@@ -98,13 +98,19 @@ async fn contract_storage_matches_the_rust_layout_mirror(main_node: Tester) -> a
 
     // A margin below the nodes' two-epoch lookahead must not be deployable:
     // the contract would accept entries no node can observe in time.
-    let too_small_margin = ValidatorRegistry::deploy(
+    // Asserted via simulation — a send *attempt* would burn the wallet's
+    // cached nonce even though gas estimation refuses the reverting deploy
+    // before anything reaches the node (alloy's cached nonce filler
+    // increments at fill time), stranding every later transaction from this
+    // signer behind the nonce gap.
+    let too_small_margin = ValidatorRegistry::deploy_builder(
         main_node.l2_provider.clone(),
         governance,
         U256::ZERO,
         U256::from(100u64),
         U256::from(1u64),
     )
+    .call()
     .await;
     assert!(
         too_small_margin.is_err(),

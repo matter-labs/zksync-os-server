@@ -701,6 +701,62 @@ async fn an_idle_chain_heartbeats_and_wakes_on_work() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A validator restarting while its write-ahead-log tip is a block that
+/// consumed an L1 priority op must resume the mempool's L1 feed as-of-*after*
+/// that tip: canonical draining resumes at tip+1, so a feed seeded *at* the
+/// tip re-queues the tip block's already-committed op, and the first
+/// post-restart deposit then pops the stale entry and trips the l1 subpool's
+/// drain-order assert — a hard node abort. The long idle heartbeat parks the
+/// chain with its tip exactly on the deposit's block; under the normal
+/// empty-block cadence that tip state lasts a fraction of a second, which is
+/// why the restart must be pinned to it rather than raced onto it.
+#[test_log::test(tokio::test)]
+async fn validator_restart_with_a_priority_op_at_the_tip_keeps_draining_deposits()
+-> anyhow::Result<()> {
+    let mut cluster = MultiNodeTester::start_with_config_overrides(3, |config| {
+        config.consensus_config.idle_heartbeat = Duration::from_secs(300);
+    })
+    .await?;
+
+    // A deposit lands, and the idle chain then rests with its tip exactly on
+    // the deposit's block.
+    let beneficiary = Address::repeat_byte(0x91);
+    cluster
+        .node(0)
+        .deposit(beneficiary, U256::from(1_000_000u64))
+        .await?;
+    let tip = cluster.max_height().await?;
+    cluster
+        .wait_for_block_on_all(tip, CONVERGENCE_TIMEOUT)
+        .await?;
+
+    // Restart a validator on that tip. A graceful stop suffices: the seam is
+    // the restart initialization, not the kill.
+    cluster.stop_validator(1).await?;
+    cluster.start_validator(1).await?;
+
+    // The next deposit is the first post-restart priority op; the restarted
+    // validator must apply its block and serve its receipt.
+    let second = cluster
+        .node(0)
+        .deposit(beneficiary, U256::from(1_000_000u64))
+        .await?;
+    let included_at = cluster.max_height().await?;
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+    let receipt = cluster
+        .node(1)
+        .l2_zk_provider
+        .get_transaction_receipt(second)
+        .await?;
+    anyhow::ensure!(
+        receipt.is_some_and(|receipt| alloy::network::ReceiptResponse::status(&receipt)),
+        "the restarted validator must serve the post-restart deposit's receipt"
+    );
+    cluster.shutdown_all().await
+}
+
 /// The zksync-os protocol upgrade, end to end on a live committee — the
 /// choreography every prior test exercised only on a single node: governance
 /// lands the upgrade on L1, every validator's watcher gates it independently,

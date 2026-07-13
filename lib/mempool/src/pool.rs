@@ -29,8 +29,8 @@ use zksync_os_l1_watcher::{
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    L1PriorityEnvelope, L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo,
-    UpgradeMetadata, ZkEnvelope, ZkTransaction,
+    BlockStartCursors, L1PriorityEnvelope, L1TxSerialId, NodeRole, ProtocolSemanticVersion,
+    SystemTxType, UpgradeInfo, UpgradeMetadata, ZkEnvelope, ZkTransaction,
 };
 
 /// General pool that provides unified access to all transaction sources in the system.
@@ -163,7 +163,15 @@ impl<T: L2Subpool> Pool<T> {
 
     /// Initializes mempool with the starting block, expects to be called exactly once during the
     /// node's lifetime.
-    pub async fn init(&mut self, replay: &ReplayRecord) {
+    ///
+    /// `feed_cursors` is where the L1-input watchers resume feeding, and it must equal the
+    /// position from which canonical draining (`on_canonical_state_change`) will resume — a
+    /// watcher seeded behind the drain point re-queues inputs the chain already consumed, and
+    /// the stale queue front trips the subpools' drain-order invariants. The linear pipeline
+    /// replays (and drains) starting *with* `replay` itself, so it passes the record's own
+    /// starting cursors; consensus fast-forwards to its write-ahead-log tip without replaying
+    /// into the pool, so it passes the cursors as of *after* the tip block.
+    pub async fn init(&mut self, replay: &ReplayRecord, feed_cursors: BlockStartCursors) {
         let current_protocol_version = &replay.protocol_version;
         self.upgrade_subpool
             .init(current_protocol_version.clone())
@@ -185,7 +193,7 @@ impl<T: L2Subpool> Pool<T> {
         }
 
         self.interop_fee_subpool
-            .init(replay.starting_cursors.interop_fee_number)
+            .init(feed_cursors.interop_fee_number)
             .await;
 
         if let Some(upgrade_watcher) = self.subcomponents.upgrade_watcher.take() {
@@ -197,7 +205,7 @@ impl<T: L2Subpool> Pool<T> {
         if let Some(l1_tx_watcher) = self.subcomponents.l1_tx_watcher.take() {
             self.runtime.spawn_critical_task(
                 "L1 transaction watcher",
-                l1_tx_watcher.run(replay.starting_cursors.l1_priority_id),
+                l1_tx_watcher.run(feed_cursors.l1_priority_id),
             );
         }
         if current_protocol_version >= &ProtocolSemanticVersion::new(0, 31, 0) {
@@ -206,13 +214,13 @@ impl<T: L2Subpool> Pool<T> {
             {
                 self.runtime.spawn_critical_task(
                     "gateway migration watcher",
-                    gateway_migration_watcher.run(replay.starting_cursors.migration_number),
+                    gateway_migration_watcher.run(feed_cursors.migration_number),
                 );
             }
             if let Some(interop_watcher) = self.subcomponents.interop_watcher.take() {
                 self.runtime.spawn_critical_task(
                     "interop roots watcher",
-                    interop_watcher.run(replay.starting_cursors.interop_root_id),
+                    interop_watcher.run(feed_cursors.interop_root_id),
                 );
             }
             if let Some(interop_fee_updater) = self.subcomponents.interop_fee_updater.take() {

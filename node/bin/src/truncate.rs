@@ -76,9 +76,7 @@ pub async fn run_truncate(
 
     // Opening the databases doubles as the running-node guard: RocksDB holds
     // an exclusive lock per database while the node lives.
-    let wal = BlockReplayStorage::new_without_genesis(
-        &rocks.join(crate::BLOCK_REPLAY_WAL_DB_NAME),
-    );
+    let wal = BlockReplayStorage::new_without_genesis(&rocks.join(crate::BLOCK_REPLAY_WAL_DB_NAME));
     let tip = wal.latest_record();
     anyhow::ensure!(
         to_block <= tip,
@@ -216,6 +214,29 @@ pub async fn run_truncate(
         tombstone = %tombstone.display(),
         "tombstone archive written"
     );
+
+    // Consensus engine state (vote journals, marshal's archives and delivery
+    // marker) that recorded progress past the truncation point must never run
+    // again — marshal would resume delivery above the new tip. Flag the
+    // directory before the cuts (a crash in between leaves the node stricter,
+    // matching the cut ordering below): startup refuses to run consensus over
+    // the flag, and the runbook's clear-the-engine-state step removes the flag
+    // together with the state it poisons.
+    let engine_dir = rocks.join("consensus");
+    let engine_state_is_fresh =
+        crate::consensus_engine_state_is_fresh(&engine_dir).with_context(|| {
+            format!(
+                "failed to inspect consensus engine state at {}",
+                engine_dir.display()
+            )
+        })?;
+    if !engine_state_is_fresh {
+        std::fs::write(
+            crate::consensus::truncation_flag_path(&engine_dir),
+            to_block.to_string(),
+        )
+        .context("failed to flag the consensus engine state as pre-truncation")?;
+    }
 
     // The cuts, ordered so that a crash between them leaves the node
     // *stricter* than intended, never looser: the WAL first (its pointer is

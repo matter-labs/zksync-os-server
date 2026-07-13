@@ -19,9 +19,9 @@ pub mod prover_api;
 mod prover_block;
 mod prover_input_generator;
 mod provider;
-pub mod truncate;
 mod state_initializer;
 pub mod tree_manager;
+pub mod truncate;
 pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
@@ -401,8 +401,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // arise in normal operation (the batcher only commits blocks it has); it
     // means a truncated node restarted before the L1 revert step of the fork
     // runbook, so the guard names that step instead of letting the recovery
-    // machinery work against the fork.
-    if config.batcher_config.enabled {
+    // machinery work against the fork. Main nodes only: an external node never
+    // commits batches and legitimately starts empty with L1 ahead, syncing the
+    // gap from its peers.
+    if node_role.is_main() && config.batcher_config.enabled {
         assert!(
             node_startup_state.last_l1_committed_block
                 <= node_startup_state.block_replay_storage_last_block,
@@ -429,6 +431,32 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             from_block_number,
             node_startup_state.last_l1_committed_block
         );
+    }
+
+    // A truncated chain must not run consensus over engine state that recorded
+    // progress past the cut — marshal would resume delivery above the new tip
+    // and die on the delivery-order assert. The truncate tool flags exactly the
+    // state it invalidated; the flag goes away with the runbook's clear step.
+    // Checked before any service binds or spawns: the refusal must leave
+    // nothing behind.
+    if config.consensus_config.enabled {
+        let engine_dir = config.general_config.rocks_db_path.join("consensus");
+        if let Some(truncated_to) =
+            consensus::read_truncation_flag(&engine_dir).unwrap_or_else(|err| {
+                panic!(
+                    "failed to read the truncation flag at {}: {err}",
+                    engine_dir.display()
+                )
+            })
+        {
+            panic!(
+                "this chain was truncated to block {truncated_to}, but the consensus \
+                 engine state at {} predates the truncation and cannot be reused; \
+                 clear the directory and restart (the fork runbook's \"clear the \
+                 consensus engine state\" step)",
+                engine_dir.display()
+            );
+        }
     }
 
     let finality_storage = Finality::new(FinalityStatus {
@@ -838,9 +866,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     // acknowledgment. Nothing is ever deleted.
     if !config.consensus_config.enabled {
         let engine_dir = config.general_config.rocks_db_path.join("consensus");
-        let has_consensus_state = std::fs::read_dir(&engine_dir)
-            .map(|mut entries| entries.next().is_some())
-            .unwrap_or(false);
+        let has_consensus_state =
+            !consensus_engine_state_is_fresh(&engine_dir).unwrap_or_else(|err| {
+                panic!(
+                    "failed to inspect consensus engine state at {}: {err}",
+                    engine_dir.display()
+                )
+            });
         consensus::check_rollback_acknowledged(
             has_consensus_state,
             config.consensus_config.acknowledge_rollback,
@@ -864,7 +896,17 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let wal_tip_record = block_replay_storage
             .get_replay_record(block_replay_storage.latest_record())
             .expect("write-ahead log must contain its latest record");
-        pool.init(&wal_tip_record).await;
+        // Feed the watchers as-of-*after* the tip: canonical draining resumes at
+        // tip+1 (redeliveries at or below the tip are absorbed without touching
+        // the pool), so seeding at the tip's *starting* cursors would re-queue
+        // the tip block's already-committed L1 inputs — stale entries at the
+        // queue front that the l1 subpool's drain-order assert then trips over
+        // at the first post-restart priority op.
+        pool.init(
+            &wal_tip_record,
+            zksync_os_consensus_execution::builder::derive_next_cursors(&wal_tip_record),
+        )
+        .await;
         // The verification-side view of locally-watched L1 inputs, taken before the
         // pool moves into the builder.
         let l1_inputs_view = pool.l1_inputs_view();
@@ -956,12 +998,27 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         };
         let anchor =
             zksync_os_consensus_execution::ChainAnchor::from_record(&anchor_record, anchor_el_hash);
+        // Resolve the actual consensus era once from this node's local anchor.
+        // The startup guard, durable marker, and diagnostic fingerprint must all
+        // refer to this exact digest rather than independently re-deriving it.
+        let consensus_era = {
+            use commonware_cryptography::Digestible as _;
+            let digest = zksync_os_wire::ConsensusBlock::genesis_at(
+                anchor.genesis_height,
+                anchor.genesis_block_hash,
+            )
+            .digest();
+            <[u8; 32]>::try_from(digest.as_ref()).expect("32-byte digest")
+        };
         let committed_height = block_replay_storage.latest_record();
-        let committed_el_hash = repositories
-            .get_block_by_number(committed_height)
-            .ok()
-            .flatten()
-            .map(|block| block.hash());
+        // The tip's hash comes from the write-ahead log — the same store the
+        // committed height comes from, written synchronously ahead of the
+        // repositories. Reading the (asynchronously persisted) repositories
+        // here can yield nothing right after an unclean restart, and a leader
+        // without its committed hash passes every turn: proposing needs the
+        // parent hash, and it refreshes only on the next commit — which after
+        // a committee-wide restart in that state would never come.
+        let committed_el_hash = Some(block_replay_storage.canonical_block_hash(committed_height));
 
         let validation = zksync_os_consensus_execution::ProposalValidation {
             config: std::sync::Arc::new(zksync_os_consensus_execution::ValidityConfig {
@@ -971,7 +1028,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 gas_limit: config.sequencer_config.block_gas_limit,
                 pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
                 max_transactions: config.sequencer_config.max_transactions_in_block,
-                max_encoded_record_size: config.consensus_config.max_message_size,
+                max_encoded_record_size: config.consensus_config.max_message_size.get() as usize,
                 fee: config.fee_config.clone().into(),
             }),
             inputs: std::sync::Arc::new(l1_inputs_view),
@@ -992,17 +1049,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // the consensus module; this block only gathers its inputs and applies the
         // outcome).
         {
-            use commonware_cryptography::Digestible as _;
-            let genesis_digest = zksync_os_wire::ConsensusBlock::genesis_at(
-                anchor.genesis_height,
-                anchor.genesis_block_hash,
-            )
-            .digest();
-            let era: [u8; 32] = genesis_digest.as_ref().try_into().expect("32-byte digest");
             let engine_dir = config.general_config.rocks_db_path.join("consensus");
-            let engine_state_is_fresh = std::fs::read_dir(&engine_dir)
-                .map(|mut entries| entries.next().is_none())
-                .unwrap_or(true);
+            let engine_state_is_fresh = consensus_engine_state_is_fresh(&engine_dir)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to inspect consensus engine state at {}: {err}",
+                        engine_dir.display()
+                    )
+                });
             let recorded = finality_store
                 .consensus_era()
                 .expect("failed to read the consensus era");
@@ -1011,7 +1065,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     .expect("invalid `consensus.acknowledge_fork`");
             let decision = consensus::decide_consensus_era(
                 recorded,
-                era,
+                consensus_era,
                 engine_state_is_fresh,
                 committed_height,
                 anchor.genesis_height,
@@ -1032,7 +1086,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                         );
                     }
                     finality_store
-                        .record_consensus_era(era, anchor.genesis_height)
+                        .record_consensus_era(consensus_era, anchor.genesis_height)
                         .expect("failed to record the consensus era");
                 }
             }
@@ -1064,10 +1118,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let (finalized_sender, finalized_receiver) = tokio::sync::watch::channel(None);
         let (metrics_encoder_sender, metrics_encoder_receiver) = tokio::sync::watch::channel(None);
         let (registry_status_sender, registry_status_receiver) = tokio::sync::watch::channel(None);
-        let chain_fingerprint = chain_fingerprint::chain_fingerprint(&config);
+        let chain_fingerprint =
+            chain_fingerprint::chain_fingerprint(&config, consensus_era, &setup.observers);
         tracing::info!(
             chain_fingerprint,
-            "committee-uniform configuration fingerprint"
+            "committee-uniform configuration and consensus-era fingerprint"
         );
         match &setup.registry {
             Some(registry) => tracing::info!(
@@ -1081,10 +1136,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             // misconfiguration. Either way the operator should know config is
             // governing while registry records exist.
             None => {
-                let recorded_derivations = finality_store
-                    .registry_derivations()
-                    .expect("the registry derivation trail does not decode")
-                    .len();
+                let recorded_derivations = match finality_store.registry_derivations() {
+                    Ok(derivations) => derivations.len(),
+                    Err(err) => {
+                        tracing::warn!(
+                            ?err,
+                            "registry derivation records are unreadable, but \
+                             `consensus.registry_mode` is `schedule`: ignoring the \
+                             non-governing trail"
+                        );
+                        0
+                    }
+                };
                 if recorded_derivations > 0 {
                     tracing::warn!(
                         recorded_derivations,
@@ -2221,6 +2284,30 @@ async fn find_last_matching_main_node_block(
     Ok(left)
 }
 
+/// Returns whether the consensus engine's storage directory holds any engine
+/// state. The `.instance-lock` file does not count: it is the mutual-exclusion
+/// marker created before the journals ever exist (by the node's own startup,
+/// and by the test harness's relaunch gate), so after an operator clears the
+/// directory for a fork its reappearance must not read as a previous era's
+/// leftovers. Absence is the only I/O error that means "fresh"; permission and
+/// storage failures must stop startup instead of silently bypassing the
+/// consensus-era guards.
+fn consensus_engine_state_is_fresh(engine_dir: &Path) -> std::io::Result<bool> {
+    let instance_lock = consensus::instance_lock_path(engine_dir);
+    match std::fs::read_dir(engine_dir) {
+        Ok(entries) => {
+            for entry in entries {
+                if entry?.path() != instance_lock {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(err),
+    }
+}
+
 /// The raft-based consensus prototype was removed in favor of the upcoming BFT consensus.
 /// Nodes that ran it may still have its RocksDB directory on disk; it is no longer read or
 /// written. We deliberately do not delete data on startup — this warning tells the operator
@@ -2244,12 +2331,31 @@ fn warn_on_leftover_raft_storage(config: &Config) {
 
 #[cfg(test)]
 mod tests {
-    use super::check_batch_verification_mismatch;
+    use super::{check_batch_verification_mismatch, consensus_engine_state_is_fresh};
     use crate::config::BatchVerificationConfig;
     use alloy::primitives::address;
     use zksync_os_contract_interface::l1_discovery::{
         BatchVerificationSL, BatchVerificationSLConfig,
     };
+
+    #[test]
+    fn consensus_state_probe_ignores_the_instance_lock() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let consensus = root.path().join("consensus");
+        assert!(consensus_engine_state_is_fresh(&consensus).expect("absent"));
+
+        std::fs::create_dir(&consensus).expect("create directory");
+        assert!(consensus_engine_state_is_fresh(&consensus).expect("empty"));
+
+        // The mutual-exclusion marker alone is not engine state: the node (and
+        // the test harness's relaunch gate) create it before the guards run.
+        std::fs::write(crate::consensus::instance_lock_path(&consensus), b"")
+            .expect("write lock marker");
+        assert!(consensus_engine_state_is_fresh(&consensus).expect("lock only"));
+
+        std::fs::write(consensus.join("state"), b"present").expect("write state");
+        assert!(!consensus_engine_state_is_fresh(&consensus).expect("nonempty"));
+    }
 
     #[test]
     fn test_batch_verification_is_disabled_on_server() {
