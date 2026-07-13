@@ -244,12 +244,10 @@ where
                 .pending()
                 .await
                 .context("get pending nonce for L1 sender cycle")?;
-            // Resolved once per cycle and reused for both simulation and every send below.
-            // Freshness is not load-bearing: the submitted max-fee/blob-fee caps are
-            // config-bound (`apply_fee_caps` only trims the priority tip by the estimate),
-            // and fee adequacy is decided at inclusion time — txs sit in the pool longer
-            // than any intra-cycle drift. Re-resolving per command would cost an RPC
-            // round-trip per tx without adding protection.
+            // Resolved once per cycle, not per command: fee caps are config-bound and
+            // whether a fee is high enough is decided when the tx is mined, not now. So
+            // re-reading fees between sends wouldn't change what we submit — it would only
+            // add an RPC round-trip per tx.
             let fee_params = self
                 .resolve_fee_params(fee_config, force_transaction_resubmission)
                 .await?;
@@ -263,8 +261,8 @@ where
                 "estimated gas limits via eth_simulateV1",
             );
 
-            // Blob base fee applies only to commands carrying blob sidecars (commit path);
-            // fetch it once per cycle instead of once per command.
+            // Only blob-carrying commands (commit path) need the blob base fee, so fetch
+            // it once per cycle instead of paying an RPC round-trip per command.
             let blob_base_fee = if commands.iter().any(|cmd| cmd.blob_sidecar().is_some()) {
                 let fee = self.provider.get_blob_base_fee().await?;
                 L1_SENDER_METRICS.report_blob_base_fee(fee)?;
