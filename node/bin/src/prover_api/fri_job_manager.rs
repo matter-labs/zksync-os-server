@@ -164,20 +164,16 @@ impl FriJobManager {
             .proving_version()
             .expect("Must be valid execution as set by the server");
 
-        if server_proving_version != proving_version {
-            // Definitive rejection: release the assignment so the job can be re-picked
-            // immediately instead of waiting out the assignment timeout.
-            self.jobs.unassign_job(batch_number, prover_id).await;
-            return Err(SubmitError::ProvingVersionMismatch(
+        let verdict = if server_proving_version != proving_version {
+            Err(SubmitError::ProvingVersionMismatch(
                 server_proving_version,
                 proving_version,
-            ));
-        }
-
-        if let Err(err) = self
-            .verify_proof(&batch_metadata, &proof_bytes, batch_number, prover_id)
-            .await
-        {
+            ))
+        } else {
+            self.verify_proof(&batch_metadata, &proof_bytes, batch_number, prover_id)
+                .await
+        };
+        if let Err(err) = verdict {
             // Definitive rejection: release the assignment so the job can be re-picked
             // immediately instead of waiting out the assignment timeout (which is set
             // to many hours for slow CPU provers).
@@ -234,10 +230,7 @@ impl FriJobManager {
 
         // Deserialization + cryptographic verification are CPU-heavy (seconds of work) -
         // run them on a blocking thread so prover API requests don't stall the runtime.
-        // `spawn_blocking` also turns a panic inside the verifier into a `JoinError`:
-        // proofs are untrusted input, and a malformed proof must be rejected (and the
-        // failed proof persisted) rather than kill the request task and leave the job
-        // assigned until `fri_job_timeout`.
+        // `spawn_blocking` also catches panics that escape the verifiers' own `catch_unwind`.
         let verify_result = tokio::task::spawn_blocking({
             let batch_metadata = batch_metadata.clone();
             let proof_bytes = proof_bytes.clone();
@@ -261,10 +254,15 @@ impl FriJobManager {
                     %join_error,
                     "proof verification panicked; rejecting the proof"
                 );
-                // The verifier died before producing any values - report zeros so the
-                // failed proof is still persisted for debugging below.
+                // The verifier died before producing register values; still report the
+                // expected hash so the persisted proof stays diagnosable.
+                let expected_hash_u32s = fri_proof_verifier::expected_public_input_registers(
+                    proving_version,
+                    batch_metadata,
+                )
+                .unwrap_or([0u32; 8]);
                 Err(SubmitError::FriProofVerificationError {
-                    expected_hash_u32s: [0u32; 8],
+                    expected_hash_u32s,
                     proof_final_register_values: [0u32; 16],
                 })
             }
@@ -327,6 +325,8 @@ impl FriJobManager {
         proof_bytes: &Bytes,
         batch_number: u64,
     ) -> Result<(), SubmitError> {
+        let expected_hash_u32s =
+            fri_proof_verifier::expected_public_input_registers(proving_version, batch_metadata)?;
         // TODO: This match is needed for the transition period.
         // v0.5.2 airbender cannot verify proofs generated with v0.5.1.
         // Once all networks are protocol upgraded, the code below can be removed.
@@ -335,9 +335,9 @@ impl FriJobManager {
             | ProvingVersion::V2
             | ProvingVersion::V3
             | ProvingVersion::V4
-            | ProvingVersion::V5 => {
-                panic!("proof verification for v1-v5 is not supported")
-            }
+            | ProvingVersion::V5 => Err(SubmitError::Other(
+                "proof verification for v1-v5 is not supported".to_string(),
+            )),
             ProvingVersion::V6 | ProvingVersion::V7 => {
                 tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
                 let program_proof =
@@ -348,16 +348,16 @@ impl FriJobManager {
                         })?
                         .0;
                 fri_proof_verifier::verify_fri_proof(
-                    batch_metadata.previous_stored_batch_info.state_commitment,
-                    batch_metadata.batch_info.clone().into_stored(),
+                    expected_hash_u32s,
                     program_proof,
+                    batch_number,
                 )
             }
             ProvingVersion::V8 => {
                 // V8 provers (airbender unrolled stack) submit `UnrolledProgramProof`,
                 // which is a different wire format and proof system than the 0.5.2 lane.
                 tracing::debug!(
-                    "Using airbender-73d69b5 unified-layer proof verifier for batch {}",
+                    "Using airbender unified-layer proof verifier for batch {}",
                     batch_number
                 );
                 let program_proof: execution_utils_0_4_0::unrolled::UnrolledProgramProof =
@@ -368,9 +368,9 @@ impl FriJobManager {
                         })?
                         .0;
                 fri_proof_verifier::verify_fri_proof_v8(
-                    batch_metadata.previous_stored_batch_info.state_commitment,
-                    &batch_metadata.batch_info,
-                    program_proof,
+                    expected_hash_u32s,
+                    &program_proof,
+                    batch_number,
                 )
             }
         }

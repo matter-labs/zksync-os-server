@@ -168,11 +168,11 @@ zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-
 zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
 # Airbender crates for verifying V8 FRI proofs submitted by external provers. The rev must match
 # the one the V8 VK was generated with (see `V8_VK_HASH` provenance in lib/types).
-execution_utils_0_4_0 = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender", rev = "73d69b5", features = [
+execution_utils_0_4_0 = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender", rev = "4e8701d5", features = [
     "verifier_binaries",
 ] }
-riscv_transpiler_0_4_0 = { package = "riscv_transpiler", git = "https://github.com/matter-labs/zksync-airbender", rev = "73d69b5" }
-verifier_common_0_4_0 = { package = "verifier_common", git = "https://github.com/matter-labs/zksync-airbender", rev = "73d69b5" }
+riscv_transpiler_0_4_0 = { package = "riscv_transpiler", git = "https://github.com/matter-labs/zksync-airbender", rev = "4e8701d5" }
+verifier_common_0_4_0 = { package = "verifier_common", git = "https://github.com/matter-labs/zksync-airbender", rev = "4e8701d5" }
 
 # Other dependencies.
 

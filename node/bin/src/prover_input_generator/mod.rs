@@ -1,5 +1,4 @@
-use self::tree_adapter::TreeOutputAdapter;
-use self::tree_adapter::VersionedMerkleTree;
+use self::tree_adapter::{LaneTreeAdapter, VersionedMerkleTree};
 use crate::pig_telemetry::{BlockPigTelemetry, record_block_pig_telemetry};
 use crate::prover_block::ProverBlock;
 use anyhow::Result;
@@ -80,6 +79,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                         record: replay_record,
                         prover_input: ProverInput::Fake,
                         tree_output: tree.output,
+                        tree_data: Some(tree),
                     },
                     &state_reporter,
                 )?;
@@ -168,11 +168,14 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             replay_record.transactions.len(),
         );
         if proving_version >= ProvingVersion::V8 {
+            // V8 prover input is generated natively at batch seal time; pass the block's tree
+            // data along so the batch run can serve tree queries without I/O.
             let _ = result_tx.send(ProverBlock {
                 output: block_output,
                 record: replay_record,
                 prover_input: ProverInput::Fake,
                 tree_output: tree.output,
+                tree_data: Some(tree),
             });
             return result_rx;
         }
@@ -202,6 +205,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
                 record: replay_record,
                 prover_input,
                 tree_output,
+                tree_data: None,
             }
         });
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
@@ -284,7 +288,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
+                LaneTreeAdapter::new(tree_view, versioned_tree),
                 state_view,
                 list_source,
             )
@@ -322,7 +326,7 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
+                LaneTreeAdapter::new(tree_view, versioned_tree),
                 state_view,
                 list_source,
             )
@@ -343,7 +347,6 @@ fn compute_prover_input(
     (prover_input, latency)
 }
 
-const LEN_BUCKETS: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 
 #[derive(Debug, Metrics)]
@@ -351,15 +354,6 @@ const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 struct ProverInputGeneratorMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
     prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
-    /// Number of unexpected existing storage slots queried per block. Positive values are abnormal.
-    #[metrics(buckets = LEN_BUCKETS)]
-    unexpected_queried_keys: Histogram<usize>,
-    /// Number of unexpected missing storage slots queried per block. Positive values are abnormal.
-    #[metrics(buckets = LEN_BUCKETS)]
-    unexpected_queried_missing_keys: Histogram<usize>,
-    /// Number of unexpected Merkle proofs queried per block. Positive values are abnormal.
-    #[metrics(buckets = LEN_BUCKETS)]
-    unexpected_queried_proofs: Histogram<usize>,
 }
 
 #[vise::register]

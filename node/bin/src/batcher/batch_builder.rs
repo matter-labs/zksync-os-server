@@ -1,5 +1,7 @@
 use crate::pig_telemetry::{BatchPigMode, BatchPigTelemetry, record_batch_pig_telemetry};
+use crate::prover_block::ProverBlock;
 use alloy::primitives::Address;
+use anyhow::Context as _;
 use std::time::Duration;
 use zksync_os_batch_types::PendingBatchInfo;
 use zksync_os_batch_types::batcher_model::{
@@ -8,9 +10,9 @@ use zksync_os_batch_types::batcher_model::{
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
-use zksync_os_native_pig::{NativeBatchRunOutput, generate_batch_run};
-use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
-use zksync_os_types::{BlockOutput, ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
+use zksync_os_native_pig::{NativeBatchBlock, NativeBatchRunOutput, generate_batch_run};
+use zksync_os_storage_api::{ReadStateHistory, read_multichain_root};
+use zksync_os_types::{ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
 
 #[derive(Debug, Clone, Copy)]
 struct BatchPigMeasurement {
@@ -22,12 +24,7 @@ struct BatchPigMeasurement {
 /// Takes a vector of blocks and produces a batch envelope.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
-    blocks: &[(
-        BlockOutput,
-        ReplayRecord,
-        zksync_os_merkle_tree::TreeBatchOutput,
-        ProverInput,
-    )],
+    blocks: &[ProverBlock],
     prev_batch_info: StoredBatchInfo,
     batch_number: u64,
     chain_id: u64,
@@ -37,49 +34,45 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     read_state: &ReadState,
     merkle_tree: &MerkleTree<RocksDBWrapper>,
 ) -> anyhow::Result<BatchForSigning<ProverInput>> {
-    let block_number_from = blocks.first().unwrap().1.block_context.block_number;
-    let block_number_to = blocks.last().unwrap().1.block_context.block_number;
-    let last_block_hash = blocks.last().unwrap().0.header.hash();
-    let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
-    let (_, last_replay_record, _, _) = blocks.last().unwrap();
+    let block_number_from = blocks.first().unwrap().record.block_context.block_number;
+    let block_number_to = blocks.last().unwrap().record.block_context.block_number;
+    let last_block_hash = blocks.last().unwrap().output.header.hash();
+    let protocol_version = blocks.first().unwrap().record.protocol_version.clone();
+    let last_replay_record = &blocks.last().unwrap().record;
     let proving_version = ProvingVersion::try_from(protocol_version.clone())?;
     let batch_computational_native_used: u64 = blocks
         .iter()
-        .map(|(block_output, _, _, _)| block_output.computational_native_used)
+        .map(|block| block.output.computational_native_used)
         .sum();
 
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
-    let native_batch_run = match proving_version {
-        ProvingVersion::V8 => {
-            let started_at = std::time::Instant::now();
-            let batch_run = generate_batch_run(
-                proving_version,
-                &blocks
-                    .iter()
-                    .map(|(_, replay_record, _, _)| replay_record.clone())
-                    .collect::<Vec<_>>(),
-                read_state,
-                merkle_tree.clone(),
-                pubdata_mode,
-            )?;
-            let elapsed = started_at.elapsed();
-            record_batch_pig_telemetry(BatchPigTelemetry {
-                batch_number,
-                chain_id,
-                first_block_number: block_number_from,
-                last_block_number: block_number_to,
-                proving_version,
-                mode: BatchPigMode::NativeBatch,
-                prover_input_words: batch_run.prover_input.len(),
-                computational_native_used: batch_computational_native_used,
-                elapsed,
-            });
-            Some(batch_run)
-        }
-        _ => None,
-    };
-    if let Some(native_batch_run) = &native_batch_run {
+    let (native_batch_run, native_pig_measurement) = if proving_version >= ProvingVersion::V8 {
+        let native_blocks = blocks
+            .iter()
+            .map(|block| {
+                Ok(NativeBatchBlock {
+                    replay_record: &block.record,
+                    tree_data: block
+                        .tree_data
+                        .as_ref()
+                        .context("native batch PIG requires per-block tree data")?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let started_at = std::time::Instant::now();
+        let batch_run = generate_batch_run(
+            proving_version,
+            &native_blocks,
+            read_state,
+            merkle_tree.clone(),
+            pubdata_mode,
+        )?;
+        let measurement = BatchPigMeasurement {
+            mode: BatchPigMode::NativeBatch,
+            prover_input_words: batch_run.prover_input.len(),
+            elapsed: started_at.elapsed(),
+        };
         tracing::info!(
             batch_number,
             block_number_from,
@@ -88,28 +81,42 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             ?protocol_version,
             ?proving_version,
             pubdata_mode = ?pubdata_mode,
-            node_sl_chain_id = sl_chain_id,
-            native_sl_chain_id = native_batch_run.sl_chain_id,
-            native_chain_id = native_batch_run.chain_id,
-            prover_input_words = native_batch_run.prover_input.len(),
-            canonical_pubdata_bytes = native_batch_run.pubdata.len(),
+            sl_chain_id,
+            prover_input_words = batch_run.prover_input.len(),
+            canonical_pubdata_bytes = batch_run.pubdata.len(),
             "Using native batch PIG for batch sealing",
         );
-    }
+        (Some(batch_run), Some(measurement))
+    } else {
+        (None, None)
+    };
 
     let (batch_info, blob_sidecar) = if let Some(native_batch_run) = &native_batch_run {
-        PendingBatchInfo::build_from_canonical_output(
+        anyhow::ensure!(
+            native_batch_run.previous_state_commitment == prev_batch_info.state_commitment,
+            "native batch run previous state commitment {} does not match previous batch {}",
+            native_batch_run.previous_state_commitment,
+            prev_batch_info.state_commitment,
+        );
+        native_batch_run.build_batch_info(
             batch_number,
+            block_number_from,
+            block_number_to,
             pubdata_mode,
             &protocol_version,
-            native_batch_run.canonical_commit_data(block_number_from, block_number_to),
+            chain_id,
+            sl_chain_id,
         )?
     } else {
         PendingBatchInfo::build(
             blocks
                 .iter()
-                .map(|(block_output, replay_record, tree, _)| {
-                    (block_output, replay_record.transactions.as_slice(), tree)
+                .map(|block| {
+                    (
+                        &block.output,
+                        block.record.transactions.as_slice(),
+                        &block.tree_output,
+                    )
                 })
                 .collect(),
             chain_id,
@@ -125,7 +132,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let mut logs = Vec::new();
     let mut messages = Vec::new();
     for block in blocks {
-        for output in block.0.tx_results.iter().flatten() {
+        for output in block.output.tx_results.iter().flatten() {
             for l2_to_l1_log in &output.l2_to_l1_logs {
                 logs.push(L2Log {
                     l2_shard_id: l2_to_l1_log.log.l2_shard_id,
@@ -143,38 +150,39 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     }
 
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
-    let (batch_prover_input, batch_pig_measurement) =
+    let (batch_prover_input, legacy_pig_measurement) =
         compute_batch_prover_input(blocks, proving_version, pubdata_mode, native_batch_run)?;
-    if let Some(batch_pig_measurement) = batch_pig_measurement {
+    if let Some(measurement) = native_pig_measurement.or(legacy_pig_measurement) {
         record_batch_pig_telemetry(BatchPigTelemetry {
             batch_number,
             chain_id,
             first_block_number: block_number_from,
             last_block_number: block_number_to,
             proving_version,
-            mode: batch_pig_measurement.mode,
-            prover_input_words: batch_pig_measurement.prover_input_words,
+            mode: measurement.mode,
+            prover_input_words: measurement.prover_input_words,
             computational_native_used: batch_computational_native_used,
-            elapsed: batch_pig_measurement.elapsed,
+            elapsed: measurement.elapsed,
         });
     }
 
     // Sanity check: all blocks in the batch should have the same protocol version
-    for (_, replay_record, _, _) in blocks.iter().skip(1) {
+    for block in blocks.iter().skip(1) {
         anyhow::ensure!(
-            replay_record.protocol_version == protocol_version,
-            "mismatched protocol versions in batch: expected {}, found {}; blocks: {:?}",
+            block.record.protocol_version == protocol_version,
+            "mismatched protocol versions in batch: expected {}, found {}; blocks: {}-{}",
             protocol_version,
-            replay_record.protocol_version,
-            blocks,
+            block.record.protocol_version,
+            block_number_from,
+            block_number_to,
         );
     }
 
     // Detect any `SetSLChainId` system transaction across all blocks in the batch.
     // Excludes the sentinel value `u64::MAX` which is used during protocol upgrades and is
     // unrelated to gateway migrations.
-    let set_sl_chain_id_migration_number = blocks.iter().find_map(|(_, replay_record, _, _)| {
-        replay_record.transactions.iter().find_map(|tx| {
+    let set_sl_chain_id_migration_number = blocks.iter().find_map(|block| {
+        block.record.transactions.iter().find_map(|tx| {
             if let ZkEnvelope::System(system_tx) = tx.envelope()
                 && let SystemTxType::SetSLChainId(_, n) = system_tx.system_subtype()
                 && *n != u64::MAX
@@ -198,7 +206,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             pubdata_mode,
             tx_count: blocks
                 .iter()
-                .map(|(block_output, _, _, _)| block_output.tx_results.len())
+                .map(|block| block.output.tx_results.len())
                 .sum(),
             computational_native_used: Some(batch_computational_native_used),
             logs,
@@ -214,12 +222,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
 }
 
 fn compute_batch_prover_input(
-    blocks: &[(
-        BlockOutput,
-        ReplayRecord,
-        zksync_os_merkle_tree::TreeBatchOutput,
-        ProverInput,
-    )],
+    blocks: &[ProverBlock],
     proving_version: ProvingVersion,
     pubdata_mode: PubdataMode,
     native_batch_run: Option<NativeBatchRunOutput>,
@@ -227,17 +230,13 @@ fn compute_batch_prover_input(
     use zk_os_forward_system::run::generate_batch_proof_input;
     use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
 
-    // Pre-V8 batch PIG stitches together the per-block prover inputs, so a single fake
-    // block input makes the real batch input impossible to build - the whole batch
-    // falls back to a fake input.
-    // V8 intentionally skips this: the native batch run has already been executed from
-    // replay records in `seal_batch` (it is required for the canonical batch commit
-    // data regardless of proving) and never reads per-block inputs, so its real prover
-    // input comes for free even when block inputs are fake.
+    // Pre-V8 batch PIG stitches together the per-block prover inputs, so a single fake block
+    // input forces the whole batch to a fake input. V8's real input comes from the native
+    // batch run instead and never reads per-block inputs.
     if proving_version < ProvingVersion::V8
         && blocks
             .iter()
-            .any(|(_, _, _, prover_input)| matches!(prover_input, ProverInput::Fake))
+            .any(|block| matches!(block.prover_input, ProverInput::Fake))
     {
         return Ok((ProverInput::Fake, None));
     }
@@ -250,48 +249,35 @@ fn compute_batch_prover_input(
         | ProvingVersion::V5 => {
             panic!("sealing batch with prover version v1-v5 is not supported");
         }
-        ProvingVersion::V6 => {
+        ProvingVersion::V6 | ProvingVersion::V7 => {
             // TODO: in the long-term we should generate proof input per batch
             let started_at = std::time::Instant::now();
-            let prover_input = generate_batch_proof_input_prev(
-                blocks
-                    .iter()
-                    .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
-                    .collect(),
-                (pubdata_mode.da_commitment_scheme() as u8)
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
-                blocks
-                    .iter()
-                    .map(|(block_output, _, _, _)| block_output.expect_pubdata_bytes())
-                    .collect(),
-            );
-            let prover_input_words = prover_input.len();
-            (
-                ProverInput::Real(prover_input),
-                Some(BatchPigMeasurement {
-                    mode: BatchPigMode::LegacyBatch,
-                    prover_input_words,
-                    elapsed: started_at.elapsed(),
-                }),
-            )
-        }
-        ProvingVersion::V7 => {
-            // TODO: in the long-term we should generate proof input per batch
-            let started_at = std::time::Instant::now();
-            let prover_input = generate_batch_proof_input(
-                blocks
-                    .iter()
-                    .map(|(_, _, _, prover_input)| prover_input.unwrap_real())
-                    .collect(),
-                (pubdata_mode.da_commitment_scheme() as u8)
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
-                blocks
-                    .iter()
-                    .map(|(block_output, _, _, _)| block_output.expect_pubdata_bytes())
-                    .collect(),
-            );
+            let block_inputs = blocks
+                .iter()
+                .map(|block| block.prover_input.unwrap_real())
+                .collect();
+            let blocks_pubdata = blocks
+                .iter()
+                .map(|block| block.output.expect_pubdata_bytes())
+                .collect();
+            let da_commitment_scheme = pubdata_mode.da_commitment_scheme() as u8;
+            let prover_input = if proving_version == ProvingVersion::V6 {
+                generate_batch_proof_input_prev(
+                    block_inputs,
+                    da_commitment_scheme
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
+                    blocks_pubdata,
+                )
+            } else {
+                generate_batch_proof_input(
+                    block_inputs,
+                    da_commitment_scheme
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
+                    blocks_pubdata,
+                )
+            };
             let prover_input_words = prover_input.len();
             (
                 ProverInput::Real(prover_input),
@@ -316,6 +302,7 @@ fn compute_batch_prover_input(
 #[cfg(test)]
 mod tests {
     use super::compute_batch_prover_input;
+    use crate::prover_block::ProverBlock;
     use alloy::consensus::{Header, Sealed};
     use alloy::primitives::{Address, B256, U256};
     use semver::Version;
@@ -412,12 +399,13 @@ mod tests {
 
     #[test]
     fn pre_v8_batch_with_fake_block_input_stays_fake() {
-        let block = (
-            dummy_block_output(),
-            dummy_replay_record(),
-            dummy_tree_output(),
-            ProverInput::Fake,
-        );
+        let block = ProverBlock {
+            output: dummy_block_output(),
+            record: dummy_replay_record(),
+            prover_input: ProverInput::Fake,
+            tree_output: dummy_tree_output(),
+            tree_data: None,
+        };
 
         let (prover_input, batch_pig_measurement) =
             compute_batch_prover_input(&[block], ProvingVersion::V7, PubdataMode::Calldata, None)

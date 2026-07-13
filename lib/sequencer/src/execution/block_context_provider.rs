@@ -186,7 +186,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
                     futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
                 ));
-                (tx_source, upgrade_tx_in_stream)
+                // The appended tx must fit in the block regardless of what triggered the injection.
+                (tx_source, true)
             } else {
                 (best_txs.stream, false)
             };

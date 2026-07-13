@@ -1,7 +1,8 @@
-use crate::NativeBatchRunOutput;
+use crate::tree::{EfficientTreeAdapter, RawLeafProof, TREE_DEPTH, VersionedMerkleTree};
+use crate::{NativeBatchBlock, NativeBatchRunOutput};
 use alloy::primitives::{B256, ruint::aliases::B160};
 use anyhow::Context as _;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use zk_ee_0_4_0::common_structs::{ProofData, da_commitment_scheme::DACommitmentScheme};
 use zk_ee_0_4_0::system::metadata::chain_config::{ChainConfig, DEFAULT_MAX_TX_GAS_LIMIT};
 use zk_ee_0_4_0::system::metadata::zk_metadata::{BlockHashes, BlockMetadataFromOracle};
@@ -13,17 +14,13 @@ use zk_os_forward_system_0_4_0::run::{
     StorageCommitment, generate_batch_proof_input,
 };
 use zksync_os_interface::traits::TxListSource;
-use zksync_os_merkle_tree::{
-    Blake2Hasher, HashTree, MerkleTree, MerkleTreeProver, RocksDBWrapper, api::flat,
-};
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
 use zksync_os_types::{PubdataMode, ZksyncOsEncode};
 
-const TREE_DEPTH: u8 = 64;
-
 /// The chain config all V8 native batch runs are executed with. Its hash is part of the batch
 /// public input, so proof verification must reconstruct it identically.
-fn chain_config(chain_id: u64) -> anyhow::Result<ChainConfig> {
+pub(crate) fn chain_config(chain_id: u64) -> anyhow::Result<ChainConfig> {
     ChainConfig::new(chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
         .map_err(|err| anyhow::anyhow!("invalid chain config: {err:?}"))
 }
@@ -33,17 +30,17 @@ pub(crate) fn chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
 }
 
 pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
-    replay_records: &[ReplayRecord],
+    blocks: &[NativeBatchBlock<'_>],
     read_state: &ReadState,
     merkle_tree: MerkleTree<RocksDBWrapper>,
     pubdata_mode: PubdataMode,
 ) -> anyhow::Result<NativeBatchRunOutput> {
     anyhow::ensure!(
-        !replay_records.is_empty(),
+        !blocks.is_empty(),
         "batch prover input requires at least one block",
     );
 
-    let first_replay_record = &replay_records[0];
+    let first_replay_record = blocks[0].replay_record;
     // The chain config is frozen for the whole batch; chain id lives there now rather than in
     // per-block metadata. All blocks in a batch share the same chain.
     let chain_id = first_replay_record.block_context.chain_id;
@@ -65,10 +62,11 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
         last_block_timestamp: first_replay_record.previous_block_timestamp,
     };
 
-    let state_views = replay_records
+    let state_views = blocks
         .iter()
-        .map(|replay_record| {
-            let state_version = replay_record
+        .map(|block| {
+            let state_version = block
+                .replay_record
                 .block_context
                 .block_number
                 .checked_sub(1)
@@ -78,28 +76,34 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
                 .map_err(anyhow::Error::from)
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let trees = replay_records
+    // Serve tree queries from each block's batch update proof (zero I/O), falling back to
+    // Merkle proof queries against the tree DB only for data the proof doesn't cover.
+    let trees = blocks
         .iter()
-        .map(|replay_record| {
-            let tree_version = replay_record
+        .map(|block| {
+            let tree_version = block
+                .replay_record
                 .block_context
                 .block_number
                 .checked_sub(1)
                 .context("batch prover input requires a parent tree version")?;
-            Ok(VersionedMerkleTree::new(merkle_tree.clone(), tree_version))
+            Ok(EfficientTreeAdapter::new(
+                block.tree_data.clone(),
+                VersionedMerkleTree::new(merkle_tree.clone(), tree_version),
+            ))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     let batch_state = HistoricalBatchState::new(state_views, trees);
 
-    let blocks = replay_records
+    let block_inputs = blocks
         .iter()
-        .map(batch_block_input)
+        .map(|block| batch_block_input(block.replay_record))
         .collect::<Vec<_>>();
 
     let batch_run = generate_batch_proof_input(
         initial_proof_data,
         batch_state,
-        blocks,
+        block_inputs,
         da_commitment_scheme(pubdata_mode)?,
         chain_config,
     )
@@ -191,12 +195,12 @@ fn b256_from_bytes32(value: Bytes32) -> B256 {
 #[derive(Debug)]
 struct HistoricalBatchState<SV> {
     state_views: Vec<SV>,
-    trees: Vec<VersionedMerkleTree>,
+    trees: Vec<EfficientTreeAdapter>,
     cursor: usize,
 }
 
 impl<SV> HistoricalBatchState<SV> {
-    fn new(state_views: Vec<SV>, trees: Vec<VersionedMerkleTree>) -> Self {
+    fn new(state_views: Vec<SV>, trees: Vec<EfficientTreeAdapter>) -> Self {
         assert_eq!(state_views.len(), trees.len());
         Self {
             state_views,
@@ -226,12 +230,25 @@ impl<SV: ViewState> ReadStorageTree for HistoricalBatchState<SV> {
     }
 
     fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
-        self.trees[self.cursor].merkle_proof(tree_index)
+        map_leaf_proof(self.trees[self.cursor].merkle_proof(tree_index))
     }
 
     fn prev_tree_index(&mut self, key: Bytes32) -> u64 {
         self.trees[self.cursor].prev_tree_index(b256_from_bytes32(key))
     }
+}
+
+fn map_leaf_proof(proof: RawLeafProof) -> LeafProof {
+    let leaf = FlatStorageLeaf {
+        key: bytes32_from_b256(proof.key),
+        value: bytes32_from_b256(proof.value),
+        next: proof.next_index,
+    };
+    let mut merkle_path = Box::new([Bytes32::default(); TREE_DEPTH as usize]);
+    for (slot, hash) in merkle_path.iter_mut().zip(proof.path.iter()) {
+        *slot = bytes32_from_b256(*hash);
+    }
+    LeafProof::new(proof.index, leaf, merkle_path)
 }
 
 impl<SV: ViewState> ForwardBatchState for HistoricalBatchState<SV> {
@@ -242,121 +259,5 @@ impl<SV: ViewState> ForwardBatchState for HistoricalBatchState<SV> {
         if self.cursor + 1 < self.state_views.len() {
             self.cursor += 1;
         }
-    }
-}
-
-#[derive(Debug)]
-struct VersionedMerkleTree {
-    inner: MerkleTree<RocksDBWrapper>,
-    version: u64,
-    cached_key_to_index: HashMap<B256, Option<u64>>,
-    cached_missing_key_to_prev_index: HashMap<B256, u64>,
-    cached_proofs: HashMap<u64, flat::StorageSlotProofEntryWithKey>,
-}
-
-impl VersionedMerkleTree {
-    fn new(inner: MerkleTree<RocksDBWrapper>, version: u64) -> Self {
-        Self {
-            inner,
-            version,
-            cached_key_to_index: HashMap::new(),
-            cached_missing_key_to_prev_index: HashMap::new(),
-            cached_proofs: HashMap::new(),
-        }
-    }
-
-    fn read(&mut self, key: B256) -> Option<B256> {
-        let (proofs, _) = self
-            .inner
-            .prove_flat(self.version, &[key])
-            .expect("failed getting Merkle proof")
-            .expect("tree version disappeared");
-        let proof = proofs
-            .into_iter()
-            .next()
-            .expect("missing proof for requested key");
-        let value = proof.value();
-        self.cache_proof(proof);
-        value
-    }
-
-    fn cache_proof(&mut self, proof: flat::StorageSlotProof) {
-        match proof.proof {
-            flat::InnerStorageSlotProof::Existing(entry) => {
-                self.insert_proof(proof.key, entry);
-            }
-            flat::InnerStorageSlotProof::NonExisting {
-                left_neighbor,
-                right_neighbor,
-            } => {
-                self.cached_key_to_index.insert(proof.key, None);
-                self.cached_missing_key_to_prev_index
-                    .insert(proof.key, left_neighbor.inner.index);
-                self.insert_proof(left_neighbor.leaf_key, left_neighbor.inner);
-                self.insert_proof(right_neighbor.leaf_key, right_neighbor.inner);
-            }
-        }
-    }
-
-    fn insert_proof(&mut self, key: B256, proof: flat::StorageSlotProofEntry) {
-        self.cached_key_to_index.insert(key, Some(proof.index));
-        self.cached_proofs.insert(
-            proof.index,
-            flat::StorageSlotProofEntryWithKey {
-                inner: proof,
-                leaf_key: key,
-            },
-        );
-    }
-
-    fn tree_index(&mut self, key: B256) -> Option<u64> {
-        if !self.cached_key_to_index.contains_key(&key) {
-            self.read(key);
-        }
-        self.cached_key_to_index[&key]
-    }
-
-    fn merkle_proof(&mut self, tree_index: u64) -> LeafProof {
-        if !self.cached_proofs.contains_key(&tree_index) {
-            let proof = self
-                .inner
-                .prove_index_flat(self.version, tree_index)
-                .expect("failed getting Merkle proof")
-                .expect("tree version disappeared");
-            self.cached_proofs.insert(tree_index, proof);
-        }
-        Self::map_proof(&self.cached_proofs[&tree_index])
-    }
-
-    fn prev_tree_index(&mut self, key: B256) -> u64 {
-        if !self.cached_missing_key_to_prev_index.contains_key(&key) {
-            self.read(key);
-        }
-        *self
-            .cached_missing_key_to_prev_index
-            .get(&key)
-            .unwrap_or_else(|| {
-                panic!(
-                    "missing previous tree index for key {key:?} at version {}",
-                    self.version
-                )
-            })
-    }
-
-    fn map_proof(proof: &flat::StorageSlotProofEntryWithKey) -> LeafProof {
-        let leaf = FlatStorageLeaf {
-            key: bytes32_from_b256(proof.leaf_key),
-            value: bytes32_from_b256(proof.inner.value),
-            next: proof.inner.next_index,
-        };
-        let mut merkle_path = Box::new([Bytes32::default(); TREE_DEPTH as usize]);
-        for (i, hash) in proof.inner.siblings.iter().enumerate() {
-            merkle_path[i] = bytes32_from_b256(*hash);
-        }
-        for level in proof.inner.siblings.len() as u8..TREE_DEPTH {
-            merkle_path[level as usize] = bytes32_from_b256(Blake2Hasher.empty_subtree_hash(level));
-        }
-
-        LeafProof::new(proof.inner.index, leaf, merkle_path)
     }
 }

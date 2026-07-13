@@ -240,16 +240,16 @@ impl<T: Clone> ProverJobMap<T> {
     /// a reassignment to another prover is left untouched.
     pub async fn unassign_job(&self, batch_number: u64, prover_id: &str) {
         let mut jobs = self.lock_with_tracking(JobMapMethod::UnassignJob).await;
-        if let Some(entry) = jobs.get_mut(&batch_number) {
-            if entry.metadata.assigned_to_prover_id.as_deref() == Some(prover_id) {
-                entry.metadata.unassign();
-                tracing::info!(
-                    batch_number,
-                    prover_id,
-                    ?self.prover_stage,
-                    "Job unassigned after rejected submission - available for immediate pick-up"
-                );
-            }
+        if let Some(entry) = jobs.get_mut(&batch_number)
+            && entry.metadata.assigned_to_prover_id.as_deref() == Some(prover_id)
+        {
+            entry.metadata.unassign();
+            tracing::info!(
+                batch_number,
+                prover_id,
+                ?self.prover_stage,
+                "Job unassigned after rejected submission - available for immediate pick-up"
+            );
         }
     }
 

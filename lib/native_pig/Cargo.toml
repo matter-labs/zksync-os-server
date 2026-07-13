@@ -22,3 +22,5 @@ zk_ee_0_4_0.workspace = true
 
 alloy.workspace = true
 anyhow.workspace = true
+tracing.workspace = true
+vise.workspace = true
