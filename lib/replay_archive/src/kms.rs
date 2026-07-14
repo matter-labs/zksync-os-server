@@ -6,33 +6,18 @@
 //! call per object; the private key never leaves KMS.
 
 use std::collections::HashSet;
-use std::fmt;
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use age_core::format::{FILE_KEY_BYTES, FileKey, Stanza};
 use age_core::secrecy::ExposeSecret as _;
 use anyhow::Context as _;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use google_cloud_auth::credentials::CredentialsFile;
-use google_cloud_auth::project::Config as AuthConfig;
-use google_cloud_auth::token::DefaultTokenSourceProvider;
-use google_cloud_token::{TokenSource, TokenSourceProvider as _};
+use google_cloud_gax::options::RequestOptionsBuilder as _;
+use google_cloud_kms_v1::client::KeyManagementService;
 use rsa::pkcs8::DecodePublicKey as _;
 use rsa::{Oaep, RsaPublicKey};
-use serde::Deserialize;
 use sha2::Sha256;
 
-/// `cloud-platform` must come along with the KMS scope: under workload identity federation
-/// the federated STS token itself calls `iamcredentials.generateAccessToken`, which rejects
-/// tokens that only carry service-specific scopes.
-const KMS_SCOPES: [&str; 2] = [
-    "https://www.googleapis.com/auth/cloud-platform",
-    "https://www.googleapis.com/auth/cloudkms",
-];
-const KMS_ENDPOINT: &str = "https://cloudkms.googleapis.com/v1";
 /// age header stanza tag for file keys wrapped with a GCP KMS RSA-OAEP key.
 const GCP_KMS_STANZA_TAG: &str = "gcp-kms-rsa-oaep";
 
@@ -58,69 +43,32 @@ pub struct GcpKmsConfig {
     pub auth_mode: GcpKmsAuthMode,
 }
 
-/// Minimal GCP KMS REST client covering the two methods the replay archive needs.
-#[derive(Clone)]
+/// GCP KMS client bound to one key version, covering the two methods the replay archive needs.
+///
+/// The underlying client retries transient failures internally, including failures to obtain
+/// or refresh access tokens.
+#[derive(Clone, Debug)]
 pub struct GcpKmsClient {
-    http: reqwest::Client,
-    token_source: Arc<dyn TokenSource>,
+    client: KeyManagementService,
     key_version: String,
-    endpoint: String,
-}
-
-impl fmt::Debug for GcpKmsClient {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GcpKmsClient")
-            .field("key_version", &self.key_version)
-            // Skip `http` / `token_source` as their representations may contain sensitive info.
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PublicKeyResponse {
-    pem: String,
-    algorithm: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AsymmetricDecryptResponse {
-    plaintext: String,
 }
 
 impl GcpKmsClient {
     pub async fn new(config: &GcpKmsConfig) -> anyhow::Result<Self> {
-        let auth_config = AuthConfig {
-            audience: None,
-            scopes: Some(&KMS_SCOPES),
-            sub: None,
-        };
-        let provider = match &config.auth_mode {
+        let credentials = match &config.auth_mode {
+            GcpKmsAuthMode::Authenticated => crate::gcp::ambient_credentials()?,
             GcpKmsAuthMode::AuthenticatedWithCredentialFile(path) => {
-                let path = path
-                    .to_str()
-                    .with_context(|| {
-                        format!("credentials file path {} is not UTF-8", path.display())
-                    })?
-                    .to_owned();
-                let credentials = CredentialsFile::new_from_file(path)
-                    .await
-                    .context("failed to read GCP KMS credentials file")?;
-                DefaultTokenSourceProvider::new_with_credentials(auth_config, Box::new(credentials))
-                    .await
-                    .context("failed to initialize GCP KMS token source from credentials file")?
+                crate::gcp::credentials_from_file(path)?
             }
-            GcpKmsAuthMode::Authenticated => DefaultTokenSourceProvider::new(auth_config)
-                .await
-                .context(crate::GCP_CREDENTIALS_HINT)
-                .context("failed to initialize GCP KMS token source")?,
         };
+        let client = KeyManagementService::builder()
+            .with_credentials(credentials)
+            .build()
+            .await
+            .context("failed to create GCP KMS client")?;
         Ok(Self {
-            http: reqwest::Client::new(),
-            token_source: provider.token_source(),
+            client,
             key_version: config.key_version.clone(),
-            endpoint: KMS_ENDPOINT.to_owned(),
         })
     }
 
@@ -128,109 +76,45 @@ impl GcpKmsClient {
         &self.key_version
     }
 
-    async fn request(
-        &self,
-        method: reqwest::Method,
-        url: String,
-        body: Option<String>,
-    ) -> anyhow::Result<String> {
-        let result = crate::retry::with_transient_retries(
-            "kms",
-            &format!("requesting {url} from GCP KMS"),
-            KmsRequestError::is_transient,
-            || async {
-                let token = self
-                    .token_source
-                    .token()
-                    .await
-                    .map_err(|err| KmsRequestError::Token(err.to_string()))?;
-                let mut request = self
-                    .http
-                    .request(method.clone(), &url)
-                    .header("authorization", token);
-                if let Some(body) = &body {
-                    request = request
-                        .header("content-type", "application/json")
-                        .body(body.clone());
-                }
-                let response = request.send().await.map_err(KmsRequestError::Send)?;
-                let status = response.status();
-                let body = response.text().await.map_err(KmsRequestError::Read)?;
-                if status.is_success() {
-                    Ok(body)
-                } else {
-                    Err(KmsRequestError::Status { status, body })
-                }
-            },
-        )
-        .await;
-        match result {
-            Ok(body) => Ok(body),
-            Err(KmsRequestError::Token(message)) => Err(anyhow::anyhow!(message))
-                .context(crate::GCP_CREDENTIALS_HINT)
-                .context("failed to obtain GCP access token"),
-            Err(err @ KmsRequestError::Send(_)) => {
-                Err(err).with_context(|| format!("GCP KMS request to {url} failed"))
-            }
-            Err(err @ KmsRequestError::Read(_)) => {
-                Err(err).with_context(|| format!("failed to read GCP KMS response from {url}"))
-            }
-            Err(KmsRequestError::Status { status, body }) => {
-                anyhow::bail!("GCP KMS request to {url} returned {status}: {body}")
-            }
-        }
-    }
-
     /// Fetches the public key of the key version, returning `(pem, algorithm)`.
     pub async fn get_public_key(&self) -> anyhow::Result<(String, String)> {
-        let url = format!("{}/{}/publicKey", self.endpoint, self.key_version);
-        let body = self.request(reqwest::Method::GET, url, None).await?;
-        let response: PublicKeyResponse =
-            serde_json::from_str(&body).context("failed to decode GCP KMS public key response")?;
-        Ok((response.pem, response.algorithm))
+        let response = self
+            .client
+            .get_public_key()
+            .set_name(&self.key_version)
+            .send()
+            .await
+            .with_context(|| {
+                format!("failed to fetch GCP KMS public key of {}", self.key_version)
+            })?;
+        let algorithm = response
+            .algorithm
+            .name()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{:?}", response.algorithm));
+        Ok((response.pem, algorithm))
     }
 
     /// Decrypts data encrypted with the public key of the key version.
     pub async fn asymmetric_decrypt(&self, ciphertext: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let url = format!("{}/{}:asymmetricDecrypt", self.endpoint, self.key_version);
-        let request = serde_json::json!({ "ciphertext": BASE64.encode(ciphertext) }).to_string();
-        let body = self
-            .request(reqwest::Method::POST, url, Some(request))
-            .await?;
-        let response: AsymmetricDecryptResponse = serde_json::from_str(&body)
-            .context("failed to decode GCP KMS asymmetric decrypt response")?;
-        BASE64
-            .decode(response.plaintext)
-            .context("failed to decode GCP KMS asymmetric decrypt plaintext")
-    }
-}
-
-/// Classified outcome of a single KMS HTTP attempt, so that only transient failures are
-/// retried.
-#[derive(Debug, thiserror::Error)]
-enum KmsRequestError {
-    #[error("failed to obtain GCP access token: {0}")]
-    Token(String),
-    #[error(transparent)]
-    Send(reqwest::Error),
-    #[error(transparent)]
-    Read(reqwest::Error),
-    #[error("HTTP {status}: {body}")]
-    Status {
-        status: reqwest::StatusCode,
-        body: String,
-    },
-}
-
-impl KmsRequestError {
-    /// Token errors are usually configuration problems and are not retried; transport
-    /// failures and HTTP 408/429/5xx are transient.
-    fn is_transient(&self) -> bool {
-        match self {
-            Self::Token(_) => false,
-            Self::Send(_) | Self::Read(_) => true,
-            Self::Status { status, .. } => matches!(status.as_u16(), 408 | 429 | 500..=599),
-        }
+        let response = self
+            .client
+            .asymmetric_decrypt()
+            .set_name(&self.key_version)
+            .set_ciphertext(ciphertext.to_vec())
+            // `AsymmetricDecrypt` is side-effect-free, so it is safe to retry even though it is
+            // a POST; without this the client only retries failures that happen before the
+            // request is sent.
+            .with_idempotency(true)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "GCP KMS asymmetric decrypt with {} failed",
+                    self.key_version
+                )
+            })?;
+        Ok(response.plaintext.to_vec())
     }
 }
 
@@ -400,63 +284,6 @@ mod tests {
         };
         let err = age::decrypt(&other_version_identity, encrypted.as_slice()).unwrap_err();
         assert!(matches!(err, age::DecryptError::NoMatchingKeys));
-    }
-
-    #[derive(Debug)]
-    struct FakeTokenSource;
-
-    #[async_trait::async_trait]
-    impl TokenSource for FakeTokenSource {
-        async fn token(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-            Ok("Bearer test-token".to_owned())
-        }
-    }
-
-    fn test_client(endpoint: String) -> GcpKmsClient {
-        GcpKmsClient {
-            http: reqwest::Client::new(),
-            token_source: Arc::new(FakeTokenSource),
-            key_version: TEST_KEY_VERSION.to_owned(),
-            endpoint,
-        }
-    }
-
-    #[tokio::test]
-    async fn kms_client_retries_transient_errors() {
-        use httpmock::{Method, MockServer};
-
-        let server = MockServer::start();
-        let mock = server.mock(|when, then| {
-            when.method(Method::POST);
-            then.status(503).body("service unavailable");
-        });
-
-        let err = test_client(server.base_url())
-            .asymmetric_decrypt(b"ciphertext")
-            .await
-            .unwrap_err();
-
-        assert!(format!("{err:#}").contains("503"), "{err:#}");
-        assert_eq!(mock.calls(), crate::retry::RETRY_ATTEMPTS as usize);
-    }
-
-    #[tokio::test]
-    async fn kms_client_does_not_retry_permanent_errors() {
-        use httpmock::{Method, MockServer};
-
-        let server = MockServer::start();
-        let mock = server.mock(|when, then| {
-            when.method(Method::POST);
-            then.status(400).body("bad request");
-        });
-
-        let err = test_client(server.base_url())
-            .asymmetric_decrypt(b"ciphertext")
-            .await
-            .unwrap_err();
-
-        assert!(format!("{err:#}").contains("400"), "{err:#}");
-        assert_eq!(mock.calls(), 1);
     }
 
     #[test]

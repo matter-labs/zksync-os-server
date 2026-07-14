@@ -9,6 +9,7 @@ mod age_encrypted;
 mod component;
 mod filesystem;
 mod gate_component;
+mod gcp;
 mod gcs;
 mod init;
 mod kms;
@@ -16,7 +17,6 @@ mod metrics;
 mod reader;
 mod recovery;
 mod replay_record;
-mod retry;
 mod s3;
 mod write_replay;
 
@@ -50,8 +50,8 @@ pub use write_replay::ReplayArchivingWriteReplay;
 
 pub const REPLAY_ARCHIVE_QUEUE_SIZE: usize = 128;
 
-/// Attached to GCP authentication failures, whose raw error messages are cryptic (an expired
-/// local login surfaces as `missing field access_token`).
+/// Attached to GCP credential setup failures, whose raw error messages do not say how to fix
+/// the problem when running outside Google Cloud.
 pub(crate) const GCP_CREDENTIALS_HINT: &str = "GCP credentials are missing or expired; \
      if running outside Google Cloud with user credentials, \
      (re)authenticate with `gcloud auth application-default login`";
