@@ -8079,7 +8079,7 @@ dependencies = [
  "num-integer",
  "num-iter",
  "num-traits",
- "rand 0.8.5",
+ "rand 0.8.7",
  "smallvec",
  "zeroize",
 ]
@@ -16420,6 +16420,7 @@ dependencies = [
  "zksync_os_pipeline",
  "zksync_os_storage",
  "zksync_os_storage_api",
+ "zksync_os_types",
 ]
 
 [[package]]

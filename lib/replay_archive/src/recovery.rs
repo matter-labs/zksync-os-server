@@ -990,6 +990,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recover_records_round_trips_system_transactions() {
+        let input_root = tempfile::tempdir().unwrap();
+        let replay_db = tempfile::tempdir().unwrap();
+        let block_hash = B256::with_last_byte(1);
+        let mut record = test_replay_record(0, B256::ZERO);
+        // System transactions have custom JSON serialization; a record containing one must
+        // survive the archive's JSON round-trip.
+        record.transactions =
+            vec![zksync_os_types::SystemTxEnvelope::set_sl_chain_id(11155111, 0).into()];
+
+        write_downloaded_replay_record(input_root.path(), 0, block_hash, "42-node-a", &record)
+            .await;
+
+        let recovered =
+            recover_replay_records_to_rocksdb(input_root.path(), replay_db.path(), 0, block_hash)
+                .await
+                .unwrap();
+
+        let replay_storage = BlockReplayStorage::new_without_genesis(replay_db.path());
+        assert_eq!(recovered, 1);
+        assert_eq!(replay_storage.get_replay_record(0).unwrap(), record);
+    }
+
+    #[tokio::test]
     async fn recover_records_rejects_different_session_copies() {
         let input_root = tempfile::tempdir().unwrap();
         let replay_db = tempfile::tempdir().unwrap();
