@@ -36,12 +36,10 @@ fn binary_source_config(reference: &str) -> Option<BinarySourceConfig> {
         }
         "v0.3.1-interface-v0.1.3"
         | "antonio/compat-nightly-2026-02-10-v0.3.1-interface-v0.1.3"
-        | "49095d336c99" => {
-            Some(BinarySourceConfig {
-                proving_version: "V7",
-                download_tag: "v0.3.1-interface-v0.1.3",
-            })
-        }
+        | "49095d336c99" => Some(BinarySourceConfig {
+            proving_version: "V7",
+            download_tag: "v0.3.1-interface-v0.1.3",
+        }),
         _ => None,
     }
 }
