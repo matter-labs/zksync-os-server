@@ -1226,7 +1226,10 @@ async fn run_main_node_pipeline(
                     )
                 }),
         )
-        .pipe(TreeManager { tree: tree.clone() });
+        .pipe(TreeManager {
+            tree: tree.clone(),
+            runtime: runtime.clone(),
+        });
 
     if !config.batcher_config.enabled {
         tracing::warn!(
@@ -1492,7 +1495,10 @@ async fn run_en_pipeline(
                     )
                 }),
         )
-        .pipe(TreeManager { tree: tree.clone() })
+        .pipe(TreeManager {
+            tree: tree.clone(),
+            runtime: runtime.clone(),
+        })
         .pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationResponder::new(
