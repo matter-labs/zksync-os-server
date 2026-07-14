@@ -16100,6 +16100,8 @@ version = "0.20.11"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-trait",
+ "backon",
  "tokio",
  "tracing",
 ]

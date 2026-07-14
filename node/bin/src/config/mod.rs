@@ -32,7 +32,7 @@ use zksync_os_mempool::SubPoolLimit;
 use zksync_os_network::{NodeRecord, PeerId, SecretKey};
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
-use zksync_os_operator_signer::SignerConfig;
+use zksync_os_operator_signer::{GkmsRetryPolicy, SignerConfig};
 use zksync_os_raft::RaftConsensusConfig;
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::{NodeRole, PubdataMode};
@@ -73,6 +73,7 @@ pub struct Config {
     pub l1_sender_config: L1SenderConfig,
     #[config_validate(async_validate(Self::validate_gw_operator_signers))]
     pub gateway_sender_config: GatewaySenderConfig,
+    pub gkms_config: GkmsConfig,
     pub l1_watcher_config: L1WatcherConfig,
     pub batcher_config: BatcherConfig,
     pub prover_input_generator_config: ProverInputGeneratorConfig,
@@ -228,6 +229,9 @@ impl Config {
         schema
             .insert(&GatewaySenderConfig::DESCRIPTION, "gateway_sender")
             .expect("Failed to insert gateway_sender config");
+        schema
+            .insert(&GkmsConfig::DESCRIPTION, "gkms")
+            .expect("Failed to insert gkms config");
         schema
             .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
             .expect("Failed to insert l1_watcher config");
@@ -1319,6 +1323,57 @@ pub struct ForceTransactionResubmissionConfig {
 
 fn is_positive_f64(&val: &f64) -> bool {
     val > 0.0
+}
+
+/// Retry policy shared by all Google Cloud KMS keys. Retries protect the node from transient
+/// Google API failures; once the budget is exhausted the error crashes the node.
+#[derive(Clone, Copy, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct GkmsConfig {
+    /// Max attempts per GKMS operation, including the initial one.
+    #[config(default_t = GkmsRetryPolicy::default().max_attempts)]
+    pub retry_max_attempts: usize,
+
+    /// Delay before the first retry; doubles on each subsequent retry.
+    #[config(default_t = GkmsRetryPolicy::default().min_delay)]
+    pub retry_min_delay: Duration,
+
+    /// Upper bound for the delay between retries.
+    #[config(default_t = GkmsRetryPolicy::default().max_delay)]
+    pub retry_max_delay: Duration,
+}
+
+impl From<GkmsConfig> for GkmsRetryPolicy {
+    fn from(config: GkmsConfig) -> Self {
+        Self {
+            max_attempts: config.retry_max_attempts,
+            min_delay: config.retry_min_delay,
+            max_delay: config.retry_max_delay,
+        }
+    }
+}
+
+impl Config {
+    /// Returns the config with [`GkmsConfig`] applied to every long-running signer key.
+    #[must_use]
+    fn apply_gkms_retry_policy(mut self) -> Self {
+        let policy = GkmsRetryPolicy::from(self.gkms_config);
+        let signers = [
+            self.l1_sender_config.operator_commit_sk.as_mut(),
+            self.l1_sender_config.operator_prove_sk.as_mut(),
+            self.l1_sender_config.operator_execute_sk.as_mut(),
+            self.gateway_sender_config.operator_commit_sk.as_mut(),
+            self.gateway_sender_config.operator_prove_sk.as_mut(),
+            self.gateway_sender_config.operator_execute_sk.as_mut(),
+            self.base_token_price_updater_config
+                .token_multiplier_setter_sk
+                .as_mut(),
+        ];
+        for signer in signers.into_iter().flatten() {
+            signer.set_gkms_retry_policy(policy);
+        }
+        self
+    }
 }
 
 /// Gateway sender configuration. Used by the L1Sender pipeline components when the chain is
@@ -2612,6 +2667,7 @@ mod tests {
                 max_batch_diff_to_upstream: None,
             },
             gateway_sender_config: GatewaySenderConfig::default(),
+            gkms_config: GkmsConfig::default(),
             l1_watcher_config: L1WatcherConfig::default(),
             batcher_config: BatcherConfig::default(),
             prover_input_generator_config: ProverInputGeneratorConfig::default(),
@@ -2814,6 +2870,53 @@ mod tests {
         assert!(
             err.contains("unsupported URL scheme"),
             "expected scheme rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn gkms_retry_policy_is_applied_to_all_operator_signers() {
+        fn gcp_signer(key: &str) -> SignerConfig {
+            SignerConfig::gcp_kms(format!(
+                "projects/p/locations/l/keyRings/r/cryptoKeys/{key}/cryptoKeyVersions/1"
+            ))
+        }
+        fn policy_of(signer: &Option<SignerConfig>) -> GkmsRetryPolicy {
+            match signer.as_ref().unwrap() {
+                SignerConfig::GcpKms { retry_policy, .. } => *retry_policy,
+                SignerConfig::Local(_) => panic!("expected a GCP KMS signer"),
+            }
+        }
+
+        let mut config = base_config(NodeRole::MainNode);
+        config.l1_sender_config.operator_commit_sk = Some(gcp_signer("commit"));
+        config.gateway_sender_config.operator_prove_sk = Some(gcp_signer("gw-prove"));
+        config
+            .base_token_price_updater_config
+            .token_multiplier_setter_sk = Some(gcp_signer("setter"));
+        config.gkms_config = GkmsConfig {
+            retry_max_attempts: 3,
+            retry_min_delay: Duration::from_millis(100),
+            retry_max_delay: Duration::from_secs(2),
+        };
+
+        let config = config.apply_gkms_retry_policy();
+
+        let expected = GkmsRetryPolicy::from(config.gkms_config);
+        assert_eq!(
+            policy_of(&config.l1_sender_config.operator_commit_sk),
+            expected
+        );
+        assert_eq!(
+            policy_of(&config.gateway_sender_config.operator_prove_sk),
+            expected
+        );
+        assert_eq!(
+            policy_of(
+                &config
+                    .base_token_price_updater_config
+                    .token_multiplier_setter_sk
+            ),
+            expected
         );
     }
 }

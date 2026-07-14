@@ -1,10 +1,10 @@
 use crate::config::{
     BackpressureConfig, BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig,
     Config, ConsensusConfig, ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig,
-    GatewaySenderConfig, GeneralConfig, GenesisConfig, InteropFeeUpdaterConfig, L1SenderConfig,
-    L1WatcherConfig, MempoolConfig, MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, ProviderConfig, ReplayArchiveConfig, RpcConfig,
-    SequencerConfig, StatusServerConfig,
+    GatewaySenderConfig, GeneralConfig, GenesisConfig, GkmsConfig, InteropFeeUpdaterConfig,
+    L1SenderConfig, L1WatcherConfig, MempoolConfig, MempoolTxValidatorConfig, NetworkConfig,
+    ObservabilityConfig, ProverApiConfig, ProverInputGeneratorConfig, ProviderConfig,
+    ReplayArchiveConfig, RpcConfig, SequencerConfig, StatusServerConfig,
 };
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::fs;
@@ -89,6 +89,12 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .expect("Failed to load Gateway sender config")
         .parse()
         .expect("Failed to parse Gateway sender config");
+
+    let gkms_config = repo
+        .single::<GkmsConfig>()
+        .expect("Failed to load gkms config")
+        .parse()
+        .expect("Failed to parse gkms config");
 
     let l1_watcher_config = repo
         .single::<L1WatcherConfig>()
@@ -187,6 +193,7 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         sequencer_config,
         l1_sender_config,
         gateway_sender_config,
+        gkms_config,
         l1_watcher_config,
         batcher_config,
         prover_input_generator_config,
@@ -202,6 +209,7 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         fee_config,
         backpressure_config,
     }
+    .apply_gkms_retry_policy()
 }
 
 /// Loads JSON / YAML config files into [`ConfigSources`] in the provided order, inferring the

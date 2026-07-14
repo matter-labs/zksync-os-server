@@ -17,6 +17,11 @@ alloy = { workspace = true, default-features = false, features = [
     "network",
     "consensus",
 ] }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
+backon.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time", "test-util"] }
