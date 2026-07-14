@@ -18,9 +18,9 @@ pub struct GkmsRetryPolicy {
 
 impl Default for GkmsRetryPolicy {
     fn default() -> Self {
-        // Exponential 1s -> 60s
+        // Exponential backoff of 1s, 2s, 4s, 8s between 5 attempts (~15s total).
         Self {
-            max_attempts: 10,
+            max_attempts: 5,
             min_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(60),
         }
@@ -220,10 +220,10 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_budget_is_about_five_minutes() {
+    fn default_policy_budget_is_about_fifteen_seconds() {
         let delays: Vec<_> = GkmsRetryPolicy::default().backoff().collect();
-        assert_eq!(delays.len(), 9);
+        assert_eq!(delays.len(), 4);
         let total: Duration = delays.iter().sum();
-        assert_eq!(total, Duration::from_secs(1 + 2 + 4 + 8 + 16 + 32 + 60 * 3));
+        assert_eq!(total, Duration::from_secs(1 + 2 + 4 + 8));
     }
 }
