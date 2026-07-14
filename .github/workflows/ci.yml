@@ -119,6 +119,10 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Measure coverage
+        env:
+          # cargo-llvm-cov overrides the config.toml rustflags; keep `tokio_unstable` on since
+          # the runtime metrics require it unconditionally.
+          RUSTFLAGS: '--cfg tokio_unstable'
         run: cargo llvm-cov --lcov --output-path lcov.info nextest --workspace --release --profile coverage
 
       - name: Generate codecov report
