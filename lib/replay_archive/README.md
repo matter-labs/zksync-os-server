@@ -144,9 +144,8 @@ the highest `<block_number>/<block_hash>` in the downloaded layout can be used a
 is the latest record the archive contains.
 
 If the archive was encrypted, recovery decrypts downloaded objects in memory when a GCP KMS key
-version (`--kms-key-version`, with optional `--kms-credential-file-path`) or an age identity
-(`--identity-file` / `--age-secret-key`) is provided. Decrypted replay records are not written to
-disk.
+version (`--kms-key-version`) or an age identity (`--identity-file` / `--age-secret-key`) is
+provided. Decrypted replay records are not written to disk.
 
 The recovery logic starts from the anchor, reads the replay record for that block, extracts the
 previous block hash from the replay record, and walks backward until block `0`. It then writes the
@@ -179,9 +178,8 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --output-root ./replay_archive_downloaded
 ```
 
-Download archive objects from GCS using ambient authentication (workload identity, or local
-`gcloud auth application-default login` credentials). The caller needs `storage.objects.list` and
-`storage.objects.get` on the bucket:
+Download archive objects from GCS using Application Default Credentials. The caller needs
+`storage.objects.list` and `storage.objects.get` on the bucket:
 
 ```bash
 cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
@@ -190,19 +188,22 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --output-root ./replay_archive_downloaded
 ```
 
-Download archive objects from GCS using a credentials file:
+On GKE, ADC uses Workload Identity without additional configuration. For external workload
+identity federation, point ADC at the external-account configuration before starting the process:
 
 ```bash
+GOOGLE_APPLICATION_CREDENTIALS=./wif-credentials.json \
 cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   download \
   --gcs-bucket-base-url my-replay-archive \
-  --gcs-credential-file-path ./gcs-credentials.json \
   --output-root ./replay_archive_downloaded
 ```
+
+For local testing, initialize local ADC with `gcloud auth application-default login`.
 
 Rebuild replay RocksDB from a KMS-encrypted archive (the primary mode for our deployments). The
-caller needs `cloudkms.cryptoKeyVersions.useToDecrypt` on the key version; with ambient
-authentication no credential flags are required:
+caller needs `cloudkms.cryptoKeyVersions.useToDecrypt` on the key version. ADC requires no
+credential CLI flags:
 
 ```bash
 cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
@@ -214,10 +215,10 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --kms-key-version projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
 ```
 
-Pass `--kms-credential-file-path` to authenticate with a credentials file instead of ambient
-credentials. Every record copy decode costs one KMS `AsymmetricDecrypt` call, and recovery decodes
-records during the chain walk and again while writing to RocksDB (roughly two calls per record per
-session copy); `--decrypt-concurrency` (default 32) bounds the number of in-flight KMS requests.
+KMS uses the same ADC configuration as GCS. Every record copy decode costs one KMS
+`AsymmetricDecrypt` call, and recovery decodes records during the chain walk and again while
+writing to RocksDB (roughly two calls per record per session copy); `--decrypt-concurrency`
+(default 32) bounds the number of in-flight KMS requests.
 
 Rebuild replay RocksDB from an unencrypted archive:
 
@@ -299,8 +300,7 @@ configured credentials file, `endpoint` overrides S3 API endpoint for S3-compati
 providers, and `region` is used as the first region provider before falling back to the SDK
 defaults and then `auto`.
 
-GCS archive with workload identity / ambient GCP authentication and GCP KMS encryption (the
-primary mode for our deployments):
+GCS archive with GCP KMS encryption (the primary mode for our deployments):
 
 ```yaml
 replay_archive:
@@ -311,23 +311,8 @@ replay_archive:
     kms_key_version: projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
 ```
 
-The `GcpKmsWithCredentialFile` encryption variant additionally takes `kms_credential_file_path`
-for deployments without ambient GCP credentials. The node only ever uses the KMS public key, so
-its service account needs `cloudkms.cryptoKeyVersions.viewPublicKey` and should not be granted
-`useToDecrypt`.
-
-GCS archive with a credentials file:
-
-```yaml
-replay_archive:
-  type: GcsWithCredentialFile
-  bucket_base_url: my-replay-archive
-  gcs_credential_file_path: ./gcs-credentials.json
-  encryption:
-    type: AgeX25519
-    recipient: age1...
-```
-
-The GCS backend uses the Google Cloud client auth chain in `Gcs` mode, which supports ambient
-credentials such as workload identity. `GcsWithCredentialFile` loads credentials from the configured
-JSON file instead.
+Both GCS and KMS use the Google Cloud client libraries' Application Default Credentials chain.
+This discovers GKE Workload Identity automatically, reads an external workload identity federation
+configuration from `GOOGLE_APPLICATION_CREDENTIALS`, or uses local credentials created by
+`gcloud auth application-default login`. The node only ever uses the KMS public key, so its
+identity needs `cloudkms.cryptoKeyVersions.viewPublicKey` and should not be granted `useToDecrypt`.

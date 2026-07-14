@@ -1,9 +1,7 @@
 //! Scratch tool: decrypt one KMS-encrypted replay archive record and print a slice of its JSON.
 //! Usage: cargo run -p zksync_os_replay_archive --example dump_record -- <file> <kms_key_version> [byte_offset]
 
-use zksync_os_replay_archive::{
-    ArchiveIdentity, GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity,
-};
+use zksync_os_replay_archive::{ArchiveIdentity, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -12,11 +10,7 @@ async fn main() -> anyhow::Result<()> {
     let key_version = args.next().expect("kms key version");
     let offset: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(0);
 
-    let client = GcpKmsClient::new(&GcpKmsConfig {
-        key_version,
-        auth_mode: GcpKmsAuthMode::Authenticated,
-    })
-    .await?;
+    let client = GcpKmsClient::new(&GcpKmsConfig { key_version }).await?;
     let identity = ArchiveIdentity::GcpKms(GcpKmsIdentity::new(client));
     let bytes = std::fs::read(&path)?;
     let json =
