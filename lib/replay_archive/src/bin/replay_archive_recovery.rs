@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use zksync_os_replay_archive::{
-    ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig,
-    GcpKmsIdentity, GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
+    ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity,
+    GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
     S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader,
     download_all_replay_archive_objects_with_concurrency, parse_age_x25519_identity,
     read_age_x25519_identity, recover_replay_records_to_rocksdb_with_optional_decryption,
@@ -48,15 +48,8 @@ enum Command {
         /// GCS bucket of the replay archive storage.
         #[arg(long, conflicts_with_all = ["archive_root", "s3_bucket_base_url"])]
         gcs_bucket_base_url: Option<String>,
-        /// Path to the GCS credentials file.
-        #[arg(long, requires = "gcs_bucket_base_url")]
-        gcs_credential_file_path: Option<PathBuf>,
         /// Use anonymous GCS access. This is only useful for public buckets.
-        #[arg(
-            long,
-            requires = "gcs_bucket_base_url",
-            conflicts_with = "gcs_credential_file_path"
-        )]
+        #[arg(long, requires = "gcs_bucket_base_url")]
         gcs_anonymous: bool,
         /// Local folder where downloaded objects should be written.
         #[arg(long)]
@@ -97,10 +90,6 @@ enum Command {
         /// writing to RocksDB.
         #[arg(long, conflicts_with_all = ["identity_file", "age_secret_key"])]
         kms_key_version: Option<String>,
-        /// Path to the GCP credentials file for KMS access. Ambient authentication is used
-        /// when absent.
-        #[arg(long, requires = "kms_key_version")]
-        kms_credential_file_path: Option<PathBuf>,
         /// Number of replay records decoded concurrently. With KMS decryption every record decode
         /// takes one KMS call, so this bounds in-flight KMS requests.
         #[arg(long, default_value_t = zksync_os_replay_archive::DEFAULT_DECRYPT_CONCURRENCY)]
@@ -128,7 +117,6 @@ async fn main() -> anyhow::Result<()> {
             s3_endpoint,
             s3_region,
             gcs_bucket_base_url,
-            gcs_credential_file_path,
             gcs_anonymous,
             output_root,
             download_concurrency,
@@ -142,10 +130,13 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?
             } else if let Some(gcs_bucket_base_url) = gcs_bucket_base_url {
-                let auth_mode = gcs_download_auth_mode(gcs_credential_file_path, gcs_anonymous);
                 let reader = GcsReplayArchiveReader::new(GcsReplayArchiveConfig {
                     bucket_base_url: gcs_bucket_base_url,
-                    auth_mode,
+                    auth_mode: if gcs_anonymous {
+                        GcsReplayArchiveAuthMode::Anonymous
+                    } else {
+                        GcsReplayArchiveAuthMode::Authenticated
+                    },
                 })
                 .await?;
                 download_all_replay_archive_objects_with_concurrency(
@@ -189,19 +180,10 @@ async fn main() -> anyhow::Result<()> {
             identity_file,
             age_secret_key,
             kms_key_version,
-            kms_credential_file_path,
             decrypt_concurrency,
         } => {
             let identity = if let Some(key_version) = kms_key_version {
-                let auth_mode = match kms_credential_file_path {
-                    Some(path) => GcpKmsAuthMode::AuthenticatedWithCredentialFile(path),
-                    None => GcpKmsAuthMode::Authenticated,
-                };
-                let client = GcpKmsClient::new(&GcpKmsConfig {
-                    key_version,
-                    auth_mode,
-                })
-                .await?;
+                let client = GcpKmsClient::new(&GcpKmsConfig { key_version }).await?;
                 Some(ArchiveIdentity::GcpKms(GcpKmsIdentity::new(client)))
             } else if let Some(age_secret_key) = age_secret_key {
                 Some(ArchiveIdentity::X25519(parse_age_x25519_identity(
@@ -228,29 +210,4 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-fn gcs_download_auth_mode(
-    gcs_credential_file_path: Option<PathBuf>,
-    gcs_anonymous: bool,
-) -> GcsReplayArchiveAuthMode {
-    if let Some(path) = gcs_credential_file_path {
-        GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path)
-    } else if gcs_anonymous {
-        GcsReplayArchiveAuthMode::Anonymous
-    } else {
-        GcsReplayArchiveAuthMode::Authenticated
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn gcs_download_auth_mode_defaults_to_ambient_auth() {
-        let auth_mode = gcs_download_auth_mode(None, false);
-
-        assert!(matches!(auth_mode, GcsReplayArchiveAuthMode::Authenticated));
-    }
 }

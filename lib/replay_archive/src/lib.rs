@@ -9,7 +9,6 @@ mod age_encrypted;
 mod component;
 mod filesystem;
 mod gate_component;
-mod gcp;
 mod gcs;
 mod init;
 mod kms;
@@ -34,7 +33,7 @@ pub use init::{
     InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
     init_replay_archive,
 };
-pub use kms::{GcpKmsAuthMode, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
+pub use kms::{GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
 pub use reader::{ReplayArchiveKeyPage, ReplayArchiveStorageReader};
 pub use recovery::{
     ArchiveIdentity, DEFAULT_DECRYPT_CONCURRENCY, DEFAULT_DOWNLOAD_CONCURRENCY,
@@ -49,12 +48,6 @@ pub use s3::{
 pub use write_replay::ReplayArchivingWriteReplay;
 
 pub const REPLAY_ARCHIVE_QUEUE_SIZE: usize = 128;
-
-/// Attached to GCP credential setup failures, whose raw error messages do not say how to fix
-/// the problem when running outside Google Cloud.
-pub(crate) const GCP_CREDENTIALS_HINT: &str = "GCP credentials are missing or expired; \
-     if running outside Google Cloud with user credentials, \
-     (re)authenticate with `gcloud auth application-default login`";
 
 /// Replay archive layout:
 ///

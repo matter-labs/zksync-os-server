@@ -5,7 +5,7 @@
 //! fetched once at startup. Decryption unwraps the file key with one KMS `AsymmetricDecrypt`
 //! call per object; the private key never leaves KMS.
 
-use std::{collections::HashSet, fmt, io, path::PathBuf};
+use std::{collections::HashSet, fmt, io};
 
 use age_core::format::{FILE_KEY_BYTES, FileKey, Stanza};
 use age_core::secrecy::ExposeSecret as _;
@@ -53,18 +53,7 @@ fn kms_retry_policy() -> impl RetryPolicy {
     KmsRetryPolicy.with_attempt_limit(KMS_RETRY_ATTEMPTS)
 }
 
-/// Authentication mode for GCP KMS access.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum GcpKmsAuthMode {
-    /// Ambient authentication (works if the binary runs on Google Cloud, e.g. via workload
-    /// identity). This is the primary mode this backend is built for.
-    Authenticated,
-    /// Authentication via a credentials file at the specified path.
-    AuthenticatedWithCredentialFile(PathBuf),
-}
-
-/// GCP KMS key configuration for replay archive encryption.
+/// GCP KMS key configuration for replay archive encryption using Application Default Credentials.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcpKmsConfig {
     /// Full key version resource name:
@@ -72,7 +61,6 @@ pub struct GcpKmsConfig {
     /// The key must have purpose `ASYMMETRIC_DECRYPT` and an `RSA_DECRYPT_OAEP_*_SHA256`
     /// algorithm.
     pub key_version: String,
-    pub auth_mode: GcpKmsAuthMode,
 }
 
 /// GCP KMS client bound to one key version, covering the two methods the replay archive needs.
@@ -96,14 +84,7 @@ impl fmt::Debug for GcpKmsClient {
 
 impl GcpKmsClient {
     pub async fn new(config: &GcpKmsConfig) -> anyhow::Result<Self> {
-        let credentials = match &config.auth_mode {
-            GcpKmsAuthMode::Authenticated => crate::gcp::ambient_credentials()?,
-            GcpKmsAuthMode::AuthenticatedWithCredentialFile(path) => {
-                crate::gcp::credentials_from_file(path)?
-            }
-        };
         let client = KeyManagementService::builder()
-            .with_credentials(credentials)
             .with_retry_policy(kms_retry_policy())
             .build()
             .await

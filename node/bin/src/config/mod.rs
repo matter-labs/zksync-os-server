@@ -1640,20 +1640,11 @@ pub enum ReplayArchiveConfig {
         #[config(nest, default)]
         encryption: ReplayArchiveEncryptionConfig,
     },
-    /// GCS backend using ambient authentication (workload identity). This is the recommended
-    /// mode when the node runs on GCP.
+    /// GCS backend using Application Default Credentials. This supports GKE Workload Identity,
+    /// external workload identity federation, and local ADC.
     Gcs {
         /// Name of the GCS bucket.
         bucket_base_url: String,
-        #[config(nest, default)]
-        encryption: ReplayArchiveEncryptionConfig,
-    },
-    /// GCS backend authenticating via a credentials file, for deployments not running on GCP.
-    GcsWithCredentialFile {
-        /// Name of the GCS bucket.
-        bucket_base_url: String,
-        /// Path to the GCS credentials file.
-        gcs_credential_file_path: PathBuf,
         #[config(nest, default)]
         encryption: ReplayArchiveEncryptionConfig,
     },
@@ -1669,8 +1660,8 @@ pub enum ReplayArchiveEncryptionConfig {
         /// age X25519 recipient public key. The node only needs this public key.
         recipient: String,
     },
-    /// GCP KMS encryption using ambient authentication (workload identity). This is the
-    /// recommended mode when the node runs on GCP.
+    /// GCP KMS encryption using Application Default Credentials. This supports GKE Workload
+    /// Identity, external workload identity federation, and local ADC.
     GcpKms {
         /// GCP KMS key version resource name
         /// (`projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..`).
@@ -1678,14 +1669,6 @@ pub enum ReplayArchiveEncryptionConfig {
         /// algorithm. The node only fetches the public key and encrypts locally; it does not
         /// need decrypt permissions.
         kms_key_version: String,
-    },
-    /// GCP KMS encryption authenticating via a credentials file, for deployments not running
-    /// on GCP.
-    GcpKmsWithCredentialFile {
-        /// GCP KMS key version resource name; see `GcpKms`.
-        kms_key_version: String,
-        /// Path to the GCP credentials file.
-        kms_credential_file_path: PathBuf,
     },
 }
 
@@ -1728,20 +1711,6 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                 },
                 encryption: encryption.into(),
             },
-            ReplayArchiveConfig::GcsWithCredentialFile {
-                bucket_base_url,
-                gcs_credential_file_path,
-                encryption,
-            } => zksync_os_replay_archive::ReplayArchiveConfig::Gcs {
-                config: zksync_os_replay_archive::GcsReplayArchiveConfig {
-                    bucket_base_url,
-                    auth_mode:
-                        zksync_os_replay_archive::GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(
-                            gcs_credential_file_path,
-                        ),
-                },
-                encryption: encryption.into(),
-            },
         }
     }
 }
@@ -1761,22 +1730,9 @@ impl From<ReplayArchiveEncryptionConfig>
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
                     config: zksync_os_replay_archive::GcpKmsConfig {
                         key_version: kms_key_version,
-                        auth_mode: zksync_os_replay_archive::GcpKmsAuthMode::Authenticated,
                     },
                 }
             }
-            ReplayArchiveEncryptionConfig::GcpKmsWithCredentialFile {
-                kms_key_version,
-                kms_credential_file_path,
-            } => zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
-                config: zksync_os_replay_archive::GcpKmsConfig {
-                    key_version: kms_key_version,
-                    auth_mode:
-                        zksync_os_replay_archive::GcpKmsAuthMode::AuthenticatedWithCredentialFile(
-                            kms_credential_file_path,
-                        ),
-                },
-            },
         }
     }
 }
@@ -2594,34 +2550,6 @@ mod tests {
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
             _ => panic!("expected GCS replay archive config"),
-        }
-    }
-
-    #[test]
-    fn replay_archive_config_parses_gcs_with_credential_file_backend() {
-        let config = parse_replay_archive_config([
-            ("REPLAY_ARCHIVE_TYPE", "GcsWithCredentialFile"),
-            ("REPLAY_ARCHIVE_BUCKET_BASE_URL", "replay-archive"),
-            (
-                "REPLAY_ARCHIVE_GCS_CREDENTIAL_FILE_PATH",
-                "/path/to/credentials.json",
-            ),
-        ]);
-
-        match config {
-            ReplayArchiveConfig::GcsWithCredentialFile {
-                bucket_base_url,
-                gcs_credential_file_path,
-                encryption,
-            } => {
-                assert_eq!(bucket_base_url, "replay-archive");
-                assert_eq!(
-                    gcs_credential_file_path,
-                    PathBuf::from("/path/to/credentials.json")
-                );
-                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
-            }
-            _ => panic!("expected GCS-with-credential-file replay archive config"),
         }
     }
 

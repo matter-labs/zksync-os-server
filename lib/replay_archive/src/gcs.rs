@@ -5,20 +5,19 @@ use crate::{
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
 use async_trait::async_trait;
+use google_cloud_auth::credentials::anonymous;
 use google_cloud_gax::error::rpc::Code;
 use google_cloud_gax::options::RequestOptionsBuilder as _;
 use google_cloud_storage::client::{Storage, StorageControl};
-use std::{fmt, path::PathBuf};
+use std::fmt;
 
 /// Authentication mode for GCS replay archive access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GcsReplayArchiveAuthMode {
-    /// Ambient authentication (works if the binary runs on Google Cloud, e.g. via workload
-    /// identity). This is the primary mode this backend is built for.
+    /// Application Default Credentials. This supports GKE Workload Identity, external workload
+    /// identity federation configured via `GOOGLE_APPLICATION_CREDENTIALS`, and local ADC.
     Authenticated,
-    /// Authentication via a credentials file at the specified path.
-    AuthenticatedWithCredentialFile(PathBuf),
     /// Anonymous access. This is only useful for read-only recovery from public buckets.
     Anonymous,
 }
@@ -32,18 +31,6 @@ pub struct GcsReplayArchiveConfig {
 }
 
 impl GcsReplayArchiveConfig {
-    pub fn with_credential_file(
-        bucket_base_url: impl Into<String>,
-        gcs_credential_file_path: PathBuf,
-    ) -> Self {
-        Self {
-            bucket_base_url: bucket_base_url.into(),
-            auth_mode: GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(
-                gcs_credential_file_path,
-            ),
-        }
-    }
-
     pub fn anonymous(bucket_base_url: impl Into<String>) -> Self {
         Self {
             bucket_base_url: bucket_base_url.into(),
@@ -69,20 +56,23 @@ struct GcsClients {
 
 impl GcsClients {
     async fn new(auth_mode: &GcsReplayArchiveAuthMode) -> anyhow::Result<Self> {
-        let credentials = match auth_mode {
-            GcsReplayArchiveAuthMode::Authenticated => crate::gcp::ambient_credentials()?,
-            GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path) => {
-                crate::gcp::credentials_from_file(path)?
+        let (storage_builder, control_builder) = match auth_mode {
+            GcsReplayArchiveAuthMode::Authenticated => {
+                (Storage::builder(), StorageControl::builder())
             }
-            GcsReplayArchiveAuthMode::Anonymous => crate::gcp::anonymous_credentials(),
+            GcsReplayArchiveAuthMode::Anonymous => {
+                let credentials = anonymous::Builder::new().build();
+                (
+                    Storage::builder().with_credentials(credentials.clone()),
+                    StorageControl::builder().with_credentials(credentials),
+                )
+            }
         };
-        let storage = Storage::builder()
-            .with_credentials(credentials.clone())
+        let storage = storage_builder
             .build()
             .await
             .context("failed to create replay archive GCS storage client")?;
-        let control = StorageControl::builder()
-            .with_credentials(credentials)
+        let control = control_builder
             .build()
             .await
             .context("failed to create replay archive GCS storage control client")?;
@@ -346,28 +336,12 @@ mod tests {
 
     async fn idempotency_checking_clients() -> GcsClients {
         let storage = Storage::builder()
-            .with_credentials(crate::gcp::anonymous_credentials())
+            .with_credentials(anonymous::Builder::new().build())
             .build()
             .await
             .unwrap();
         let control = StorageControl::from_stub(IdempotencyCheckingControl);
         GcsClients { storage, control }
-    }
-
-    #[test]
-    fn gcs_config_builds_credential_file_auth_mode() {
-        let config = GcsReplayArchiveConfig::with_credential_file(
-            "bucket",
-            "/path/to/credentials.json".into(),
-        );
-
-        assert_eq!(config.bucket_base_url, "bucket");
-        assert_eq!(
-            config.auth_mode,
-            GcsReplayArchiveAuthMode::AuthenticatedWithCredentialFile(PathBuf::from(
-                "/path/to/credentials.json"
-            ))
-        );
     }
 
     #[test]
