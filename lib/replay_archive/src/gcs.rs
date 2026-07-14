@@ -6,8 +6,9 @@ use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
 use async_trait::async_trait;
 use google_cloud_gax::error::rpc::Code;
+use google_cloud_gax::options::RequestOptionsBuilder as _;
 use google_cloud_storage::client::{Storage, StorageControl};
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf};
 
 /// Authentication mode for GCS replay archive access.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +61,7 @@ impl GcsReplayArchiveConfig {
 /// `StorageControl` performs metadata operations (existence checks, listing) over gRPC. Both
 /// retry transient errors internally, following the GCS retry guidance; writes are retried
 /// because the `if_generation_match` precondition makes them idempotent.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct GcsClients {
     storage: Storage,
     control: StorageControl,
@@ -97,11 +98,21 @@ fn is_not_found(err: &google_cloud_storage::Error) -> bool {
 }
 
 /// GCS implementation of [`ReplayArchiveStorage`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GcsReplayArchiveStorage {
     config: GcsReplayArchiveConfig,
     session: ReplayArchiveSession,
     clients: GcsClients,
+}
+
+impl fmt::Debug for GcsReplayArchiveStorage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GcsReplayArchiveStorage")
+            .field("config", &self.config)
+            .field("session", &self.session)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GcsReplayArchiveStorage {
@@ -190,6 +201,7 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
             .get_object()
             .set_bucket(self.config.bucket_resource())
             .set_object(&key)
+            .with_idempotency(true)
             .send()
             .await;
         match result {
@@ -206,10 +218,19 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
 }
 
 /// GCS implementation of [`ReplayArchiveStorageReader`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GcsReplayArchiveReader {
     config: GcsReplayArchiveConfig,
     clients: GcsClients,
+}
+
+impl fmt::Debug for GcsReplayArchiveReader {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GcsReplayArchiveReader")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GcsReplayArchiveReader {
@@ -237,12 +258,16 @@ impl ReplayArchiveStorageReader for GcsReplayArchiveReader {
         if let Some(page_token) = page_token {
             request = request.set_page_token(page_token);
         }
-        let response = request.send().await.with_context(|| {
-            format!(
-                "failed to list replay archive GCS objects in gs://{}",
-                self.config.bucket_base_url
-            )
-        })?;
+        let response = request
+            .with_idempotency(true)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to list replay archive GCS objects in gs://{}",
+                    self.config.bucket_base_url
+                )
+            })?;
 
         let keys = response
             .objects
@@ -282,6 +307,52 @@ impl ReplayArchiveStorageReader for GcsReplayArchiveReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use google_cloud_gax::options::RequestOptions;
+    use google_cloud_gax::response::Response;
+    use google_cloud_storage::model::{
+        GetObjectRequest, ListObjectsRequest, ListObjectsResponse, Object,
+    };
+    use std::fmt;
+
+    struct IdempotencyCheckingControl;
+
+    const TEST_CLIENT_SECRET: &str = "credential-must-not-appear-in-debug";
+
+    impl fmt::Debug for IdempotencyCheckingControl {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(TEST_CLIENT_SECRET)
+        }
+    }
+
+    impl google_cloud_storage::stub::StorageControl for IdempotencyCheckingControl {
+        async fn get_object(
+            &self,
+            _request: GetObjectRequest,
+            options: RequestOptions,
+        ) -> google_cloud_gax::Result<Response<Object>> {
+            assert_eq!(options.idempotent(), Some(true));
+            Ok(Response::from(Object::new()))
+        }
+
+        async fn list_objects(
+            &self,
+            _request: ListObjectsRequest,
+            options: RequestOptions,
+        ) -> google_cloud_gax::Result<Response<ListObjectsResponse>> {
+            assert_eq!(options.idempotent(), Some(true));
+            Ok(Response::from(ListObjectsResponse::new()))
+        }
+    }
+
+    async fn idempotency_checking_clients() -> GcsClients {
+        let storage = Storage::builder()
+            .with_credentials(crate::gcp::anonymous_credentials())
+            .build()
+            .await
+            .unwrap();
+        let control = StorageControl::from_stub(IdempotencyCheckingControl);
+        GcsClients { storage, control }
+    }
 
     #[test]
     fn gcs_config_builds_credential_file_auth_mode() {
@@ -304,5 +375,57 @@ mod tests {
         let config = GcsReplayArchiveConfig::anonymous("bucket");
 
         assert_eq!(config.bucket_resource(), "projects/_/buckets/bucket");
+    }
+
+    #[tokio::test]
+    async fn contains_object_marks_request_idempotent() {
+        let storage = GcsReplayArchiveStorage {
+            config: GcsReplayArchiveConfig::anonymous("bucket"),
+            session: ReplayArchiveSession::new(42, "node-a").unwrap(),
+            clients: idempotency_checking_clients().await,
+        };
+
+        assert!(storage.contains_object(7, BlockHash::ZERO).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_keys_page_marks_request_idempotent() {
+        let reader = GcsReplayArchiveReader {
+            config: GcsReplayArchiveConfig::anonymous("bucket"),
+            clients: idempotency_checking_clients().await,
+        };
+
+        assert_eq!(
+            reader.list_keys_page(None).await.unwrap(),
+            ReplayArchiveKeyPage {
+                keys: Vec::new(),
+                next_page_token: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn gcs_debug_does_not_include_client_details() {
+        let clients = idempotency_checking_clients().await;
+        let storage = GcsReplayArchiveStorage {
+            config: GcsReplayArchiveConfig::anonymous("bucket"),
+            session: ReplayArchiveSession::new(42, "node-a").unwrap(),
+            clients: clients.clone(),
+        };
+        let reader = GcsReplayArchiveReader {
+            config: GcsReplayArchiveConfig::anonymous("bucket"),
+            clients,
+        };
+
+        let storage_debug = format!("{storage:?}");
+        assert!(storage_debug.contains("bucket"), "{storage_debug}");
+        assert!(
+            !storage_debug.contains(TEST_CLIENT_SECRET),
+            "{storage_debug}"
+        );
+
+        let reader_debug = format!("{reader:?}");
+        assert!(reader_debug.contains("bucket"), "{reader_debug}");
+        assert!(!reader_debug.contains(TEST_CLIENT_SECRET), "{reader_debug}");
     }
 }

@@ -55,3 +55,32 @@ pub(crate) fn credentials_from_file(path: &Path) -> anyhow::Result<Credentials> 
 pub(crate) fn anonymous_credentials() -> Credentials {
     anonymous::Builder::new().build()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn loads_aws_external_account_credentials() {
+        let credentials_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            credentials_file.path(),
+            r#"{
+                "type": "external_account",
+                "audience": "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider",
+                "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+                "token_url": "https://sts.googleapis.com/v1/token",
+                "credential_source": {
+                    "environment_id": "aws1",
+                    "region_url": "http://127.0.0.1:1/region",
+                    "url": "http://127.0.0.1:1/credentials",
+                    "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15",
+                    "imdsv2_session_token_url": "http://127.0.0.1:1/token"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        credentials_from_file(credentials_file.path()).unwrap();
+    }
+}
