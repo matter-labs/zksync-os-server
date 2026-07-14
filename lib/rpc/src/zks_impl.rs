@@ -1,7 +1,7 @@
 use crate::ReadRpcStorage;
 use crate::log_proof_utils::{batch_tree_proof, chain_proof_vector, get_chain_log_proof};
 use crate::result::ToRpcResult;
-use alloy::primitives::{Address, B256, BlockNumber, TxHash, U64, U256, keccak256};
+use alloy::primitives::{Address, B256, BlockNumber, Bytes, TxHash, U64, U256, keccak256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::rpc::types::Index;
 use anyhow::Context;
@@ -22,7 +22,9 @@ use zksync_os_rpc_api::{
     },
     zks::ZksApiServer,
 };
-use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_multichain_root};
+use zksync_os_storage_api::{
+    PersistedBatch, RepositoryError, StateError, ViewState, read_multichain_root,
+};
 use zksync_os_types::L2_TO_L1_TREE_SIZE;
 
 const LOG_PROOF_SUPPORTED_METADATA_VERSION: u8 = 1;
@@ -415,6 +417,35 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             l1_verification_data,
         }))
     }
+
+    /// Fetch the 124-byte `AccountProperties::encoding()` preimage for
+    /// `address` at the end of L1 batch `batch_number`.
+    ///
+    /// See [`ZksApi::get_account_preimage`] for rationale — selective-
+    /// disclosure tooling needs the full encoded preimage to verify
+    /// individual `AccountProperties` fields against the blake2s hash
+    /// stored in the state tree at the account-properties slot.
+    ///
+    /// Implementation note: this thinly wraps the existing
+    /// `ViewState::get_account` path that `eth_getBalance`,
+    /// `eth_getCode`, etc. already rely on internally — it just hands
+    /// the raw encoding bytes back to the caller instead of extracting
+    /// a single field.
+    async fn get_account_preimage_impl(
+        &self,
+        address: Address,
+        batch_number: u64,
+    ) -> ZksResult<Option<Bytes>> {
+        let Some(batch) = self.storage.batch().get_batch_by_number(batch_number)? else {
+            return Ok(None);
+        };
+        let last_block_number = batch.last_block_number();
+        let mut state_view = self.storage.state_view_at(last_block_number)?;
+        let Some(props) = state_view.get_account(address) else {
+            return Ok(None);
+        };
+        Ok(Some(Bytes::copy_from_slice(&props.encoding())))
+    }
 }
 
 #[async_trait]
@@ -458,6 +489,16 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
         batch_number: u64,
     ) -> RpcResult<Option<BatchStorageProof>> {
         self.get_proof_impl(account, &keys, batch_number)
+            .to_rpc_result()
+    }
+
+    async fn get_account_preimage(
+        &self,
+        account: Address,
+        batch_number: u64,
+    ) -> RpcResult<Option<Bytes>> {
+        self.get_account_preimage_impl(account, batch_number)
+            .await
             .to_rpc_result()
     }
 }
