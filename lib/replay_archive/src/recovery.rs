@@ -182,7 +182,7 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
     );
     loop {
         let window_start = (window_top + 1).saturating_sub(window_size);
-        let mut window: HashMap<BlockNumber, Vec<(BlockHash, ReplayRecord)>> =
+        let mut window: HashMap<BlockNumber, Vec<(BlockHash, anyhow::Result<ReplayRecord>)>> =
             futures::stream::iter(window_start..=window_top)
                 .map(|block_number| {
                     let decoder = decoder.clone();
@@ -205,14 +205,28 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
             let candidates = window
                 .remove(&block_number)
                 .context("replay archive recovery window is missing a block")?;
-            let replay_record = candidates
-                .into_iter()
-                .find_map(|(hash, record)| (hash == block_hash).then_some(record))
+            let mut canonical_candidate = None;
+            for (hash, record) in candidates {
+                if hash == block_hash {
+                    canonical_candidate = Some(record);
+                } else if let Err(err) = record {
+                    // Only the canonical record must decode; a broken record from a
+                    // reorged-out block is skipped.
+                    tracing::warn!(
+                        block_number,
+                        non_canonical_block_hash = %hash,
+                        error = format!("{err:#}"),
+                        "Skipping non-canonical replay archive record that failed to decode"
+                    );
+                }
+            }
+            let replay_record = canonical_candidate
                 .with_context(|| {
                     format!(
                         "missing replay archive records for block #{block_number}, {block_hash}"
                     )
-                })?;
+                })?
+                .with_context(|| format!("failed to recover replay record #{block_number}"))?;
             anyhow::ensure!(
                 replay_record.block_context.block_number == block_number,
                 "replay record path block number {block_number} does not match record block number {}",
@@ -433,11 +447,15 @@ async fn write_downloaded_object(
 }
 
 /// Reads and decodes all `(block_hash, record)` candidates present for a block number.
+///
+/// Decode failures are captured per candidate instead of failing the whole read: only the
+/// candidate selected by the canonical chain walk must decode successfully, so a corrupt or
+/// undecryptable record from a reorged-out block does not abort recovery.
 async fn read_candidate_records(
     input_root: &Path,
     block_number: BlockNumber,
     decoder: &Arc<ReplayRecordDecoder>,
-) -> anyhow::Result<Vec<(BlockHash, ReplayRecord)>> {
+) -> anyhow::Result<Vec<(BlockHash, anyhow::Result<ReplayRecord>)>> {
     let block_dir = input_root.join(block_number.to_string());
     let mut entries = tokio::fs::read_dir(&block_dir).await.with_context(|| {
         format!(
@@ -463,17 +481,18 @@ async fn read_candidate_records(
             continue;
         }
         let file_name = entry.file_name();
-        let block_hash: BlockHash = file_name
+        let Some(block_hash) = file_name
             .to_str()
-            .and_then(|name| name.parse().ok())
-            .with_context(|| {
-                format!(
-                    "replay archive directory entry {} is not a block hash",
-                    entry.path().display()
-                )
-            })?;
+            .and_then(|name| name.parse::<BlockHash>().ok())
+        else {
+            tracing::warn!(
+                path = %entry.path().display(),
+                "Skipping replay archive directory entry that is not a block hash"
+            );
+            continue;
+        };
         let record =
-            read_verified_replay_record(input_root, block_number, block_hash, decoder).await?;
+            read_verified_replay_record(input_root, block_number, block_hash, decoder).await;
         candidates.push((block_hash, record));
     }
     anyhow::ensure!(
@@ -517,6 +536,12 @@ async fn read_verified_replay_record(
             )
         })?;
         if !file_type.is_file() {
+            continue;
+        }
+        // Session node ids may contain dots, so a `.partial` leftover from an interrupted
+        // download would parse as a session copy; exclude it explicitly (mirrors
+        // `scan_existing_downloaded_objects`).
+        if entry.file_name().to_string_lossy().ends_with(".partial") {
             continue;
         }
 
@@ -873,6 +898,95 @@ mod tests {
         assert_eq!(recovered, 2);
         assert_eq!(replay_storage.get_replay_record(0).unwrap(), genesis_record);
         assert_eq!(replay_storage.get_replay_record(1).unwrap(), block_record);
+    }
+
+    #[tokio::test]
+    async fn recover_records_ignores_non_block_hash_directories() {
+        let input_root = tempfile::tempdir().unwrap();
+        let replay_db = tempfile::tempdir().unwrap();
+        let block_hash = B256::with_last_byte(1);
+        let record = test_replay_record(0, B256::ZERO);
+
+        write_downloaded_replay_record(input_root.path(), 0, block_hash, "42-node-a", &record)
+            .await;
+        // A stray directory next to the block hash directories (e.g. `lost+found` or a
+        // user-created backup) must not abort recovery.
+        tokio::fs::create_dir(input_root.path().join("0").join("backup"))
+            .await
+            .unwrap();
+
+        let recovered =
+            recover_replay_records_to_rocksdb(input_root.path(), replay_db.path(), 0, block_hash)
+                .await
+                .unwrap();
+
+        assert_eq!(recovered, 1);
+    }
+
+    #[tokio::test]
+    async fn recover_records_skips_undecodable_non_canonical_records() {
+        let input_root = tempfile::tempdir().unwrap();
+        let replay_db = tempfile::tempdir().unwrap();
+        let canonical_hash = B256::with_last_byte(1);
+        let reorged_out_hash = B256::with_last_byte(2);
+        let record = test_replay_record(0, B256::ZERO);
+
+        write_downloaded_replay_record(input_root.path(), 0, canonical_hash, "42-node-a", &record)
+            .await;
+        // A record from a reorged-out block that cannot be decoded must not abort recovery
+        // of the intact canonical chain.
+        let reorged_out_path = input_root
+            .path()
+            .join("0")
+            .join(format_block_hash(reorged_out_hash))
+            .join("42-node-a");
+        tokio::fs::create_dir_all(reorged_out_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(reorged_out_path, b"not a replay record")
+            .await
+            .unwrap();
+
+        let recovered = recover_replay_records_to_rocksdb(
+            input_root.path(),
+            replay_db.path(),
+            0,
+            canonical_hash,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(recovered, 1);
+    }
+
+    #[tokio::test]
+    async fn recover_records_ignores_partial_download_leftovers() {
+        let input_root = tempfile::tempdir().unwrap();
+        let replay_db = tempfile::tempdir().unwrap();
+        let block_hash = B256::with_last_byte(1);
+        let record = test_replay_record(0, B256::ZERO);
+
+        write_downloaded_replay_record(input_root.path(), 0, block_hash, "42-node-a", &record)
+            .await;
+        // A truncated `.partial` file left by an interrupted download must not be decoded
+        // as a session copy.
+        tokio::fs::write(
+            input_root
+                .path()
+                .join("0")
+                .join(format_block_hash(block_hash))
+                .join("42-node-a.partial"),
+            b"trunc",
+        )
+        .await
+        .unwrap();
+
+        let recovered =
+            recover_replay_records_to_rocksdb(input_root.path(), replay_db.path(), 0, block_hash)
+                .await
+                .unwrap();
+
+        assert_eq!(recovered, 1);
     }
 
     #[tokio::test]

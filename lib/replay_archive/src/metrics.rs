@@ -1,5 +1,5 @@
 use std::time::Duration;
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Buckets, Counter, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
 const LATENCIES: Buckets = Buckets::exponential(0.00001..=10.0, 10.0);
 const BYTES: Buckets = Buckets::exponential(1.0..=128.0 * 1024.0 * 1024.0, 2.0);
@@ -26,6 +26,16 @@ pub(crate) struct ReplayArchiveMetrics {
 
     #[metrics(unit = Unit::Seconds, buckets = SECONDS_PER_MEGABYTE)]
     pub encryption_time_per_megabyte: Histogram<f64>,
+
+    /// Time to archive one replay record, including encryption and the storage write.
+    /// Subtract `encryption_time` to isolate the storage write.
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES)]
+    pub archive_time: Histogram<Duration>,
+
+    /// Retried attempts of storage/KMS calls after transient failures. A sustained non-zero
+    /// rate means the backend is degraded even if no errors surface.
+    #[metrics(labels = ["operation"])]
+    pub transient_retries: LabeledFamily<&'static str, Counter>,
 }
 
 #[vise::register]

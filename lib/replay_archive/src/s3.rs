@@ -205,7 +205,7 @@ impl ReplayArchiveStorageReader for S3ReplayArchiveReader {
             let Some(object_key) = object.key() else {
                 continue;
             };
-            if let Some(key) = crate::parse_archive_object_key(object_key)? {
+            if let Some(key) = crate::parse_archive_object_key(object_key) {
                 keys.push(key);
             }
         }

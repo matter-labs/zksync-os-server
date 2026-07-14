@@ -92,16 +92,17 @@ enum Command {
         age_secret_key: Option<String>,
         /// GCP KMS key version resource name
         /// (`projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..`).
-        /// If provided, records are decrypted in memory, unwrapping the encryption key of every
-        /// record with one KMS asymmetric decrypt call.
+        /// If provided, records are decrypted in memory. Each record copy decode costs one KMS
+        /// asymmetric decrypt call; records are decoded during the chain walk and again when
+        /// writing to RocksDB.
         #[arg(long, conflicts_with_all = ["identity_file", "age_secret_key"])]
         kms_key_version: Option<String>,
         /// Path to the GCP credentials file for KMS access. Ambient authentication is used
         /// when absent.
         #[arg(long, requires = "kms_key_version")]
         kms_credential_file_path: Option<PathBuf>,
-        /// Number of replay records decoded concurrently. With KMS decryption every record takes
-        /// one KMS call, so this bounds in-flight KMS requests.
+        /// Number of replay records decoded concurrently. With KMS decryption every record decode
+        /// takes one KMS call, so this bounds in-flight KMS requests.
         #[arg(long, default_value_t = zksync_os_replay_archive::DEFAULT_DECRYPT_CONCURRENCY)]
         decrypt_concurrency: usize,
     },

@@ -15,10 +15,6 @@ use http::StatusCode;
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
-use std::time::Duration;
-
-const DOWNLOAD_RETRY_ATTEMPTS: u32 = 4;
-const DOWNLOAD_RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 
 /// Authentication mode for GCS replay archive access.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,19 +95,26 @@ impl GcsReplayArchiveStorage {
         let request = UploadObjectRequest {
             bucket: self.config.bucket_base_url.clone(),
             // Succeeds only if no live version of this object exists yet — the GCS equivalent
-            // of S3's `if_none_match("*")`, enforcing the append-only contract.
+            // of S3's `if_none_match("*")`, enforcing the append-only contract. This also makes
+            // the upload safe to retry.
             if_generation_match: Some(0),
             ..Default::default()
         };
-        self.client
-            .upload_object(&request, object, &upload_type)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create append-only replay archive GCS object gs://{}/{}",
-                    self.config.bucket_base_url, key
-                )
-            })?;
+        with_gcs_retries(
+            "gcs_upload",
+            &format!("creating replay archive object {key}"),
+            || {
+                self.client
+                    .upload_object(&request, object.clone(), &upload_type)
+            },
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create append-only replay archive GCS object gs://{}/{}",
+                self.config.bucket_base_url, key
+            )
+        })?;
         Ok(())
     }
 }
@@ -164,7 +167,13 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
             object: key.clone(),
             ..Default::default()
         };
-        match self.client.get_object(&request).await {
+        let result = with_gcs_retries(
+            "gcs_check",
+            &format!("checking replay archive object {key}"),
+            || self.client.get_object(&request),
+        )
+        .await;
+        match result {
             Ok(_) => Ok(true),
             Err(err) if is_not_found(&err) => Ok(false),
             Err(err) => Err(err).with_context(|| {
@@ -229,31 +238,16 @@ fn is_transient(err: &google_cloud_storage::http::Error) -> bool {
 }
 
 /// Retries a GCS call on transient failures with exponential backoff.
-async fn with_download_retries<T, Fut>(
+async fn with_gcs_retries<T, Fut>(
+    operation_label: &'static str,
     description: &str,
     operation: impl Fn() -> Fut,
 ) -> Result<T, google_cloud_storage::http::Error>
 where
     Fut: Future<Output = Result<T, google_cloud_storage::http::Error>>,
 {
-    let mut attempt = 1;
-    loop {
-        match operation().await {
-            Ok(value) => return Ok(value),
-            Err(err) if attempt < DOWNLOAD_RETRY_ATTEMPTS && is_transient(&err) => {
-                let delay = DOWNLOAD_RETRY_BASE_DELAY * 2u32.pow(attempt - 1);
-                tracing::warn!(
-                    attempt,
-                    delay_ms = delay.as_millis() as u64,
-                    error = %err,
-                    "transient GCS error while {description}; retrying"
-                );
-                tokio::time::sleep(delay).await;
-                attempt += 1;
-            }
-            Err(err) => return Err(err),
-        }
-    }
+    crate::retry::with_transient_retries(operation_label, description, is_transient, operation)
+        .await
 }
 
 /// GCS implementation of [`ReplayArchiveStorageReader`].
@@ -294,7 +288,7 @@ impl ReplayArchiveStorageReader for GcsReplayArchiveReader {
             page_token,
             ..Default::default()
         };
-        let response = with_download_retries("listing replay archive objects", || {
+        let response = with_gcs_retries("gcs_list", "listing replay archive objects", || {
             self.client.list_objects(&request)
         })
         .await
@@ -307,7 +301,7 @@ impl ReplayArchiveStorageReader for GcsReplayArchiveReader {
 
         let mut keys = Vec::new();
         for object in response.items.into_iter().flatten() {
-            if let Some(key) = crate::parse_archive_object_key(&object.name)? {
+            if let Some(key) = crate::parse_archive_object_key(&object.name) {
                 keys.push(key);
             }
         }
@@ -325,7 +319,8 @@ impl ReplayArchiveStorageReader for GcsReplayArchiveReader {
             ..Default::default()
         };
         let range = Range::default();
-        with_download_retries(
+        with_gcs_retries(
+            "gcs_download",
             &format!("downloading replay archive object {object_key}"),
             || self.client.download_object(&get_request, &range),
         )
@@ -357,6 +352,39 @@ mod tests {
                 "/path/to/credentials.json"
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn gcs_writes_retry_transient_errors() {
+        use httpmock::{Method, MockServer};
+
+        let server = MockServer::start();
+        let upload_mock = server.mock(|when, then| {
+            when.method(Method::POST);
+            then.status(503).body("service unavailable");
+        });
+
+        let mut client_config = ClientConfig::default().anonymous();
+        client_config.storage_endpoint = server.base_url();
+        let storage = GcsReplayArchiveStorage {
+            config: GcsReplayArchiveConfig {
+                bucket_base_url: "bucket".to_owned(),
+                auth_mode: GcsReplayArchiveAuthMode::Anonymous,
+            },
+            session: ReplayArchiveSession::new(42, "node-a").unwrap(),
+            client: Client::new(client_config),
+        };
+
+        let err = storage
+            .append_object(7, BlockHash::ZERO, b"record".to_vec())
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("failed to create append-only"),
+            "{err:#}"
+        );
+        assert_eq!(upload_mock.calls(), crate::retry::RETRY_ATTEMPTS as usize);
     }
 
     #[cfg(unix)]

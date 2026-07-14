@@ -64,6 +64,7 @@ pub struct GcpKmsClient {
     http: reqwest::Client,
     token_source: Arc<dyn TokenSource>,
     key_version: String,
+    endpoint: String,
 }
 
 impl fmt::Debug for GcpKmsClient {
@@ -119,6 +120,7 @@ impl GcpKmsClient {
             http: reqwest::Client::new(),
             token_source: provider.token_source(),
             key_version: config.key_version.clone(),
+            endpoint: KMS_ENDPOINT.to_owned(),
         })
     }
 
@@ -132,41 +134,56 @@ impl GcpKmsClient {
         url: String,
         body: Option<String>,
     ) -> anyhow::Result<String> {
-        let token = self
-            .token_source
-            .token()
-            .await
-            .map_err(|err| anyhow::anyhow!("{err}"))
-            .context(crate::GCP_CREDENTIALS_HINT)
-            .context("failed to obtain GCP access token")?;
-        let mut request = self
-            .http
-            .request(method, &url)
-            .header("authorization", token);
-        if let Some(body) = body {
-            request = request
-                .header("content-type", "application/json")
-                .body(body);
+        let result = crate::retry::with_transient_retries(
+            "kms",
+            &format!("requesting {url} from GCP KMS"),
+            KmsRequestError::is_transient,
+            || async {
+                let token = self
+                    .token_source
+                    .token()
+                    .await
+                    .map_err(|err| KmsRequestError::Token(err.to_string()))?;
+                let mut request = self
+                    .http
+                    .request(method.clone(), &url)
+                    .header("authorization", token);
+                if let Some(body) = &body {
+                    request = request
+                        .header("content-type", "application/json")
+                        .body(body.clone());
+                }
+                let response = request.send().await.map_err(KmsRequestError::Send)?;
+                let status = response.status();
+                let body = response.text().await.map_err(KmsRequestError::Read)?;
+                if status.is_success() {
+                    Ok(body)
+                } else {
+                    Err(KmsRequestError::Status { status, body })
+                }
+            },
+        )
+        .await;
+        match result {
+            Ok(body) => Ok(body),
+            Err(KmsRequestError::Token(message)) => Err(anyhow::anyhow!(message))
+                .context(crate::GCP_CREDENTIALS_HINT)
+                .context("failed to obtain GCP access token"),
+            Err(err @ KmsRequestError::Send(_)) => {
+                Err(err).with_context(|| format!("GCP KMS request to {url} failed"))
+            }
+            Err(err @ KmsRequestError::Read(_)) => {
+                Err(err).with_context(|| format!("failed to read GCP KMS response from {url}"))
+            }
+            Err(KmsRequestError::Status { status, body }) => {
+                anyhow::bail!("GCP KMS request to {url} returned {status}: {body}")
+            }
         }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("GCP KMS request to {url} failed"))?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .with_context(|| format!("failed to read GCP KMS response from {url}"))?;
-        anyhow::ensure!(
-            status.is_success(),
-            "GCP KMS request to {url} returned {status}: {body}"
-        );
-        Ok(body)
     }
 
     /// Fetches the public key of the key version, returning `(pem, algorithm)`.
     pub async fn get_public_key(&self) -> anyhow::Result<(String, String)> {
-        let url = format!("{KMS_ENDPOINT}/{}/publicKey", self.key_version);
+        let url = format!("{}/{}/publicKey", self.endpoint, self.key_version);
         let body = self.request(reqwest::Method::GET, url, None).await?;
         let response: PublicKeyResponse =
             serde_json::from_str(&body).context("failed to decode GCP KMS public key response")?;
@@ -175,7 +192,7 @@ impl GcpKmsClient {
 
     /// Decrypts data encrypted with the public key of the key version.
     pub async fn asymmetric_decrypt(&self, ciphertext: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let url = format!("{KMS_ENDPOINT}/{}:asymmetricDecrypt", self.key_version);
+        let url = format!("{}/{}:asymmetricDecrypt", self.endpoint, self.key_version);
         let request = serde_json::json!({ "ciphertext": BASE64.encode(ciphertext) }).to_string();
         let body = self
             .request(reqwest::Method::POST, url, Some(request))
@@ -185,6 +202,35 @@ impl GcpKmsClient {
         BASE64
             .decode(response.plaintext)
             .context("failed to decode GCP KMS asymmetric decrypt plaintext")
+    }
+}
+
+/// Classified outcome of a single KMS HTTP attempt, so that only transient failures are
+/// retried.
+#[derive(Debug, thiserror::Error)]
+enum KmsRequestError {
+    #[error("failed to obtain GCP access token: {0}")]
+    Token(String),
+    #[error(transparent)]
+    Send(reqwest::Error),
+    #[error(transparent)]
+    Read(reqwest::Error),
+    #[error("HTTP {status}: {body}")]
+    Status {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+}
+
+impl KmsRequestError {
+    /// Token errors are usually configuration problems and are not retried; transport
+    /// failures and HTTP 408/429/5xx are transient.
+    fn is_transient(&self) -> bool {
+        match self {
+            Self::Token(_) => false,
+            Self::Send(_) | Self::Read(_) => true,
+            Self::Status { status, .. } => matches!(status.as_u16(), 408 | 429 | 500..=599),
+        }
     }
 }
 
@@ -354,6 +400,63 @@ mod tests {
         };
         let err = age::decrypt(&other_version_identity, encrypted.as_slice()).unwrap_err();
         assert!(matches!(err, age::DecryptError::NoMatchingKeys));
+    }
+
+    #[derive(Debug)]
+    struct FakeTokenSource;
+
+    #[async_trait::async_trait]
+    impl TokenSource for FakeTokenSource {
+        async fn token(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+            Ok("Bearer test-token".to_owned())
+        }
+    }
+
+    fn test_client(endpoint: String) -> GcpKmsClient {
+        GcpKmsClient {
+            http: reqwest::Client::new(),
+            token_source: Arc::new(FakeTokenSource),
+            key_version: TEST_KEY_VERSION.to_owned(),
+            endpoint,
+        }
+    }
+
+    #[tokio::test]
+    async fn kms_client_retries_transient_errors() {
+        use httpmock::{Method, MockServer};
+
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(Method::POST);
+            then.status(503).body("service unavailable");
+        });
+
+        let err = test_client(server.base_url())
+            .asymmetric_decrypt(b"ciphertext")
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("503"), "{err:#}");
+        assert_eq!(mock.calls(), crate::retry::RETRY_ATTEMPTS as usize);
+    }
+
+    #[tokio::test]
+    async fn kms_client_does_not_retry_permanent_errors() {
+        use httpmock::{Method, MockServer};
+
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(Method::POST);
+            then.status(400).body("bad request");
+        });
+
+        let err = test_client(server.base_url())
+            .asymmetric_decrypt(b"ciphertext")
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("400"), "{err:#}");
+        assert_eq!(mock.calls(), 1);
     }
 
     #[test]

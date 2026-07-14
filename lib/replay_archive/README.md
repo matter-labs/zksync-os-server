@@ -91,8 +91,10 @@ projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
 The node fetches the public key once at startup (requiring only
 `cloudkms.cryptoKeyVersions.viewPublicKey`) and wraps the per-record age file key locally with
 RSA-OAEP; no private key material exists outside KMS. During recovery, unwrapping the file key of
-every record takes one KMS `AsymmetricDecrypt` call (requiring
-`cloudkms.cryptoKeyVersions.useToDecrypt`), so key access can be revoked and audited per record.
+a record copy takes one KMS `AsymmetricDecrypt` call (requiring
+`cloudkms.cryptoKeyVersions.useToDecrypt`), so key access can be revoked and audited. Recovery
+currently decodes each archived copy once during the canonical chain walk and again when writing
+to RocksDB, so budget roughly two `AsymmetricDecrypt` calls per record per session copy.
 Note that KMS-encrypted objects use a custom age stanza and can only be decrypted by the recovery
 tool, not by the stock `age` CLI.
 
@@ -213,8 +215,9 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
 ```
 
 Pass `--kms-credential-file-path` to authenticate with a credentials file instead of ambient
-credentials. Every record costs one KMS `AsymmetricDecrypt` call; `--decrypt-concurrency`
-(default 32) bounds the number of in-flight KMS requests.
+credentials. Every record copy decode costs one KMS `AsymmetricDecrypt` call, and recovery decodes
+records during the chain walk and again while writing to RocksDB (roughly two calls per record per
+session copy); `--decrypt-concurrency` (default 32) bounds the number of in-flight KMS requests.
 
 Rebuild replay RocksDB from an unencrypted archive:
 

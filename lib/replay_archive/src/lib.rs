@@ -1,5 +1,4 @@
 use alloy::primitives::{BlockHash, BlockNumber};
-use anyhow::Context as _;
 use async_trait::async_trait;
 use std::fmt;
 use std::str::FromStr;
@@ -17,6 +16,7 @@ mod metrics;
 mod reader;
 mod recovery;
 mod replay_record;
+mod retry;
 mod s3;
 mod write_replay;
 
@@ -188,30 +188,29 @@ pub(crate) fn session_marker_key(session: &ReplayArchiveSession) -> String {
 }
 
 /// Parses a flat object-store key back into a [`ReplayArchiveKey`], skipping the session marker
-/// and any key that doesn't match the `<session>/<block_number>/<block_hash>` layout.
-pub(crate) fn parse_archive_object_key(
-    object_key: &str,
-) -> anyhow::Result<Option<ReplayArchiveKey>> {
+/// and any key that doesn't match the `<session>/<block_number>/<block_hash>` layout. Foreign
+/// keys sharing the bucket are logged and skipped instead of failing the listing.
+pub(crate) fn parse_archive_object_key(object_key: &str) -> Option<ReplayArchiveKey> {
     let parts = object_key.split('/').collect::<Vec<_>>();
     if parts.len() != 3 || parts[2] == SESSION_MARKER_FILE_NAME {
-        return Ok(None);
+        return None;
     }
 
-    let session = parts[0]
-        .parse::<ReplayArchiveSession>()
-        .with_context(|| format!("failed to parse replay archive session in {object_key}"))?;
-    let block_number = parts[1]
-        .parse::<BlockNumber>()
-        .with_context(|| format!("failed to parse replay archive block number in {object_key}"))?;
-    let block_hash = parts[2]
-        .parse::<BlockHash>()
-        .with_context(|| format!("failed to parse replay archive block hash in {object_key}"))?;
-
-    Ok(Some(ReplayArchiveKey::new(
-        session,
-        block_number,
-        block_hash,
-    )))
+    let session = parts[0].parse::<ReplayArchiveSession>();
+    let block_number = parts[1].parse::<BlockNumber>();
+    let block_hash = parts[2].parse::<BlockHash>();
+    match (session, block_number, block_hash) {
+        (Ok(session), Ok(block_number), Ok(block_hash)) => {
+            Some(ReplayArchiveKey::new(session, block_number, block_hash))
+        }
+        _ => {
+            tracing::warn!(
+                object_key,
+                "Skipping object key that is not a replay archive record"
+            );
+            None
+        }
+    }
 }
 
 /// Session-bound byte storage using the session/block/hash layout.
@@ -333,7 +332,7 @@ mod tests {
         let block_hash = B256::with_last_byte(1);
         let object_key = format!("42-node-a/7/{}", format_block_hash(block_hash));
 
-        let parsed = parse_archive_object_key(&object_key).unwrap().unwrap();
+        let parsed = parse_archive_object_key(&object_key).unwrap();
 
         assert_eq!(
             parsed,
@@ -347,12 +346,16 @@ mod tests {
 
     #[test]
     fn archive_object_key_parser_skips_session_marker_and_non_archive_keys() {
-        assert!(parse_archive_object_key("other/key").unwrap().is_none());
-        assert!(
-            parse_archive_object_key("42-node-a/.session")
-                .unwrap()
-                .is_none()
-        );
+        assert!(parse_archive_object_key("other/key").is_none());
+        assert!(parse_archive_object_key("42-node-a/.session").is_none());
+    }
+
+    #[test]
+    fn archive_object_key_parser_skips_foreign_three_segment_keys() {
+        // A shared bucket may hold unrelated objects; they must be skipped, not abort listing.
+        assert!(parse_archive_object_key("logs/2026/app.txt").is_none());
+        assert!(parse_archive_object_key("42-node-a/7/not-a-hash").is_none());
+        assert!(parse_archive_object_key("42-node-a/not-a-number/0x00").is_none());
     }
 
     #[tokio::test]
