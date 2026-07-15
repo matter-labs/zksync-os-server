@@ -42,8 +42,6 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_addr_override: Option<Address>,
     /// Override for decimals of the base token.
     pub base_token_decimals_override: Option<u8>,
-    /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
-    pub gateway_base_token_addr_override: Option<Address>,
     /// Signer configuration to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
@@ -152,17 +150,6 @@ impl BaseTokenPriceUpdater {
     ) -> anyhow::Result<(Self, BaseTokenPriceHandle)> {
         let zk_chain_l1 = l1_state.diamond_proxy_l1.clone();
         let mut l1_provider = l1_state.diamond_proxy_l1.provider().clone();
-        let zk_chain_gateway = if l1_state.l1_chain_id != l1_state.sl_chain_id {
-            Some(
-                l1_state
-                    .bridgehub_l1
-                    .zk_chain_by_chain_id(l1_state.sl_chain_id)
-                    .await
-                    .context("Failed to resolve gateway diamond proxy")?,
-            )
-        } else {
-            None
-        };
 
         let base_token_address = zk_chain_l1.get_base_token_address().await?;
 
@@ -191,18 +178,8 @@ impl BaseTokenPriceUpdater {
             );
         }
 
-        let sl_token = if let Some(zk_chain_gateway) = zk_chain_gateway {
-            let gateway_base_token_address = zk_chain_gateway.get_base_token_address().await?;
-            Self::resolve_api_token(
-                gateway_base_token_address,
-                base_token_adjuster_config.gateway_base_token_addr_override,
-                Some(18), // We expect gateway base token to be ETH or ZK, both have `18` decimals
-                &l1_provider,
-            )
-            .await?
-        } else {
-            APIToken::ETH
-        };
+        // The settlement layer is always L1, whose base token is ETH.
+        let sl_token = APIToken::ETH;
 
         let price_api_client = match external_price_api_client_config {
             ExternalPriceApiClientConfig::Forced { forced } => {

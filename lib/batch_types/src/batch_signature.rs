@@ -61,7 +61,7 @@ impl BatchSignature {
     pub async fn sign_batch(
         prev_batch_info: &StoredBatchInfo,
         commit_batch_info: &CommitBatchInfo,
-        diamond_proxy_sl: Address,
+        diamond_proxy: Address,
         sl_chain_id: u64,
         multisig_committer: Address,
         protocol_version: &ProtocolSemanticVersion,
@@ -70,7 +70,7 @@ impl BatchSignature {
         let digest = eip712_multisig_digest(
             prev_batch_info,
             commit_batch_info,
-            diamond_proxy_sl,
+            diamond_proxy,
             sl_chain_id,
             multisig_committer,
             protocol_version,
@@ -83,7 +83,7 @@ impl BatchSignature {
         self,
         prev_batch_info: &StoredBatchInfo,
         commit_batch_info: &CommitBatchInfo,
-        diamond_proxy_sl: Address,
+        diamond_proxy: Address,
         sl_chain_id: u64,
         multisig_committer: Address,
         protocol_version: &ProtocolSemanticVersion,
@@ -94,7 +94,7 @@ impl BatchSignature {
                 .recover_address_from_prehash(&eip712_multisig_digest(
                     prev_batch_info,
                     commit_batch_info,
-                    diamond_proxy_sl,
+                    diamond_proxy,
                     sl_chain_id,
                     multisig_committer,
                     protocol_version,
@@ -128,7 +128,7 @@ sol! {
 fn eip712_multisig_digest(
     prev_batch_info: &StoredBatchInfo,
     commit_batch_info: &CommitBatchInfo,
-    diamond_proxy_sl: Address,
+    diamond_proxy: Address,
     sl_chain_id: u64,
     multisig_committer: Address,
     protocol_version: &ProtocolSemanticVersion,
@@ -140,7 +140,7 @@ fn eip712_multisig_digest(
     );
 
     let message = CommitBatchesMultisig {
-        chainAddress: diamond_proxy_sl,
+        chainAddress: diamond_proxy,
         processBatchFrom: U256::from(commit_batch_info.batch_number),
         processBatchTo: U256::from(commit_batch_info.batch_number),
         batchData: batch_data.into(),

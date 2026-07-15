@@ -289,7 +289,7 @@ where
                         .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
                         .with_gas_limit(gas_limit)
                         .with_to(self.to_address)
-                        .with_input(cmd.solidity_call(self.gateway, &operator_address));
+                        .with_input(cmd.solidity_call(&operator_address));
 
                     let mut blob_gas_limit = 0;
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
@@ -524,7 +524,7 @@ where
     /// the loop stops and whatever has been paired so far is returned — the unmatched command
     /// remains in `inbound` for the normal send path.
     ///
-    /// `sl_block_number` must be the same L1 block at which `getTotalBatches*` was called when
+    /// `l1_block_number` must be the same L1 block at which `getTotalBatches*` was called when
     /// constructing the inbound command queue. Pinning the confirmed-nonce baseline to that block
     /// prevents the race where txs mined between the `getTotalBatches` call and this nonce check
     /// cause us to mis-count in-flight txs and crash on calldata mismatch.
@@ -538,7 +538,7 @@ where
         let latest_nonce = self
             .provider
             .get_transaction_count(operator_address)
-            .block_id(BlockId::number(self.sl_block_number))
+            .block_id(BlockId::number(self.l1_block_number))
             .await
             .context("get confirmed transaction count")?;
         let pending_nonce = self
@@ -555,7 +555,7 @@ where
         let in_flight_count = (pending_nonce - latest_nonce) as usize;
         tracing::info!(
             command_name,
-            sl_block_number = self.sl_block_number,
+            l1_block_number = self.l1_block_number,
             latest_nonce,
             pending_nonce,
             in_flight_count,
@@ -611,7 +611,7 @@ where
                     let L1SenderCommand::SendToL1(cmd) = raw_cmd else {
                         return false;
                     };
-                    cmd.solidity_call(self.gateway, &operator_address) == *tx.input()
+                    cmd.solidity_call(&operator_address) == *tx.input()
                 })
                 .await;
 
@@ -751,7 +751,7 @@ where
                 let req = build_l1_simulation_request(
                     operator_address,
                     self.to_address,
-                    cmd.solidity_call(self.gateway, &operator_address),
+                    cmd.solidity_call(&operator_address),
                     starting_nonce + i as u64,
                     fee_params,
                     cmd.blob_sidecar(),

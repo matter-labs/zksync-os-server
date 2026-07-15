@@ -14,11 +14,10 @@ pub struct L1Sender<C> {
     pub provider: NodeProvider,
     pub config: L1SenderConfig<C>,
     pub to_address: Address,
-    pub gateway: bool,
     pub commit_submitted_tx: Option<watch::Sender<u64>>,
-    /// SL block number at which `getTotalBatches*` was read on startup; passed through to
+    /// L1 block number at which `getTotalBatches*` was read on startup; passed through to
     /// `run_l1_sender` to keep the confirmed-nonce baseline consistent with the inbound queue.
-    pub sl_block_number: u64,
+    pub l1_block_number: u64,
 }
 
 #[async_trait]

@@ -27,11 +27,10 @@ mod statistics;
 pub struct GasAdjuster {
     base_fee_statistics: GasStatistics<u128>,
     blob_base_fee_statistics: GasStatistics<u128>,
-    gw_pubdata_price_statistics: GasStatistics<U256>,
     blob_fill_ratio_statistics: Statistics<Ratio<u64>>,
 
     config: GasAdjusterConfig,
-    sl_provider: DynProvider,
+    l1_provider: DynProvider,
     pubdata_price_sender: watch::Sender<Option<U256>>,
     blob_fill_ratio_sender: watch::Sender<Option<Ratio<u64>>>,
     sidecar_receiver: Receiver<BlobTransactionSidecar>,
@@ -50,7 +49,7 @@ pub struct GasAdjusterConfig {
 
 impl GasAdjuster {
     pub async fn new(
-        sl_provider: DynProvider,
+        l1_provider: DynProvider,
         config: GasAdjusterConfig,
         pubdata_price_sender: watch::Sender<Option<U256>>,
         blob_fill_ratio_sender: watch::Sender<Option<Ratio<u64>>>,
@@ -59,9 +58,9 @@ impl GasAdjuster {
         // Subtracting 1 from the "latest" block number to prevent errors in case
         // the info about the latest block is not yet present on the node.
         // This sometimes happens on Infura.
-        let current_block = sl_provider.get_block_number().await?.saturating_sub(1);
+        let current_block = l1_provider.get_block_number().await?.saturating_sub(1);
         let fee_history = Self::base_fee_history(
-            &sl_provider,
+            &l1_provider,
             current_block,
             config.max_base_fee_samples as u64,
         )
@@ -79,21 +78,12 @@ impl GasAdjuster {
             fee_history.iter().map(|fee| fee.base_fee_per_blob_gas),
         );
 
-        let gw_pubdata_price_statistics = GasStatistics::new(
-            config.max_base_fee_samples,
-            current_block,
-            fee_history
-                .iter()
-                .filter_map(|fee| fee.pubdata_price_per_byte),
-        );
-
         let this = Self {
             base_fee_statistics,
             blob_base_fee_statistics,
-            gw_pubdata_price_statistics,
             blob_fill_ratio_statistics: Statistics::new(config.max_blob_fill_ratio_samples),
             config,
-            sl_provider,
+            l1_provider,
             pubdata_price_sender,
             blob_fill_ratio_sender,
             sidecar_receiver,
@@ -110,14 +100,14 @@ impl GasAdjuster {
         // Subtracting 1 from the "latest" block number to prevent errors in case
         // the info about the latest block is not yet present on the node.
         // This sometimes happens on Infura.
-        let current_block = self.sl_provider.get_block_number().await?.saturating_sub(1);
+        let current_block = self.l1_provider.get_block_number().await?.saturating_sub(1);
 
         let last_processed_block = self.base_fee_statistics.last_processed_block();
 
         if current_block > last_processed_block {
             let n_blocks = current_block - last_processed_block;
             let fee_data =
-                Self::base_fee_history(&self.sl_provider, current_block, n_blocks).await?;
+                Self::base_fee_history(&self.l1_provider, current_block, n_blocks).await?;
 
             // We shouldn't rely on provider to return consistent results, so we check that we have at least one new sample.
             if let Some(current_base_fee_per_gas) = fee_data.last().map(|fee| fee.base_fee_per_gas)
@@ -159,27 +149,6 @@ impl GasAdjuster {
                 METRICS
                     .median_blob_base_fee
                     .set(self.blob_base_fee_statistics.median() as u64);
-            }
-
-            if let Some(current_pubdata_price_per_byte) =
-                fee_data.last().and_then(|fee| fee.pubdata_price_per_byte)
-            {
-                if current_pubdata_price_per_byte > U256::from(u64::MAX) {
-                    tracing::info!(
-                        "Failed to report current_pubdata_price_per_byte = {current_pubdata_price_per_byte}, it exceeds u64::MAX"
-                    );
-                } else {
-                    METRICS
-                        .current_pubdata_price_per_byte
-                        .set(current_pubdata_price_per_byte.to());
-                }
-            }
-            self.gw_pubdata_price_statistics
-                .add_samples(fee_data.iter().filter_map(|fee| fee.pubdata_price_per_byte));
-            if self.gw_pubdata_price_statistics.median() <= U256::from(u64::MAX) {
-                METRICS
-                    .median_pubdata_price_per_byte
-                    .set(self.gw_pubdata_price_statistics.median().to());
             }
 
             self.pubdata_price_sender
@@ -260,7 +229,6 @@ impl GasAdjuster {
                 U256::from(self.gas_price()).saturating_mul(U256::from(L1_GAS_PER_PUBDATA_BYTE))
             }
             PubdataMode::Validium => U256::from(0u32),
-            PubdataMode::RelayedL2Calldata => self.gw_pubdata_price_statistics.median(),
         };
 
         if price <= U256::from(u128::MAX) {
@@ -319,23 +287,17 @@ impl GasAdjuster {
                 );
             }
 
-            let pubdata_price_per_byte = fee_history
-                .pubdata_price_per_byte
-                .map(|v| v.into_iter().map(Some).collect())
-                .unwrap_or_else(|| vec![None; chunk_size as usize]);
             // We take `chunk_size` entries and drop data for the block after `chunk_end`.
-            for ((base_fee_per_gas, base_fee_per_blob_gas), pubdata_price_per_byte) in fee_history
+            for (base_fee_per_gas, base_fee_per_blob_gas) in fee_history
                 .base
                 .base_fee_per_gas
                 .into_iter()
                 .zip(fee_history.base.base_fee_per_blob_gas)
-                .zip(pubdata_price_per_byte)
                 .take(chunk_size as usize)
             {
                 let fees = BaseFees {
                     base_fee_per_gas,
                     base_fee_per_blob_gas,
-                    pubdata_price_per_byte,
                 };
                 history.push(fees)
             }
@@ -350,5 +312,4 @@ impl GasAdjuster {
 pub struct BaseFees {
     pub base_fee_per_gas: u128,
     pub base_fee_per_blob_gas: u128,
-    pub pubdata_price_per_byte: Option<U256>,
 }
