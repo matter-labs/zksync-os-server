@@ -14,11 +14,15 @@ pub(super) struct RetryService<S> {
     pub(super) inner: S,
     pub(super) provider: ProviderKind,
     pub(super) max_retries: u32,
+    pub(super) infinite_retries: bool,
     pub(super) backoff: Duration,
 }
 
 impl<S> RetryService<S> {
-    fn should_retry(error: &TransportError) -> bool {
+    fn should_retry(error: &TransportError, infinite_retries: bool) -> bool {
+        if infinite_retries {
+            return true;
+        }
         if RateLimitRetryPolicy::default().should_retry(error) {
             return true;
         }
@@ -67,6 +71,7 @@ where
         let mut inner = std::mem::replace(&mut self.inner, inner);
         let provider = self.provider;
         let max_retries = self.max_retries;
+        let infinite_retries = self.infinite_retries;
         let backoff = self.backoff;
         Box::pin(async move {
             let mut retry_number = 0;
@@ -85,9 +90,9 @@ where
                     Err(e) => err = e,
                 }
 
-                if Self::should_retry(&err) {
+                if Self::should_retry(&err, infinite_retries) {
                     retry_number += 1;
-                    if retry_number > max_retries {
+                    if !infinite_retries && retry_number > max_retries {
                         return Err(TransportErrorKind::custom_str(&format!(
                             "Max retries exceeded {err}"
                         )));
@@ -100,5 +105,52 @@ where
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::rpc::json_rpc::ErrorPayload;
+    use std::borrow::Cow;
+
+    fn error_response(code: i64) -> TransportError {
+        TransportError::ErrorResp(ErrorPayload {
+            code,
+            message: Cow::Borrowed("rpc error"),
+            data: None,
+        })
+    }
+
+    #[test]
+    fn default_policy_retries_known_rpc_failures_only() {
+        assert!(RetryService::<()>::should_retry(
+            &TransportErrorKind::http_error(500, String::new()),
+            false
+        ));
+        assert!(RetryService::<()>::should_retry(
+            &error_response(-32603),
+            false
+        ));
+        assert!(!RetryService::<()>::should_retry(
+            &error_response(-32001),
+            false
+        ));
+        assert!(!RetryService::<()>::should_retry(
+            &TransportErrorKind::pubsub_unavailable(),
+            false
+        ));
+    }
+
+    #[test]
+    fn infinite_retries_policy_retries_any_transport_error() {
+        assert!(RetryService::<()>::should_retry(
+            &error_response(-32001),
+            true
+        ));
+        assert!(RetryService::<()>::should_retry(
+            &TransportErrorKind::pubsub_unavailable(),
+            true
+        ));
     }
 }

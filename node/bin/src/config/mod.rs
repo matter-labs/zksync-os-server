@@ -1249,6 +1249,10 @@ pub struct L1SenderConfig {
     #[config(nest, default)]
     pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
 
+    /// Retry sender RPC calls on all errors forever.
+    #[config(default_t = true)]
+    pub rpc_retry_forever: bool,
+
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
     pub command_limit: usize,
@@ -1360,6 +1364,10 @@ pub struct GatewaySenderConfig {
     /// Force transaction resubmission options.
     #[config(nest, default)]
     pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
+
+    /// Retry sender RPC calls on all errors forever.
+    #[config(default_t = false)]
+    pub rpc_retry_forever: bool,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
     #[config(default_t = 16)]
@@ -2601,6 +2609,7 @@ mod tests {
                 max_priority_fee_per_gas: 1 * EtherUnit::Gwei,
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
                 force_transaction_resubmission: ForceTransactionResubmissionConfig::default(),
+                rpc_retry_forever: true,
                 command_limit: 16,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),

@@ -17,6 +17,8 @@ use zksync_os_provider::NodeProvider;
 pub(crate) enum ProviderKind {
     L1,
     Gateway,
+    L1CustomRetries,
+    GatewayCustomRetries,
 }
 
 pub(crate) async fn build_node_provider(
@@ -25,16 +27,16 @@ pub(crate) async fn build_node_provider(
     finalized_poll_interval: Duration,
     log_cache_capacity: usize,
     provider: ProviderKind,
+    infinite_retries: bool,
 ) -> NodeProvider {
-    let max_retries = config.max_retries;
-    let retry_backoff = config.retry_backoff;
     let provider_layers = ServiceBuilder::new()
         .layer_fn(move |inner| latency::LatencyService { inner, provider })
         .layer_fn(move |inner| retry::RetryService {
             inner,
             provider,
-            max_retries,
-            backoff: retry_backoff,
+            max_retries: config.max_retries,
+            infinite_retries,
+            backoff: config.retry_backoff,
         });
 
     let client = RpcClient::builder()
