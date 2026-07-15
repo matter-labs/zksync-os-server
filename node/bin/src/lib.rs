@@ -56,7 +56,7 @@ use anyhow::Context;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -957,6 +957,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         rx
     };
 
+    let rpc_ready: Arc<OnceLock<()>> = Arc::new(OnceLock::new());
+
     // ======== Start Status Server ========
     let status_port = if config.status_server_config.enabled {
         let status_listener = prebound_status_listener
@@ -968,6 +970,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let status_state = StatusServerState {
             pipeline_snapshot: pipeline_snapshot_rx,
             consensus_raft_status_rx: raft_status_rx,
+            ready: rpc_ready.clone(),
         };
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
@@ -994,6 +997,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         repositories_for_wait
             .wait_for_db_ready_to_process_blocks()
             .await;
+        // `rpc::spawn` awaits this future before serving.
+        let _ = rpc_ready.set(());
     };
     let rpc_policy_client = config
         .sequencer_config

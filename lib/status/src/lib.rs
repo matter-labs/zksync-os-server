@@ -9,11 +9,12 @@ mod health;
 mod pipeline;
 mod status;
 
-use crate::health::health;
+use crate::health::{health, ready};
 use crate::pipeline::pipeline;
 use crate::status::status;
 use axum::{Router, routing::get};
 use reth_tasks::shutdown::GracefulShutdown;
+use std::sync::{Arc, OnceLock};
 use tokio::{net::TcpListener, sync::watch};
 use zksync_os_backpressure::PipelineSnapshot;
 use zksync_os_raft::RaftConsensusStatus;
@@ -24,6 +25,7 @@ pub use status::{ConsensusStatus, StatusResponse};
 pub struct StatusServerState {
     pub pipeline_snapshot: watch::Receiver<PipelineSnapshot>,
     pub consensus_raft_status_rx: Option<watch::Receiver<Option<RaftConsensusStatus>>>,
+    pub ready: Arc<OnceLock<()>>,
 }
 
 pub(crate) type AppState = StatusServerState;
@@ -37,6 +39,7 @@ pub async fn run_status_server(
     let app = Router::new()
         .route("/status", get(status))
         .route("/status/health", get(health))
+        .route("/status/ready", get(ready))
         .route("/status/pipeline", get(pipeline))
         .with_state(state);
 
