@@ -1,17 +1,14 @@
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
-use alloy::primitives::{Address, B256, BlockNumber, Log, TxHash, U256};
+use alloy::primitives::{B256, BlockNumber, Log, TxHash, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use backon::{ConstantBuilder, Retryable};
-use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
-use zksync_os_contract_interface::IChainAssetHandler;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
-use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::models::CommitBatchInfo;
 use zksync_os_contract_interface::{IExecutor, ZkChain};
 use zksync_os_provider::NodeProvider;
@@ -29,75 +26,6 @@ const COMMIT_DATA_RETRY_POLICY: ConstantBuilder = ConstantBuilder::new()
 /// recent — and therefore warm — state instead of O(log(range)) probes at deep-history blocks,
 /// which archive RPCs serve much more slowly.
 const GALLOP_INITIAL_DISTANCE: u64 = 1_000;
-
-/// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
-/// using binary search. Returns latest block if migration number is not reached yet.
-///
-/// Used by [`GatewayMigrationWatcher`][crate::GatewayMigrationWatcher] (on L1) to determine the
-/// block from which to start scanning for migration events.
-pub async fn find_block_by_migration_number(
-    zk_chain: &ZkChain<NodeProvider>,
-    chain_asset_handler: Address,
-    chain_id: u64,
-    migration_number: u64,
-) -> anyhow::Result<BlockNumber> {
-    let instance = Arc::new(IChainAssetHandler::new(
-        chain_asset_handler,
-        zk_chain.provider().clone(),
-    ));
-    let target = U256::from(migration_number);
-    let latest = instance.provider().get_block_number().await?;
-    let latest_migration_number = match instance
-        .migrationNumber(U256::from(chain_id))
-        .block(latest.into())
-        .call()
-        .await
-    {
-        Ok(n) => n,
-        // Pre-V31 `ChainAssetHandler` does not expose `migrationNumber`. No Gateway migrations can
-        // exist in that era, so there is nothing to scan for — start from the latest block.
-        Err(err) if is_method_missing(&err) => return Ok(latest),
-        Err(err) => return Err(err.into()),
-    };
-    // If this migration has not been reached yet, return the latest block.
-    if latest_migration_number < migration_number {
-        return Ok(latest);
-    }
-
-    // The chain's diamond proxy deployment block is a safe lower bound for CAH searches: the proxy
-    // can only exist when the bridgehub ecosystem (including CAH, when present) is at least
-    // partially up. The predicate still guards against CAH being absent for the V30→V31 migration
-    // window where the proxy existed before CAH was deployed.
-    let start_block = zk_chain.deployment_block().await?;
-    find_l1_block_by_predicate(zk_chain.provider(), start_block, move |block| {
-        let instance = instance.clone();
-        async move {
-            let code = instance
-                .provider()
-                .get_code_at(*instance.address())
-                .block_id(block.into())
-                .await?;
-            if code.0.is_empty() {
-                return Ok(false);
-            }
-            // At this block the address may have code but not yet be the ChainAssetHandler
-            // (e.g. a proxy upgraded to it only later), so `migrationNumber` reverts. Treat a
-            // revert as "not deployed yet" (false); real RPC errors still propagate.
-            let res = match instance
-                .migrationNumber(U256::from(chain_id))
-                .block(block.into())
-                .call()
-                .await
-            {
-                Ok(res) => res,
-                Err(err) if is_method_missing(&err) => return Ok(false),
-                Err(err) => return Err(err.into()),
-            };
-            Ok(res >= target)
-        }
-    })
-    .await
-}
 
 /// Searches `[start_block_number, latest]` for the first block at which `predicate` returns
 /// `true`. The predicate must be monotonic over the search range (caller's responsibility).

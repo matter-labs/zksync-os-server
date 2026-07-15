@@ -227,7 +227,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
     ) -> EthResult<Option<ZkApiTransaction>> {
         // Check the mempool first so that pending transactions (not yet included in a block)
         // are visible. This is essential for callers like the operator's in-flight tx recovery
-        // path that use this method to inspect transactions that are still pending on Gateway.
+        // path that use this method to inspect transactions that are not yet mined.
         if let Some(pool_tx) = self
             .mempool
             .get_transaction_by_sender_and_nonce(sender, nonce.saturating_to())

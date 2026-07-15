@@ -51,8 +51,8 @@ pub struct L2ToL1LogProof {
     pub root: B256,
     /// The gateway block number where this L2 batch was executed.
     ///
-    /// Present whenever the node has a gateway provider configured (i.e. the chain settles to a
-    /// gateway rather than directly to L1). `None` for chains that settle directly to L1.
+    /// Always `None`: Gateway settlement is not supported, so the local batch root is the final
+    /// proof node. Kept in the response shape for API compatibility.
     pub gateway_block_number: Option<u64>,
 }
 

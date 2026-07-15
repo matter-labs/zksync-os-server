@@ -1,5 +1,5 @@
 use crate::commands::SendToL1;
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
@@ -37,12 +37,12 @@ impl SendToL1 for ExecuteCommand {
 
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1Passthrough;
 
-    fn solidity_call(&self, gateway: bool, operator: &Address) -> Bytes {
+    fn solidity_call(&self, operator: &Address) -> Bytes {
         IExecutor::executeBatchesSharedBridgeCall::new((
             self.batches.first().unwrap().batch.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
-            self.to_calldata_suffix(gateway, operator).into(),
+            self.to_calldata_suffix(operator).into(),
         ))
         .abi_encode()
         .into()
@@ -80,7 +80,7 @@ impl Display for ExecuteCommand {
 }
 
 impl ExecuteCommand {
-    fn to_calldata_suffix(&self, gateway: bool, operator: &Address) -> Vec<u8> {
+    fn to_calldata_suffix(&self, operator: &Address) -> Vec<u8> {
         let stored_batch_infos = self
             .batches
             .iter()
@@ -106,34 +106,11 @@ impl ExecuteCommand {
         let encoded_data: Vec<u8> = match protocol_version_minor {
             29 | 30 => (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
             31 | 32 => {
-                let mut logs = Vec::new();
-                let mut messages = Vec::new();
-                let mut multichain_roots = Vec::new();
-                if gateway {
-                    logs = self
-                        .batches
-                        .iter()
-                        .map(|batch| {
-                            batch
-                                .batch
-                                .logs
-                                .iter()
-                                .cloned()
-                                .map(IExecutor::L2Log::from)
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>();
-                    messages = self
-                        .batches
-                        .iter()
-                        .map(|batch| batch.batch.messages.clone())
-                        .collect::<Vec<_>>();
-                    multichain_roots = self
-                        .batches
-                        .iter()
-                        .map(|batch| batch.batch.multichain_root)
-                        .collect::<Vec<_>>();
-                }
+                // Batch logs / messages / multichain roots are only relayed when executing on a
+                // Gateway; when settling on L1 they are always empty.
+                let logs: Vec<Vec<IExecutor::L2Log>> = Vec::new();
+                let messages: Vec<Vec<Vec<u8>>> = Vec::new();
+                let multichain_roots: Vec<B256> = Vec::new();
                 (
                     stored_batch_infos,
                     priority_ops,

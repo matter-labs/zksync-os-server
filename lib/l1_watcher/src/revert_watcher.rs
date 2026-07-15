@@ -5,44 +5,41 @@ use zksync_os_contract_interface::IExecutor::BlocksRevert;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_provider::NodeProvider;
 
-/// Watches settlement-layer `BlocksRevert` events and crashes the node when the main node reverts
+/// Watches L1 `BlocksRevert` events and crashes the node when the main node reverts
 /// committed L1 batches.
 pub struct L1RevertWatcher {
-    /// SL block number used to initialize finality at startup. Reverts at or below this block are
+    /// L1 block number used to initialize finality at startup. Reverts at or below this block are
     /// already reflected in the startup frontier and must be ignored.
-    startup_sl_block: u64,
+    startup_l1_block: u64,
 }
 
 impl L1RevertWatcher {
-    pub async fn create_watcher(
+    pub fn create_watcher(
         config: L1WatcherConfig,
         zk_chain: ZkChain<NodeProvider>,
-        startup_sl_block: u64,
-        l1_chain_id: u64,
-    ) -> anyhow::Result<L1Watcher<L1RevertWatcher>> {
+        startup_l1_block: u64,
+    ) -> L1Watcher<L1RevertWatcher> {
         tracing::info!(
-            startup_sl_block,
+            startup_l1_block,
             zk_chain_address = ?zk_chain.address(),
             "initializing L1 revert watcher"
         );
-        let this = Self { startup_sl_block };
-        // Process forward from the startup SL block; reverts in earlier blocks are already accounted for.
+        let this = Self { startup_l1_block };
+        // Process forward from the startup L1 block; reverts in earlier blocks are already accounted for.
         L1Watcher::new_confirmed(
             config,
             zk_chain.provider().clone(),
             (*zk_chain.address()).into(),
-            startup_sl_block + 1,
+            startup_l1_block + 1,
             None,
-            l1_chain_id,
             this,
         )
-        .await
     }
 }
 
 /// Returns true if the revert event happened after startup and therefore requires a restart.
-fn should_restart_for_revert(startup_sl_block: u64, log_block_number: Option<u64>) -> bool {
-    log_block_number.is_some_and(|log_block_number| log_block_number > startup_sl_block)
+fn should_restart_for_revert(startup_l1_block: u64, log_block_number: Option<u64>) -> bool {
+    log_block_number.is_some_and(|log_block_number| log_block_number > startup_l1_block)
 }
 
 #[async_trait::async_trait]
@@ -59,21 +56,21 @@ impl ProcessL1Event for L1RevertWatcher {
         log: Log,
     ) -> Result<(), L1WatcherError> {
         let total_batches_committed = revert.totalBatchesCommitted.to::<u64>();
-        if should_restart_for_revert(self.startup_sl_block, log.block_number) {
+        if should_restart_for_revert(self.startup_l1_block, log.block_number) {
             tracing::error!(
                 total_batches_committed,
                 total_batches_verified = %revert.totalBatchesVerified,
                 total_batches_executed = %revert.totalBatchesExecuted,
                 log_block_number = ?log.block_number,
-                "detected L1 batch revert on the settlement layer; restarting to re-sync from the main node",
+                "detected L1 batch revert; restarting to re-sync from the main node",
             );
             return Err(L1WatcherError::L1Reverted(total_batches_committed));
         }
         tracing::warn!(
             total_batches_committed,
             log_block_number = ?log.block_number,
-            startup_sl_block = self.startup_sl_block,
-            "skipping historical L1 batch revert at or below startup SL block; already reflected in startup frontier",
+            startup_l1_block = self.startup_l1_block,
+            "skipping historical L1 batch revert at or below startup L1 block; already reflected in startup frontier",
         );
         Ok(())
     }

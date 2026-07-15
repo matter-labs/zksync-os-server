@@ -47,8 +47,6 @@ alloy::sol! {
     }
 
     interface ServerNotifier {
-        event MigrateToGateway(uint256 indexed chainId, uint256 migrationNumber);
-        event MigrateFromGateway(uint256 indexed chainId, uint256 migrationNumber);
         event UpgradeTimestampUpdated(uint256 indexed chainId, uint256 indexed protocolVersion, uint256 upgradeTimestamp);
     }
 
@@ -170,30 +168,6 @@ alloy::sol! {
             uint256 _l2GasLimit,
             uint256 _l2GasPerPubdataByteLimit
         ) external view returns (uint256);
-    }
-
-    #[sol(rpc)]
-    interface IChainAssetHandler {
-        struct MigrationInterval {
-            uint256 migrateToGWBatchNumber;
-            uint256 migrateFromGWBatchNumber;
-            uint256 settlementLayerBatchLowerBound;
-            uint256 settlementLayerBatchUpperBound;
-            uint256 settlementLayerChainId;
-            bool isActive;
-        }
-
-        function migrationNumber(uint256 _chainId) external view returns (uint256);
-        event MigrationFinalized(
-            uint256 indexed chainId,
-            uint256 migrationNumber,
-            bytes32 indexed assetId,
-            address indexed zkChain
-        );
-        function migrationInterval(
-            uint256 _chainId,
-            uint256 _migrationNumber
-        ) external view returns (MigrationInterval memory interval);
     }
 
     // `IChainTypeManager.sol`
@@ -658,30 +632,6 @@ impl<P: Provider + Clone> Bridgehub<P> {
 
     pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
         self.instance.getAllZKChainChainIDs().call().await
-    }
-
-    pub async fn whitelisted_settlement_layers(
-        &self,
-        chain_id: impl Into<U256>,
-    ) -> alloy::contract::Result<bool> {
-        self.instance
-            .whitelistedSettlementLayers(chain_id.into())
-            .call()
-            .await
-    }
-
-    pub async fn chain_asset_handler_address(&self) -> alloy::contract::Result<Address> {
-        self.instance.chainAssetHandler().call().await
-    }
-
-    pub async fn migration_number(&self, chain_id: u64) -> alloy::contract::Result<U256> {
-        let chain_asset_handler_address = self.chain_asset_handler_address().await?;
-        let chain_asset_handler =
-            IChainAssetHandler::new(chain_asset_handler_address, self.instance.provider());
-        chain_asset_handler
-            .migrationNumber(U256::from(chain_id))
-            .call()
-            .await
     }
 }
 

@@ -7,7 +7,7 @@ use zksync_os_contract_interface::ZkChain;
 use zksync_os_provider::NodeProvider;
 use zksync_os_storage_api::WriteFinality;
 
-/// Watches settlement-layer execution events and advances the executed finality frontier.
+/// Watches L1 execution events and advances the executed finality frontier.
 ///
 /// This component reads `BlockExecution` events, waits until the corresponding committed batch is
 /// available in `CommittedBatchProvider`, and then updates `WriteFinality` with the latest
@@ -40,7 +40,6 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
         zk_chain: ZkChain<NodeProvider>,
         committed_batch_provider: CommittedBatchProvider,
         finality: Finality,
-        l1_chain_id: u64,
     ) -> anyhow::Result<StartResolver<(), Self>> {
         tracing::info!(
             config.max_blocks_to_process,
@@ -76,7 +75,13 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
             Ok((last_l1_block, processor))
         };
 
-        StartResolver::new(config, provider, address, None, l1_chain_id, resolve_start).await
+        Ok(StartResolver::new(
+            config,
+            provider,
+            address,
+            None,
+            resolve_start,
+        ))
     }
 }
 

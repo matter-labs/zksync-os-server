@@ -35,9 +35,9 @@ impl ProverTester {
 
         // Get L1 state which contains diamond proxy address
         let l1_state =
-            L1State::fetch(self.l1_provider.clone(), None, bridgehub_address, chain_id).await?;
+            L1State::fetch(self.l1_provider.clone(), bridgehub_address, chain_id).await?;
         let total_batches_proved = l1_state
-            .diamond_proxy_sl
+            .diamond_proxy_l1
             .get_total_batches_proved(BlockNumberOrTag::Latest.into())
             .await?;
         Ok(total_batches_proved)
@@ -52,8 +52,8 @@ impl ProverTester {
 
         // Get L1 state which contains diamond proxy address
         let l1_state =
-            L1State::fetch(self.l1_provider.clone(), None, bridgehub_address, chain_id).await?;
-        let diamond_proxy_address = l1_state.diamond_proxy_address_sl();
+            L1State::fetch(self.l1_provider.clone(), bridgehub_address, chain_id).await?;
+        let diamond_proxy_address = l1_state.diamond_proxy_address();
         tracing::info!(
             batch_number,
             %diamond_proxy_address,

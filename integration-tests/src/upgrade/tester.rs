@@ -32,28 +32,24 @@ pub struct UpgradeTester<'a> {
     pub tester: &'a Tester,
     // Bridgehub contract on L1
     pub bridgehub_l1: zksync_os_contract_interface::Bridgehub<NodeProvider>,
-    // Bridgehub contract on SL
-    pub bridgehub_sl: interfaces::Bridgehub::BridgehubInstance<NodeProvider>,
-    // Bridgehub owner address on SL
-    pub bridgehub_owner_sl: Address,
-    // CTM contract on SL
-    pub ctm_sl: interfaces::ChainTypeManager::ChainTypeManagerInstance<NodeProvider>,
-    // CTM owner address on SL
-    pub ctm_owner_sl: Address,
+    // Bridgehub contract instance (test-local interface)
+    pub bridgehub: interfaces::Bridgehub::BridgehubInstance<NodeProvider>,
+    // Bridgehub owner address
+    pub bridgehub_owner: Address,
     // CTM contract on L1
-    pub ctm_l1: interfaces::ChainTypeManager::ChainTypeManagerInstance<NodeProvider>,
-    // CTM owner address on L1
-    pub ctm_owner_l1: Address,
+    pub ctm: interfaces::ChainTypeManager::ChainTypeManagerInstance<NodeProvider>,
+    // CTM owner address
+    pub ctm_owner: Address,
     // L1 chain admin contract
     pub l1_chain_admin: interfaces::ChainAdmin::ChainAdminInstance<NodeProvider>,
     // L1 chain admin owner address
     pub l1_chain_admin_owner: Address,
     // Server notifier contract on L1
     pub l1_server_notifier: interfaces::ServerNotifier::ServerNotifierInstance<NodeProvider>,
-    // Diamond proxy on the settlement layer
-    pub diamond_proxy_sl: interfaces::ZkChain::ZkChainInstance<NodeProvider>,
-    // Diamond proxy owner address
-    pub diamond_proxy_admin_sl: Address,
+    // Diamond proxy on L1
+    pub diamond_proxy: interfaces::ZkChain::ZkChainInstance<NodeProvider>,
+    // Diamond proxy admin address
+    pub diamond_proxy_admin: Address,
     // Bytecode supplier contract
     pub bytecode_supplier: interfaces::BytecodesSupplier::BytecodesSupplierInstance<NodeProvider>,
     // L2 chain id
@@ -146,7 +142,7 @@ impl<'a> UpgradeTester<'a> {
                 .l2_provider
                 .send_transaction(
                     TransactionRequest::default()
-                        .with_to(self.bridgehub_owner_sl) // Random address
+                        .with_to(self.bridgehub_owner) // Random address
                         .with_value(U256::from(1u64)),
                 )
                 .await?
@@ -177,41 +173,27 @@ impl<'a> UpgradeTester<'a> {
             .expect("Chain id is missing in the config");
 
         let bridgehub_address_l1 = tester.l2_zk_provider.get_bridgehub_contract().await?;
-        let l1_state = L1State::fetch(
-            tester.l1_provider().clone(),
-            None,
-            bridgehub_address_l1,
-            chain_id,
-        )
-        .await?;
-        let bridgehub_sl = interfaces::Bridgehub::new(
-            *l1_state.bridgehub_sl.address(),
+        let l1_state =
+            L1State::fetch(tester.l1_provider().clone(), bridgehub_address_l1, chain_id).await?;
+        let bridgehub = interfaces::Bridgehub::new(
+            *l1_state.bridgehub_l1.address(),
             tester.l1_provider().clone(),
         );
-        let bridgehub_owner_sl = bridgehub_sl.owner().call().await?;
+        let bridgehub_owner = bridgehub.owner().call().await?;
 
-        let ctm_sl_address = l1_state.bridgehub_sl.chain_type_manager_address().await?;
-        let ctm_sl =
-            interfaces::ChainTypeManager::new(ctm_sl_address, tester.l1_provider().clone());
-        let raw_protocol_version = ctm_sl
-            .getProtocolVersion(U256::from(chain_id))
-            .call()
-            .await?;
+        let ctm_address = l1_state.bridgehub_l1.chain_type_manager_address().await?;
+        let ctm = interfaces::ChainTypeManager::new(ctm_address, tester.l1_provider().clone());
+        let raw_protocol_version = ctm.getProtocolVersion(U256::from(chain_id)).call().await?;
         let protocol_version = ProtocolSemanticVersion::try_from(raw_protocol_version)
             .expect("invalid protocol version stored in CTM");
-        let ctm_owner_sl = ctm_sl.owner().call().await?;
+        let ctm_owner = ctm.owner().call().await?;
 
-        let diamond_proxy_sl = l1_state.bridgehub_sl.zk_chain().await?;
-        let diamond_proxy_sl =
-            interfaces::ZkChain::new(*diamond_proxy_sl.address(), tester.l1_provider().clone());
-        let diamond_proxy_admin_sl = diamond_proxy_sl.getAdmin().call().await?;
+        let diamond_proxy = l1_state.bridgehub_l1.zk_chain().await?;
+        let diamond_proxy =
+            interfaces::ZkChain::new(*diamond_proxy.address(), tester.l1_provider().clone());
+        let diamond_proxy_admin = diamond_proxy.getAdmin().call().await?;
 
-        let diamond_proxy_l1 = l1_state.bridgehub_l1.zk_chain().await?;
-        let l1_chain_admin =
-            interfaces::ZkChain::new(*diamond_proxy_l1.address(), tester.l1_provider().clone())
-                .getAdmin()
-                .call()
-                .await?;
+        let l1_chain_admin = diamond_proxy.getAdmin().call().await?;
         let l1_chain_admin =
             interfaces::ChainAdmin::new(l1_chain_admin, tester.l1_provider().clone());
 
@@ -220,18 +202,14 @@ impl<'a> UpgradeTester<'a> {
         // Fetch the BytecodesSupplier address from the L1 ChainTypeManager,
         // where it is stored as an immutable `L1_BYTECODES_SUPPLIER`.
         // Falls back to the config address for pre-v31 deployments that don't expose this getter.
-        let ctm_l1_address = l1_state.bridgehub_l1.chain_type_manager_address().await?;
-        let ctm_l1 =
-            interfaces::ChainTypeManager::new(ctm_l1_address, tester.l1_provider().clone());
-        let ctm_owner_l1 = ctm_l1.owner().call().await?;
         let l1_server_notifier = interfaces::ServerNotifier::new(
-            ctm_l1.serverNotifierAddress().call().await?,
+            ctm.serverNotifierAddress().call().await?,
             tester.l1_provider().clone(),
         );
-        let bytecode_supplier_address = match ctm_l1.L1_BYTECODES_SUPPLIER().call().await {
+        let bytecode_supplier_address = match ctm.L1_BYTECODES_SUPPLIER().call().await {
             Ok(addr) if addr != Address::ZERO => addr,
             Ok(_) => anyhow::bail!(
-                "L1 ChainTypeManager at {ctm_l1_address:?} returned zero BytecodesSupplier"
+                "L1 ChainTypeManager at {ctm_address:?} returned zero BytecodesSupplier"
             ),
             Err(_) => {
                 // Pre-v31 CTMs don't have this getter; fall back to config.
@@ -249,14 +227,12 @@ impl<'a> UpgradeTester<'a> {
         Ok(Self {
             tester,
             bridgehub_l1: l1_state.bridgehub_l1,
-            bridgehub_sl,
-            bridgehub_owner_sl,
-            ctm_sl,
-            ctm_owner_sl,
-            ctm_l1,
-            ctm_owner_l1,
-            diamond_proxy_sl,
-            diamond_proxy_admin_sl,
+            bridgehub,
+            bridgehub_owner,
+            ctm,
+            ctm_owner,
+            diamond_proxy,
+            diamond_proxy_admin,
             l1_chain_admin,
             l1_chain_admin_owner,
             l1_server_notifier,
@@ -270,10 +246,9 @@ impl<'a> UpgradeTester<'a> {
     async fn enable_impersonation(&self) -> anyhow::Result<()> {
         // Enable impersonation and fund all governance accounts
         for addr in [
-            self.bridgehub_owner_sl,
-            self.ctm_owner_sl,
-            self.ctm_owner_l1,
-            self.diamond_proxy_admin_sl,
+            self.bridgehub_owner,
+            self.ctm_owner,
+            self.diamond_proxy_admin,
             self.l1_chain_admin_owner,
         ] {
             self.tester
@@ -346,20 +321,20 @@ impl<'a> UpgradeTester<'a> {
 
     pub async fn pause_bridgehub_migrations(&self) -> anyhow::Result<()> {
         let pause_migration_tx = if self.tester.chain_layout.protocol_version().contains("v30") {
-            self.bridgehub_sl
+            self.bridgehub
                 .pauseMigration()
                 .into_transaction_request()
-                .with_from(self.bridgehub_owner_sl)
+                .with_from(self.bridgehub_owner)
         } else {
-            let chain_asset_handler = self.bridgehub_sl.chainAssetHandler().call().await?;
+            let chain_asset_handler = self.bridgehub.chainAssetHandler().call().await?;
             let chain_asset_handler = ChainAssetHandlerBaseInstance::new(
                 chain_asset_handler,
-                self.bridgehub_sl.provider().clone(),
+                self.bridgehub.provider().clone(),
             );
             chain_asset_handler
                 .pauseMigration()
                 .into_transaction_request()
-                .with_from(self.bridgehub_owner_sl)
+                .with_from(self.bridgehub_owner)
         };
         self.send_impersonated_transaction(pause_migration_tx)
             .await?;
@@ -429,10 +404,8 @@ impl<'a> UpgradeTester<'a> {
         new_version: U256,
     ) -> anyhow::Result<()> {
         let tx = if self.tester.chain_layout.protocol_version().contains("v30") {
-            let ctm = ChainTypeManagerV30Instance::new(
-                *self.ctm_sl.address(),
-                self.ctm_sl.provider().clone(),
-            );
+            let ctm =
+                ChainTypeManagerV30Instance::new(*self.ctm.address(), self.ctm.provider().clone());
             ctm.setNewVersionUpgrade(
                 upgrade_data,
                 self.protocol_version
@@ -442,10 +415,10 @@ impl<'a> UpgradeTester<'a> {
                 new_version,
             )
             .into_transaction_request()
-            .with_from(self.ctm_owner_sl)
+            .with_from(self.ctm_owner)
         } else {
-            let verifier = self.diamond_proxy_sl.getVerifier().call().await?;
-            self.ctm_sl
+            let verifier = self.diamond_proxy.getVerifier().call().await?;
+            self.ctm
                 .setNewVersionUpgrade(
                     upgrade_data,
                     self.protocol_version
@@ -456,7 +429,7 @@ impl<'a> UpgradeTester<'a> {
                     verifier,
                 )
                 .into_transaction_request()
-                .with_from(self.ctm_owner_sl)
+                .with_from(self.ctm_owner)
         };
         self.send_impersonated_transaction(tx).await?;
         Ok(())
@@ -507,8 +480,8 @@ impl<'a> UpgradeTester<'a> {
     ) -> anyhow::Result<()> {
         let tx = if self.tester.chain_layout.protocol_version().contains("v30") {
             let zk_chain = ZkChainV30Instance::new(
-                *self.diamond_proxy_sl.address(),
-                self.diamond_proxy_sl.provider().clone(),
+                *self.diamond_proxy.address(),
+                self.diamond_proxy.provider().clone(),
             );
             zk_chain
                 .upgradeChainFromVersion(
@@ -518,9 +491,9 @@ impl<'a> UpgradeTester<'a> {
                     upgrade_data,
                 )
                 .into_transaction_request()
-                .with_from(self.diamond_proxy_admin_sl)
+                .with_from(self.diamond_proxy_admin)
         } else {
-            self.diamond_proxy_sl
+            self.diamond_proxy
                 .upgradeChainFromVersion(
                     Address::ZERO, // not used
                     self.protocol_version
@@ -529,7 +502,7 @@ impl<'a> UpgradeTester<'a> {
                     upgrade_data,
                 )
                 .into_transaction_request()
-                .with_from(self.diamond_proxy_admin_sl)
+                .with_from(self.diamond_proxy_admin)
         };
         self.send_impersonated_transaction(tx).await?;
         Ok(())

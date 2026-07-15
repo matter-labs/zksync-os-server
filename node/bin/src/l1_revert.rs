@@ -42,7 +42,7 @@ async fn derive_last_l1_batch_to_keep(
     );
 
     let fetch_committed = |batch: u64| async move {
-        fetch_live_committed_batch(&l1_state.diamond_proxy_sl, batch)
+        fetch_live_committed_batch(&l1_state.diamond_proxy_l1, batch)
             .await
             .map(|(batch_data, _commit_tx_hash)| batch_data)
             .with_context(|| format!("failed to fetch committed batch {batch} from L1"))
@@ -109,7 +109,7 @@ async fn perform_l1_revert(
         .await
         .context("failed to initialize `sequencer.rebuild.l1_reverter_sk`")?;
 
-    let validator_timelock = IValidatorTimelock::new(l1_state.validator_timelock_sl, l1_provider);
+    let validator_timelock = IValidatorTimelock::new(l1_state.validator_timelock, l1_provider);
     let reverter_role = validator_timelock.REVERTER_ROLE().call().await?;
     let has_reverter_role = validator_timelock
         .hasRoleForChainId(U256::from(chain_id), reverter_role, reverter_address)
@@ -125,13 +125,13 @@ async fn perform_l1_revert(
         current_last_committed_batch = l1_state.last_committed_batch,
         current_last_executed_batch = l1_state.last_executed_batch,
         reverter = %reverter_address,
-        validator_timelock = %l1_state.validator_timelock_sl,
+        validator_timelock = %l1_state.validator_timelock,
         "performing startup L1 revert"
     );
 
     let revert_tx = validator_timelock
         .revertBatchesSharedBridge(
-            *l1_state.diamond_proxy_sl.address(),
+            *l1_state.diamond_proxy_l1.address(),
             U256::from(plan.last_l1_batch_to_keep),
         )
         .from(reverter_address)
@@ -140,7 +140,7 @@ async fn perform_l1_revert(
         .with_context(|| {
             format!(
                 "failed to submit `revertBatchesSharedBridge` to validator timelock {}",
-                l1_state.validator_timelock_sl
+                l1_state.validator_timelock
             )
         })?;
 
@@ -162,14 +162,14 @@ async fn perform_l1_revert(
     );
 
     // Ensure L1 node returns the proper last committed batch number after the revert.
-    ensure_revert(&l1_state.diamond_proxy_sl, plan.last_l1_batch_to_keep).await?;
+    ensure_revert(&l1_state.diamond_proxy_l1, plan.last_l1_batch_to_keep).await?;
 
     Ok(())
 }
 
 /// Waits until the settlement layer reports a committed-batch count consistent with the revert.
 async fn ensure_revert(
-    diamond_proxy_sl: &ZkChain<NodeProvider>,
+    diamond_proxy_l1: &ZkChain<NodeProvider>,
     last_l1_batch_to_keep: u64,
 ) -> anyhow::Result<()> {
     const RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
@@ -177,7 +177,7 @@ async fn ensure_revert(
         .with_max_times(30);
 
     let observed = match (|| async {
-        let committed = diamond_proxy_sl
+        let committed = diamond_proxy_l1
             .get_total_batches_committed(BlockId::latest())
             .await
             .context("failed to read totalBatchesCommitted")?;
@@ -271,7 +271,7 @@ async fn plan_l1_revert(
             );
 
             let (_, on_chain_commit_tx_hash) =
-                fetch_live_committed_batch(&l1_state.diamond_proxy_sl, from_batch_number)
+                fetch_live_committed_batch(&l1_state.diamond_proxy_l1, from_batch_number)
                     .await
                     .context(
                         "failed to fetch on-chain commit tx hash for L1Revert from_batch_number",

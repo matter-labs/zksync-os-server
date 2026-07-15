@@ -34,9 +34,6 @@ pub struct BlockContextProvider<Subpool> {
     config: Config,
     last_block: Option<LastBlock>,
     next_interop_tx_allowed_after: Instant,
-    /// L2 chain id of the chain's currently-active settlement layer. Can change in runtime if there
-    /// is a migration in the process.
-    current_sl_chain_id: u64,
     last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
 }
 
@@ -65,22 +62,14 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         config: Config,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
-        let current_sl_chain_id = config.l1_chain_id;
         Self {
             fee_provider,
             pool,
             config,
             last_block: None,
             next_interop_tx_allowed_after: Instant::now(),
-            current_sl_chain_id,
             last_constructed_block_ctx_sender,
         }
-    }
-
-    /// `true` when the chain currently settles on a Gateway (i.e. its tracked SL chain id
-    /// differs from L1's).
-    fn settles_on_gateway(&self) -> bool {
-        self.current_sl_chain_id != self.config.l1_chain_id
     }
 
     pub fn last_block_number(&self) -> Option<u64> {
@@ -120,7 +109,10 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .pool
             .best_transactions_stream(
                 self.next_interop_tx_allowed_after,
-                self.settles_on_gateway(),
+                // Interop system txs only flowed under Gateway settlement; with Gateway removed
+                // this is constantly false. The upcoming L1-based interop will re-enable it.
+                /* include_interop_traffic */
+                false,
             )
             .await
             .context("mempool is closed")?;
@@ -169,7 +161,7 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
                 || previous_record.block_context.block_number == 0)
         {
             let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
-                self.current_sl_chain_id,
+                self.config.l1_chain_id,
                 // We use `u64::MAX` as a placeholder, since it is not an actual migration
                 u64::MAX,
             );
@@ -464,24 +456,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         if let Some(last_interop_log_id) = outcome.last_interop_log_id {
             self.next_interop_tx_allowed_after = Instant::now() + self.config.service_block_delay;
             next_cursors.interop_root_id = last_interop_log_id + 1;
-        }
-
-        if let Some(last_migration_number) = outcome.last_migration_number {
-            next_cursors.migration_number = last_migration_number + 1;
-        }
-        if let Some(target_sl_chain_id) = outcome.last_sl_chain_id_target {
-            // Subsequent produced blocks will gate interop traffic on the new value (in particular:
-            // stop including interop-root / interop-fee txs once we've migrated back to L1).
-            // Otherwise, we will end up with blocks/batches that must be committed to L1 but
-            // include interop txs which leads to `CommitBasedInteropNotSupported` revert.
-            if self.current_sl_chain_id != target_sl_chain_id {
-                tracing::info!(
-                    previous_sl_chain_id = self.current_sl_chain_id,
-                    new_sl_chain_id = target_sl_chain_id,
-                    "applied SetSLChainId tx; updating runtime settlement layer pointer"
-                );
-                self.current_sl_chain_id = target_sl_chain_id;
-            }
         }
         if let Some(last_interop_fee_number) = outcome.last_interop_fee_number {
             next_cursors.interop_fee_number = last_interop_fee_number + 1;
