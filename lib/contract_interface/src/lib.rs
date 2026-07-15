@@ -87,12 +87,6 @@ alloy::sol! {
         // Event that is being emmited by L1
         event AppendedChainRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 indexed chainRoot);
 
-        function addInteropRoot (
-            uint256 chainId,
-            uint256 blockOrBatchNumber,
-            bytes32[] calldata sides
-        );
-
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
 
         uint256 public interopRootLogId;
