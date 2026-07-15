@@ -1,10 +1,10 @@
 use alloy::network::EthereumWallet;
 use alloy::primitives::Address;
 use alloy::signers::Signer;
-use alloy::signers::gcp::GcpSigner;
 use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::utils::secret_key_to_address;
+use gcp::GcpKmsSigner;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
@@ -26,7 +26,7 @@ pub enum SignerConfig {
         /// `projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}`
         resource_name: String,
         /// Lazily-initialized GCP signer, shared across clones.
-        cached_signer: Arc<OnceCell<GcpSigner>>,
+        cached_signer: Arc<OnceCell<GcpKmsSigner>>,
     },
 }
 
@@ -55,7 +55,7 @@ impl SignerConfig {
     }
 
     /// Returns the cached GCP signer, creating it on first call.
-    async fn get_gcp_signer(&self) -> anyhow::Result<&GcpSigner> {
+    async fn get_gcp_signer(&self) -> anyhow::Result<&GcpKmsSigner> {
         match self {
             Self::GcpKms {
                 resource_name,
