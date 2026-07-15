@@ -1,6 +1,6 @@
 # Single Chain (v31.0)
 
-Default single-chain configuration for running ZKsync OS against L1 for protocol version v31.0.
+Default single-chain configuration for running ZKsync OS directly against L1 for protocol version v31.0.
 
 ## Chains
 
@@ -8,9 +8,9 @@ Default single-chain configuration for running ZKsync OS against L1 for protocol
 |-------------------|----------|----------|
 | `config.yaml`     | 506      | 3050     |
 
-The chain starts from a pre-baked node database (`db.tar.gz`, unpacked into a temporary
-directory via `general.ephemeral_state`) because the L1 state already contains batches
-committed by the node run that produced these fixtures.
+The ecosystem and chain were deployed with `zk-deployer`; no Gateway chain or Gateway
+database is involved. The node initializes its database from genesis on first start and
+processes the priority transactions already present in the L1 state.
 
 ## Quick Start
 
@@ -29,4 +29,4 @@ For contract addresses, please refer to `genesis` section of the [config.yaml](.
 
 ## Versions
 
-For information about how this config was created, check [version.yaml](../versions.yaml) file.
+For information about how this config was created, check [versions.yaml](../versions.yaml).
