@@ -271,6 +271,7 @@ where
                 MainNodeProtocolConfig {
                     accepted_verifier_signers: accepted_verifier_signers(),
                     verify_result_tx: verify_result_tx.clone(),
+                    verification: None,
                 },
                 zks_state,
                 connection_registry,
@@ -279,6 +280,7 @@ where
                 MainNode2faConfig {
                     accepted_verifier_signers: accepted_verifier_signers(),
                     verify_result_tx,
+                    verification: None,
                 },
                 twofa_state,
                 zks_2fa_registry,

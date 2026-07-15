@@ -4,6 +4,7 @@ use crate::prover_tester::ProverTester;
 use crate::provider::ZksyncTestingProvider;
 use crate::rpc_recorder::{HttpRpcRecorder, RpcRecordConfig};
 use crate::test_config::{build_node_config, disable_prover_input_generation};
+use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, B256, U256};
 use alloy::providers::utils::Eip1559Estimator;
@@ -247,10 +248,10 @@ pub struct StoppedTester {
 /// database directory, the L1 handle and the config all survive the refusal,
 /// so [`Self::restore`] puts a working `StoppedTester` back together.
 ///
-/// Port reservations are released by the failed launch and re-acquired from
-/// the (unchanged) config on restore. Supporting nodes owned by the failed
-/// launch are shut down by its drop and are not restored — expected-refusal
-/// starts are for plain clusters, which own none.
+/// The previously bound server ports are carried through so a successful start
+/// after the refusal pins the same HTTP ports a plain restart would. Supporting
+/// nodes owned by the failed launch are shut down by its drop and are not
+/// restored — expected-refusal starts are for plain clusters, which own none.
 #[derive(Debug)]
 pub struct StoppedTesterBackup {
     l1: AnvilL1,

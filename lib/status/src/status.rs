@@ -1,8 +1,8 @@
-use crate::consensus::{ConsensusStatus, ConsensusStatusSource};
+use crate::AppState;
+use crate::consensus::ConsensusStatus;
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct StatusResponse {
@@ -12,11 +12,13 @@ pub struct StatusResponse {
     pub consensus: Option<ConsensusStatus>,
 }
 
-pub(crate) async fn status(
-    State(consensus): State<Arc<Option<ConsensusStatusSource>>>,
-) -> Json<StatusResponse> {
+pub(crate) async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     Json(StatusResponse {
         healthy: true,
-        consensus: consensus.as_ref().as_ref().map(|source| source.snapshot()),
+        consensus: state
+            .consensus
+            .as_ref()
+            .as_ref()
+            .map(|source| source.snapshot()),
     })
 }

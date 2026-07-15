@@ -116,9 +116,10 @@ impl MultiNodeTester {
 
         // Every validator's zks-network identity, decided up front so each
         // node's boot list can name all the others. The port reservations are
-        // released just before launch; the launching testers re-acquire them
-        // (the window is tolerated the same way single-node tests tolerate
-        // port churn — a loud launch failure, never silent misbehavior).
+        // released just before launch; the nodes then bind those concrete
+        // ports themselves (the unlocked window is tolerated the same way
+        // single-node tests tolerate port churn — a loud launch failure,
+        // never silent misbehavior).
         let mut network_ports = Vec::with_capacity(num_validators);
         for _ in 0..num_validators {
             network_ports.push(crate::utils::LockedPort::acquire_unused().await?);
@@ -140,11 +141,11 @@ impl MultiNodeTester {
             })
             .collect();
         let network_port_numbers: Vec<u16> = network_ports.iter().map(|port| port.port).collect();
-        // Release the reservations before launching: each tester re-locks its
-        // own port at launch, and a *restarting* validator (promotion flips)
-        // must be able to re-acquire it too — a cluster-held lock would
-        // deadlock exactly there. The unlocked window is the same one every
-        // single-node test tolerates.
+        // Release the reservations before launching: the nodes bind the
+        // concrete ports written into their configs (a pre-set network
+        // identity survives `bind_runtime_config`), and a restarting
+        // validator rebinds its configured port after waiting for the
+        // previous incarnation's listener to be released.
         drop(network_ports);
 
         // Per-validator verifier identities; the allow-list every settler

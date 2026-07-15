@@ -36,7 +36,12 @@ async fn fetch_committed_batch(
     batch_number: u64,
 ) -> anyhow::Result<(B256, u64, u64)> {
     let l1_state = fetch_l1_state(tester).await?;
-    let (batch, _) = fetch_live_committed_batch(&l1_state.diamond_proxy_sl, batch_number).await?;
+    let (batch, _) = fetch_live_committed_batch(
+        &l1_state.diamond_proxy_sl,
+        batch_number,
+        tester.config().l1_watcher_config.max_blocks_to_process,
+    )
+    .await?;
     Ok((
         batch.batch_info.hash(),
         batch.first_block_number(),
@@ -55,8 +60,12 @@ pub(crate) async fn fetch_on_chain_batch_commit_tx_hash(
     batch_number: u64,
 ) -> anyhow::Result<B256> {
     let l1_state = fetch_l1_state(tester).await?;
-    let (_, commit_tx_hash) =
-        fetch_live_committed_batch(&l1_state.diamond_proxy_sl, batch_number).await?;
+    let (_, commit_tx_hash) = fetch_live_committed_batch(
+        &l1_state.diamond_proxy_sl,
+        batch_number,
+        tester.config().l1_watcher_config.max_blocks_to_process,
+    )
+    .await?;
     Ok(commit_tx_hash)
 }
 

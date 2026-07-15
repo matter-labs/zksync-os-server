@@ -52,6 +52,7 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
 
         let provider = zk_chain.provider().clone();
         let address = (*zk_chain.address()).into();
+        let max_blocks_to_process = config.max_blocks_to_process;
 
         let resolve_start = move |()| async move {
             let last_committed_batch = finality.get_finality_status().last_committed_batch;
@@ -62,9 +63,13 @@ impl<Finality: WriteFinality> L1CommitWatcher<Finality> {
             {
                 Some(block) => block,
                 None => {
-                    util::find_l1_commit_block_by_batch_number(&zk_chain, last_committed_batch)
-                        .await?
-                        .0
+                    util::find_l1_commit_block_by_batch_number(
+                        &zk_chain,
+                        last_committed_batch,
+                        max_blocks_to_process,
+                    )
+                    .await?
+                    .0
                 }
             };
             tracing::info!(last_committed_batch, last_l1_block, "resolved on L1");

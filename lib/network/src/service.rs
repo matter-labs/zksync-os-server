@@ -491,6 +491,16 @@ impl NetworkService {
         let twofa_config = MainNode2faConfig {
             accepted_verifier_signers: protocol.accepted_verifier_signers.clone(),
             verify_result_tx: protocol.verify_result_tx.clone(),
+            // A committee validator's own verifier half rides the same `zks_2fa`
+            // session it collects signatures on (see `MainNode2faConfig`).
+            verification: protocol
+                .verification
+                .as_ref()
+                .map(|verifier| ExternalNode2faConfig {
+                    signing_key: verifier.signing_key.clone(),
+                    verify_batch_tx: verifier.verify_batch_tx.clone(),
+                    outgoing_verify_results: verifier.outgoing_verify_results.clone(),
+                }),
         };
         let twofa_state =
             HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS, trusted_peers);

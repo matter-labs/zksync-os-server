@@ -370,7 +370,8 @@ To enable it, on **every validator**:
 
 - `network.enabled = true`, with a stable `network.secret_key` and
   `network.boot_nodes` listing the other validators — the committee meshes on
-  the zks network, and batch-verification traffic rides those sessions.
+  the devp2p network, and batch-verification traffic rides those connections
+  (the `zks_2fa` subprotocol, multiplexed beside the replay-serving `zks` one).
   Whoever currently settles collects from its own peers, so the verifier set
   follows a settlement failover with no reconfiguration.
 - `batch_verification.client_enabled = true` with a per-validator

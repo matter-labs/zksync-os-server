@@ -16552,6 +16552,7 @@ dependencies = [
  "commonware-codec",
  "commonware-cryptography",
  "flate2",
+ "fs2",
  "futures",
  "httpmock",
  "rand 0.8.7",
