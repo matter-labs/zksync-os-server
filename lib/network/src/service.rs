@@ -19,7 +19,6 @@ use futures::future::join_all;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
 use reth_discv5::discv5;
 use reth_eth_wire::HelloMessageWithProtocols;
-use reth_net_nat::NatResolver;
 use reth_network::error::NetworkError;
 use reth_network::types::peers::config::PeerBackoffDurations;
 use reth_network::{
@@ -329,14 +328,6 @@ impl NetworkService {
         // are captured. This must happen before `NetworkManager::builder()` because that is where
         // reth initializes its metric handles (via `Default::default()` on each metrics struct).
         crate::metrics::install_recorder();
-        match NatResolver::Any.external_addr().await {
-            None => {
-                tracing::info!("could not resolve external IP (STUN)");
-            }
-            Some(ip) => {
-                tracing::info!(%ip, "resolved external IP (STUN)");
-            }
-        };
         let rlpx_address = SocketAddr::new(IpAddr::V4(config.address), config.port);
         let configured_port = config.port;
         let discv5_listen_config = discv5::ListenConfig::Ipv4 {
