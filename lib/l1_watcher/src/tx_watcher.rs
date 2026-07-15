@@ -44,7 +44,7 @@ impl L1TxWatcher {
 
         let resolve_start = move |next_l1_priority_id: u64| async move {
             let next_l1_block =
-                find_l1_block_by_priority_id(zk_chain_l1.clone(), next_l1_priority_id).await?;
+                find_l1_block_by_priority_id(&zk_chain_l1, next_l1_priority_id).await?;
             tracing::info!(next_l1_block, "resolved on L1");
             let processor = Self {
                 next_l1_priority_id,
@@ -60,15 +60,17 @@ impl L1TxWatcher {
 }
 
 async fn find_l1_block_by_priority_id(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: &ZkChain<NodeProvider>,
     next_l1_priority_id: u64,
 ) -> anyhow::Result<BlockNumber> {
     let deployment_block = zk_chain.deployment_block().await?;
     util::find_l1_block_by_predicate(
-        Arc::new(zk_chain),
+        zk_chain.provider(),
         deployment_block,
-        move |zk, block| async move {
-            let res = zk.get_total_priority_txs_at_block(block.into()).await?;
+        move |block| async move {
+            let res = zk_chain
+                .get_total_priority_txs_at_block(block.into())
+                .await?;
             Ok(res >= next_l1_priority_id)
         },
     )
