@@ -103,11 +103,23 @@ pub(super) async fn run_mn_connection<P: ZksProtocolVersionSpec, Replay: ReadRep
         .max_blocks_per_message
         .unwrap_or(1)
         .clamp(1, MAX_BLOCKS_PER_MESSAGE) as usize;
+    // Overrides let a debugging EN sync reverted records that are stored under non-canonical
+    // db keys (see `en_replay_record_overrides` config).
+    let db_key_overrides: HashMap<_, _> = request
+        .record_overrides
+        .into_iter()
+        .map(|record_override| {
+            (
+                record_override.block_number,
+                record_override.db_key.to_vec(),
+            )
+        })
+        .collect();
 
     // Stream records to the EN indefinitely.
     let mut stream = replay
         .clone()
-        .stream_from_forever(request.starting_block, HashMap::new());
+        .stream_from_forever(request.starting_block, db_key_overrides);
     loop {
         tokio::select! {
             // Biased because first branch always leads to early return. Makes sense to check it
