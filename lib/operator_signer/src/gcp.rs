@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::Duration;
 
 use alloy::{
     consensus::SignableTransaction,
@@ -26,6 +27,10 @@ use k256::{
 
 /// Total number of attempts, including the initial request, for transient KMS failures.
 const KMS_RETRY_ATTEMPTS: u32 = 4;
+
+/// Per-attempt request timeout. The SDK sets no timeout by default, so without this a
+/// stalled connection would hang a sign call (and the l1_sender pipeline) indefinitely.
+const KMS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 struct KmsRetryPolicy;
@@ -213,6 +218,7 @@ impl TxSigner<Signature> for GcpKmsSigner {
 pub(crate) async fn create_gcp_signer(resource_name: &str) -> anyhow::Result<GcpKmsSigner> {
     let client = KeyManagementService::builder()
         .with_retry_policy(kms_retry_policy())
+        .with_attempt_timeout(KMS_ATTEMPT_TIMEOUT)
         .build()
         .await
         .context("failed to create GCP KMS client using Application Default Credentials")?;
