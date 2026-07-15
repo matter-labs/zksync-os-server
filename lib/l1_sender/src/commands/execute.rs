@@ -80,7 +80,7 @@ impl Display for ExecuteCommand {
 }
 
 impl ExecuteCommand {
-    fn to_calldata_suffix(&self, operator: &Address) -> Vec<u8> {
+    fn to_calldata_suffix(&self, _operator: &Address) -> Vec<u8> {
         let stored_batch_infos = self
             .batches
             .iter()
@@ -105,24 +105,19 @@ impl ExecuteCommand {
             .minor;
         let encoded_data: Vec<u8> = match protocol_version_minor {
             29 | 30 => (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
+            // The atomic-interop contracts (chains on this branch still report protocol
+            // version 0.31.x) read `abi.decode(data, (DecodedExecuteData))`: one struct-typed
+            // parameter after the version byte (an extra offset word around the old tuple).
+            // The gateway-only fields of the released v31 flat 8-tuple wire (logs, messages,
+            // multichain roots, IMT roots, settlement fee payer) were dropped from the struct:
+            // only L1 settlement is supported here.
             31 | 32 => {
-                // Batch logs / messages / multichain roots / IMT boundary roots are only relayed
-                // when executing on a Gateway; when settling on L1 they are always empty.
-                let logs: Vec<Vec<IExecutor::L2Log>> = Vec::new();
-                let messages: Vec<Vec<Vec<u8>>> = Vec::new();
-                let multichain_roots: Vec<B256> = Vec::new();
-                let imt_roots: Vec<IExecutor::BatchImtRoots> = Vec::new();
-                (
-                    stored_batch_infos,
-                    priority_ops,
-                    interop_roots,
-                    logs,
-                    messages,
-                    multichain_roots,
-                    imt_roots,
-                    operator,
-                )
-                    .abi_encode_params()
+                let decoded = IExecutor::DecodedExecuteData {
+                    batchesData: stored_batch_infos,
+                    priorityOpsData: priority_ops,
+                    dependencyRoots: interop_roots,
+                };
+                (decoded,).abi_encode_params()
             }
             _ => panic!("Unsupported protocol version: {}", protocol_version_minor),
         };

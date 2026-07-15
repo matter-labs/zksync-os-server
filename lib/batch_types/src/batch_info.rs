@@ -89,11 +89,14 @@ impl PendingBatchInfo {
 
                         if let Some(roots) = envelope.interop_roots() {
                             for root in roots {
+                                // Mirrors `ExecutorFacet._verifyDependencyInteropRoots`:
+                                // keccak(prev || chainId || blockOrBatchNumber || timestamp || sides).
                                 dependency_roots_rolling_hash = keccak256(
                                     (
                                         dependency_roots_rolling_hash,
                                         root.chainId,
                                         root.blockOrBatchNumber,
+                                        root.timestamp,
                                         root.sides,
                                     )
                                         .abi_encode_packed(),
