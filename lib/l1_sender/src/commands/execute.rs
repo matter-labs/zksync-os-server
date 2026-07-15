@@ -103,8 +103,11 @@ impl ExecuteCommand {
             .batch_info
             .protocol_version
             .minor;
-        let encoded_data: Vec<u8> = match protocol_version_minor {
-            29 | 30 => (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
+        let (encoding_version, encoded_data): (u8, Vec<u8>) = match protocol_version_minor {
+            29 | 30 => (
+                1,
+                (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
+            ),
             // The atomic-interop contracts (chains on this branch still report protocol
             // version 0.31.x) read `abi.decode(data, (DecodedExecuteData))`: one struct-typed
             // parameter after the version byte (an extra offset word around the old tuple).
@@ -117,17 +120,14 @@ impl ExecuteCommand {
                     priorityOpsData: priority_ops,
                     dependencyRoots: interop_roots,
                 };
-                (decoded,).abi_encode_params()
+                // The struct wire is a breaking re-encoding of the v31 flat tuple, so it carries
+                // its own version byte (`BatchDecoder.SUPPORTED_ENCODING_VERSION_EXECUTE`).
+                (2, (decoded,).abi_encode_params())
             }
             _ => panic!("Unsupported protocol version: {}", protocol_version_minor),
         };
 
-        /// Current commitment encoding version as per protocol.
-        const SUPPORTED_ENCODING_VERSION: u8 = 1;
-
-        // Prefixed by current encoding version as expected by protocol
-        [vec![SUPPORTED_ENCODING_VERSION], encoded_data]
-            .concat()
-            .to_vec()
+        // Prefixed by the encoding version expected by the protocol for this wire format.
+        [vec![encoding_version], encoded_data].concat().to_vec()
     }
 }
