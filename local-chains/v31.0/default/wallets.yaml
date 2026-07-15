@@ -1,24 +1,26 @@
-deployer:
-  address: 0x49f8f7060f88d53e07e333203bc2a93d503fc00a
-  private_key: 0x74ac9c92fcd131c671e8df8a3a1994a41afec0455300d43434b6dc3c1f03baaf
-operator:
-  address: 0x5af9fd4853d5cee88f3c9299e0b8b4161848f9c1
-  private_key: 0x08a27663700ad65b1776ff4633722dfb26350c3d71184d54967eee15c9273fd5
-blob_operator:
-  address: 0x870bd2162968f9fbaac9fa762a2a7332e13c3eb6
-  private_key: 0x585c342c5fedeca375e5b411c5bc0ff38e7d15d8f208cbc1b46a136bb22fc1a7
-prove_operator:
-  address: 0xbeba7ffdeee0fe60e4d24a11b244f4ce8c91173c
-  private_key: 0xe184c1d40d6b7594ecd38c8b6a1fbfdaedb24d87dbb4964a9e61a2f687e853d3
-execute_operator:
-  address: 0xbcf171d4574169d02730a496b2128b85efda6430
-  private_key: 0xd06b7600f430a14e19edcb6342b97769a62379b1b32bf5353ca7ebc325839cb0
-fee_account:
-  address: 0xeb708b1235cf636382f643028b212c794da585b2
-  private_key: 0x75f45584e9f5a7523476d8b69d91b6cdf2fb01f2c55b0868e4a2e65e22ca5850
-governor:
-  address: 0x9dba85cc32e8a90da108f92170a32257515bdb63
-  private_key: 0xf8bf07344543c1e8f08efdd4f94e39184636d3891df5e7e181bfea1d467b273d
-token_multiplier_setter:
-  address: 0x26ffd45ce17ebb3e8d3c7c60c46cd011134c36dd
-  private_key: 0xde2821ed87ab8165d99952c0f8819a39155529b5aaf22890b1d57e587e8163f9
+ecosystem:
+  owner:
+    address: '0x4e34f5dbea655878ec014490da4a6f058e7560be'
+    private_key: '0x75462ff7ed52f4c25b9d8decc77fd09261fadc980431273430a742eb273e180d'
+  governor:
+    address: '0xe9addbf6b066cfc7a795ae70906732de8587a5f2'
+    private_key: '0x48054490c4bca150ea9fa5de5ec2be3142fa1c4ededc0c9885c490837e4bffd8'
+  token_multiplier_setter:
+    address: '0x1c8547ee9940f4b0e8d05e89fed21dcbe34bde24'
+    private_key: '0x8aed91641b9723ed151683225cb6f77822e5efb1302b20fae28c794385c79d93'
+506:
+  owner:
+    address: '0x7516d4b6e1c6a342772735071c5e4806a6dcb14b'
+    private_key: '0x17c15e218e597be033bed93a4b051dfe42400a06cc568216125085b667fbed40'
+  fee_account:
+    address: '0x77a26c5474bb15be3f92f58cbed81c2434f854fd'
+    private_key: '0xcfbe81c59488b8010194470d59df6d1036094099c1c71042775376e50a3e365b'
+  operator_commit_sk:
+    address: '0xc5178628efdf82c5821109dd19d48f0412531a9c'
+    private_key: '0xc78123547577c67de697c0e80911cb913d2be569d182ed2d42bd7cd30851948c'
+  operator_prove_sk:
+    address: '0x4fe99c3a871960be8aa243aa7ccab16e0ef30e8d'
+    private_key: '0x1ed8abac5f8143e0f37cc4da4655cb14c82473c1254da12683956749b0cca5bd'
+  operator_execute_sk:
+    address: '0xde4603bcef5d32e13f98309592a77502c48fd107'
+    private_key: '0x7a2f70531f7ba8a79e74c2be455eb7dfa0526f2e802ab9d7132959f040acafc5'
