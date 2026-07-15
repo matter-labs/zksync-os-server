@@ -283,7 +283,6 @@ impl<T: L2Subpool> Pool<T> {
         let mut interop_txs = Vec::new();
         let mut interop_fee_txs = Vec::new();
         let mut l1_transactions = Vec::new();
-        let mut l2_transactions = Vec::new();
         for tx in &replay_record.transactions {
             match tx.envelope() {
                 ZkEnvelope::System(system_tx) => match system_tx.system_subtype() {
@@ -301,12 +300,10 @@ impl<T: L2Subpool> Pool<T> {
                 ZkEnvelope::L1(l1_tx) => {
                     l1_transactions.push(l1_tx);
                 }
-                ZkEnvelope::L2(l2_tx) => {
-                    l2_transactions.push(*l2_tx.hash());
-                }
                 ZkEnvelope::Upgrade(upgrade) => {
                     upgrade_txs.push(upgrade);
                 }
+                ZkEnvelope::L2(_) => {}
             }
         }
         self.upgrade_subpool
@@ -325,6 +322,31 @@ impl<T: L2Subpool> Pool<T> {
             .on_canonical_state_change(l1_transactions)
             .await;
 
+        self.notify_l2_canonical_state_change(header, account_diffs, replay_record);
+
+        StateChangeOutcome {
+            last_interop_log_id,
+            last_l1_priority_id,
+            last_interop_fee_number,
+        }
+    }
+
+    /// Notifies the L2 subpool of a newly committed block: evicts mined transactions
+    /// and updates account nonces/balances. Does not touch L1-fed subpools.
+    pub fn notify_l2_canonical_state_change(
+        &self,
+        header: Sealed<Header>,
+        account_diffs: &[AccountDiff],
+        replay_record: &ReplayRecord,
+    ) {
+        let l2_transactions: Vec<TxHash> = replay_record
+            .transactions
+            .iter()
+            .filter_map(|tx| match tx.envelope() {
+                ZkEnvelope::L2(l2_tx) => Some(*l2_tx.hash()),
+                _ => None,
+            })
+            .collect();
         let (header, hash) = header.into_parts();
         let body = BlockBody::default();
         let block = Block::new(header, body);
@@ -347,12 +369,6 @@ impl<T: L2Subpool> Pool<T> {
                 mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
-
-        StateChangeOutcome {
-            last_interop_log_id,
-            last_l1_priority_id,
-            last_interop_fee_number,
-        }
     }
 }
 

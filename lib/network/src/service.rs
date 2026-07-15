@@ -1,7 +1,7 @@
 use crate::config::NetworkConfig;
 use crate::protocol::{
     ConnectionRegistry, ExternalNodeProtocolConfig, HandlerSharedState, MainNodeProtocolConfig,
-    ProtocolEvent, ZksProtocolConfig, ZksProtocolHandler,
+    ProtocolEvent, UpstreamGuard, ZksProtocolConfig, ZksProtocolHandler,
 };
 use crate::raft::protocol::RaftProtocolHandler;
 use crate::session::PeerSessionStore;
@@ -571,28 +571,36 @@ impl NetworkService {
                 verify_batch_tx: verifier.verify_batch_tx,
                 outgoing_verify_results: verifier.outgoing_verify_results,
             });
+
+        // One shared guard for all four version handlers: an EN consumes from at most one upstream
+        // across every `zks` protocol version.
+        let upstream = UpstreamGuard::new();
         let builder = builder
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _>::for_external_node(
                 replay.clone(),
                 protocol.clone(),
+                upstream.clone(),
                 state.clone(),
                 connection_registry.clone(),
             ))
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV2, _>::for_external_node(
                 replay.clone(),
                 protocol.clone(),
+                upstream.clone(),
                 state.clone(),
                 connection_registry.clone(),
             ))
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV3, _>::for_external_node(
                 replay.clone(),
                 protocol.clone(),
+                upstream.clone(),
                 state.clone(),
                 connection_registry.clone(),
             ))
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV4, _>::for_external_node(
                 replay.clone(),
                 protocol.clone(),
+                upstream.clone(),
                 state.clone(),
                 connection_registry.clone(),
             ))
@@ -600,6 +608,7 @@ impl NetworkService {
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV5, _>::for_external_node(
                 replay,
                 protocol,
+                upstream,
                 state,
                 connection_registry,
             ));

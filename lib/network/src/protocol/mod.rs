@@ -7,6 +7,7 @@ mod events;
 mod handler;
 mod handler_shared_state;
 mod mn;
+mod upstream;
 
 pub use config::{
     ExternalNodeProtocolConfig, ExternalNodeVerifierConfig, MainNodeProtocolConfig,
@@ -17,6 +18,7 @@ pub(crate) use events::ConnectionRegistry;
 pub use events::{PeerConnectionHandle, ProtocolEvent};
 pub use handler::{ZksProtocolConnectionHandler, ZksProtocolHandler};
 pub use handler_shared_state::HandlerSharedState;
+pub use upstream::UpstreamGuard;
 
 /// Maximum number of replay records carried in a single `BlockReplays` message.
 const MAX_BLOCKS_PER_MESSAGE: u64 = 64;

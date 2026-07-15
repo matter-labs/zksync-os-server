@@ -15,7 +15,7 @@ use tokio::sync::{broadcast, mpsc};
 use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_network::protocol::{
     ExternalNodeProtocolConfig, ExternalNodeVerifierConfig, HandlerSharedState,
-    MainNodeProtocolConfig, ProtocolEvent, ZksProtocolHandler,
+    MainNodeProtocolConfig, ProtocolEvent, UpstreamGuard, ZksProtocolHandler,
 };
 use zksync_os_network::twofa::{ExternalNode2faConfig, MainNode2faConfig, Zks2faProtocolHandler};
 use zksync_os_network::version::{
@@ -210,7 +210,7 @@ where
                     InMemReplay(HashMap::from_iter(replays)),
                     MainNodeProtocolConfig {
                         accepted_verifier_signers: accepted_verifier_signers(),
-                        verify_result_tx,
+                        verify_result_tx: Some(verify_result_tx),
                     },
                     state,
                     connection_registry.clone(),
@@ -228,6 +228,7 @@ where
                         replay_sender: replay_tx,
                         verification,
                     },
+                    UpstreamGuard::new(),
                     state,
                     connection_registry.clone(),
                 ),
@@ -345,9 +346,13 @@ async fn send_replay_record_matching_version(version: ZksVersion) {
             false,
         );
 
-        // Spawn and connect all the peers
+        // EN dials MN so the EN's connection is outgoing (consume) and MN's is incoming (serve).
+        let mn_peer_id = net.peers()[0].peer_id();
+        let mn_peer_addr = net.peers()[0].local_addr();
         let handle = net.spawn();
-        handle.connect_peers().await;
+        handle.peers()[1]
+            .network()
+            .add_peer(mn_peer_id, mn_peer_addr);
 
         assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
             assert_eq!(peer_id, *handle.peers()[1].peer_id());
@@ -390,8 +395,12 @@ async fn emits_replay_session_events() {
         false,
     );
 
+    let mn_peer_id = net.peers()[0].peer_id();
+    let mn_peer_addr = net.peers()[0].local_addr();
     let handle = net.spawn();
-    handle.connect_peers().await;
+    handle.peers()[1]
+        .network()
+        .add_peer(mn_peer_id, mn_peer_addr);
 
     let peer1_id = *handle.peers()[1].peer_id();
     let mut saw_established = false;
@@ -461,8 +470,12 @@ async fn batches_multiple_replay_records_on_zks3() {
         false,
     );
 
+    let mn_peer_id = net.peers()[0].peer_id();
+    let mn_peer_addr = net.peers()[0].local_addr();
     let handle = net.spawn();
-    handle.connect_peers().await;
+    handle.peers()[1]
+        .network()
+        .add_peer(mn_peer_id, mn_peer_addr);
 
     let peer1_id = *handle.peers()[1].peer_id();
     let mut replay_blocks_sent = Vec::new();
@@ -520,8 +533,12 @@ async fn emits_verifier_role_request_event() {
         true,
     );
 
+    let mn_peer_id = net.peers()[0].peer_id();
+    let mn_peer_addr = net.peers()[0].local_addr();
     let handle = net.spawn();
-    handle.connect_peers().await;
+    handle.peers()[1]
+        .network()
+        .add_peer(mn_peer_id, mn_peer_addr);
 
     let peer1_id = *handle.peers()[1].peer_id();
     let mut saw_verifier_role_requested = false;
@@ -584,8 +601,12 @@ async fn authorizes_verifier_before_replay() {
         true,
     );
 
+    let mn_peer_id = net.peers()[0].peer_id();
+    let mn_peer_addr = net.peers()[0].local_addr();
     let handle = net.spawn();
-    handle.connect_peers().await;
+    handle.peers()[1]
+        .network()
+        .add_peer(mn_peer_id, mn_peer_addr);
 
     let peer1_id = *handle.peers()[1].peer_id();
     let mut saw_verifier_role_requested = false;
@@ -658,8 +679,12 @@ async fn emits_verifier_unauthorized_before_replay() {
         HashSet::new(),
     );
 
+    let mn_peer_id = net.peers()[0].peer_id();
+    let mn_peer_addr = net.peers()[0].local_addr();
     let handle = net.spawn();
-    handle.connect_peers().await;
+    handle.peers()[1]
+        .network()
+        .add_peer(mn_peer_id, mn_peer_addr);
 
     let peer1_id = *handle.peers()[1].peer_id();
     let mut saw_verifier_role_requested = false;
@@ -735,11 +760,13 @@ async fn forwards_verify_batch_result_to_main_node() {
         HashSet::new(),
     );
 
+    let main_peer_id = net.peers()[0].peer_id();
+    let external_peer_id = net.peers()[1].peer_id();
+    let mn_peer_addr = net.peers()[0].local_addr();
     let handle = net.spawn();
-    handle.connect_peers().await;
-
-    let main_peer_id = *handle.peers()[0].peer_id();
-    let external_peer_id = *handle.peers()[1].peer_id();
+    handle.peers()[1]
+        .network()
+        .add_peer(main_peer_id, mn_peer_addr);
     let mut saw_verifier_authorized = false;
     let mut saw_replay_requested = false;
 
@@ -833,9 +860,13 @@ async fn send_replay_record_different_versions(version: ZksVersion) {
                 false,
             );
 
-        // Spawn and connect all the peers
+        // EN dials MN so the EN's connection is outgoing (consume) and MN's is incoming (serve).
+        let mn_peer_id = net.peers()[0].peer_id();
+        let mn_peer_addr = net.peers()[0].local_addr();
         let handle = net.spawn();
-        handle.connect_peers().await;
+        handle.peers()[1]
+            .network()
+            .add_peer(mn_peer_id, mn_peer_addr);
 
         assert_matches!(from_peer0.recv().await, Some(ProtocolEvent::Established { peer_id, .. }) => {
             assert_eq!(peer_id, *handle.peers()[1].peer_id());
@@ -1087,4 +1118,171 @@ async fn zks_2fa_forwards_verify_batch_result_to_main_node() {
     .unwrap();
     assert_eq!(forwarded.peer_id, external_peer_id);
     assert_eq!(forwarded.message, result);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn replays_transitively_en_to_en() {
+    // MN(peer0) -> EN1(peer1) -> EN2(peer2). EN1 syncs from the MN and serves EN2 from its own
+    // store; EN2 must receive the MN's record transitively. Role is by sync state, not direction.
+    let mut net = Testnet::create_with(3, MockEthProvider::default()).await;
+    let record1 = dummy_record::<ZksProtocolV3>(1);
+
+    let (_from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::MainNode,
+        0,
+        [(1, record1.clone())],
+        100,
+        false,
+    );
+    // EN1's store is pre-populated so it can serve EN2.
+    let (_from_peer1, _replay_rx_peer1) = net.peers_mut()[1].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::ExternalNode,
+        1,
+        [(1, record1.clone())],
+        100,
+        false,
+    );
+    let (_from_peer2, mut replay_rx_peer2) = net.peers_mut()[2]
+        .add_zks_sub_protocol::<ZksProtocolV3>(NodeRole::ExternalNode, 1, [], 100, false);
+
+    let peer0_id = net.peers()[0].peer_id();
+    let peer0_addr = net.peers()[0].local_addr();
+    let peer1_id = net.peers()[1].peer_id();
+    let peer1_addr = net.peers()[1].local_addr();
+
+    let handle = net.spawn();
+    // EN1 <-> MN and EN2 <-> EN1.
+    handle.peers()[1].network().add_peer(peer0_id, peer0_addr);
+    handle.peers()[2].network().add_peer(peer1_id, peer1_addr);
+
+    let received = tokio::time::timeout(std::time::Duration::from_secs(10), replay_rx_peer2.recv())
+        .await
+        .expect("EN2 did not receive a replay record in time")
+        .expect("EN2 replay channel closed");
+    assert_eq!(received, record1);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn en_consumes_when_main_node_dials_it() {
+    // The MN dials the EN (incoming link on the EN). A direction-based design would make the EN
+    // serve and never sync; the sync-state machine must still consume.
+    let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
+    let record1 = dummy_record::<ZksProtocolV3>(1);
+
+    let (_from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::MainNode,
+        0,
+        [(1, record1.clone())],
+        100,
+        false,
+    );
+    let (_from_peer1, mut replay_rx_en) = net.peers_mut()[1].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::ExternalNode,
+        1,
+        [],
+        100,
+        false,
+    );
+
+    let en_id = net.peers()[1].peer_id();
+    let en_addr = net.peers()[1].local_addr();
+
+    let handle = net.spawn();
+    // MN dials EN.
+    handle.peers()[0].network().add_peer(en_id, en_addr);
+
+    let received = tokio::time::timeout(std::time::Duration::from_secs(10), replay_rx_en.recv())
+        .await
+        .expect("EN did not receive a replay record in time")
+        .expect("EN replay channel closed");
+    assert_eq!(received, record1);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn en_consumes_from_single_upstream_without_panic() {
+    // EN(peer0) connects to two MNs. It pins exactly one as upstream and applies block 1 once; the
+    // single-consumer guard plus the cursor-alignment check prevent the second from interleaving
+    // (no assert_eq! panic).
+    let mut net = Testnet::create_with(3, MockEthProvider::default()).await;
+    let record1 = dummy_record::<ZksProtocolV3>(1);
+
+    let (_from_peer0, mut replay_rx_peer0) = net.peers_mut()[0]
+        .add_zks_sub_protocol::<ZksProtocolV3>(NodeRole::ExternalNode, 1, [], 100, false);
+    let (_from_peer1, _) = net.peers_mut()[1].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::MainNode,
+        0,
+        [(1, record1.clone())],
+        100,
+        false,
+    );
+    let (_from_peer2, _) = net.peers_mut()[2].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::MainNode,
+        0,
+        [(1, record1.clone())],
+        100,
+        false,
+    );
+
+    let peer1_id = net.peers()[1].peer_id();
+    let peer1_addr = net.peers()[1].local_addr();
+    let peer2_id = net.peers()[2].peer_id();
+    let peer2_addr = net.peers()[2].local_addr();
+
+    let handle = net.spawn();
+    handle.peers()[0].network().add_peer(peer1_id, peer1_addr);
+    handle.peers()[0].network().add_peer(peer2_id, peer2_addr);
+
+    // EN receives block 1 exactly once from its single pinned upstream.
+    let received = tokio::time::timeout(std::time::Duration::from_secs(10), replay_rx_peer0.recv())
+        .await
+        .expect("EN did not receive a replay record in time")
+        .expect("EN replay channel closed");
+    assert_eq!(received, record1);
+
+    // Both MNs only hold block 1, so a second record must not arrive. Reaching here without a panic
+    // is the single-upstream invariant holding.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            replay_rx_peer0.recv()
+        )
+        .await
+        .is_err(),
+        "EN unexpectedly received a second record; single-upstream invariant may be violated"
+    );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn en_with_verifier_syncs_from_en_server() {
+    // EN2 has a verifier configured and dials EN1. EN1's probe arrives at EN2 before EN1 can
+    // respond to EN2's VerifierRoleRequest. EN2 must skip the verifier handshake gracefully and
+    // still receive blocks — not terminate the connection.
+    let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
+    let record1 = dummy_record::<ZksProtocolV3>(1);
+
+    let (_from_peer0, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::ExternalNode,
+        0,
+        [(1, record1.clone())],
+        100,
+        false,
+    );
+    let (_from_peer1, mut replay_rx_peer1) = net.peers_mut()[1].add_zks_sub_protocol::<ZksProtocolV3>(
+        NodeRole::ExternalNode,
+        1,
+        [],
+        100,
+        true,
+    );
+
+    let peer0_id = net.peers()[0].peer_id();
+    let peer0_addr = net.peers()[0].local_addr();
+    let handle = net.spawn();
+    handle.peers()[1].network().add_peer(peer0_id, peer0_addr);
+
+    let received = tokio::time::timeout(std::time::Duration::from_secs(10), replay_rx_peer1.recv())
+        .await
+        .expect("EN2 (with verifier) did not receive a replay record in time")
+        .expect("EN2 replay channel closed");
+    assert_eq!(received, record1);
 }
