@@ -8,9 +8,6 @@ use anyhow::Context as _;
 use futures::StreamExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
-use zksync_os_contract_interface::settlement_layer_intervals::{
-    IntervalSettlementLayer, SettlementLayerIntervals,
-};
 use zksync_os_genesis::genesis_header;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
@@ -66,13 +63,9 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         fee_provider: FeeProvider,
         pool: Pool<Subpool>,
         config: Config,
-        intervals: &SettlementLayerIntervals,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
-        let current_sl_chain_id = match intervals.current_settlement_layer() {
-            IntervalSettlementLayer::L1 => config.l1_chain_id,
-            IntervalSettlementLayer::Gateway(gw_chain_id) => *gw_chain_id,
-        };
+        let current_sl_chain_id = config.l1_chain_id;
         Self {
             fee_provider,
             pool,

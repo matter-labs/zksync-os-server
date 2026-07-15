@@ -13,15 +13,14 @@ use zksync_os_contract_interface::IChainAssetHandler;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::is_method_missing;
-use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
+use zksync_os_contract_interface::{IExecutor, ZkChain};
 use zksync_os_provider::NodeProvider;
 
 /// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
 /// using binary search. Returns latest block if migration number is not reached yet.
 ///
-/// Used by both [`GatewayMigrationWatcher`][crate::GatewayMigrationWatcher] (on L1) and
-/// [`MigrationCompleteWatcher`][crate::MigrationCompleteWatcher] (on the current settlement layer)
-/// to determine the block from which to start scanning for migration events.
+/// Used by [`GatewayMigrationWatcher`][crate::GatewayMigrationWatcher] (on L1) to determine the
+/// block from which to start scanning for migration events.
 pub async fn find_block_by_migration_number(
     zk_chain: ZkChain<NodeProvider>,
     chain_asset_handler: Address,
@@ -319,53 +318,6 @@ pub async fn find_l1_execute_block_by_batch_number(
         },
     )
     .await
-}
-
-/// Finds the first L1 block where `interopRootLogId >= next_interop_root_id`.
-/// Uses binary search for efficiency.
-pub async fn find_l1_block_by_interop_root_id(
-    bridgehub: Bridgehub<NodeProvider>,
-    next_interop_root_id: u64,
-) -> anyhow::Result<BlockNumber> {
-    if next_interop_root_id == 0 {
-        return Ok(0);
-    }
-
-    let message_root_address = bridgehub.message_root_address().await?;
-    let message_root = Arc::new(MessageRoot::new(
-        message_root_address,
-        bridgehub.provider().clone(),
-    ));
-
-    let latest = message_root.provider().get_block_number().await?;
-    // The provider's cache resolves (and remembers) the MessageRoot deployment block, giving the
-    // search a tight lower bound without a per-iteration code-existence guard.
-    let deployment_block = message_root.deployment_block().await?;
-
-    let predicate =
-        async |message_root: Arc<MessageRoot<NodeProvider>>, block: u64| -> anyhow::Result<bool> {
-            let res = message_root.interop_root_log_id(block.into()).await?;
-            Ok(res >= next_interop_root_id)
-        };
-
-    if !predicate(message_root.clone(), latest).await? {
-        anyhow::bail!(
-            "Condition not satisfied up to latest block: contract not deployed yet \
-             or target not reached.",
-        );
-    }
-
-    let (mut lo, mut hi) = (deployment_block, latest);
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if predicate(message_root.clone(), mid).await? {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-
-    Ok(lo)
 }
 
 /// Fetches and decodes stored batch data for batch `batch_number` that is expected to have been

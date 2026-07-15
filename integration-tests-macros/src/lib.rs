@@ -120,7 +120,7 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// The attribute expects a bracketed list of case paths:
 ///
 /// ```ignore
-/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 /// ```
 ///
 /// Each path should evaluate to a `TestCase`, typically one of the exported constants from
@@ -143,9 +143,9 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// Build and use a ready `Tester`:
 ///
 /// ```ignore
-/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
+/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_L1, Tester, test_multisetup};
 ///
-/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 /// async fn basic_rpc_smoke(tester: Tester) -> anyhow::Result<()> {
 ///     let chain_id = tester.l2_provider.get_chain_id().await?;
 ///     assert!(chain_id > 0);
@@ -156,14 +156,11 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 /// Inspect the case without starting the node:
 ///
 /// ```ignore
-/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, test_multisetup};
-/// use zksync_os_integration_tests::SettlementLayer;
+/// use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_L1, TestCase, test_multisetup};
 ///
-/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 /// async fn case_metadata_is_expected(case: TestCase) -> anyhow::Result<()> {
-///     match case.settlement_layer {
-///         SettlementLayer::L1 | SettlementLayer::Gateway => {}
-///     }
+///     assert!(!case.protocol_version.is_empty());
 ///     Ok(())
 /// }
 /// ```
@@ -188,11 +185,11 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 ///
 /// ```ignore
 /// use zksync_os_integration_tests::{
-///     CURRENT_TO_L1, NEXT_TO_GATEWAY, TestCase, Tester, test_multisetup,
+///     CURRENT_TO_L1, NEXT_TO_L1, TestCase, Tester, test_multisetup,
 /// };
 ///
-/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
-/// async fn settlement_layer_matches_runtime(
+/// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
+/// async fn protocol_version_matches_runtime(
 ///     case: TestCase,
 ///     tester: Tester,
 /// ) -> anyhow::Result<()> {

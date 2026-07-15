@@ -2,7 +2,6 @@ pub mod calldata;
 pub mod l1_discovery;
 mod metrics;
 pub mod models;
-pub mod settlement_layer_intervals;
 
 use crate::IBridgehub::{
     IBridgehubInstance, L2TransactionRequestDirect, L2TransactionRequestTwoBridgesOuter,

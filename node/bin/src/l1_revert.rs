@@ -99,17 +99,17 @@ async fn perform_l1_revert(
     plan: &RevertPlan,
     l1_state: &L1State,
     chain_id: u64,
-    sl_provider: &NodeProvider,
+    l1_provider: &NodeProvider,
 ) -> anyhow::Result<()> {
-    let mut sl_provider = sl_provider.clone();
+    let mut l1_provider = l1_provider.clone();
 
     let reverter_address = plan
         .l1_reverter_sk
-        .register_with_wallet(sl_provider.wallet_mut())
+        .register_with_wallet(l1_provider.wallet_mut())
         .await
         .context("failed to initialize `sequencer.rebuild.l1_reverter_sk`")?;
 
-    let validator_timelock = IValidatorTimelock::new(l1_state.validator_timelock_sl, sl_provider);
+    let validator_timelock = IValidatorTimelock::new(l1_state.validator_timelock_sl, l1_provider);
     let reverter_role = validator_timelock.REVERTER_ROLE().call().await?;
     let has_reverter_role = validator_timelock
         .hasRoleForChainId(U256::from(chain_id), reverter_role, reverter_address)
@@ -317,7 +317,7 @@ pub async fn revert_l1_on_startup(
     rebuild: &RebuildConfig,
     config: &Config,
     l1_state: &L1State,
-    sl_provider: &NodeProvider,
+    l1_provider: &NodeProvider,
 ) -> anyhow::Result<bool> {
     let chain_id = config
         .genesis_config
@@ -328,7 +328,7 @@ pub async fn revert_l1_on_startup(
     match plan_l1_revert(rebuild, l1_state, max_blocks).await? {
         None => Ok(false),
         Some(plan) => {
-            perform_l1_revert(&plan, l1_state, chain_id, sl_provider)
+            perform_l1_revert(&plan, l1_state, chain_id, l1_provider)
                 .await
                 .context("failed to perform startup L1 revert")?;
             Ok(true)

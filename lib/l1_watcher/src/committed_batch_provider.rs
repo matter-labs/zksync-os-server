@@ -12,7 +12,6 @@ use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_contract_interface::models::StoredBatchInfo;
-use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
 use zksync_os_provider::NodeProvider;
 
 const INIT_MAX_PARALLEL_BATCH_FETCHES: usize = 10;
@@ -36,9 +35,8 @@ const WAIT_FOR_BATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone)]
 pub struct CommittedBatchProvider {
     inner: Arc<RwLock<Inner>>,
-    /// Intervals used to route batch lookups to the diamond proxy of the SL the batch was
-    /// committed to.
-    intervals: SettlementLayerIntervals,
+    /// L1 diamond proxy used to look up committed batches.
+    diamond_proxy_l1: ZkChain<NodeProvider>,
 }
 
 #[derive(Debug, Default)]
@@ -58,7 +56,7 @@ impl CommittedBatchProvider {
     ) -> anyhow::Result<Self> {
         let provider = Self {
             inner: Arc::new(RwLock::new(Inner::default())),
-            intervals: l1_state.settlement_layer_intervals.clone(),
+            diamond_proxy_l1: l1_state.diamond_proxy_l1.clone(),
         };
         // Special case for genesis
         if l1_state.last_executed_batch == 0 {
@@ -170,13 +168,9 @@ impl CommittedBatchProvider {
     ) -> anyhow::Result<()> {
         stream::iter(batch_numbers)
             .map(|batch_number| async move {
-                let proxy = &self
-                    .intervals
-                    .find_interval(batch_number)
-                    .with_context(|| format!("batch {batch_number} does not belong to any known settlement layer interval"))?
-                    .proxy;
                 let discovered_batch =
-                    fetch_batch(proxy, batch_number, max_l1_blocks_to_scan).await?;
+                    fetch_batch(&self.diamond_proxy_l1, batch_number, max_l1_blocks_to_scan)
+                        .await?;
                 tracing::info!(
                     batch_number = discovered_batch.number(),
                     "discovered committed batch {} on startup",
