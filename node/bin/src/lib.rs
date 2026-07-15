@@ -794,7 +794,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
         },
         last_constructed_block_ctx_sender,
-        node_role.is_external(),
     );
 
     // ========== Start L1 Persist Batch Watcher ===========

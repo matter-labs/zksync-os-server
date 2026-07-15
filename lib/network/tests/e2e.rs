@@ -298,7 +298,9 @@ where
                     max_blocks_per_message: 64,
                     replay_sender: replay_tx,
                     verification: None,
+                    trusted_peers: HashSet::new(),
                 },
+                UpstreamGuard::new(),
                 zks_state,
                 connection_registry,
             ));
@@ -1294,7 +1296,7 @@ where
 {
     let (protocol_tx, _protocol_rx) = mpsc::unbounded_channel();
     let (replay_tx, replay_rx) = mpsc::channel(8);
-    let state = HandlerSharedState::new(protocol_tx, 100);
+    let state = HandlerSharedState::new(protocol_tx, 100, HashSet::new());
     let connection_registry = Arc::new(RwLock::new(HashMap::new()));
     let handler = ZksProtocolHandler::<P, _>::for_external_node(
         InMemReplay(HashMap::new()),

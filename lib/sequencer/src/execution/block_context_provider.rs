@@ -35,7 +35,6 @@ pub struct BlockContextProvider<Subpool> {
     last_block: Option<LastBlock>,
     next_interop_tx_allowed_after: Instant,
     last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
-    is_external_node: bool,
 }
 
 pub struct Config {
@@ -62,7 +61,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         pool: Pool<Subpool>,
         config: Config,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
-        is_external_node: bool,
     ) -> Self {
         Self {
             fee_provider,
@@ -71,7 +69,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             last_block: None,
             next_interop_tx_allowed_after: Instant::now(),
             last_constructed_block_ctx_sender,
-            is_external_node,
         }
     }
 
