@@ -1393,7 +1393,6 @@ pub async fn deposit_l1_to_l2(
         l1.provider.clone(),
         chain_id,
     );
-    let amount = U256::from(1_000_000_000_000_000_000u128) * U256::from(1_000u64);
     let max_priority_fee_per_gas = l1.provider.get_max_priority_fee_per_gas().await?;
     let base_l1_fees = l1
         .provider

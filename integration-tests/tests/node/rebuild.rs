@@ -369,8 +369,7 @@ async fn rebuild_panics_if_from_block_is_already_committed(
     let launch_error = stopped
         .start_with_config(restarted_config)
         .await
-        .err()
-        .expect("expected node startup to fail");
+        .expect_err("expected node startup to fail");
     let message = format!("{launch_error:#}");
     assert!(
         message.contains("rebuild_from_block_number must be > last_l1_committed_block"),
@@ -876,8 +875,7 @@ async fn l1_revert_rejects_already_executed_batch(env: TestEnvironment) -> anyho
     let launch_error = stopped
         .start_with_config(revert_config)
         .await
-        .err()
-        .expect("expected node startup to fail");
+        .expect_err("expected node startup to fail");
     let message = format!("{launch_error:#}");
     assert!(
         message.contains("at or before the last executed batch"),

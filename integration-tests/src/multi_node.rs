@@ -45,6 +45,11 @@ fn generate_validator_keys() -> ValidatorKeys {
     }
 }
 
+/// One validator's deviation from the shared committee schedule: the validator
+/// index and the full schedule its config carries instead (activation epoch →
+/// validator indices per entry).
+pub type ScheduleOverride = (usize, Vec<(u64, Vec<usize>)>);
+
 /// One validator slot: a running node, a stopped one (restartable on the same state
 /// and keys), or the momentary in-between while a transition is in flight.
 /// (Test-harness type — the size imbalance between variants is irrelevant here.)
@@ -171,7 +176,7 @@ impl MultiNodeTester {
             );
             config.network_config.enabled = true;
             config.network_config.port = network_port_numbers[index];
-            config.network_config.secret_key = Some(network_secrets[index].clone());
+            config.network_config.secret_key = Some(network_secrets[index]);
             // Dial in one direction only (toward higher indices): both ends
             // dialing each other makes reth's duplicate-session teardown and
             // the short reconnect backoffs churn sessions forever, and verify
@@ -348,7 +353,7 @@ impl MultiNodeTester {
         num_validators: usize,
         schedule: &[(u64, Vec<usize>)],
         epoch_length: u64,
-        schedule_overrides: &[(usize, Vec<(u64, Vec<usize>)>)],
+        schedule_overrides: &[ScheduleOverride],
     ) -> anyhow::Result<Self> {
         Self::start_with_schedule_inner(
             num_validators,
@@ -364,7 +369,7 @@ impl MultiNodeTester {
         num_validators: usize,
         schedule: &[(u64, Vec<usize>)],
         epoch_length: u64,
-        schedule_overrides: &[(usize, Vec<(u64, Vec<usize>)>)],
+        schedule_overrides: &[ScheduleOverride],
         shadow_registry: Option<alloy::primitives::Address>,
     ) -> anyhow::Result<Self> {
         assert!(

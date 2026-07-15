@@ -1,6 +1,10 @@
 //! Test contracts that can be deployed and interacted with during a test's lifetime.
 //! See `./test-contracts/README.md` for instructions on how to build the artifacts.
 
+// `alloy::sol!` generates constructor bindings with as many arguments as the
+// contract declares; the registry's constructor is wide by design.
+#![allow(clippy::too_many_arguments)]
+
 use crate::assert_traits::ReceiptAssert;
 use alloy::network::ReceiptResponse;
 use alloy::primitives::{Address, B256, U256, address};

@@ -13,11 +13,11 @@ use zksync_os_server::config::CommitteeScheduleEntryConfig;
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(120);
 /// The promotion test's boundary wait spans the rolling restarts plus a dozen
 /// epochs of margin — generous on purpose.
-const PROMOTION_TIMEOUT: Duration = Duration::from_secs(240);
+const PROMOTION_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Blocks per epoch for these tests: small enough to cross several boundaries in
 /// seconds, large enough that a boundary is not every other block.
-const EPOCH_LENGTH: u64 = 20;
+const EPOCH_LENGTH: u64 = 10;
 
 /// The committee grows 3 → 4 at epoch 2, live. The joiner runs from genesis,
 /// follows the epochs it is not yet a member of, then votes from its activation
@@ -159,7 +159,7 @@ async fn misconfigured_validator_stalls_then_recovers_after_config_fix() -> anyh
     // carry the chain across the boundary. The misconfigured validator stalls
     // near it: `wait_for_block_on_all` cannot be used while it lags, so wait on
     // the healthy members individually.
-    let target = 3 * EPOCH_LENGTH;
+    let target = 4 * EPOCH_LENGTH;
     for index in [0, 2, 3] {
         wait_for_height_on(&cluster, index, target).await?;
     }
@@ -297,7 +297,7 @@ async fn observer_promoted_to_validator_at_a_scheduled_boundary() -> anyhow::Res
     // anyone. (If the restarts overran it, the committee would simply run one
     // member short until the candidate arrives — late first engines are safe —
     // but the margin keeps the test deterministic in what it asserts.)
-    let activation_epoch = cluster.max_height().await? / EPOCH_LENGTH + 12;
+    let activation_epoch = cluster.max_height().await? / EPOCH_LENGTH + 6;
     let promoted_entries: Vec<CommitteeScheduleEntryConfig> = vec![
         CommitteeScheduleEntryConfig {
             activation_epoch: 0,

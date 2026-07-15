@@ -370,6 +370,14 @@ zksync_os_server = { version = "=0.20.8", path = "node/bin" }
 # Drop this whole patch section once the PR is merged and commonware is
 # upgraded past it.
 #
+# We are also tracking a second upstream fix that this fork does *not* carry, so
+# it does not gate dropping this patch: a torn blob-header create (a crash midway
+# through creating a blob can leave a zeroed header that then fails the node on
+# its next open). It only fired under the chaos rig's fuzzing and a real-world
+# reproduction is highly unlikely, so it is not worth forking for — we just want
+# it landed upstream.
+# Upstream PR: https://github.com/commonwarexyz/monorepo/pull/4256
+#
 # The entire family is patched, not just commonware-storage: the fork is a
 # monorepo, so its storage crate resolves sibling dependencies from its own
 # tree, and mixing those with the same crates from crates.io splits the
