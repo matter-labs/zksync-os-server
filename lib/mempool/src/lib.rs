@@ -7,7 +7,7 @@ pub use config::TxValidatorConfig;
 pub mod subpools;
 
 mod interop_fee_updater;
-pub use interop_fee_updater::{InteropFeeUpdaterConfig, LocalEthCall};
+pub use interop_fee_updater::{InteropFeeUpdater, InteropFeeUpdaterConfig, LocalEthCall};
 
 mod pool;
 pub use pool::{Config, L1InputsView, MarkingTxStream, Pool, StreamOutcome};

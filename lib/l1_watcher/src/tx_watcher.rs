@@ -46,7 +46,7 @@ impl L1TxWatcher {
 
         let resolve_start = move |next_l1_priority_id: u64| async move {
             let next_l1_block = find_l1_block_by_priority_id(
-                zk_chain_l1.clone(),
+                &zk_chain_l1,
                 next_l1_priority_id,
                 max_blocks_to_process,
             )
@@ -82,7 +82,7 @@ impl L1TxWatcher {
 /// head — no historical *state* queries, which fail on RPCs with bounded state
 /// retention once the chain has aged.
 async fn find_l1_block_by_priority_id(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: &ZkChain<NodeProvider>,
     next_l1_priority_id: u64,
     max_blocks_per_query: u64,
 ) -> anyhow::Result<BlockNumber> {

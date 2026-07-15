@@ -1,16 +1,28 @@
+//! Status HTTP endpoints.
+//!
+//! - `GET /status` — general node status, including consensus state on nodes
+//!   running BFT consensus.
+//! - `GET /status/health` — liveness endpoint. Always 200 while the process is up.
+//! - `GET /status/pipeline` — per-component backpressure and lag snapshot for
+//!   diagnostics and dashboards.
+//! - `GET /status/consensus-metrics` — the consensus runtime's own prometheus
+//!   registry; 404 on nodes without consensus.
+
 mod consensus;
 mod health;
+mod pipeline;
 mod status;
 
 use crate::health::health;
+use crate::pipeline::pipeline;
 use crate::status::status;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Router, routing::get};
 use reth_tasks::shutdown::GracefulShutdown;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::watch};
+use zksync_os_backpressure::PipelineSnapshot;
 
 pub use consensus::{
     ConsensusMetricsEncoder, ConsensusStatus, ConsensusStatusSource, FinalizedObservation,
@@ -18,13 +30,21 @@ pub use consensus::{
 };
 pub use status::StatusResponse;
 
+#[derive(Clone)]
+pub struct StatusServerState {
+    pub pipeline_snapshot: watch::Receiver<PipelineSnapshot>,
+    /// Present only on nodes running BFT consensus (`Arc` because the source is
+    /// not clonable while axum state must be).
+    pub consensus: Arc<Option<ConsensusStatusSource>>,
+}
+
+pub(crate) type AppState = StatusServerState;
+
 /// Serves the consensus runtime's own prometheus registry (engine, marshal, p2p). A
 /// second scrape target beside the node's main metrics port; 404 on nodes without
 /// consensus, 503 until the consensus runtime has come up.
-async fn consensus_metrics(
-    State(consensus): State<Arc<Option<ConsensusStatusSource>>>,
-) -> Result<String, StatusCode> {
-    let Some(source) = consensus.as_ref() else {
+async fn consensus_metrics(State(state): State<AppState>) -> Result<String, StatusCode> {
+    let Some(source) = state.consensus.as_ref() else {
         return Err(StatusCode::NOT_FOUND);
     };
     let Some(encoder) = source.metrics_encoder.borrow().clone() else {
@@ -33,21 +53,18 @@ async fn consensus_metrics(
     Ok(encoder())
 }
 
-// todo: handle graceful shutdown in a meaningful manner:
-//       we should start a timer for RPC server's lifetime, report healthy=false and only shutdown
-//       after timer is expired
+/// Runs the status HTTP server on a pre-bound listener.
 pub async fn run_status_server(
-    addr: SocketAddr,
+    listener: TcpListener,
     shutdown: GracefulShutdown,
-    consensus: Option<ConsensusStatusSource>,
+    state: StatusServerState,
 ) -> anyhow::Result<()> {
     let app = Router::new()
-        .route("/status/health", get(health))
         .route("/status", get(status))
+        .route("/status/health", get(health))
+        .route("/status/pipeline", get(pipeline))
         .route("/status/consensus-metrics", get(consensus_metrics))
-        .with_state(Arc::new(consensus));
-
-    let listener = TcpListener::bind(addr).await?;
+        .with_state(state);
 
     let addr = listener.local_addr()?;
     tracing::info!(%addr, "status server running");

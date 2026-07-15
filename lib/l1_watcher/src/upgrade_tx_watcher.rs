@@ -107,7 +107,7 @@ impl L1UpgradeTxWatcher {
 
         let resolve_start = move |current_protocol_version: ProtocolSemanticVersion| async move {
             let last_l1_block = find_l1_block_by_protocol_version(
-                zk_chain_l1,
+                &zk_chain_l1,
                 ctm_l1,
                 current_protocol_version.clone(),
                 max_blocks_to_process,
@@ -791,7 +791,7 @@ async fn fetch_upgrade_cut_log_at(
 /// historical *state* queries, which fail on RPCs with bounded state retention
 /// once the chain has aged.
 async fn find_l1_block_by_protocol_version(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: &ZkChain<NodeProvider>,
     ctm: Address,
     protocol_version: ProtocolSemanticVersion,
     max_blocks_per_query: u64,

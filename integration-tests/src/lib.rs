@@ -1,17 +1,14 @@
-use crate::config::{ChainLayout, load_chain_config};
+use crate::config::ChainLayout;
 use crate::node_log::NodeLogState;
 use crate::prover_tester::ProverTester;
 use crate::provider::ZksyncTestingProvider;
 use crate::rpc_recorder::{HttpRpcRecorder, RpcRecordConfig};
-use crate::test_config::{
-    TEST_PROVIDER_POLL_INTERVAL, build_node_config, disable_prover_input_generation,
-};
-use crate::utils::LockedPort;
+use crate::test_config::{build_node_config, disable_prover_input_generation};
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, B256, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{
-    DynProvider, Identity, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
+    DynProvider, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
 };
 use alloy::rpc::types::TransactionRequest;
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
@@ -31,14 +28,14 @@ use zksync_os_alloy_ext::network::Zksync;
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
-use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_network::NodeRecord;
 use zksync_os_provider::NodeProvider;
-use zksync_os_server::config::{Config, ProviderConfig};
+use zksync_os_server::ServerPorts;
+use zksync_os_server::config::Config;
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
-use zksync_os_server::default_protocol_version::{
-    NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION_V31_0,
-};
+#[cfg(feature = "prover-tests")]
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
+use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
@@ -64,32 +61,23 @@ pub mod wallets;
 /// L1 chain id as expected by contracts deployed in `l1-state.json.gz`
 const L1_CHAIN_ID: u64 = 31337;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettlementLayer {
-    L1,
-    Gateway,
-}
-
 pub use zksync_os_integration_tests_macros::test_multisetup;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TestCase {
     pub protocol_version: &'static str,
-    pub settlement_layer: SettlementLayer,
 }
 
 impl TestCase {
     pub const fn current_to_l1() -> Self {
         Self {
             protocol_version: PROTOCOL_VERSION,
-            settlement_layer: SettlementLayer::L1,
         }
     }
 
-    pub const fn next_to_gateway() -> Self {
+    pub const fn next_to_l1() -> Self {
         Self {
             protocol_version: NEXT_PROTOCOL_VERSION,
-            settlement_layer: SettlementLayer::Gateway,
         }
     }
 
@@ -99,7 +87,7 @@ impl TestCase {
 }
 
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
-pub const NEXT_TO_GATEWAY: TestCase = TestCase::next_to_gateway();
+pub const NEXT_TO_L1: TestCase = TestCase::next_to_l1();
 
 /// Set of private keys for batch verification participants.
 pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
@@ -111,8 +99,6 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 /// shutdown. We put 60s here until zksync-os v0.4.0 which will get rid of RISC-V simulator and
 /// allow async/abortable prover input generation.
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
-const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
-const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
     BATCH_VERIFICATION_KEYS
@@ -128,92 +114,41 @@ static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
 pub struct TestEnvironment {
     l1: AnvilL1,
     chain_layout: ChainLayout<'static>,
-    gateway: Option<GatewayContext>,
     prepared_runtime: PreparedRuntime,
 }
 
 struct PreparedRuntime {
     tempdir: Arc<TempDir>,
-    ports: Ports,
-}
-
-struct GatewayContext {
-    rpc_url: String,
-    node: SupportingNode,
 }
 
 impl PreparedRuntime {
     async fn new() -> anyhow::Result<Self> {
         Ok(Self {
             tempdir: Arc::new(tempfile::tempdir()?),
-            ports: Ports::acquire_unused().await?,
         })
     }
 }
 
 impl TestEnvironment {
     async fn from_case(case: TestCase) -> anyhow::Result<Self> {
-        match case.settlement_layer {
-            SettlementLayer::L1 => {
-                let chain_layout = ChainLayout::Default {
-                    protocol_version: case.protocol_version,
-                };
-                let l1 = AnvilL1::start(chain_layout).await?;
-                let prepared_runtime = PreparedRuntime::new().await?;
-                Ok(Self {
-                    l1,
-                    chain_layout,
-                    gateway: None,
-                    prepared_runtime,
-                })
-            }
-            SettlementLayer::Gateway => {
-                let protocol_version = case.protocol_version;
-                let chain_layout = ChainLayout::GatewayChain {
-                    protocol_version,
-                    chain_index: 0,
-                };
-                let l1 = AnvilL1::start(ChainLayout::Gateway { protocol_version }).await?;
-                let mut gateway_config = build_node_config(
-                    &l1,
-                    ChainLayout::Gateway { protocol_version },
-                    cfg!(feature = "prover-tests"),
-                )
-                .await?;
-                if !prover_input_generation_enabled() {
-                    disable_prover_input_generation(&mut gateway_config);
-                }
-                let gateway = Tester::launch_with_new_runtime(
-                    l1.clone(),
-                    ChainLayout::Gateway { protocol_version },
-                    gateway_config,
-                )
-                .await?;
-                let gateway = GatewayContext::from_tester(gateway);
-                let prepared_runtime = PreparedRuntime::new().await?;
-                Ok(Self {
-                    l1,
-                    chain_layout,
-                    gateway: Some(gateway),
-                    prepared_runtime,
-                })
-            }
-        }
+        let chain_layout = ChainLayout::Default {
+            protocol_version: case.protocol_version,
+        };
+        let l1 = AnvilL1::start(chain_layout).await?;
+        let prepared_runtime = PreparedRuntime::new().await?;
+        Ok(Self {
+            l1,
+            chain_layout,
+            prepared_runtime,
+        })
     }
 
     pub async fn default_config(&self) -> anyhow::Result<Config> {
         let mut config = build_node_config(&self.l1, self.chain_layout, false).await?;
-        if let Some(gateway) = &self.gateway {
-            config.gateway_provider_config = Some(ProviderConfig::new(
-                gateway.rpc_url.clone(),
-                TEST_PROVIDER_POLL_INTERVAL,
-            ));
-        }
         Tester::bind_runtime_config(
             &self.l1,
             self.prepared_runtime.tempdir.as_ref(),
             &mut config,
-            &self.prepared_runtime.ports,
         );
         Ok(config)
     }
@@ -223,7 +158,7 @@ impl TestEnvironment {
         self.launch(config).await
     }
 
-    pub async fn launch(mut self, mut config: Config) -> anyhow::Result<Tester> {
+    pub async fn launch(self, mut config: Config) -> anyhow::Result<Tester> {
         if !prover_input_generation_enabled() {
             disable_prover_input_generation(&mut config);
         }
@@ -231,40 +166,28 @@ impl TestEnvironment {
             &self.l1,
             self.prepared_runtime.tempdir.as_ref(),
             &mut config,
-            &self.prepared_runtime.ports,
         );
-        let supporting_gateway = if let Some(gateway) = self.gateway.take() {
-            if config.gateway_provider_config.is_none() {
-                config.gateway_provider_config = Some(ProviderConfig::new(
-                    gateway.rpc_url.clone(),
-                    TEST_PROVIDER_POLL_INTERVAL,
-                ));
-            }
-            wait_for_gateway_readiness(&self.l1, &gateway.rpc_url, &config).await?;
-            Some(gateway.node)
-        } else {
-            None
-        };
         #[cfg(feature = "prover-tests")]
         let enable_prover = !config.prover_api_config.fake_fri_provers.enabled;
-        let mut tester = Tester::launch_node_inner(
+        let tester = Tester::launch_node_inner(
             self.l1,
             config,
             self.prepared_runtime.tempdir,
             self.chain_layout,
             None,
             true,
-            Some(self.prepared_runtime.ports),
         )
         .await?;
-        if let Some(gateway) = supporting_gateway {
-            tester.owned_supporting_nodes.push(gateway);
-        }
         #[cfg(feature = "prover-tests")]
         if enable_prover {
             let mut sequencer_urls = vec![tester.prover_api_address.clone()];
             for node in &tester.owned_supporting_nodes {
-                sequencer_urls.push(format!("http://localhost:{}", node._ports.prover_api.port));
+                sequencer_urls.push(
+                    node.bound_ports
+                        .prover_api
+                        .map(|p| format!("http://localhost:{}", p))
+                        .expect("supporting node must have prover API port bound for prover tests"),
+                );
             }
             spawn_prover_service(&tester, &sequencer_urls, sequencer_urls.len()).await;
         }
@@ -289,7 +212,7 @@ pub struct Tester {
     runtime: Runtime,
     task_manager_handle: Option<JoinHandle<Result<(), PanickedTaskError>>>,
     config: Config,
-    ports: Ports,
+    bound_ports: ServerPorts,
 
     #[allow(dead_code)]
     tempdir: Arc<tempfile::TempDir>,
@@ -298,8 +221,6 @@ pub struct Tester {
     node_record: NodeRecord,
     l2_rpc_address: String,
     status_server_url: String,
-    gateway_rpc_url: Option<String>,
-    sl_provider: NodeProvider,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
     owned_supporting_nodes: Vec<SupportingNode>,
@@ -313,7 +234,7 @@ pub struct Tester {
 pub struct StoppedTester {
     pub(crate) l1: AnvilL1,
     pub(crate) config: Config,
-    ports: Ports,
+    previous_bound_ports: ServerPorts,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
     pub(crate) chain_layout: ChainLayout<'static>,
@@ -334,6 +255,7 @@ pub struct StoppedTester {
 pub struct StoppedTesterBackup {
     l1: AnvilL1,
     config: Config,
+    previous_bound_ports: ServerPorts,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
@@ -342,9 +264,9 @@ pub struct StoppedTesterBackup {
 impl StoppedTesterBackup {
     pub async fn restore(self) -> anyhow::Result<StoppedTester> {
         Ok(StoppedTester {
-            ports: Ports::from_config(&self.config).await?,
             l1: self.l1,
             config: self.config,
+            previous_bound_ports: self.previous_bound_ports,
             tempdir: self.tempdir,
             log_state: self.log_state,
             chain_layout: self.chain_layout,
@@ -357,16 +279,9 @@ impl StoppedTesterBackup {
 pub struct SupportingNode {
     runtime: Runtime,
     pub prover_tester: ProverTester,
-    _ports: Ports,
+    #[cfg(feature = "prover-tests")]
+    bound_ports: ServerPorts,
     _tempdir: Arc<TempDir>,
-}
-
-#[derive(Debug)]
-pub(crate) struct Ports {
-    pub(crate) l2_rpc: LockedPort,
-    pub(crate) prover_api: LockedPort,
-    pub(crate) network: LockedPort,
-    pub(crate) status: LockedPort,
 }
 
 impl Tester {
@@ -385,12 +300,10 @@ impl Tester {
         // The clone carries the upstream node's network identity; an EN needs
         // its own (a pre-set secret is preserved by `bind_runtime_config` as a
         // deliberate identity — here it would collide with the upstream's port).
+        // Clearing the key makes `bind_runtime_config` assign a fresh identity
+        // and an ephemeral port.
         config.network_config.secret_key = None;
         config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
-        config.gateway_provider_config = self
-            .gateway_rpc_url
-            .clone()
-            .map(|rpc_url| ProviderConfig::new(rpc_url, TEST_PROVIDER_POLL_INTERVAL));
         config.prover_api_config.fake_fri_provers.enabled = true;
         config.prover_api_config.fake_snark_provers.enabled = true;
         config.prover_input_generator_config.logging_enabled = false;
@@ -404,36 +317,6 @@ impl Tester {
 
     pub fn l1_wallet(&self) -> &EthereumWallet {
         &self.l1.wallet
-    }
-
-    pub fn sl_provider(&self) -> &NodeProvider {
-        &self.sl_provider
-    }
-
-    /// Returns the gateway provider if a gateway RPC URL is configured, `None` otherwise.
-    /// Use this when calling [`L1State::fetch`] or [`L1State::fetch_finalized`].
-    pub fn gateway_eth_provider(&self) -> Option<NodeProvider> {
-        self.gateway_rpc_url
-            .as_ref()
-            .map(|_| self.sl_provider.clone())
-    }
-
-    pub async fn gateway_provider(&self) -> anyhow::Result<Option<DynProvider<Zksync>>> {
-        let provider: Option<DynProvider<Zksync>> =
-            if let Some(gateway_rpc_url) = &self.gateway_rpc_url {
-                Some(DynProvider::<Zksync>::new(
-                    ProviderBuilder::<Identity, Identity, Zksync>::default()
-                        .with_recommended_fillers()
-                        .connect(gateway_rpc_url)
-                        .await
-                        .with_context(|| {
-                            format!("failed to connect to gateway RPC at {gateway_rpc_url}")
-                        })?,
-                ))
-            } else {
-                None
-            };
-        Ok(provider)
     }
 
     /// Returns true if the node's runtime has reported a critical-task panic.
@@ -567,25 +450,24 @@ impl Tester {
         Self::launch_with_new_runtime(self.l1.clone(), self.chain_layout, config).await
     }
 
-    /// Gracefully shut down and restart the node, reusing the same database and L1.
+    /// Gracefully shut down the node while keeping its database and L1 alive for a later restart.
     ///
     /// Returns a new `Tester` connected to the restarted node. The original `Tester` is consumed.
     ///
-    /// Restart keeps the same config by default, including the original ports.
+    /// A later restart preserves HTTP ports. Port-0 p2p networking may get a new OS-assigned port.
     pub async fn stop(self) -> anyhow::Result<StoppedTester> {
         let Self {
             runtime,
             l1,
             config,
-            ports,
+            bound_ports,
             tempdir,
             log_state,
             chain_layout,
             owned_supporting_nodes,
             ..
         } = self;
-        // NOTE: supporting nodes (e.g. gateway) are kept alive across stop/start so that
-        // `restart()` works for `NEXT_TO_GATEWAY` topology.  They are only torn down in
+        // NOTE: supporting nodes are kept alive across stop/start; they are only torn down in
         // `StoppedTester::shutdown()` or when `StoppedTester` is dropped.
         shutdown_runtime(runtime).await?;
         // The consensus stack outlives the node runtime by design; a stopped
@@ -598,12 +480,12 @@ impl Tester {
             log_state,
             chain_layout,
             config,
-            ports,
+            previous_bound_ports: bound_ports,
             owned_supporting_nodes,
         })
     }
 
-    /// Restart keeps the same config by default. The internal P2P network port may change.
+    /// Restart keeps the same config by default.
     pub async fn restart(self) -> anyhow::Result<Self> {
         self.stop().await?.start().await
     }
@@ -659,9 +541,8 @@ impl Tester {
         mut config: Config,
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
-        let ports = Ports::acquire_unused().await?;
-        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config, &ports);
-        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
+        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config);
+        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true).await
     }
 
     /// Like [`Self::launch_with_new_runtime`], but the node starts on a *copy* of
@@ -675,28 +556,30 @@ impl Tester {
         seed_rocks_from: &std::path::Path,
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
-        let ports = Ports::acquire_unused().await?;
-        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config, &ports);
+        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config);
         copy_dir_recursively(seed_rocks_from, &config.general_config.rocks_db_path)?;
-        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true, Some(ports)).await
+        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true).await
     }
 
-    fn bind_runtime_config(l1: &AnvilL1, tempdir: &TempDir, config: &mut Config, ports: &Ports) {
+    fn bind_runtime_config(l1: &AnvilL1, tempdir: &TempDir, config: &mut Config) {
         config.general_config.rocks_db_path = tempdir.path().join("rocksdb");
         config.l1_provider_config.rpc_url = l1.address.clone();
-        config.rpc_config.address = format!("0.0.0.0:{}", ports.l2_rpc.port);
-        config.prover_api_config.address = format!("0.0.0.0:{}", ports.prover_api.port);
+        config.rpc_config.address = "0.0.0.0:0".to_string();
+        config.prover_api_config.address = "0.0.0.0:0".to_string();
         config.prover_api_config.proof_storage.path = tempdir.path().join("proof_storage_path");
-        config.status_server_config.address = format!("0.0.0.0:{}", ports.status.port);
+        config.status_server_config.address = "0.0.0.0:0".to_string();
         config.network_config.address = Ipv4Addr::LOCALHOST;
         config.network_config.interface = None;
         // A pre-set secret key marks a deliberate network identity: peers hold
         // boot-node records derived from (key, port) — committee meshes,
-        // restarts — so both must survive rebinding. Everything else gets the
-        // usual fresh port and a throwaway key. (The port alone can't be the
-        // signal: its config default is non-zero.)
+        // restarts — so both must survive rebinding. Everything else gets a
+        // throwaway key and asks the server for a fresh ephemeral port (the
+        // server turns port 0 into a concrete TCP+UDP p2p port immediately
+        // before building reth's network config, so the advertised ENR remains
+        // dialable without test-side probing). The port alone can't be the
+        // signal: its config default is non-zero.
         if config.network_config.secret_key.is_none() {
-            config.network_config.port = ports.network.port;
+            config.network_config.port = 0;
             config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
         }
     }
@@ -708,12 +591,7 @@ impl Tester {
         chain_layout: ChainLayout<'static>,
         log_state: Option<NodeLogState>,
         wait_for_initial_deposit: bool,
-        held_ports: Option<Ports>,
     ) -> anyhow::Result<Self> {
-        let ports = match held_ports {
-            Some(ports) => ports,
-            None => Ports::from_config(&config).await?,
-        };
         // In-process fake provers use job managers directly; keep the HTTP API only for tests
         // that can hand jobs to external prover workers.
         if config.prover_api_config.fake_fri_provers.enabled
@@ -721,22 +599,6 @@ impl Tester {
         {
             config.prover_api_config.enabled = false;
         }
-        let l2_rpc_address = config.rpc_config.address.clone();
-        let l2_rpc_ws_url = format!("ws://localhost:{}", parse_local_port(&l2_rpc_address)?);
-        let status_server_url = config
-            .status_server_config
-            .address
-            .replace("0.0.0.0:", "http://localhost:");
-
-        let network_secret_key = config
-            .network_config
-            .secret_key
-            .as_ref()
-            .context("network secret key should be present in test config")?;
-        let node_record = NodeRecord::from_secret_key(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), config.network_config.port),
-            network_secret_key,
-        );
 
         if let Some(ephemeral_state) = &config.general_config.ephemeral_state {
             tracing::info!("Loading ephemeral state from {}", ephemeral_state.display());
@@ -748,16 +610,6 @@ impl Tester {
         let node_role = config.general_config.node_role;
         let log_state = log_state.unwrap_or_else(|| NodeLogState::fresh(node_role));
         let log_tag = log_state.tag();
-        let gateway_rpc_url = config
-            .gateway_provider_config
-            .as_ref()
-            .map(|config| config.rpc_url.clone());
-        #[cfg(feature = "prover-tests")]
-        let prover_api_address = config
-            .prover_api_config
-            .address
-            .clone()
-            .replace("0.0.0.0:", "http://localhost:");
 
         let runtime = RuntimeBuilder::new(
             RuntimeConfig::default().with_tokio(TokioConfig::existing_handle(Handle::current())),
@@ -783,14 +635,14 @@ impl Tester {
         // blocking pool and can lag its runtime shutdown. The conflict clears
         // as soon as the straggling drop lands.
         let launch_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        loop {
+        let bound_ports = loop {
             let launch = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
                 zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
                     .instrument(node_span.clone()),
             ))
             .await;
             let panic = match launch {
-                Ok(()) => break,
+                Ok(bound_ports) => break bound_ports,
                 Err(panic) => panic,
             };
             let message = panic
@@ -808,10 +660,37 @@ impl Tester {
                 continue;
             }
             anyhow::bail!("node startup panicked: {message}");
-        }
+        };
         let task_manager_handle = runtime
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
+
+        let l2_rpc_ws_url = format!("ws://localhost:{}", bound_ports.rpc);
+        let l2_rpc_address = format!("http://localhost:{}", bound_ports.rpc);
+        let status_server_url = bound_ports
+            .status
+            .map(|p| format!("http://localhost:{}", p))
+            .unwrap_or_default();
+        let network_secret_key = config
+            .network_config
+            .secret_key
+            .as_ref()
+            .context("network secret key should be present in test config")?;
+        let mut node_record = NodeRecord::from_secret_key(
+            SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                bound_ports.network.map(|p| p.tcp).unwrap_or(0),
+            ),
+            network_secret_key,
+        );
+        if let Some(network_ports) = bound_ports.network {
+            node_record.udp_port = network_ports.udp;
+        }
+        #[cfg(feature = "prover-tests")]
+        let prover_api_address = bound_ports
+            .prover_api
+            .map(|p| format!("http://localhost:{}", p))
+            .unwrap_or_default();
 
         let l2_wallet = EthereumWallet::new(
             // Private key for 0x36615cf349d7f6344891b1e7ca7c72883f5dc049
@@ -845,34 +724,8 @@ impl Tester {
             .connect(&l2_rpc_ws_url)
             .await?;
 
-        let sl_provider = if let Some(gateway_rpc_url) = &gateway_rpc_url {
-            let sl_provider = (|| async {
-                let sl_provider = ProviderBuilder::new()
-                    .wallet(l2_wallet.clone())
-                    .connect(gateway_rpc_url)
-                    .await?;
-
-                // Wait for L2 node to get up and be able to respond.
-                sl_provider.get_chain_id().await?;
-                anyhow::Ok(sl_provider)
-            })
-            .retry(
-                ConstantBuilder::default()
-                    .with_delay(Duration::from_millis(200))
-                    .with_max_times(50),
-            )
-            .notify(|err: &anyhow::Error, dur: Duration| {
-                tracing::info!(%err, ?dur, "retrying connection to L2 node");
-            })
-            .await?;
-            NodeProvider::new(sl_provider).await?
-        } else {
-            l1.provider.clone()
-        };
-        let gateway_eth_provider = gateway_rpc_url.as_ref().map(|_| sl_provider.clone());
         let prover_tester = ProverTester::new(
             NodeProvider::new(l1.provider.clone()).await?,
-            gateway_eth_provider,
             NodeProvider::new(l2_provider.clone()).await?,
             DynProvider::new(l2_zk_provider.clone()),
         );
@@ -885,11 +738,9 @@ impl Tester {
             runtime,
             task_manager_handle: Some(task_manager_handle),
             config,
-            ports,
-            l2_rpc_address: l2_rpc_address.replace("0.0.0.0:", "http://localhost:"),
+            bound_ports,
+            l2_rpc_address,
             status_server_url,
-            gateway_rpc_url,
-            sl_provider,
             node_record,
             log_state,
             tempdir: tempdir.clone(),
@@ -920,6 +771,7 @@ impl StoppedTester {
         StoppedTesterBackup {
             l1: self.l1.clone(),
             config: self.config.clone(),
+            previous_bound_ports: self.previous_bound_ports,
             tempdir: self.tempdir.clone(),
             log_state: self.log_state.clone(),
             chain_layout: self.chain_layout,
@@ -951,16 +803,19 @@ impl StoppedTester {
             chain_layout,
             log_state,
             owned_supporting_nodes,
-            ports,
+            previous_bound_ports,
+            config: _,
             ..
         } = self;
-        let ports = if ports.matches_config(&config)? {
-            ports.wait_until_unused().await?;
-            ports
-        } else {
-            drop(ports);
-            Ports::from_config(&config).await?
-        };
+        let mut config = config;
+        preserve_http_ports_on_restart(&mut config, previous_bound_ports)?;
+        // A committee validator restarts on its configured concrete p2p port
+        // (its peers hold boot records derived from it); wait for the previous
+        // incarnation's listener to be fully released before rebinding.
+        // Ephemeral-port nodes (port 0) get a fresh port and skip this.
+        if config.network_config.port != 0 {
+            wait_for_port_to_be_unused(config.network_config.port).await?;
+        }
         wait_for_rocksdb_locks_released(&config.general_config.rocks_db_path).await?;
         // A batcher must not come back up while its previous incarnation's L1
         // transactions are still in flight — a commit landing after the new
@@ -976,7 +831,6 @@ impl StoppedTester {
             chain_layout,
             Some(log_state.restarted()),
             false,
-            Some(ports),
         )
         .await?;
         tester.owned_supporting_nodes = owned_supporting_nodes;
@@ -993,34 +847,29 @@ impl StoppedTester {
     }
 }
 
-impl SupportingNode {
-    fn from_tester(tester: Tester) -> Self {
-        let Tester {
-            runtime,
-            ports,
-            tempdir,
-            owned_supporting_nodes,
-            prover_tester,
-            ..
-        } = tester;
-        drop(owned_supporting_nodes);
-        Self {
-            runtime,
-            prover_tester,
-            _ports: ports,
-            _tempdir: tempdir,
-        }
+fn preserve_http_ports_on_restart(
+    config: &mut Config,
+    previous_bound_ports: ServerPorts,
+) -> anyhow::Result<()> {
+    config.rpc_config.address =
+        socket_address_with_port(&config.rpc_config.address, previous_bound_ports.rpc)?;
+    if let Some(status_port) = previous_bound_ports.status {
+        config.status_server_config.address =
+            socket_address_with_port(&config.status_server_config.address, status_port)?;
     }
+    if let Some(prover_api_port) = previous_bound_ports.prover_api {
+        config.prover_api_config.address =
+            socket_address_with_port(&config.prover_api_config.address, prover_api_port)?;
+    }
+    Ok(())
 }
 
-impl GatewayContext {
-    fn from_tester(tester: Tester) -> Self {
-        let rpc_url = tester.l2_rpc_url().to_owned();
-        Self {
-            rpc_url,
-            node: SupportingNode::from_tester(tester),
-        }
-    }
+fn socket_address_with_port(address: &str, port: u16) -> anyhow::Result<String> {
+    let mut address: SocketAddr = address
+        .parse()
+        .with_context(|| format!("failed to parse socket address {address:?}"))?;
+    address.set_port(port);
+    Ok(address.to_string())
 }
 
 impl Drop for SupportingNode {
@@ -1031,114 +880,8 @@ impl Drop for SupportingNode {
     }
 }
 
-impl Ports {
-    pub(crate) async fn acquire_unused() -> anyhow::Result<Self> {
-        Ok(Self {
-            l2_rpc: LockedPort::acquire_unused().await?,
-            prover_api: LockedPort::acquire_unused().await?,
-            network: LockedPort::acquire_unused().await?,
-            status: LockedPort::acquire_unused().await?,
-        })
-    }
-
-    async fn from_config(config: &Config) -> anyhow::Result<Self> {
-        Ok(Self {
-            l2_rpc: acquire_port_with_retry(parse_local_port(&config.rpc_config.address)?)
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to acquire L2 RPC port {}",
-                        config.rpc_config.address
-                    )
-                })?,
-            prover_api: acquire_port_with_retry(parse_local_port(
-                &config.prover_api_config.address,
-            )?)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to acquire prover API port {}",
-                    config.prover_api_config.address
-                )
-            })?,
-            network: acquire_port_with_retry(config.network_config.port)
-                .await
-                .with_context(|| {
-                    format!(
-                        "failed to acquire network port {}",
-                        config.network_config.port
-                    )
-                })?,
-            status: acquire_port_with_retry(parse_local_port(
-                &config.status_server_config.address,
-            )?)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to acquire status server port {}",
-                    config.status_server_config.address
-                )
-            })?,
-        })
-    }
-
-    fn matches_config(&self, config: &Config) -> anyhow::Result<bool> {
-        Ok(
-            self.l2_rpc.port == parse_local_port(&config.rpc_config.address)?
-                && self.prover_api.port == parse_local_port(&config.prover_api_config.address)?
-                && self.network.port == config.network_config.port
-                && self.status.port == parse_local_port(&config.status_server_config.address)?,
-        )
-    }
-
-    async fn wait_until_unused(&self) -> anyhow::Result<()> {
-        wait_for_port_to_be_unused(self.l2_rpc.port)
-            .await
-            .with_context(|| format!("failed waiting for L2 RPC port {}", self.l2_rpc.port))?;
-        wait_for_port_to_be_unused(self.prover_api.port)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed waiting for prover API port {}",
-                    self.prover_api.port
-                )
-            })?;
-        wait_for_port_to_be_unused(self.network.port)
-            .await
-            .with_context(|| format!("failed waiting for network port {}", self.network.port))?;
-        wait_for_port_to_be_unused(self.status.port)
-            .await
-            .with_context(|| format!("failed waiting for status server port {}", self.status.port))
-    }
-}
-
-fn parse_local_port(address: &str) -> anyhow::Result<u16> {
-    let port = address
-        .rsplit_once(':')
-        .context("address should contain a port")?
-        .1;
-    port.parse().context("address port should be numeric")
-}
-
-async fn acquire_port_with_retry(port: u16) -> anyhow::Result<LockedPort> {
-    let deadline = tokio::time::Instant::now() + PORT_ACQUISITION_TIMEOUT;
-    loop {
-        match LockedPort::acquire(port).await {
-            Ok(locked_port) => return Ok(locked_port),
-            Err(err) if tokio::time::Instant::now() < deadline => {
-                tracing::info!(port, %err, "retrying port acquisition");
-                tokio::time::sleep(PORT_ACQUISITION_POLL_INTERVAL).await;
-            }
-            Err(err) => {
-                return Err(err).with_context(|| {
-                    format!(
-                        "port {port} did not become acquirable within {PORT_ACQUISITION_TIMEOUT:?}"
-                    )
-                });
-            }
-        }
-    }
-}
+const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
+const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 async fn wait_for_port_to_be_unused(port: u16) -> anyhow::Result<()> {
     let deadline = tokio::time::Instant::now() + PORT_ACQUISITION_TIMEOUT;
@@ -1459,191 +1202,8 @@ pub async fn deposit_l1_to_l2(
     Ok(l2_tx_hash)
 }
 
-/// Multi-node owner for gateway-settling tests.
-///
-/// Owns one gateway tester plus one tester per settling chain.
-pub struct GatewayTester {
-    gateway: Tester,
-    chains: Vec<Tester>,
-}
-
-impl GatewayTester {
-    pub fn builder() -> GatewayTesterBuilder {
-        GatewayTesterBuilder::default()
-    }
-
-    pub async fn setup(num_chains: usize) -> anyhow::Result<Self> {
-        Self::builder().num_chains(num_chains).build().await
-    }
-
-    /// Get a specific chain by index
-    pub fn chain(&self, index: usize) -> &Tester {
-        &self.chains[index]
-    }
-
-    pub fn chain_mut(&mut self, index: usize) -> &mut Tester {
-        &mut self.chains[index]
-    }
-
-    pub fn gateway(&self) -> &Tester {
-        &self.gateway
-    }
-}
-
-pub struct GatewayTesterBuilder {
-    protocol_version: &'static str,
-    num_chains: Option<usize>,
-    deployment_filter: Option<DeploymentFilterConfig>,
-    policy_service: Option<PolicyServiceConfig>,
-}
-
-impl Default for GatewayTesterBuilder {
-    fn default() -> Self {
-        Self {
-            protocol_version: PROTOCOL_VERSION_V31_0,
-            num_chains: None,
-            deployment_filter: None,
-            policy_service: None,
-        }
-    }
-}
-
-impl GatewayTesterBuilder {
-    pub fn protocol_version(mut self, protocol_version: &'static str) -> Self {
-        self.protocol_version = protocol_version;
-        self
-    }
-
-    pub fn num_chains(mut self, num_chains: usize) -> Self {
-        self.num_chains = Some(num_chains);
-        self
-    }
-
-    /// Set the deployment filter config for all chains.
-    pub fn deployment_filter(mut self, config: DeploymentFilterConfig) -> Self {
-        self.deployment_filter = Some(config);
-        self
-    }
-
-    /// Set the policy-service client config for all chains.
-    pub fn policy_service(mut self, config: PolicyServiceConfig) -> Self {
-        self.policy_service = Some(config);
-        self
-    }
-
-    pub async fn build(self) -> anyhow::Result<GatewayTester> {
-        let num_chains = self.num_chains.unwrap_or(2);
-
-        let protocol_version = self.protocol_version;
-        let l1 = AnvilL1::start(ChainLayout::Gateway { protocol_version }).await?;
-        let mut gateway_config =
-            build_node_config(&l1, ChainLayout::Gateway { protocol_version }, false).await?;
-        if !prover_input_generation_enabled() {
-            disable_prover_input_generation(&mut gateway_config);
-        }
-        let gateway = Tester::launch_with_new_runtime(
-            l1.clone(),
-            ChainLayout::Gateway { protocol_version },
-            gateway_config,
-        )
-        .await?;
-        let gateway_rpc_url = gateway.l2_rpc_url().to_owned();
-
-        let mut chains = Vec::with_capacity(num_chains);
-        for i in 0..num_chains {
-            let chain_layout = ChainLayout::GatewayChain {
-                protocol_version,
-                chain_index: i,
-            };
-            let chain_config = load_chain_config(chain_layout).await;
-            let chain_id = chain_config
-                .genesis_config
-                .chain_id
-                .expect("Chain ID must be set in chain config");
-            wait_for_gateway_readiness(&l1, gateway.l2_rpc_url(), &chain_config).await?;
-            let gateway_rpc_url = gateway_rpc_url.clone();
-            let deployment_filter = self.deployment_filter.clone();
-            let policy_service = self.policy_service.clone();
-
-            let mut tester_config = build_node_config(&l1, chain_layout, false).await?;
-            if !prover_input_generation_enabled() {
-                disable_prover_input_generation(&mut tester_config);
-            }
-            tester_config.gateway_provider_config = Some(ProviderConfig::new(
-                gateway_rpc_url,
-                TEST_PROVIDER_POLL_INTERVAL,
-            ));
-            if let Some(deployment_filter) = deployment_filter {
-                tester_config
-                    .sequencer_config
-                    .tx_validator
-                    .deployment_filter = deployment_filter;
-            }
-            if let Some(policy_service) = policy_service {
-                tester_config.sequencer_config.tx_validator.policy_service = policy_service;
-            }
-
-            let tester =
-                Tester::launch_with_new_runtime(l1.clone(), chain_layout, tester_config).await?;
-
-            tracing::info!(
-                "L2 chain {} started with chain_id {} on {}",
-                i,
-                chain_id,
-                tester.l2_rpc_address
-            );
-
-            chains.push(tester);
-        }
-
-        Ok(GatewayTester { gateway, chains })
-    }
-}
-
 fn prover_input_generation_enabled() -> bool {
     std::env::var("NEXTEST_PROFILE").as_deref() != Ok("no-pig")
-}
-
-async fn wait_for_gateway_readiness(
-    l1: &AnvilL1,
-    gateway_rpc_url: &str,
-    chain_config: &Config,
-) -> anyhow::Result<()> {
-    let chain_id = chain_config
-        .genesis_config
-        .chain_id
-        .context("chain config is missing genesis chain_id")?;
-    let bridgehub_address = chain_config
-        .genesis_config
-        .bridgehub_address
-        .context("chain config is missing bridgehub_address")?;
-
-    (|| async {
-        let gateway_provider = ProviderBuilder::new()
-            .wallet(EthereumWallet::new(PrivateKeySigner::random()))
-            .connect(gateway_rpc_url)
-            .await
-            .with_context(|| format!("failed to connect to gateway RPC at {gateway_rpc_url}"))?;
-
-        L1State::fetch_finalized(
-            l1.provider.clone(),
-            Some(NodeProvider::new(gateway_provider).await?),
-            bridgehub_address,
-            chain_id,
-        )
-        .await
-        .with_context(|| format!("gateway is not ready for chain {chain_id}"))?;
-        anyhow::Ok(())
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_millis(200))
-            .with_max_times(300),
-    )
-    .notify(|err: &anyhow::Error, dur: Duration| {
-        tracing::info!(chain_id, %err, ?dur, "retrying gateway readiness check");
-    })
-    .await
 }
 
 #[derive(Debug, Clone)]
@@ -1699,9 +1259,28 @@ impl AnvilL1 {
 
         tracing::info!("L1 chain started on {}", address);
 
+        // `NodeProvider::new` probes Anvil's capabilities over a transport with no request
+        // timeout; an Anvil that wedges right after passing the readiness check above would
+        // otherwise hang the test until nextest's terminate timeout.
+        let provider = (|| async {
+            tokio::time::timeout(Duration::from_secs(10), NodeProvider::new(provider.clone()))
+                .await
+                .context("timed out probing L1 node capabilities")?
+                .context("failed to probe L1 node capabilities")
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_millis(200))
+                .with_max_times(5),
+        )
+        .notify(|err: &anyhow::Error, dur: Duration| {
+            tracing::info!(%err, ?dur, "retrying L1 node capability probing");
+        })
+        .await?;
+
         Ok(Self {
             address,
-            provider: NodeProvider::new(provider).await?,
+            provider,
             wallet,
             _tempdir: Arc::new(tempdir),
         })

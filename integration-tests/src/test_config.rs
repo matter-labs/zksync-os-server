@@ -45,9 +45,6 @@ pub(crate) async fn build_node_config(
     config.consensus_config.idle_heartbeat = std::time::Duration::ZERO;
     config.l1_provider_config =
         ProviderConfig::new(l1.address.clone(), TEST_PROVIDER_POLL_INTERVAL);
-    if let Some(gateway_provider_config) = &mut config.gateway_provider_config {
-        gateway_provider_config.rpc_poll_interval = TEST_PROVIDER_POLL_INTERVAL;
-    }
     config.sequencer_config.fee_collector_address = Address::random();
     config.rpc_config.send_raw_transaction_sync_timeout = Duration::from_secs(10);
     config.prover_api_config.fake_fri_provers.enabled = !with_proofs;

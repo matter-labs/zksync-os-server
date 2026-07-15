@@ -3,12 +3,17 @@ pub(crate) mod metrics;
 pub mod protocol;
 pub mod service;
 pub mod session;
+pub mod twofa;
 pub mod version;
 mod wire;
 
 // todo: temporary re-export while we have record overrides, otherwise `wire` module should be
 //       entirely internal
-pub use service::{PeerVerifyBatch, PeerVerifyBatchResult};
+pub use service::{NetworkPorts, PeerVerifyBatch, PeerVerifyBatchResult};
+pub use twofa::{
+    ExternalNode2faConfig, MainNode2faConfig, ZKS_2FA_PROTOCOL, Zks2faMessage,
+    Zks2faProtocolHandler,
+};
 pub use wire::replays::RecordOverride;
 
 /// Versioned wire encodings of replay records. Every version file is immutable once

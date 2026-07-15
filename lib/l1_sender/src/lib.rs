@@ -241,12 +241,28 @@ where
             // transaction that only full restart recovery reconciles today.
             let operator_address =
                 until_l1_available(command_name, || self.operator_address()).await?;
-            let sim_fee_params = until_l1_available(command_name, || {
+            // One pending-count read per cycle. The account is quiescent here (prior cycle's txs
+            // are confirmed), so this baseline is race-free; used for both simulation and sends.
+            let base_nonce = until_l1_available(command_name, || async {
+                self.provider
+                    .get_transaction_count(operator_address)
+                    .pending()
+                    .await
+                    .context("get pending nonce for L1 sender cycle")
+            })
+            .await?;
+            // The only fee read per send cycle (one drain of up to `command_limit`
+            // commands); the send loop below reuses these params for every command instead
+            // of resolving again per tx. That's safe because fee caps are config-bound and
+            // whether a fee is high enough is decided when the tx is mined, not now — so
+            // per-command reads would only add an RPC round-trip per tx without changing
+            // what we submit.
+            let fee_params = until_l1_available(command_name, || {
                 self.resolve_fee_params(fee_config, force_transaction_resubmission)
             })
             .await?;
             let gas_limits = until_l1_available(command_name, || {
-                self.estimate_gas_limits(&commands, operator_address, sim_fee_params)
+                self.estimate_gas_limits(&commands, operator_address, fee_params, base_nonce)
             })
             .await?;
             tracing::info!(
@@ -255,6 +271,22 @@ where
                 ?gas_limits,
                 "estimated gas limits via eth_simulateV1",
             );
+
+            // Only blob-carrying commands (commit path) need the blob base fee, so fetch
+            // it once per cycle instead of paying an RPC round-trip per command.
+            let blob_base_fee = if commands.iter().any(|cmd| cmd.blob_sidecar().is_some()) {
+                let fee = until_l1_available(command_name, || async {
+                    self.provider
+                        .get_blob_base_fee()
+                        .await
+                        .map_err(anyhow::Error::from)
+                })
+                .await?;
+                L1_SENDER_METRICS.report_blob_base_fee(fee)?;
+                Some(fee)
+            } else {
+                None
+            };
 
             // Reachability gate: hold new submissions while L1 is away. The reads
             // above don't prove reachability (the signer address is local and gas
@@ -276,16 +308,13 @@ where
             // This holds true because l1 transactions are included in the order of sender nonce.
             // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
             let pending_txs: Vec<PendingTx<Input>> =
-            futures::stream::iter(commands.into_iter().zip(gas_limits))
-                .then(|(mut cmd, gas_limit)| {
+            futures::stream::iter(commands.into_iter().zip(gas_limits).enumerate())
+                .then(|(nonce_offset, (mut cmd, gas_limit))| {
                     let range = range.clone();
                     async move {
-                    let fee_params = until_l1_available(command_name, || {
-                        self.resolve_fee_params(fee_config, force_transaction_resubmission)
-                    })
-                    .await?;
                     let mut tx_request = TransactionRequest::default()
                         .with_from(operator_address)
+                        .with_nonce(base_nonce + nonce_offset as u64)
                         .with_max_fee_per_gas(fee_params.max_fee_per_gas)
                         .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
                         .with_gas_limit(gas_limit)
@@ -295,15 +324,8 @@ where
                     let mut blob_gas_limit = 0;
                     if let Some(blob_sidecar) = cmd.blob_sidecar() {
                         blob_gas_limit = blob_sidecar.blobs.len() as u64 * DATA_GAS_PER_BLOB;
-                        let fee_per_blob_gas = until_l1_available(command_name, || async {
-                            self.provider
-                                .get_blob_base_fee()
-                                .await
-                                .map_err(anyhow::Error::from)
-                        })
-                        .await?;
-                        L1_SENDER_METRICS
-                            .report_blob_base_fee(fee_per_blob_gas)?;
+                        let fee_per_blob_gas = blob_base_fee
+                            .context("blob base fee not prefetched for a cycle with blob sidecars")?;
                         let max_fee_per_blob_gas = fee_params.max_fee_per_blob_gas;
 
                         if fee_per_blob_gas > max_fee_per_blob_gas {
@@ -315,9 +337,11 @@ where
                         }
                         tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
 
-                        // Fusaka is active on all real chains, so send the EIP-7594 blob format by
-                        // default. Anvil does not support EIP-7594 yet, so fall back to EIP-4844
-                        // there (see https://github.com/foundry-rs/foundry/issues/12222).
+                        // Send the EIP-7594 blob format when the chain's active fork accepts it
+                        // (probed via `eth_config`, falling back to a chain-id heuristic — see
+                        // `ProviderCapabilities::supports_eip7594`). Pre-Fusaka chains and Anvil
+                        // get the legacy EIP-4844 format
+                        // (see https://github.com/foundry-rs/foundry/issues/12222).
                         if self.provider.capabilities().supports_eip7594 {
                             tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip7594(
                                 blob_sidecar.try_into_7594(EnvKzgSettings::Default.get())?,
@@ -340,7 +364,30 @@ where
                     L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()]
                         .set(balance_required);
 
-                    let pending_tx = self.provider.send_transaction(tx_request).await?;
+                    // A nonce-class rejection is a definitive refusal (tx not admitted), typically a
+                    // transient pool/state view inconsistency around a block import. The nonce is
+                    // fixed for this cycle, so re-sending it unchanged after a backoff self-heals.
+                    let mut send_attempt = 1;
+                    let pending_tx = loop {
+                        match self.provider.send_transaction(tx_request.clone()).await {
+                            Ok(pending_tx) => break pending_tx,
+                            Err(err)
+                                if is_nonce_error(&err)
+                                    && send_attempt < self.config.nonce_error_max_attempts =>
+                            {
+                                tracing::warn!(
+                                    command_name,
+                                    range,
+                                    send_attempt,
+                                    %err,
+                                    "L1 node rejected the transaction with a nonce error; retrying"
+                                );
+                                tokio::time::sleep(self.config.nonce_error_retry_backoff).await;
+                                send_attempt += 1;
+                            }
+                            Err(err) => return Err(err.into()),
+                        }
+                    };
                     let submitted_at = Instant::now();
                     let tx_hash = *pending_tx.tx_hash();
                     let receipt_fut = self.wait_for_confirmed_receipt(tx_hash);
@@ -704,7 +751,6 @@ where
         let configured_params = fee_config.configured_fee_params();
         let estimated = self.provider.estimate_eip1559_fees().await?;
         L1_SENDER_METRICS.report_l1_eip_1559_estimation(estimated)?;
-        self.report_custom_priority_fee_metrics().await?;
 
         tracing::debug!(
             max_priority_fee_per_gas_gwei = ?format_units(estimated.max_priority_fee_per_gas, "gwei"),
@@ -725,15 +771,10 @@ where
         commands: &[Input],
         operator_address: Address,
         fee_params: FeeParams,
+        // Sequential nonces start here — anvil's EIP-4844 parsing requires `nonce` and
+        // `gas_limit` even with `validation=false`. Matches the send nonces.
+        starting_nonce: u64,
     ) -> anyhow::Result<Vec<u64>> {
-        // Sequential nonces from the operator's pending count — anvil's EIP-4844 parsing
-        // requires `nonce` and `gas_limit` even with `validation=false`.
-        let starting_nonce = self
-            .provider
-            .get_transaction_count(operator_address)
-            .pending()
-            .await
-            .context("get pending nonce for L1 sender gas estimation")?;
         // Some L1 providers check sender balance even with `validation=false`; override
         // to bypass.
         let balance_override = StateOverridesBuilder::default()
@@ -746,8 +787,9 @@ where
             )
             .build();
 
-        // Mirror the submission path: EIP-7594 by default, EIP-4844 only on Anvil. Only consumed
-        // by `build_l1_simulation_request` when a command actually carries a blob sidecar.
+        // Mirror the submission path: EIP-7594 if the chain's active fork accepts it, EIP-4844
+        // otherwise. Only consumed by `build_l1_simulation_request` when a command actually
+        // carries a blob sidecar.
         let use_eip7594_sidecar = self.provider.capabilities().supports_eip7594;
 
         let block_state_calls = commands
@@ -853,6 +895,14 @@ where
             // skips the tick and must never take the sender down with it.
             if let Err(err) = self.report_operator_metrics_once(command_name).await {
                 tracing::warn!(command_name, "skipping operator metrics tick: {err:#}");
+            }
+            // Dashboard-only estimates; a failed poll must not take the sender down.
+            if let Err(err) = self.report_custom_priority_fee_metrics().await {
+                tracing::warn!(
+                    command_name,
+                    %err,
+                    "failed to report priority-fee estimate metrics"
+                );
             }
         }
     }
@@ -983,6 +1033,19 @@ where
     }
 }
 
+/// Nonce-class `eth_sendRawTransaction` rejections.
+fn is_nonce_error(err: &TransportError) -> bool {
+    match err {
+        TransportError::ErrorResp(payload) => {
+            let message = payload.message.to_lowercase();
+            message.contains("nonce too low")
+                || message.contains("nonce too high")
+                || message.contains("nonce gap")
+        }
+        _ => false,
+    }
+}
+
 /// Combines operator-configured fee caps with the network's EIP-1559 estimate.
 ///
 /// `max_fee_per_gas` and `max_fee_per_blob_gas` are taken verbatim from
@@ -1050,6 +1113,45 @@ impl L1SenderFeeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonce_error_classification() {
+        use alloy::rpc::json_rpc::ErrorPayload;
+        use alloy::transports::TransportErrorKind;
+
+        let resp = |message: &str| {
+            TransportError::ErrorResp(ErrorPayload {
+                code: -32000,
+                message: message.to_string().into(),
+                data: None,
+            })
+        };
+
+        // reth rejects a nonce-gapped blob transaction with exactly "nonce too high"; geth
+        // appends details after the same prefix; some clients capitalize.
+        assert!(is_nonce_error(&resp("nonce too high")));
+        assert!(is_nonce_error(&resp(
+            "nonce too high: tx nonce 7, gapped nonce 5"
+        )));
+        assert!(is_nonce_error(&resp(
+            "nonce too low: next nonce 5, tx nonce 3"
+        )));
+        assert!(is_nonce_error(&resp("Nonce too high")));
+        assert!(is_nonce_error(&resp("nonce gap for sender")));
+
+        // Non-nonce rejections and transport-level failures are not retryable here: a
+        // transport failure is ambiguous (the tx may have been admitted), so it must
+        // propagate rather than trigger a re-send.
+        assert!(!is_nonce_error(&resp(
+            "insufficient funds for gas * price + value"
+        )));
+        assert!(!is_nonce_error(&resp(
+            "replacement transaction underpriced"
+        )));
+        assert!(!is_nonce_error(&TransportErrorKind::custom_str(
+            "error sending request"
+        )));
+    }
 
     #[test]
     fn blob_simulation_request_is_buildable_only_with_sidecar() {

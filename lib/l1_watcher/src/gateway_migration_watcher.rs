@@ -51,7 +51,7 @@ impl GatewayMigrationWatcher {
         let resolve_start = move |next_migration_number: u64| async move {
             let chain_asset_handler_address = bridgehub.chain_asset_handler_address().await?;
             let next_l1_block = util::find_block_by_migration_number(
-                zk_chain.clone(),
+                &zk_chain,
                 chain_asset_handler_address,
                 l2_chain_id,
                 next_migration_number,

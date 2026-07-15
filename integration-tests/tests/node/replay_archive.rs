@@ -67,6 +67,9 @@ async fn encrypted_replay_archive_recovers_node_storage_end_to_end(
     };
     let rocks_db_path = tester.config().general_config.rocks_db_path.clone();
     let stopped = tester.stop().await?;
+    tokio::task::spawn_blocking(zksync_os_rocksdb::RocksDB::<()>::await_rocksdb_termination)
+        .await
+        .context("failed to join RocksDB shutdown wait")?;
 
     tokio::fs::remove_dir_all(&rocks_db_path)
         .await

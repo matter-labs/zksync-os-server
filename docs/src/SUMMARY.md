@@ -7,6 +7,7 @@
 - [Setup](setup/index.md)
   - [Prerequisites](setup/prerequisites.md)
   - [Local Run](setup/local_run.md)
+  - [Besu Network](setup/besu.md)
   - [Local Consensus Devnet](setup/consensus_devnet.md)
   - [Docker Setup](setup/docker.md)
   - [Batch verification (2FA)](setup/batch_verification.md)

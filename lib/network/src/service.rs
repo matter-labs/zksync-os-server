@@ -4,10 +4,15 @@ use crate::protocol::{
     ProtocolEvent, ZksProtocolConfig, ZksProtocolHandler,
 };
 use crate::session::PeerSessionStore;
-use crate::version::{ZksProtocolV1, ZksProtocolV2, ZksProtocolV3, ZksProtocolV4};
+use crate::twofa::wire::Zks2faMessage;
+use crate::twofa::{
+    ExternalNode2faConfig, MainNode2faConfig, Zks2faConnectionRegistry, Zks2faProtocolHandler,
+};
+use crate::version::{ZksProtocolV1, ZksProtocolV2, ZksProtocolV3, ZksProtocolV4, ZksProtocolV5};
 use crate::wire::message::ZksMessage;
 use crate::{VerifyBatch, VerifyBatchResult};
 use alloy::eips::eip2124::Head;
+use alloy::primitives::bytes::BytesMut;
 use backon::{ConstantBuilder, Retryable};
 use futures::future::join_all;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
@@ -23,10 +28,12 @@ use reth_network_peers::PeerId;
 use reth_network_peers::{NodeRecord, TrustedPeer};
 use reth_provider::BlockNumReader;
 use reth_tasks::Runtime;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::{
+    IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener as StdTcpListener, UdpSocket,
+};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -41,6 +48,15 @@ const BOOT_NODE_RESOLUTION_MAX_RETRIES: usize = 24;
 const BOOT_NODE_RESOLUTION_RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
     .with_delay(BOOT_NODE_RESOLUTION_RETRY_DELAY)
     .with_max_times(BOOT_NODE_RESOLUTION_MAX_RETRIES);
+const EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS: usize = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkPorts {
+    /// TCP port used by RLPx.
+    pub tcp: u16,
+    /// UDP port used by discv5.
+    pub udp: u16,
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to resolve any configured boot nodes before starting the p2p network")]
@@ -54,6 +70,59 @@ struct BootNodeResolutionState {
     resolved_boot_nodes: Vec<TrustedPeer>,
 }
 
+#[derive(Debug)]
+struct ReservedTcpUdpPort {
+    port: u16,
+    _tcp_listener: StdTcpListener,
+    _udp_socket: UdpSocket,
+}
+
+fn try_reserve_tcp_udp_port(address: Ipv4Addr, port: u16) -> io::Result<ReservedTcpUdpPort> {
+    let tcp_listener = StdTcpListener::bind(SocketAddrV4::new(address, port))?;
+    let port = tcp_listener.local_addr()?.port();
+    let udp_socket = UdpSocket::bind(SocketAddrV4::new(address, port))?;
+    Ok(ReservedTcpUdpPort {
+        port,
+        _tcp_listener: tcp_listener,
+        _udp_socket: udp_socket,
+    })
+}
+
+fn reserve_ephemeral_tcp_udp_port(address: Ipv4Addr) -> io::Result<ReservedTcpUdpPort> {
+    let mut last_error = None;
+    for _ in 0..EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS {
+        match try_reserve_tcp_udp_port(address, 0) {
+            Ok(reservation) => return Ok(reservation),
+            Err(err) => last_error = Some(err),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "no ephemeral TCP+UDP port reservation was attempted",
+        )
+    }))
+}
+
+fn network_error_is_addr_in_use(error: &NetworkError) -> bool {
+    match error {
+        NetworkError::AddressAlreadyInUse { .. } => true,
+        NetworkError::Io(err) | NetworkError::Discovery(_, err) => {
+            err.kind() == io::ErrorKind::AddrInUse
+        }
+        NetworkError::Discv5Error(err) => {
+            // discv5 does not expose AddrInUse as an io::ErrorKind, so match its display text.
+            let err = err.to_string().to_ascii_lowercase();
+            err.contains("address already in use")
+                || err.contains("addrinuse")
+                || err.contains("os error 48")
+                || err.contains("os error 98")
+        }
+        NetworkError::DnsResolver(_) => false,
+    }
+}
+
 async fn resolve_boot_nodes_with_retry(
     boot_nodes: Vec<TrustedPeer>,
 ) -> Result<Vec<TrustedPeer>, NetworkError> {
@@ -65,27 +134,27 @@ async fn resolve_boot_nodes_with_retry(
         resolved_boot_nodes: Vec::with_capacity(boot_nodes.len()),
         unresolved_boot_nodes: boot_nodes,
     }));
-    let resolve = Arc::new(|boot_node: TrustedPeer| async move { boot_node.resolve().await });
 
-    {
+    let resolve_once = || {
         let state = Arc::clone(&state);
-        let resolve = Arc::clone(&resolve);
-        move || {
-            let state = Arc::clone(&state);
-            let resolve = Arc::clone(&resolve);
-            async move { resolve_boot_nodes_once(&state, resolve.as_ref()).await }
+        async move {
+            resolve_boot_nodes_once(&state, &|boot_node: TrustedPeer| async move {
+                boot_node.resolve().await
+            })
+            .await
         }
-    }
-    .retry(BOOT_NODE_RESOLUTION_RETRY_BUILDER)
-    .notify(|error, retry_in| {
-        tracing::info!(
-            retry_in = ?retry_in,
-            unresolved_boot_nodes = error.unresolved_boot_nodes,
-            "retrying boot node resolution before starting p2p network"
-        );
-    })
-    .await
-    .map_err(|error| io::Error::new(io::ErrorKind::AddrNotAvailable, error))?;
+    };
+    resolve_once
+        .retry(BOOT_NODE_RESOLUTION_RETRY_BUILDER)
+        .notify(|error, retry_in| {
+            tracing::info!(
+                retry_in = ?retry_in,
+                unresolved_boot_nodes = error.unresolved_boot_nodes,
+                "retrying boot node resolution before starting p2p network"
+            );
+        })
+        .await
+        .map_err(|error| io::Error::new(io::ErrorKind::AddrNotAvailable, error))?;
 
     let state = state.lock().expect("boot node resolution state poisoned");
     if !state.unresolved_boot_nodes.is_empty() {
@@ -152,7 +221,11 @@ pub struct NetworkService {
     network_manager: NetworkManager,
     protocol_rx: mpsc::UnboundedReceiver<ProtocolEvent>,
     peer_sessions: Arc<RwLock<PeerSessionStore>>,
+    /// Registry of live `zks` (replay) connections. Retained for dispatching `VerifyBatch` to
+    /// pre-split peers that still carry verifier traffic over `zks/3`/`zks/4`.
     connection_registry: ConnectionRegistry,
+    /// Registry of live `zks_2fa` connections used to dispatch `VerifyBatch` to verifier peers.
+    zks_2fa_registry: Zks2faConnectionRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -168,13 +241,78 @@ pub struct PeerVerifyBatchResult {
 }
 
 impl NetworkService {
-    pub async fn new(
+    /// Builds the network service and returns the TCP/UDP ports it bound.
+    ///
+    /// When `config.port` is 0, startup first finds a port available for both TCP and UDP, then
+    /// retries if another process claims it before reth binds its sockets.
+    pub async fn new<Replay, Client>(
+        mut config: NetworkConfig,
+        runtime: Runtime,
+        protocol_config: ZksProtocolConfig,
+        replay: Replay,
+        client: Client,
+    ) -> Result<(Self, NetworkPorts), NetworkError>
+    where
+        Replay: ReadReplay + Clone,
+        Client: ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + Clone + 'static,
+    {
+        if config.port != 0 {
+            return Self::build(config, runtime, protocol_config, replay, client).await;
+        }
+
+        // Retries the reserve -> drop -> reth-bind sequence, unlike the inner reservation retry.
+        let mut last_error = None;
+        for attempt in 1..=EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS {
+            let reservation =
+                reserve_ephemeral_tcp_udp_port(config.address).map_err(NetworkError::from)?;
+            config.port = reservation.port;
+            // reth binds its own sockets, so release the temporary reservation before building.
+            drop(reservation);
+
+            match Self::build(
+                config.clone(),
+                runtime.clone(),
+                protocol_config.clone(),
+                replay.clone(),
+                client.clone(),
+            )
+            .await
+            {
+                Ok(service) => return Ok(service),
+                Err(err)
+                    if network_error_is_addr_in_use(&err)
+                        && attempt < EPHEMERAL_NETWORK_PORT_RESERVATION_ATTEMPTS =>
+                {
+                    tracing::info!(
+                        port = config.port,
+                        attempt,
+                        %err,
+                        "ephemeral p2p port was claimed before reth could bind; retrying"
+                    );
+                    config.port = 0;
+                    last_error = Some(err);
+                    tokio::task::yield_now().await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                "failed to bind an ephemeral TCP+UDP p2p port",
+            )
+            .into()
+        }))
+    }
+
+    async fn build(
         config: NetworkConfig,
         runtime: Runtime,
         protocol_config: ZksProtocolConfig,
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
-    ) -> Result<Self, NetworkError> {
+    ) -> Result<(Self, NetworkPorts), NetworkError> {
         // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
         // are captured. This must happen before `NetworkManager::builder()` because that is where
         // reth initializes its metric handles (via `Default::default()` on each metrics struct).
@@ -187,7 +325,12 @@ impl NetworkService {
                 tracing::info!(%ip, "resolved external IP (STUN)");
             }
         };
-        let rlpx_address = SocketAddr::V4(SocketAddrV4::new(config.address, config.port));
+        let rlpx_address = SocketAddr::new(IpAddr::V4(config.address), config.port);
+        let configured_port = config.port;
+        let discv5_listen_config = discv5::ListenConfig::Ipv4 {
+            ip: config.address,
+            port: config.port,
+        };
         let chain_spec = client.chain_spec();
         let genesis = Head {
             hash: chain_spec.genesis_hash(),
@@ -200,8 +343,10 @@ impl NetworkService {
         let boot_nodes = resolve_boot_nodes_with_retry(config.boot_nodes.clone()).await?;
         tracing::info!(?genesis, ?fork_id, "initializing p2p network service");
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
+        // ENs only sync/verify against trusted peers; a main node must still accept untrusted ENs.
+        let trusted_nodes_only = matches!(protocol_config, ZksProtocolConfig::ExternalNode(_));
         let cfg_builder = RethNetworkConfig::builder(config.secret_key, runtime)
-            .boot_nodes(boot_nodes.clone())
+            .boot_nodes(boot_nodes)
             // Configure node identity
             .apply(|builder| {
                 let peer_id = builder.get_peer_id();
@@ -223,30 +368,22 @@ impl NetworkService {
             .discovery_v5(
                 reth_discv5::Config::builder(rlpx_address)
                     .discv5_config(
-                        discv5::ConfigBuilder::new(discv5::ListenConfig::from_ip(
-                            rlpx_address.ip(),
-                            config.port,
-                        ))
-                        // Require only 2 peers to agree on our external IP to update our local ENR
-                        .enr_peer_update_min(2)
-                        // 2 peers from above must agree on external IP within 1h from each other.
-                        // This can make the node less responsive to dynamic IP changes.
-                        .vote_duration(Duration::from_secs(3600))
-                        // Sets peer ban duration to 1 second, effectively disabling it
-                        .ban_duration(Some(Duration::from_secs(1)))
-                        .build(),
+                        discv5::ConfigBuilder::new(discv5_listen_config)
+                            // Require only 2 peers to agree on our external IP to update our local ENR
+                            .enr_peer_update_min(2)
+                            // 2 peers from above must agree on external IP within 1h from each other.
+                            // This can make the node less responsive to dynamic IP changes.
+                            .vote_duration(Duration::from_secs(3600))
+                            // Sets peer ban duration to 1 second, effectively disabling it
+                            .ban_duration(Some(Duration::from_secs(1)))
+                            .build(),
                     )
                     // Specify custom fork id configuration
                     .fork(b"zksync-os", fork_id),
             )
+            .listener_addr(rlpx_address)
             .peer_config(
                 PeersConfig::default()
-                    // Boot nodes are *trusted*: a plain discovered peer is dropped
-                    // after `max_backoff_count` failed dials, so a boot peer whose
-                    // listener comes up moments after ours (nodes of one committee
-                    // or an EN and its main node starting together) would be
-                    // abandoned permanently. Trusted peers are redialed forever.
-                    .with_trusted_nodes(boot_nodes.clone())
                     // Sets peer ban duration to 1 second, effectively disabling it
                     .with_ban_duration(Duration::from_secs(1))
                     // Keep backoff durations short so that peers reconnect quickly after a
@@ -262,10 +399,15 @@ impl NetworkService {
                     })
                     // Peers' fork id must match, otherwise we could discover peers from other
                     // chains.
-                    .with_enforce_enr_fork_id(true),
+                    .with_enforce_enr_fork_id(true)
+                    // Boot nodes are *trusted*: a plain discovered peer is dropped after
+                    // `max_backoff_count` failed dials, so a boot peer whose listener comes up
+                    // moments after ours (nodes of one committee, or an EN and its main node
+                    // starting together) would be abandoned permanently. Trusted peers are
+                    // redialed forever, so replay sync never gets stranded on non-serving peers.
+                    .with_trusted_nodes(config.boot_nodes.clone())
+                    .with_trusted_nodes_only(trusted_nodes_only),
             )
-            // Use the same port for RLPx (TCP) and for discv5 (UDP)
-            .listener_addr(rlpx_address)
             .discovery_addr(rlpx_address)
             // Disable transaction gossip as it is unsupported by ZKsync OS
             .disable_tx_gossip(true)
@@ -276,6 +418,10 @@ impl NetworkService {
             // Use genesis as chain head
             .set_head(genesis);
         let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+        // Boot nodes double as trusted peers, exempt from the connection cap on outgoing dials.
+        let trusted_peer_ids: HashSet<PeerId> =
+            config.boot_nodes.iter().map(|peer| peer.id).collect();
+        let zks_2fa_registry: Zks2faConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
         let cfg_builder = match protocol_config {
             ZksProtocolConfig::MainNode(protocol) => Self::register_main_node_rlpx_sub_protocols(
                 cfg_builder,
@@ -283,6 +429,8 @@ impl NetworkService {
                 replay,
                 protocol_tx,
                 connection_registry.clone(),
+                zks_2fa_registry.clone(),
+                trusted_peer_ids,
             ),
             ZksProtocolConfig::ExternalNode(protocol) => {
                 Self::register_external_node_rlpx_sub_protocols(
@@ -291,6 +439,8 @@ impl NetworkService {
                     replay,
                     protocol_tx,
                     connection_registry.clone(),
+                    zks_2fa_registry.clone(),
+                    trusted_peer_ids,
                 )
             }
         };
@@ -301,12 +451,27 @@ impl NetworkService {
         let (network_manager, _txpool, _request_handler) =
             NetworkManager::builder(net_cfg).await?.split();
 
-        Ok(Self {
-            network_manager,
-            protocol_rx,
-            peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
-            connection_registry,
-        })
+        let bound_tcp_port = network_manager.local_addr().port();
+        let bound_udp_port = network_manager
+            .handle()
+            .discv5()
+            .map(|discv5| discv5.local_port())
+            .expect("discv5 must be configured for zksync-os networking");
+        debug_assert_eq!(bound_tcp_port, configured_port);
+        debug_assert_eq!(bound_udp_port, configured_port);
+        Ok((
+            Self {
+                network_manager,
+                protocol_rx,
+                peer_sessions: Arc::new(RwLock::new(PeerSessionStore::default())),
+                connection_registry,
+                zks_2fa_registry,
+            },
+            NetworkPorts {
+                tcp: bound_tcp_port,
+                udp: bound_udp_port,
+            },
+        ))
     }
 
     fn register_main_node_rlpx_sub_protocols(
@@ -315,8 +480,20 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         protocol_tx: mpsc::UnboundedSender<ProtocolEvent>,
         connection_registry: ConnectionRegistry,
+        zks_2fa_registry: Zks2faConnectionRegistry,
+        trusted_peers: HashSet<PeerId>,
     ) -> NetworkConfigBuilder {
-        let state = HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS);
+        let state = HandlerSharedState::new(
+            protocol_tx.clone(),
+            MAX_ACTIVE_CONNECTIONS,
+            trusted_peers.clone(),
+        );
+        let twofa_config = MainNode2faConfig {
+            accepted_verifier_signers: protocol.accepted_verifier_signers.clone(),
+            verify_result_tx: protocol.verify_result_tx.clone(),
+        };
+        let twofa_state =
+            HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS, trusted_peers);
         builder
             // Support for v1 must be dropped before upgrade to protocol version v31.0. Otherwise,
             // we might send invalid record to ENs that are still using v1 protocol (`starting_migration_number`
@@ -340,10 +517,22 @@ impl NetworkService {
                 connection_registry.clone(),
             ))
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV4, _>::for_main_node(
+                replay.clone(),
+                protocol.clone(),
+                state.clone(),
+                connection_registry.clone(),
+            ))
+            // Replay-only version: verifier traffic is carried by `zks_2fa` instead.
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV5, _>::for_main_node(
                 replay,
                 protocol,
                 state,
                 connection_registry,
+            ))
+            .add_rlpx_sub_protocol(Zks2faProtocolHandler::for_main_node(
+                twofa_config,
+                twofa_state,
+                zks_2fa_registry,
             ))
     }
 
@@ -353,9 +542,24 @@ impl NetworkService {
         replay: impl ReadReplay + Clone,
         protocol_tx: mpsc::UnboundedSender<ProtocolEvent>,
         connection_registry: ConnectionRegistry,
+        zks_2fa_registry: Zks2faConnectionRegistry,
+        trusted_peers: HashSet<PeerId>,
     ) -> NetworkConfigBuilder {
-        let state = HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS);
-        builder
+        let state = HandlerSharedState::new(
+            protocol_tx.clone(),
+            MAX_ACTIVE_CONNECTIONS,
+            trusted_peers.clone(),
+        );
+        // Only verifier ENs advertise `zks_2fa`; replay-only ENs leave `verification` unset.
+        let twofa_config = protocol
+            .verification
+            .clone()
+            .map(|verifier| ExternalNode2faConfig {
+                signing_key: verifier.signing_key,
+                verify_batch_tx: verifier.verify_batch_tx,
+                outgoing_verify_results: verifier.outgoing_verify_results,
+            });
+        let builder = builder
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV1, _>::for_external_node(
                 replay.clone(),
                 protocol.clone(),
@@ -375,11 +579,30 @@ impl NetworkService {
                 connection_registry.clone(),
             ))
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV4, _>::for_external_node(
+                replay.clone(),
+                protocol.clone(),
+                state.clone(),
+                connection_registry.clone(),
+            ))
+            // Replay-only version: verifier traffic is carried by `zks_2fa` instead.
+            .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV5, _>::for_external_node(
                 replay,
                 protocol,
                 state,
                 connection_registry,
-            ))
+            ));
+        match twofa_config {
+            Some(twofa_config) => {
+                let twofa_state =
+                    HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS, trusted_peers);
+                builder.add_rlpx_sub_protocol(Zks2faProtocolHandler::for_external_node(
+                    twofa_config,
+                    twofa_state,
+                    zks_2fa_registry,
+                ))
+            }
+            None => builder,
+        }
     }
 
     /// Consume the service by registering it as the set of long-running tasks that drive p2p
@@ -395,10 +618,17 @@ impl NetworkService {
     ) {
         let peer_sessions = Arc::clone(&self.peer_sessions);
         let connection_registry = Arc::clone(&self.connection_registry);
+        let zks_2fa_registry = Arc::clone(&self.zks_2fa_registry);
         if let Some(mut verify_request_rx) = verify_request_rx {
             runtime.spawn_critical_task("p2p verify dispatcher", async move {
                 while let Some(request) = verify_request_rx.recv().await {
-                    dispatch_verify_batch(&peer_sessions, &connection_registry, request).await;
+                    dispatch_verify_batch(
+                        &peer_sessions,
+                        &connection_registry,
+                        &zks_2fa_registry,
+                        request,
+                    )
+                    .await;
                 }
             });
         }
@@ -508,6 +738,7 @@ impl NetworkService {
 async fn dispatch_verify_batch(
     peer_sessions: &Arc<RwLock<PeerSessionStore>>,
     connection_registry: &ConnectionRegistry,
+    zks_2fa_registry: &Zks2faConnectionRegistry,
     request: VerifyBatch,
 ) {
     let required_block = request.last_block_number;
@@ -528,36 +759,49 @@ async fn dispatch_verify_batch(
         return;
     }
 
+    // Resolve each eligible peer to a concrete send target. New peers carry verifier traffic over
+    // `zks_2fa`; pre-split peers still use the in-`zks` verifier path on zks/3+.
+    enum Target {
+        Zks2fa(mpsc::Sender<BytesMut>),
+        LegacyZks(mpsc::Sender<BytesMut>),
+    }
     let dispatch_targets: Vec<_> = {
+        let zks_2fa_registry = zks_2fa_registry.read().unwrap();
         let connection_registry = connection_registry.read().unwrap();
         eligible_peers
             .into_iter()
-            .map(|peer_id| (peer_id, connection_registry.get(&peer_id).cloned()))
+            .map(|peer_id| {
+                let target = if let Some(handle) = zks_2fa_registry.get(&peer_id) {
+                    Some(Target::Zks2fa(handle.outbound_tx.clone()))
+                } else {
+                    connection_registry.get(&peer_id).and_then(|connection| {
+                        (connection.version >= crate::version::ZksVersion::Zks3)
+                            .then(|| Target::LegacyZks(connection.outbound_tx.clone()))
+                    })
+                };
+                (peer_id, target)
+            })
             .collect()
     };
     let mut sent = 0usize;
-    for (peer_id, connection) in dispatch_targets {
-        let Some(connection) = connection else {
-            tracing::warn!(
-                peer_id = %peer_id,
-                request_id = request.request_id,
-                batch_number = request.batch_number,
-                "skipping verify request: missing active connection"
-            );
-            continue;
+    for (peer_id, target) in dispatch_targets {
+        let (outbound_tx, encoded) = match target {
+            Some(Target::Zks2fa(tx)) => (tx, Zks2faMessage::VerifyBatch(request.clone()).encoded()),
+            Some(Target::LegacyZks(tx)) => (
+                tx,
+                ZksMessage::<ZksProtocolV3>::VerifyBatch(request.clone()).encoded(),
+            ),
+            None => {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    request_id = request.request_id,
+                    batch_number = request.batch_number,
+                    "skipping verify request: no eligible active connection"
+                );
+                continue;
+            }
         };
-        if connection.version < crate::version::ZksVersion::Zks3 {
-            tracing::warn!(
-                peer_id = %peer_id,
-                request_id = request.request_id,
-                batch_number = request.batch_number,
-                version = ?connection.version,
-                "skipping verify request: peer is not on zks/3"
-            );
-            continue;
-        }
-        let encoded = ZksMessage::<ZksProtocolV3>::VerifyBatch(request.clone()).encoded();
-        if connection.outbound_tx.send(encoded).await.is_err() {
+        if outbound_tx.send(encoded).await.is_err() {
             tracing::warn!(
                 peer_id = %peer_id,
                 request_id = request.request_id,
@@ -597,6 +841,8 @@ mod tests {
     use crate::VerifyBatch;
     use crate::protocol::PeerConnectionHandle;
     use crate::session::PeerSessionStore;
+    use crate::twofa::wire::Zks2faMessage;
+    use crate::twofa::{Zks2faConnectionRegistry, Zks2faPeerHandle};
     use crate::version::{ZksProtocolV3, ZksVersion};
     use crate::wire::message::ZksMessage;
     use alloy::primitives::{Address, B512, Bytes};
@@ -868,6 +1114,7 @@ mod tests {
 
         let peer_sessions = Arc::new(RwLock::new(store));
         let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let zks_2fa_registry: Zks2faConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
 
         let (eligible_tx, mut eligible_rx) = mpsc::channel(1);
         let (lagging_tx, mut lagging_rx) = mpsc::channel(1);
@@ -907,7 +1154,13 @@ mod tests {
         }
 
         let request = verify_request();
-        dispatch_verify_batch(&peer_sessions, &connection_registry, request.clone()).await;
+        dispatch_verify_batch(
+            &peer_sessions,
+            &connection_registry,
+            &zks_2fa_registry,
+            request.clone(),
+        )
+        .await;
 
         let encoded =
             tokio::time::timeout(std::time::Duration::from_millis(250), eligible_rx.recv())
@@ -945,12 +1198,76 @@ mod tests {
     async fn dispatch_verify_batch_returns_when_no_eligible_peers_exist() {
         let peer_sessions = Arc::new(RwLock::new(PeerSessionStore::default()));
         let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let zks_2fa_registry: Zks2faConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
 
         tokio::time::timeout(
             std::time::Duration::from_millis(250),
-            dispatch_verify_batch(&peer_sessions, &connection_registry, verify_request()),
+            dispatch_verify_batch(
+                &peer_sessions,
+                &connection_registry,
+                &zks_2fa_registry,
+                verify_request(),
+            ),
         )
         .await
         .expect("dispatch should return immediately when there are no eligible peers");
+    }
+
+    #[test_log::test(tokio::test(flavor = "current_thread"))]
+    async fn dispatch_verify_batch_prefers_zks_2fa_for_new_peers() {
+        // A peer present in the `zks_2fa` registry receives the request over `zks_2fa`, even if it
+        // also has a (replay-only) `zks` connection.
+        let zks_2fa_peer = peer_id(0x11);
+        let signer = Address::repeat_byte(0xAA);
+
+        let mut store = PeerSessionStore::default();
+        add_authorized_peer(&mut store, zks_2fa_peer, 120, signer);
+
+        let peer_sessions = Arc::new(RwLock::new(store));
+        let connection_registry: ConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let zks_2fa_registry: Zks2faConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
+
+        let (twofa_tx, mut twofa_rx) = mpsc::channel(1);
+        // A replay-only `zks/5` connection coexists for the same peer; it must NOT receive the
+        // verify request because `zks_2fa` takes precedence.
+        let (zks_tx, mut zks_rx) = mpsc::channel(1);
+        zks_2fa_registry.write().unwrap().insert(
+            zks_2fa_peer,
+            Zks2faPeerHandle {
+                outbound_tx: twofa_tx,
+            },
+        );
+        connection_registry.write().unwrap().insert(
+            zks_2fa_peer,
+            PeerConnectionHandle {
+                version: ZksVersion::Zks5,
+                outbound_tx: zks_tx,
+            },
+        );
+
+        let request = verify_request();
+        dispatch_verify_batch(
+            &peer_sessions,
+            &connection_registry,
+            &zks_2fa_registry,
+            request.clone(),
+        )
+        .await;
+
+        let encoded = tokio::time::timeout(std::time::Duration::from_millis(250), twofa_rx.recv())
+            .await
+            .expect("zks_2fa peer should receive verify request")
+            .expect("zks_2fa peer channel closed");
+        let mut slice = encoded.as_ref();
+        match Zks2faMessage::decode_message(&mut slice).unwrap() {
+            Zks2faMessage::VerifyBatch(actual) => assert_eq!(actual, request),
+            other => panic!("unexpected zks_2fa message dispatched: {other:?}"),
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), zks_rx.recv())
+                .await
+                .is_err(),
+            "replay-only zks/5 connection must not receive the verify request"
+        );
     }
 }

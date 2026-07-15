@@ -57,7 +57,7 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
             let current_l1_block = zk_chain.provider().get_block_number().await?;
             let last_executed_batch = finality.get_finality_status().last_executed_batch;
             let last_l1_block = util::find_l1_execute_block_by_batch_number(
-                zk_chain,
+                &zk_chain,
                 last_executed_batch,
                 max_blocks_to_process,
             )
@@ -108,7 +108,7 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
             let last_finalized_executed_batch =
                 finality.get_finality_status().last_finalized_executed_batch;
             let last_l1_block = util::find_l1_execute_block_by_batch_number(
-                zk_chain,
+                &zk_chain,
                 last_finalized_executed_batch,
                 max_blocks_to_process,
             )
