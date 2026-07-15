@@ -46,7 +46,6 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
             "initializing L1 persist batch watcher"
         );
 
-        let max_blocks_to_process = config.max_blocks_to_process;
         let provider = zk_chain.provider().clone();
         let address = (*zk_chain.address()).into();
 
@@ -57,18 +56,14 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 "resolving L1 persist batch watcher start block"
             );
 
-            // Start at `last_persisted_batch` so we re-validate it on resume, unless we're at
-            // genesis — in which case `0` triggers the batch-0 fast path inside
-            // `find_l1_commit_block_by_batch_number`.
-            let start_block = util::find_l1_commit_block_by_batch_number(
-                zk_chain,
-                last_persisted_batch,
-                max_blocks_to_process,
-            )
-            .await
-            .with_context(|| {
-                format!("failed to find L1 commit for batch #{last_persisted_batch}")
-            })?;
+            // Start at `last_persisted_batch` so we re-validate it on resume; at genesis batch 0
+            // resolves to the deployment block, scanning the whole history.
+            let (start_block, _) =
+                util::find_l1_commit_block_by_batch_number(&zk_chain, last_persisted_batch)
+                    .await
+                    .with_context(|| {
+                        format!("failed to find L1 commit for batch #{last_persisted_batch}")
+                    })?;
 
             let processor = Self {
                 batch_storage,

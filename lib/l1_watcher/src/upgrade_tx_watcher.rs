@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::watcher::{L1WatcherError, StartResolver};
 use crate::{EventSink, L1WatcherConfig, ProcessL1Event, util};
@@ -107,7 +106,7 @@ impl L1UpgradeTxWatcher {
 
         let resolve_start = move |current_protocol_version: ProtocolSemanticVersion| async move {
             let last_l1_block =
-                find_l1_block_by_protocol_version(zk_chain_l1, current_protocol_version.clone())
+                find_l1_block_by_protocol_version(&zk_chain_l1, current_protocol_version.clone())
                     .await?;
             tracing::info!(last_l1_block, "checking block starting from");
 
@@ -770,17 +769,17 @@ async fn fetch_upgrade_cut_log_at(
 }
 
 async fn find_l1_block_by_protocol_version(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: &ZkChain<NodeProvider>,
     protocol_version: ProtocolSemanticVersion,
 ) -> anyhow::Result<BlockNumber> {
     let protocol_version = protocol_version.packed()?;
 
     let deployment_block = zk_chain.deployment_block().await?;
     util::find_l1_block_by_predicate(
-        Arc::new(zk_chain),
+        zk_chain.provider(),
         deployment_block,
-        move |zk, block| async move {
-            let res = zk.get_raw_protocol_version(block.into()).await?;
+        move |block| async move {
+            let res = zk_chain.get_raw_protocol_version(block.into()).await?;
             Ok(res >= protocol_version)
         },
     )

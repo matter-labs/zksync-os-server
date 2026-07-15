@@ -28,9 +28,7 @@ mod sink;
 pub use sink::EventSink;
 
 mod committed_batch_provider;
-pub use committed_batch_provider::{
-    CommittedBatchProvider, fetch_batch, fetch_batch_commit_tx_hash,
-};
+pub use committed_batch_provider::{CommittedBatchProvider, fetch_live_committed_batch};
 
 mod persist_batch_watcher;
 pub use persist_batch_watcher::L1PersistBatchWatcher;
