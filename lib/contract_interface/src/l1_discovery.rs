@@ -1,6 +1,5 @@
 use crate::metrics::L1_STATE_METRICS;
 use crate::models::BatchDaInputMode;
-use crate::settlement_layer_intervals::SettlementLayerIntervals;
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256, address};
@@ -48,9 +47,6 @@ pub struct L1State {
     /// The address returned by `getSettlementLayer()` on the L1 diamond proxy at startup.
     /// `Address::ZERO` means the chain is settling on L1; any other address is the Gateway.
     pub settlement_layer_address: Address,
-    /// Settlement layer intervals discovered on startup. Can be used to route batch lookups to the
-    /// diamond proxy of the SL the batch was committed to.
-    pub settlement_layer_intervals: SettlementLayerIntervals,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,10 +90,7 @@ impl L1State {
     /// Fetches L1 ecosystem contracts along with batch finality status as of latest block.
     ///
     /// `gateway_provider` must be `Some` when the chain is currently settling on the Gateway
-    /// (an error is returned if missing). It may also be passed when the chain is currently
-    /// settling on L1 but has historical Gateway intervals — in that case the Gateway diamond
-    /// proxy is resolved from it so historical batches committed on the Gateway can still be
-    /// looked up via [`SettlementLayerIntervals::resolve_proxy`].
+    /// (an error is returned if missing).
     pub async fn fetch(
         l1_provider: NodeProvider,
         gateway_provider: Option<NodeProvider>,
@@ -188,20 +181,6 @@ impl L1State {
             None => BatchVerificationSL::Disabled,
         };
 
-        let chain_asset_handler = bridgehub_l1.chain_asset_handler_address().await?;
-        let settlement_layer_intervals = SettlementLayerIntervals::discover(
-            chain_asset_handler,
-            diamond_proxy_l1.clone(),
-            gateway_provider,
-            l2_chain_id,
-        )
-        .await?;
-        tracing::info!(
-            "discovered {} settlement layer intervals: {:?}",
-            settlement_layer_intervals.intervals().len(),
-            settlement_layer_intervals.intervals(),
-        );
-
         Ok(Self {
             bridgehub_l1,
             bridgehub_sl,
@@ -219,7 +198,6 @@ impl L1State {
             l1_chain_id,
             sl_chain_id,
             settlement_layer_address,
-            settlement_layer_intervals,
         })
     }
 
@@ -291,7 +269,6 @@ impl L1State {
             l1_chain_id: this.l1_chain_id,
             sl_chain_id: this.sl_chain_id,
             settlement_layer_address: this.settlement_layer_address,
-            settlement_layer_intervals: this.settlement_layer_intervals,
         })
     }
 
@@ -312,12 +289,6 @@ impl L1State {
 
     pub fn diamond_proxy_address_sl(&self) -> Address {
         *self.diamond_proxy_sl.address()
-    }
-
-    /// `true` when the chain is currently committing batches to a Gateway, derived from the
-    /// settlement layer interval discovered at startup.
-    pub fn settles_on_gateway(&self) -> bool {
-        self.settlement_layer_intervals.settles_on_gateway()
     }
 
     pub fn report_metrics(&self) {

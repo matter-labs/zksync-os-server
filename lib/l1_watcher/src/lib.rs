@@ -18,14 +18,8 @@ pub use revert_watcher::L1RevertWatcher;
 mod upgrade_tx_watcher;
 pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 
-mod interop_watcher;
-pub use interop_watcher::InteropWatcher;
-
 mod watcher;
 pub use watcher::{L1Watcher, StartResolver};
-
-mod sl_aware_watcher;
-pub use sl_aware_watcher::{SegmentResolver, SegmentSpec, SlAwareL1Watcher};
 
 mod traits;
 pub(crate) use traits::{ProcessL1Event, ProcessRawEvents};

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use tokio::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::{TracingPrimary, TracingSecondary};
-use zksync_os_integration_tests::{GatewayTester, PolicyServiceConfig};
+use zksync_os_integration_tests::{NEXT_TO_L1, PolicyServiceConfig, Tester};
 use zksync_os_tx_validators::deployment_filter::FORCE_DEPLOYER_ADDRESS;
 use zksync_os_types::BOOTLOADER_FORMAL_ADDRESS;
 
@@ -28,12 +28,12 @@ fn policy_service(server: &MockServer) -> PolicyServiceConfig {
     }
 }
 
-async fn setup(server: &MockServer) -> Result<GatewayTester> {
-    GatewayTester::builder()
-        .policy_service(policy_service(server))
-        .num_chains(1)
-        .build()
-        .await
+/// Env with the policy-service client configured (requires protocol >= v31).
+async fn setup(server: &MockServer) -> Result<Tester> {
+    let env = NEXT_TO_L1.environment().await?;
+    let mut config = env.default_config().await?;
+    config.sequencer_config.tx_validator.policy_service = policy_service(server);
+    env.launch(config).await
 }
 
 /// Install allow-everything mocks for both `/admit` and `/judge`. Used by
@@ -60,9 +60,9 @@ async fn allow_response_lets_tx_through() -> Result<()> {
     let server = MockServer::start_async().await;
     let [admit_mock, judge_mock] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
 
-    mc.chain(0)
+    tester
         .l2_provider
         .send_transaction(
             TransactionRequest::default()
@@ -102,7 +102,7 @@ async fn deny_response_rejects_send_raw_transaction() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
 
@@ -111,8 +111,7 @@ async fn deny_response_rejects_send_raw_transaction() -> Result<()> {
 
     // The deny lands synchronously at the RPC boundary — the client never
     // sees a tx hash.
-    let err = mc
-        .chain(0)
+    let err = tester
         .l2_provider
         .send_transaction(
             TransactionRequest::default()
@@ -141,15 +140,14 @@ async fn deny_response_rejects_eth_call() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
 
     let deny_mock = deny_for_target(&server, "/admit", TEST_DENY_TARGET).await;
     let _fallback = allow_admit_and_judge(&server).await;
 
-    let err = mc
-        .chain(0)
+    let err = tester
         .l2_provider
         .call(
             TransactionRequest::default()
@@ -177,15 +175,14 @@ async fn deny_response_rejects_eth_estimate_gas() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
 
     let deny_mock = deny_for_target(&server, "/admit", TEST_DENY_TARGET).await;
     let _fallback = allow_admit_and_judge(&server).await;
 
-    let err = mc
-        .chain(0)
+    let err = tester
         .l2_provider
         .estimate_gas(
             TransactionRequest::default()
@@ -308,12 +305,11 @@ async fn allow_response_lets_eth_call_through() -> Result<()> {
     let server = MockServer::start_async().await;
     let [admit_mock, judge_mock] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
 
     // Admit + judge allow should land the call on the VM; an empty-target
     // call executes cleanly against an EOA and returns empty bytes.
-    let result = mc
-        .chain(0)
+    let result = tester
         .l2_provider
         .call(TransactionRequest::default().with_to(Address::random()))
         .await?;
@@ -336,10 +332,9 @@ async fn allow_response_lets_eth_estimate_gas_through() -> Result<()> {
     let server = MockServer::start_async().await;
     let [admit_mock, judge_mock] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
 
-    let estimate = mc
-        .chain(0)
+    let estimate = tester
         .l2_provider
         .estimate_gas(
             TransactionRequest::default()
@@ -381,12 +376,12 @@ async fn rpc_judge_deny_matches_captured_trace_callee() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
 
     // Deploy two contracts so the test call produces a 2-frame trace
     // (Primary.calculate -> Secondary.multiply). Allow everything during
     // deployment.
-    let provider = mc.chain(0).l2_provider.clone();
+    let provider = tester.l2_provider.clone();
     let secondary = TracingSecondary::deploy(provider.clone(), U256::from(0)).await?;
     let primary = TracingPrimary::deploy(provider.clone(), *secondary.address()).await?;
     let primary_address = *primary.address();
@@ -447,8 +442,8 @@ async fn rpc_judge_first_body_has_frames_for_contract_call() -> Result<()> {
         })
         .await;
 
-    let mc = setup(&server).await?;
-    let provider = mc.chain(0).l2_provider.clone();
+    let tester = setup(&server).await?;
+    let provider = tester.l2_provider.clone();
     let secondary = TracingSecondary::deploy(provider.clone(), U256::from(0)).await?;
     let primary = TracingPrimary::deploy(provider.clone(), *secondary.address()).await?;
     let bodies_before = captured.lock().unwrap().len();
@@ -493,9 +488,9 @@ async fn rpc_judge_deny_blocks_eth_call_at_callee() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
 
-    let provider = mc.chain(0).l2_provider.clone();
+    let provider = tester.l2_provider.clone();
     let secondary = TracingSecondary::deploy(provider.clone(), U256::from(0)).await?;
     let primary = TracingPrimary::deploy(provider.clone(), *secondary.address()).await?;
     let primary_address = *primary.address();
@@ -535,7 +530,7 @@ async fn l1_priority_eth_call_skips_admit_and_judge() -> Result<()> {
     let server = MockServer::start_async().await;
     let [admit_mock, judge_mock] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
+    let tester = setup(&server).await?;
 
     // Snapshot post-setup call counts; the test call must not increment.
     let admit_before = admit_mock.calls_async().await;
@@ -546,7 +541,7 @@ async fn l1_priority_eth_call_skips_admit_and_judge() -> Result<()> {
         .transaction_type(0x7f); // L1PriorityTxType::TX_TYPE
     // We don't care whether simulation succeeds — only that admit/judge
     // weren't consulted.
-    let _ = mc.chain(0).l2_provider.call(req).await;
+    let _ = tester.l2_provider.call(req).await;
 
     assert_eq!(
         admit_mock.calls_async().await,
@@ -573,8 +568,8 @@ async fn judge_deny_rejects_send_raw_transaction() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
-    let signer = mc.chain(0).l2_wallet.default_signer().address();
+    let tester = setup(&server).await?;
+    let signer = tester.l2_wallet.default_signer().address();
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
     // Deny only `/judge` calls whose `from` is the test signer. Avoids
@@ -593,8 +588,7 @@ async fn judge_deny_rejects_send_raw_transaction() -> Result<()> {
         })
         .await;
 
-    let err = mc
-        .chain(0)
+    let err = tester
         .l2_provider
         .send_transaction(
             TransactionRequest::default()
@@ -623,8 +617,8 @@ async fn judge_deny_rejects_eth_call() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
-    let signer = mc.chain(0).l2_wallet.default_signer().address();
+    let tester = setup(&server).await?;
+    let signer = tester.l2_wallet.default_signer().address();
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
 
@@ -644,8 +638,7 @@ async fn judge_deny_rejects_eth_call() -> Result<()> {
         })
         .await;
 
-    let err = mc
-        .chain(0)
+    let err = tester
         .l2_provider
         .call(TransactionRequest::default().with_to(TEST_DENY_TARGET))
         .await
@@ -669,8 +662,8 @@ async fn judge_deny_rejects_eth_estimate_gas() -> Result<()> {
     let server = MockServer::start_async().await;
     let [setup_admit, setup_judge] = allow_admit_and_judge(&server).await;
 
-    let mc = setup(&server).await?;
-    let signer = mc.chain(0).l2_wallet.default_signer().address();
+    let tester = setup(&server).await?;
+    let signer = tester.l2_wallet.default_signer().address();
     setup_admit.delete_async().await;
     setup_judge.delete_async().await;
     let deny_mock = deny_judge_for_signer(&server, signer).await;
@@ -687,8 +680,7 @@ async fn judge_deny_rejects_eth_estimate_gas() -> Result<()> {
         })
         .await;
 
-    let err = mc
-        .chain(0)
+    let err = tester
         .l2_provider
         .estimate_gas(
             TransactionRequest::default()

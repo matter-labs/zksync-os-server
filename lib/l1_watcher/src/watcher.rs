@@ -137,8 +137,7 @@ impl<S, P: ProcessRawEvents> StartResolver<S, P> {
 ///
 /// Produced by [`StartResolver::resolve`] once the starting point has been resolved into a
 /// concrete `next_block` and processor. May be run unbounded (live tail) or bounded by
-/// `end_block` (used by [`SlAwareL1Watcher`](crate::SlAwareL1Watcher) to scan a closed segment
-/// to completion).
+/// `end_block`.
 pub struct L1Watcher<P> {
     provider: NodeProvider,
     address: ValueOrArray<Address>,
@@ -147,34 +146,12 @@ pub struct L1Watcher<P> {
     end_block: Option<BlockNumber>,
     max_blocks_to_process: u64,
     block_boundary: BlockBoundary,
-    pub(crate) processor: P,
+    processor: P,
 }
 
 impl<P: ProcessRawEvents> L1Watcher<P> {
-    /// Builds a watcher for a single pre-resolved segment, tailing the finalized boundary
-    /// (closed segments are dominated by `end_block`, so the boundary mode only matters for the
-    /// open-ended segment).
-    pub(crate) fn new_finalized(
-        config: L1WatcherConfig,
-        provider: NodeProvider,
-        address: ValueOrArray<Address>,
-        next_block: BlockNumber,
-        end_block: Option<BlockNumber>,
-        processor: P,
-    ) -> Self {
-        Self {
-            provider,
-            address,
-            next_block,
-            end_block,
-            max_blocks_to_process: config.max_blocks_to_process,
-            block_boundary: BlockBoundary::Finalized,
-            processor,
-        }
-    }
-
     /// Builds a watcher for a single pre-resolved segment, tailing the confirmed boundary
-    /// (`latest - confirmations`). Unlike [`new_finalized`](Self::new_finalized), it reacts to an
+    /// (`latest - confirmations`). Unlike a finalized-boundary watcher, it reacts to an
     /// event within `confirmations` blocks instead of waiting out finality.
     pub(crate) async fn new_confirmed(
         config: L1WatcherConfig,
@@ -202,11 +179,6 @@ impl<P: ProcessRawEvents> L1Watcher<P> {
     /// For unbounded watchers (`end_block = None`) this never returns; for bounded watchers
     /// it returns once the cursor passes `end_block`.
     pub async fn run(mut self) {
-        self.run_inner().await;
-    }
-
-    /// Non-consuming version of `run`, intended for internal usage in this crate.
-    pub(crate) async fn run_inner(&mut self) {
         let mut headers = match self.block_boundary {
             BlockBoundary::Confirmed { .. } => self.provider.latest_header_watcher().await,
             BlockBoundary::Finalized => self.provider.finalized_header_watcher().await,
