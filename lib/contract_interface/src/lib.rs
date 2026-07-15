@@ -44,6 +44,7 @@ alloy::sol! {
     struct InteropRoot {
         uint256 chainId;
         uint256 blockOrBatchNumber;
+        uint256 timestamp;
         bytes32[] sides;
     }
 
@@ -82,6 +83,7 @@ alloy::sol! {
             uint256 indexed chainId,
             uint256 indexed blockNumber,
             uint256 indexed logId,
+            uint256 timestamp,
             bytes32[] sides
         );
 
@@ -390,6 +392,15 @@ alloy::sol! {
         struct BatchImtRoots {
             bytes32 rootBegin;
             bytes32 rootEnd;
+        }
+
+        /// `BatchDecoder.DecodedExecuteData` — the execute-batches wire struct of the
+        /// atomic-interop contracts (protocol v0.31.x on that branch, v32+ once released):
+        /// the payload after the version byte is `abi.encode` of this struct.
+        struct DecodedExecuteData {
+            StoredBatchInfo[] batchesData;
+            PriorityOpsBatchInfo[] priorityOpsData;
+            InteropRoot[][] dependencyRoots;
         }
 
         function executeBatchesSharedBridge(

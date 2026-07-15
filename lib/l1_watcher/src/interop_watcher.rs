@@ -201,6 +201,7 @@ impl ProcessRawEvents for InteropWatcher {
         let interop_root = InteropRoot {
             chainId: event.chainId,
             blockOrBatchNumber: event.blockNumber,
+            timestamp: event.timestamp,
             sides: event.sides.clone(),
         };
 

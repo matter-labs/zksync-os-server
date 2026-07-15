@@ -17,6 +17,10 @@ fn proving_version_from_tag(tag: &str) -> Option<String> {
     match tag {
         "v0.2.10-interface-v0.1.3" => Some(String::from("V6")),
         "v0.3.1-interface-v0.1.3" => Some(String::from("V7")),
+        // TEMPORARY: v0.3.1 + timestamped interop roots, published on a fork until the
+        // corresponding zksync-os PR merges and a real release (with rebuilt app binaries)
+        // is cut. Reuses the v0.3.1 app binaries below.
+        "v0.3.2-interface-v0.1.3" => Some(String::from("V7")),
         _ => None,
     }
 }
@@ -119,6 +123,10 @@ fn main() {
             // Should be removed as soon as we can get rig of proving V6.
             let tag = if proving_version == "V6" {
                 "v0.2.5".to_owned()
+            } else if tag == "v0.3.2-interface-v0.1.3" {
+                // TEMPORARY: no binary release exists for the fork tag; the forward-only
+                // integration flow just needs the V7 binaries to be present.
+                "v0.3.1-interface-v0.1.3".to_owned()
             } else {
                 tag
             };
