@@ -226,6 +226,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
         loop {
             state_reporter.enter_state(GenericComponentState::Idle);
+            // A batch must always accept its first block: with the batch
+            // still empty there is nothing to seal, and sealing on a single
+            // block that alone exceeds a limit (e.g. more transactions than
+            // `tx_per_batch_limit`) would produce an empty batch — panicking
+            // below with the oversized block still queued, so the batcher
+            // crash-loops on it.
+            let batch_is_empty = blocks.is_empty();
             tokio::select! {
                 /* ---------- check for timeout ---------- */
                 _ = async {
@@ -241,7 +248,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 /* ---------- collect blocks ---------- */
                should_seal = block_receiver.peek_recv(|item| {
                     // determine if the block fits into the current batch
-                    accumulator.clone().add(&item.output, &item.record).should_seal()
+                    !batch_is_empty
+                        && accumulator.clone().add(&item.output, &item.record).should_seal()
                 }) => {
                     state_reporter.enter_state(GenericComponentState::Active);
                     match should_seal {
