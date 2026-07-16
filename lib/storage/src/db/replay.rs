@@ -434,22 +434,51 @@ impl ReadReplay for BlockReplayStorage {
         db_key: Option<Vec<u8>>,
     ) -> Option<ReplayRecord> {
         let key = db_key.unwrap_or_else(|| block_number.to_be_bytes().to_vec());
-        let Some(block_context) = self.get_context_by_key(block_number, &key) else {
-            // Writes are atomic, so if we can't read the context, we can't read the rest of the
-            // replay record anyway.
-            return None;
-        };
+        // Writes are atomic, so if we can't read the context, we can't read the rest of the
+        // replay record anyway.
+        let block_context = self.get_context_by_key(block_number, &key)?;
+        Some(self.assemble_replay_record(block_number, &key, block_context))
+    }
 
-        // Writes are atomic and, since block context was read successfully, the rest of the replay
-        // record should be present too. Hence, we can safely unwrap here.
+    fn latest_record(&self) -> BlockNumber {
+        // This is guaranteed to be non-`None` because genesis is always inserted on storage initialization.
+        self.latest_record_checked()
+            .expect("no blocks in BlockReplayStorage")
+    }
+}
+
+impl BlockReplayStorage {
+    /// Like [`ReadReplay::get_replay_record`], but takes the block context from the legacy row,
+    /// embedded hashes included. Used by the override path: during a multi-block override the
+    /// `CanonicalHash` entries of already-overridden ancestors point at the new chain, so
+    /// reconstructing the hashes would splice new-chain entries into the record being archived.
+    fn get_replay_record_with_original_hashes(
+        &self,
+        block_number: BlockNumber,
+    ) -> Option<ReplayRecord> {
+        let key = block_number.to_be_bytes();
+        let block_context = self.get_legacy_context(&key)?;
+        Some(self.assemble_replay_record(block_number, &key, block_context))
+    }
+
+    /// Assembles a [`ReplayRecord`] around an already-resolved context.
+    ///
+    /// Writes are atomic and a context for this key exists, so the rest of the replay record
+    /// must be present too. Hence, we can safely unwrap here.
+    fn assemble_replay_record(
+        &self,
+        block_number: u64,
+        key: &[u8],
+        block_context: BlockContext,
+    ) -> ReplayRecord {
         let starting_l1_priority_id = self
             .db
-            .get_cf(BlockReplayColumnFamily::StartingL1SerialId, &key)
+            .get_cf(BlockReplayColumnFamily::StartingL1SerialId, key)
             .expect("Failed to read from LastProcessedL1TxId CF")
             .expect("StartingL1SerialId must be written atomically with Context");
         let transactions = self
             .db
-            .get_cf(BlockReplayColumnFamily::Txs, &key)
+            .get_cf(BlockReplayColumnFamily::Txs, key)
             .expect("Failed to read from Txs CF")
             .expect("Txs must be written atomically with Context");
         // todo: save `previous_block_timestamp` as another column in the next breaking change to
@@ -464,13 +493,13 @@ impl ReadReplay for BlockReplayStorage {
 
         let node_version = self
             .db
-            .get_cf(BlockReplayColumnFamily::NodeVersion, &key)
+            .get_cf(BlockReplayColumnFamily::NodeVersion, key)
             .expect("Failed to read from NodeVersion CF")
             .expect("NodeVersion must be written atomically with Context");
 
         let protocol_version = if let Some(version) = self
             .db
-            .get_cf(BlockReplayColumnFamily::ProtocolVersion, &key)
+            .get_cf(BlockReplayColumnFamily::ProtocolVersion, key)
             .expect("Failed to read from ProtocolVersion CF")
         {
             String::from_utf8(version)
@@ -499,7 +528,7 @@ impl ReadReplay for BlockReplayStorage {
 
         let force_preimages = if let Some(preimages) = self
             .db
-            .get_cf(BlockReplayColumnFamily::ForcePreimages, &key)
+            .get_cf(BlockReplayColumnFamily::ForcePreimages, key)
             .expect("Failed to read from ForcePreimages CF")
         {
             let stored: StorageForcePreimages =
@@ -514,13 +543,13 @@ impl ReadReplay for BlockReplayStorage {
 
         let block_output_hash = self
             .db
-            .get_cf(BlockReplayColumnFamily::BlockOutputHash, &key)
+            .get_cf(BlockReplayColumnFamily::BlockOutputHash, key)
             .expect("Failed to read from BlockOutputHash CF")
             .expect("BlockOutputHash must be written atomically with Context");
 
         let starting_interop_root_id = if let Some(starting_interop_root_id) = self
             .db
-            .get_cf(BlockReplayColumnFamily::StartingInteropRootId, &key)
+            .get_cf(BlockReplayColumnFamily::StartingInteropRootId, key)
             .expect("Failed to read from StartingInteropRootId CF")
         {
             let stored: u64 = bincode::serde::decode_from_slice(
@@ -536,7 +565,7 @@ impl ReadReplay for BlockReplayStorage {
 
         let starting_migration_number = if let Some(starting_migration_number) = self
             .db
-            .get_cf(BlockReplayColumnFamily::StartingMigrationNumber, &key)
+            .get_cf(BlockReplayColumnFamily::StartingMigrationNumber, key)
             .expect("Failed to read from StartingMigrationNumber CF")
         {
             let stored: u64 = bincode::serde::decode_from_slice(
@@ -552,7 +581,7 @@ impl ReadReplay for BlockReplayStorage {
 
         let starting_interop_fee_number = if let Some(starting_interop_fee_number) = self
             .db
-            .get_cf(BlockReplayColumnFamily::StartingInteropFeeNumber, &key)
+            .get_cf(BlockReplayColumnFamily::StartingInteropFeeNumber, key)
             .expect("Failed to read from StartingInteropFeeNumber CF")
         {
             let stored: u64 = bincode::serde::decode_from_slice(
@@ -568,7 +597,7 @@ impl ReadReplay for BlockReplayStorage {
 
         // TODO(RocksDB migration): BlockStartCursors fields are reassembled from separate column
         // families below. A future migration should read them from a single CF.
-        Some(ReplayRecord {
+        ReplayRecord {
             block_context,
             transactions: bincode::decode_from_slice(&transactions, bincode::config::standard())
                 .expect("Failed to deserialize transactions")
@@ -592,13 +621,7 @@ impl ReadReplay for BlockReplayStorage {
                 migration_number: starting_migration_number,
                 interop_fee_number: starting_interop_fee_number,
             },
-        })
-    }
-
-    fn latest_record(&self) -> BlockNumber {
-        // This is guaranteed to be non-`None` because genesis is always inserted on storage initialization.
-        self.latest_record_checked()
-            .expect("no blocks in BlockReplayStorage")
+        }
     }
 }
 
@@ -639,8 +662,11 @@ impl WriteReplay for BlockReplayStorage {
         }
 
         if block_context.block_number <= current_latest_record {
+            // The legacy copy always exists for canonical rows (they are dual-written), and it
+            // is the only correct hash source here: reconstruction would splice new-chain
+            // hashes into the archived record when overriding a range of blocks.
             let old_record = self
-                .get_replay_record(block_context.block_number)
+                .get_replay_record_with_original_hashes(block_context.block_number)
                 .expect("Old record must exist");
             if &old_record != block_record {
                 let old_record_hash = self.get_canonical_block_hash(block_context.block_number);
@@ -969,5 +995,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(storage.get_replay_record(5), Some(next));
+    }
+
+    #[tokio::test]
+    async fn multi_block_override_archives_original_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
+        let chain = make_chain(5);
+        for sealed in &chain {
+            storage.write(sealed.clone(), false).await.unwrap();
+        }
+
+        // Replace blocks 3 and 4 sequentially, as a range rebuild does. By the time block 4 is
+        // overridden, `CanonicalHash[3]` already points at the new chain, so its archived copy
+        // must not be reconstructed from the index.
+        let (old3, old4) = (&chain[3], &chain[4]);
+        let mut new3 = old3.as_ref().clone();
+        new3.block_context.timestamp += 100;
+        let new3_hash = fake_hash(103);
+        storage
+            .write(Sealed::new_unchecked(new3.clone(), new3_hash), true)
+            .await
+            .unwrap();
+        let mut new4 = old4.as_ref().clone();
+        new4.block_context.timestamp += 100;
+        new4.block_context.block_hashes = new3.block_context.block_hashes.push(new3_hash);
+        new4.previous_block_timestamp = new3.block_context.timestamp;
+        storage
+            .write(Sealed::new_unchecked(new4.clone(), fake_hash(104)), true)
+            .await
+            .unwrap();
+
+        // The archived copies keep the hashes they were executed with: old block 4's window
+        // ends with old block 3's hash, not the replacement's. (Contexts are compared instead
+        // of full records because `previous_block_timestamp` of archived rows is derived from
+        // the current canonical neighbor on read — a pre-existing quirk.)
+        let old4_read = storage
+            .get_replay_record_by_key(4, Some(old4.hash().0.to_vec()))
+            .unwrap();
+        assert_eq!(old4_read.block_context, old4.block_context);
+        let old3_read = storage
+            .get_replay_record_by_key(3, Some(old3.hash().0.to_vec()))
+            .unwrap();
+        assert_eq!(old3_read.block_context, old3.block_context);
+        // The new canonical rows reconstruct against the repointed index.
+        assert_eq!(storage.get_replay_record(3), Some(new3));
+        assert_eq!(storage.get_replay_record(4), Some(new4));
     }
 }
