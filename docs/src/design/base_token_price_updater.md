@@ -43,7 +43,7 @@ then the component will also periodically update "ETH:token" price ratio on L1. 
 still work without it but there will be a warning in logs and ratio on L1 won't change meaning that price
 for L1->L2 txs can eventually get outdated.
 
-You can use either a local private key or a GCP KMS key via the `token_multiplier_setter_sk` field:
+You can use a local private key, a GCP KMS key, or an Azure Key Vault key via the `token_multiplier_setter_sk` field:
 
 ```yaml
 # Option 1: Local private key (plain hex string)
@@ -55,6 +55,12 @@ base_token_price_updater:
   token_multiplier_setter_sk:
     type: gcp_kms
     resource: "projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}"
+
+# Option 3: Azure Key Vault / Managed HSM key (structured object; the key version is required)
+base_token_price_updater:
+  token_multiplier_setter_sk:
+    type: azure_kms
+    key_id: "https://{vault}.vault.azure.net/keys/{name}/{version}"
 ```
 
 ## Mainnet recommendation

@@ -1119,8 +1119,9 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
 /// External Nodes do not send L1 transactions and may omit them.
 ///
-/// Each operator accepts either a hex private key string (backward-compatible) or a GCP KMS
-/// resource object: `{"type": "gcp_kms", "resource": "projects/.../cryptoKeyVersions/N"}`.
+/// Each operator accepts either a hex private key string (backward-compatible) or a cloud KMS
+/// object: `{"type": "gcp_kms", "resource": "projects/.../cryptoKeyVersions/N"}` or
+/// `{"type": "azure_kms", "key_id": "https://{vault}.vault.azure.net/keys/{name}/{version}"}`.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 pub struct L1SenderConfig {
     /// Signer to commit batches to L1.
@@ -1131,7 +1132,7 @@ pub struct L1SenderConfig {
     pub operator_commit_sk: Option<SignerConfig>,
 
     /// Signer to submit proofs to L1.
-    /// Can be arbitrary funded address - proof submission is permissionless.
+    /// Must hold `PROVER_ROLE` for the chain on the ValidatorTimelock (permissioned).
     /// Not required for External Nodes, which do not send L1 transactions.
     /// On a Main Node, required at runtime only when settling on L1 (see `operator_commit_sk`).
     #[config(secret, alias = "operator_prove_pk", with = SignerConfigDeserializer)]
