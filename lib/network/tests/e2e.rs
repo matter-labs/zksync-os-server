@@ -22,29 +22,52 @@ use zksync_os_network::version::{
     ZksProtocolV0, ZksProtocolV1, ZksProtocolV2, ZksProtocolV3, ZksProtocolV4, ZksProtocolV5,
     ZksProtocolVersionSpec, ZksVersion,
 };
-use zksync_os_network::{PeerVerifyBatchResult, VerifyBatchOutcome, VerifyBatchResult};
+use zksync_os_network::{
+    PeerVerifyBatchResult, RecordOverride, VerifyBatchOutcome, VerifyBatchResult,
+};
 use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::{ReadReplay, ReplayRecord};
 use zksync_os_types::{BlockStartCursors, NodeRole, ProtocolSemanticVersion};
 
 #[derive(Debug, Clone, Default)]
-struct InMemReplay(HashMap<BlockNumber, ReplayRecord>);
+struct InMemReplay {
+    canonical: HashMap<BlockNumber, ReplayRecord>,
+    /// Rows stored under explicit db keys, mirroring how reverted records are kept in RocksDB.
+    by_key: HashMap<Vec<u8>, ReplayRecord>,
+}
+
+impl InMemReplay {
+    fn new(replays: impl IntoIterator<Item = (BlockNumber, ReplayRecord)>) -> Self {
+        Self {
+            canonical: HashMap::from_iter(replays),
+            by_key: HashMap::new(),
+        }
+    }
+
+    fn with_override(mut self, db_key: Vec<u8>, record: ReplayRecord) -> Self {
+        self.by_key.insert(db_key, record);
+        self
+    }
+}
 
 impl ReadReplay for InMemReplay {
     fn get_context(&self, block_number: BlockNumber) -> Option<BlockContext> {
-        self.0.get(&block_number).map(|r| r.block_context)
+        self.canonical.get(&block_number).map(|r| r.block_context)
     }
 
     fn get_replay_record_by_key(
         &self,
         block_number: BlockNumber,
-        _db_key: Option<Vec<u8>>,
+        db_key: Option<Vec<u8>>,
     ) -> Option<ReplayRecord> {
-        self.0.get(&block_number).cloned()
+        match db_key {
+            Some(db_key) => self.by_key.get(&db_key).cloned(),
+            None => self.canonical.get(&block_number).cloned(),
+        }
     }
 
     fn latest_record(&self) -> BlockNumber {
-        self.0.keys().last().copied().unwrap_or_default()
+        self.canonical.keys().last().copied().unwrap_or_default()
     }
 }
 
@@ -132,6 +155,18 @@ trait PeerExt {
         trusted_peers: HashSet<PeerId>,
     ) -> TestPeerProtocolHandles;
 
+    #[allow(clippy::too_many_arguments)]
+    fn add_zks_sub_protocol_with_storage<P: ZksProtocolVersionSpec>(
+        &mut self,
+        node_role: NodeRole,
+        starting_block: BlockNumber,
+        replays: InMemReplay,
+        record_overrides: Vec<RecordOverride>,
+        max_active_connections: usize,
+        verifier_signing_key: Option<SecretString>,
+        trusted_peers: HashSet<PeerId>,
+    ) -> TestPeerProtocolHandles;
+
     /// Registers a replay-only `zks/5` handler plus a `zks_2fa` handler on the same peer, sharing a
     /// single `ProtocolEvent` stream — mirroring how a post-split verifier peer is wired. Pass
     /// `verifier_signing_key` only for external nodes.
@@ -184,6 +219,27 @@ where
         verifier_signing_key: Option<SecretString>,
         trusted_peers: HashSet<PeerId>,
     ) -> TestPeerProtocolHandles {
+        self.add_zks_sub_protocol_with_storage::<P>(
+            node_role,
+            starting_block,
+            InMemReplay::new(replays),
+            vec![],
+            max_active_connections,
+            verifier_signing_key,
+            trusted_peers,
+        )
+    }
+
+    fn add_zks_sub_protocol_with_storage<P: ZksProtocolVersionSpec>(
+        &mut self,
+        node_role: NodeRole,
+        starting_block: BlockNumber,
+        replays: InMemReplay,
+        record_overrides: Vec<RecordOverride>,
+        max_active_connections: usize,
+        verifier_signing_key: Option<SecretString>,
+        trusted_peers: HashSet<PeerId>,
+    ) -> TestPeerProtocolHandles {
         let (protocol_tx, protocol_rx) = mpsc::unbounded_channel();
         let (replay_tx, replay_rx) = mpsc::channel(8);
         let (verification, outgoing_verify_results_tx) =
@@ -207,7 +263,7 @@ where
             let (verify_result_tx, verify_result_rx) = mpsc::channel(8);
             (
                 ZksProtocolHandler::<P, _>::for_main_node(
-                    InMemReplay(HashMap::from_iter(replays)),
+                    replays,
                     MainNodeProtocolConfig {
                         accepted_verifier_signers: accepted_verifier_signers(),
                         verify_result_tx,
@@ -220,10 +276,10 @@ where
         } else {
             (
                 ZksProtocolHandler::<P, _>::for_external_node(
-                    InMemReplay(HashMap::from_iter(replays)),
+                    replays,
                     ExternalNodeProtocolConfig {
                         starting_block: Arc::new(RwLock::new(starting_block)),
-                        record_overrides: vec![],
+                        record_overrides,
                         max_blocks_per_message: 64,
                         replay_sender: replay_tx,
                         verification,
@@ -260,7 +316,7 @@ where
             HandlerSharedState::new(protocol_tx, max_active_connections, HashSet::new());
         let connection_registry = Arc::new(RwLock::new(HashMap::new()));
         let zks_2fa_registry = Arc::new(RwLock::new(HashMap::new()));
-        let replays = InMemReplay(HashMap::from_iter(replays));
+        let replays = InMemReplay::new(replays);
 
         let (verify_result_rx, outgoing_verify_results_tx) = if node_role.is_main() {
             let (verify_result_tx, verify_result_rx) = mpsc::channel(8);
@@ -438,6 +494,49 @@ async fn emits_replay_session_events() {
 
     let received_replay_record = replay_rx_peer1.recv().await.unwrap();
     assert_eq!(received_replay_record, record1);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn serves_overridden_replay_records() {
+    // Regression test for the reverted-block debugging flow (#657): an EN that requests record
+    // overrides must be served the rows stored under the overridden db keys instead of the
+    // canonical ones.
+    let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
+    let record1 = dummy_record::<ZksProtocolV3>(1);
+    let canonical2 = dummy_record::<ZksProtocolV3>(2);
+    let reverted2 = dummy_record::<ZksProtocolV3>(2);
+    assert_ne!(canonical2, reverted2);
+    // Opaque to the protocol; in production this is the reverted block's hash.
+    let db_key = vec![0xAB; 32];
+
+    net.peers_mut()[0].add_zks_sub_protocol_with_storage::<ZksProtocolV3>(
+        NodeRole::MainNode,
+        0,
+        InMemReplay::new([(1, record1.clone()), (2, canonical2.clone())])
+            .with_override(db_key.clone(), reverted2.clone()),
+        vec![],
+        100,
+        None,
+        HashSet::new(),
+    );
+    let mut external = net.peers_mut()[1].add_zks_sub_protocol_with_storage::<ZksProtocolV3>(
+        NodeRole::ExternalNode,
+        1,
+        InMemReplay::new([(1, record1.clone()), (2, canonical2.clone())]),
+        vec![RecordOverride {
+            block_number: 2,
+            db_key: db_key.into(),
+        }],
+        100,
+        None,
+        HashSet::new(),
+    );
+
+    let handle = net.spawn();
+    handle.connect_peers().await;
+
+    assert_eq!(external.replay_rx.recv().await.unwrap(), record1);
+    assert_eq!(external.replay_rx.recv().await.unwrap(), reverted2);
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
