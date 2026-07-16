@@ -41,15 +41,10 @@ pub struct BlockReplayStorage {
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
     /// Full [`BlockContext`], including the 256 previous block hashes (~8 KiB per block).
+    /// For canonical rows this is a rollback-safety copy — reads prefer [`Self::ContextV2`].
+    /// Non-canonical (hash-keyed) rows live only here.
     ///
-    /// For canonical rows this is a compatibility copy: reads prefer the stripped row in
-    /// [`Self::ContextV2`] and only fall back here (for rows written before `ContextV2`
-    /// existed, or by an older binary during a rollback). Non-canonical (hash-keyed) rows live
-    /// only here.
-    ///
-    /// TODO(RocksDB migration): once `ContextV2` has proven itself in production, stop writing
-    /// canonical rows here and migrate pre-existing ones (backfilling `CanonicalHash` for
-    /// history predating that CF along the way), leaving this CF to non-canonical rows only.
+    /// TODO(RocksDB migration): stop writing canonical rows here and delete existing ones.
     Context,
     /// Stripped [`BlockContext`] for canonical rows: everything except the 256 previous block
     /// hashes, which are derivable data and get reconstructed from [`Self::CanonicalHash`] on
@@ -350,6 +345,13 @@ impl BlockReplayStorage {
                 Some(bytes) => U256::from_be_slice(&bytes),
                 None => {
                     let embedded = embedded.get_or_insert_with(|| {
+                        // Only expected for blocks appended before `CanonicalHash` was
+                        // introduced, i.e. only on chains that haven't produced a block since.
+                        tracing::warn!(
+                            block_number,
+                            oldest_missing_entry = number,
+                            "missing CanonicalHash entries; falling back to embedded block hashes"
+                        );
                         self.get_legacy_context(key)
                             .expect("canonical rows are dual-written; legacy copy must exist")
                             .block_hashes
