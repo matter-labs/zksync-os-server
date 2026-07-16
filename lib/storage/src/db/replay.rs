@@ -30,6 +30,8 @@ use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 #[derive(Clone, Debug)]
 pub struct BlockReplayStorage {
     db: RocksDB<BlockReplayColumnFamily>,
+    /// Shared by all blocks; stripped rows don't persist it (see [`StoredBlockContextV2`]).
+    chain_id: u64,
 }
 
 /// Column families for storage of block replay commands.
@@ -111,7 +113,10 @@ impl BlockReplayStorage {
             .expect("Failed to open BlockReplayStorage")
             .with_sync_writes();
 
-        let this = Self { db };
+        let this = Self {
+            db,
+            chain_id: genesis.state().await.context.chain_id,
+        };
         let inserted_genesis = if this.latest_record_checked().is_none() {
             let genesis_tx = genesis.genesis_upgrade_tx().await;
             let genesis_context = &genesis.state().await.context;
@@ -142,11 +147,11 @@ impl BlockReplayStorage {
     ///
     /// This is intended for recovery tooling that rebuilds the DB from archived replay records and
     /// writes the recovered chain from genesis upward.
-    pub fn new_without_genesis(db_path: &Path) -> Self {
+    pub fn new_without_genesis(db_path: &Path, chain_id: u64) -> Self {
         let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
             .expect("Failed to open BlockReplayStorage")
             .with_sync_writes();
-        Self { db }
+        Self { db, chain_id }
     }
 
     fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, is_canonical: bool) {
@@ -393,7 +398,9 @@ impl BlockReplayStorage {
                 stored.block_number, block_number,
                 "block number mismatch when reading context"
             );
-            return Some(stored.into_context(self.read_block_hashes(block_number, key)));
+            return Some(
+                stored.into_context(self.chain_id, self.read_block_hashes(block_number, key)),
+            );
         }
         // No stripped row: either a canonical row written before `ContextV2` existed (or by an
         // older binary during a rollback), or a non-canonical (hash-keyed) row holding a
@@ -678,17 +685,16 @@ pub struct StorageForcePreimages {
     pub preimages: Vec<(B256, Vec<u8>)>,
 }
 
-/// [`BlockContext`] as persisted in the `ContextV2` CF: without the 256 previous block hashes.
-/// The hashes are derivable data (hashes of the previous 256 canonical blocks), so they are not
-/// persisted per block (~8 KiB each); [`BlockReplayStorage::read_block_hashes`] reconstructs them
-/// from the `CanonicalHash` CF on read.
+/// [`BlockContext`] as persisted in the `ContextV2` CF: without the 256 previous block hashes
+/// (derivable from the `CanonicalHash` CF, ~8 KiB per block; see
+/// [`BlockReplayStorage::read_block_hashes`]) and without the chain id (shared by all blocks,
+/// stored once in the `Meta` CF).
 ///
 /// The exhaustive destructuring in the conversions below keeps this struct in sync with
 /// [`BlockContext`]: a field added there fails compilation here, prompting a decision on whether
 /// and how to persist it.
 #[derive(Debug, bincode::Encode, bincode::Decode)]
 struct StoredBlockContextV2 {
-    chain_id: u64,
     block_number: u64,
     timestamp: u64,
     #[bincode(with_serde)]
@@ -711,7 +717,7 @@ struct StoredBlockContextV2 {
 impl StoredBlockContextV2 {
     fn strip(context: BlockContext) -> Self {
         let BlockContext {
-            chain_id,
+            chain_id: _,
             block_number,
             block_hashes: _,
             timestamp,
@@ -726,7 +732,6 @@ impl StoredBlockContextV2 {
             blob_fee,
         } = context;
         Self {
-            chain_id,
             block_number,
             timestamp,
             eip1559_basefee,
@@ -741,9 +746,8 @@ impl StoredBlockContextV2 {
         }
     }
 
-    fn into_context(self, block_hashes: BlockHashes) -> BlockContext {
+    fn into_context(self, chain_id: u64, block_hashes: BlockHashes) -> BlockContext {
         let Self {
-            chain_id,
             block_number,
             timestamp,
             eip1559_basefee,
@@ -874,7 +878,7 @@ mod tests {
     #[tokio::test]
     async fn reconstructs_hashes_from_canonical_hash_cf() {
         let dir = tempfile::tempdir().unwrap();
-        let storage = BlockReplayStorage::new_without_genesis(dir.path());
+        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
         // Crosses the 256-hash window boundary: early blocks are zero-padded, later ones aren't.
         let chain = make_chain(300);
         for sealed in &chain {
@@ -894,7 +898,7 @@ mod tests {
     #[tokio::test]
     async fn falls_back_to_embedded_hashes_when_canonical_hash_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let storage = BlockReplayStorage::new_without_genesis(dir.path());
+        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
         let chain = make_chain(300);
         for sealed in &chain {
             storage.write(sealed.clone(), false).await.unwrap();
@@ -908,7 +912,7 @@ mod tests {
     #[tokio::test]
     async fn rows_without_stripped_copy_are_served_from_legacy() {
         let dir = tempfile::tempdir().unwrap();
-        let storage = BlockReplayStorage::new_without_genesis(dir.path());
+        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
         let chain = make_chain(300);
         for sealed in &chain {
             storage.write(sealed.clone(), false).await.unwrap();
@@ -920,7 +924,7 @@ mod tests {
     #[tokio::test]
     async fn override_keeps_old_record_readable_by_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let storage = BlockReplayStorage::new_without_genesis(dir.path());
+        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
         let chain = make_chain(5);
         for sealed in &chain {
             storage.write(sealed.clone(), false).await.unwrap();
