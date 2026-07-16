@@ -72,6 +72,12 @@ pub struct BuilderConfig {
     pub l2_chain_id: u64,
     /// The chain id of the settlement layer. Fixed for the lifetime of the process:
     /// settlement-layer migration while consensus is running is not supported yet.
+    ///
+    /// TODO(consensus): a returning Gateway settlement makes this runtime-mutable and
+    /// splits the single L1 provider identity (`finalized_ingestion` boundary,
+    /// `LocalL1Inputs` authenticity oracle, the senders' target). The verification
+    /// side already rejects non-placeholder `SetSLChainId` transactions, so this
+    /// fails closed until designed.
     pub sl_chain_id: u64,
     pub gas_limit: u64,
     pub pubdata_limit: u64,

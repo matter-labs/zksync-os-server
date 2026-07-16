@@ -78,6 +78,14 @@ struct ChainSurface {
     // Exactly the fee-rule inputs consumed by proposal verification. Oracle
     // inputs stay out: validators bound movement from the parent and need not
     // observe the same off-chain price at the same instant.
+    //
+    // TODO(consensus): two knobs are should-be-uniform but deliberately not
+    // fingerprinted because they never fail verification: `fee.native_price_usd`
+    // (divergent leader targets produce a fee sawtooth, ≤12.5% per block) and
+    // `base_token_adjuster.base_token_addr_override` (a node overridden to the wrong
+    // asset prices its leader turns off the wrong token — always within bounds,
+    // economically wrong, invisible here). Document as committee ops invariants, or
+    // promote into the fingerprint if drift is ever observed in practice.
     fee_base_fee_override: Option<u128>,
     fee_native_per_gas: u64,
     fee_pubdata_price_override: Option<u128>,

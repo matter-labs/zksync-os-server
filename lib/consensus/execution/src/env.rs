@@ -100,6 +100,14 @@ impl ChainAnchor {
 /// The backend's native views borrow from the backend handle, which would tie them to a
 /// lock held across VM execution. This wrapper owns a backend handle (cheap to clone)
 /// and opens a fresh view per read — view construction is O(1) on the default backend.
+///
+/// TODO(consensus): the `expect`s below assume the backend holds a view at the
+/// committed height, which has a startup window where it may not: the consensus
+/// runtime spawns before the node pipeline replays the write-ahead-log range, and
+/// after an unclean kill the state backend can trail the WAL by a block. A proposal
+/// verified (or a backfilled block committed) in that window panics here instead of
+/// withholding. Close it by gating verification on `applied >= WAL tip` at startup,
+/// or by degrading a missing view to a vote withhold.
 #[derive(Clone)]
 pub struct BaseViewAt<S> {
     base: S,
@@ -812,6 +820,13 @@ where
                             // outcome means this node's state diverged from the
                             // network's (or the chain finalized garbage, which honest
                             // quorums prevent). There is no way to continue.
+                            //
+                            // TODO(consensus): only the error string survives here —
+                            // the `BlockDump` (context + processed transactions) is
+                            // discarded, unlike the single-sequencer path which writes
+                            // it to `block_dump_path`. Preserve the artifact: this is
+                            // the one scenario where post-mortem material matters
+                            // most.
                             error!(height, reason, "finalized block failed re-execution");
                             panic!("finalized block {height} failed re-execution: {reason}");
                         }

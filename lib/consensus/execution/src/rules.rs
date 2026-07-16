@@ -23,7 +23,7 @@ use zksync_os_sequencer::execution::{FeeConfig, FeeParams, fee_params_within_pro
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
     BlockStartCursors, ExecutionVersion, L1PriorityEnvelope, L1TxSerialId, L1UpgradeEnvelope,
-    ProtocolSemanticVersion, UpgradeInfo, ZkEnvelope,
+    ProtocolSemanticVersion, SystemTxType, UpgradeInfo, ZkEnvelope,
 };
 
 /// The outcome of checking one proposal against these rules.
@@ -56,6 +56,10 @@ pub struct ValidityConfig {
     /// absorb honest clock skew.
     pub max_timestamp_skew: Duration,
     pub chain_id: u64,
+    /// The settlement layer's chain id — what the one-time `SetSLChainId` system
+    /// transaction at the v31 boundary must carry. Wired from the same source as the
+    /// builder's (`l1_chain_id`; the settlement layer is always L1 today).
+    pub sl_chain_id: u64,
     pub fee_collector_address: alloy::primitives::Address,
     pub gas_limit: u64,
     pub pubdata_limit: u64,
@@ -222,6 +226,72 @@ pub async fn check_proposal(
             record.starting_cursors,
             parent.next_cursors
         );
+    }
+
+    // System transactions: only what the builder emits may ride consensus, because a
+    // system transaction executes fine regardless of provenance — re-execution alone
+    // would accept whatever a leader injected. The v1 builder emits exactly one kind:
+    // the one-time `SetSLChainId` placeholder in the first v31 block. Everything else
+    // is rejected until it has an authenticity rule of its own.
+    //
+    // TODO(consensus): interop support — authenticate `ImportInteropRoots` (and the
+    // interop fee, once it is an L1-authenticated or committee-derivable input) the
+    // way L1 priority transactions are: a local watcher-backed oracle
+    // (`LocalL1Inputs`-style), contiguous-cursor advancement in the builder's
+    // `derive_next_cursors`, matching checks here, and finalized-boundary ingestion.
+    // Until then the cursor-equality rule above keeps interop cursors frozen and this
+    // rule keeps the transactions out.
+    //
+    // TODO(consensus): live settlement migrations — a real (non-placeholder)
+    // `SetSLChainId` must only be accepted against an L1-observed migration event;
+    // rejected outright until that rule exists.
+    let v31_upgrade_boundary =
+        record.protocol_version.minor == 31 && parent.protocol_version.minor < 31;
+    // The genesis-shaped boundary: block 1 of a chain born on v31. The builder emits
+    // the system transaction there too, but its *absence* is tolerated (unlike on the
+    // upgrade boundary) — nothing consumes the field yet, and requiring it would
+    // reject hand-assembled fixture chains for no security gain. Injection, not
+    // omission, is the dangerous direction.
+    let sl_chain_id_boundary =
+        v31_upgrade_boundary || (record.protocol_version.minor == 31 && context.block_number == 1);
+    let mut sl_chain_id_txs = 0usize;
+    for tx in &record.transactions {
+        let Some(subtype) = tx.as_system_tx_type() else {
+            continue;
+        };
+        match subtype {
+            SystemTxType::SetSLChainId(chain_id, migration_number) => {
+                if !sl_chain_id_boundary {
+                    invalid!("SetSLChainId system transaction outside the v31 activation block");
+                }
+                if *chain_id != config.sl_chain_id {
+                    invalid!(
+                        "SetSLChainId targets chain id {chain_id} where the settlement layer \
+                         is {}",
+                        config.sl_chain_id
+                    );
+                }
+                if *migration_number != u64::MAX {
+                    invalid!(
+                        "SetSLChainId carries migration number {migration_number}; live \
+                         settlement migrations are not supported under consensus"
+                    );
+                }
+                sl_chain_id_txs += 1;
+                if sl_chain_id_txs > 1 {
+                    invalid!("duplicate SetSLChainId system transaction");
+                }
+            }
+            SystemTxType::ImportInteropRoots(_) => {
+                invalid!("interop root imports are not yet supported under consensus");
+            }
+            SystemTxType::SetInteropFee(_) => {
+                invalid!("interop fee updates are not yet supported under consensus");
+            }
+        }
+    }
+    if v31_upgrade_boundary && sl_chain_id_txs == 0 {
+        invalid!("the v31 upgrade block must carry the SetSLChainId system transaction");
     }
 
     // Fees: the values an honest fee provider could produce on top of the parent —
@@ -486,10 +556,14 @@ mod tests {
     /// under `config()`'s cap.
     const HONEST_ENCODED_SIZE: usize = 1_000;
 
+    /// The settlement layer chain id `config()` pins (distinct from the L2 chain id).
+    const SL_CHAIN_ID: u64 = 900;
+
     fn config() -> ValidityConfig {
         ValidityConfig {
             max_timestamp_skew: Duration::from_secs(10),
             chain_id: 270,
+            sl_chain_id: SL_CHAIN_ID,
             fee_collector_address: Address::repeat_byte(9),
             gas_limit: 100_000_000,
             pubdata_limit: 110_000,
@@ -558,6 +632,94 @@ mod tests {
                 "unexpected verdict: {verdict:?}"
             );
         };
+    }
+
+    #[tokio::test]
+    async fn interop_system_transactions_are_rejected() {
+        use zksync_os_types::SystemTxEnvelope;
+        let roots = valid_record(vec![ZkTransaction::from(
+            SystemTxEnvelope::import_interop_roots(Vec::new(), 0),
+        )]);
+        assert_verdict!(
+            check(&roots, &StubInputs::default()).await,
+            Verdict::Invalid(_)
+        );
+
+        let fee = valid_record(vec![ZkTransaction::from(
+            SystemTxEnvelope::set_interop_fee(U256::from(1), 0),
+        )]);
+        assert_verdict!(
+            check(&fee, &StubInputs::default()).await,
+            Verdict::Invalid(_)
+        );
+    }
+
+    #[tokio::test]
+    async fn sl_chain_id_tx_is_pinned_to_the_v31_boundary() {
+        use zksync_os_types::SystemTxEnvelope;
+        let sl_tx =
+            || ZkTransaction::from(SystemTxEnvelope::set_sl_chain_id(SL_CHAIN_ID, u64::MAX));
+
+        // Outside any boundary (`valid_record` is block 5 with a v31 parent): invalid.
+        let outside = valid_record(vec![sl_tx()]);
+        assert_verdict!(
+            check(&outside, &StubInputs::default()).await,
+            Verdict::Invalid(_)
+        );
+
+        // At the genesis-shaped boundary (block 1 of a v31 chain): correct content
+        // passes, and its absence is tolerated there.
+        let mut at_genesis = valid_record(vec![sl_tx()]);
+        at_genesis.block_context.block_number = 1;
+        assert_verdict!(
+            check(&at_genesis, &StubInputs::default()).await,
+            Verdict::Valid
+        );
+        let mut absent = valid_record(Vec::new());
+        absent.block_context.block_number = 1;
+        assert_verdict!(check(&absent, &StubInputs::default()).await, Verdict::Valid);
+
+        // Wrong settlement chain id, a real (non-placeholder) migration number, and
+        // duplicates: all invalid even at the boundary.
+        let mut wrong_chain = valid_record(vec![ZkTransaction::from(
+            SystemTxEnvelope::set_sl_chain_id(SL_CHAIN_ID + 1, u64::MAX),
+        )]);
+        wrong_chain.block_context.block_number = 1;
+        assert_verdict!(
+            check(&wrong_chain, &StubInputs::default()).await,
+            Verdict::Invalid(_)
+        );
+        let mut real_migration = valid_record(vec![ZkTransaction::from(
+            SystemTxEnvelope::set_sl_chain_id(SL_CHAIN_ID, 3),
+        )]);
+        real_migration.block_context.block_number = 1;
+        assert_verdict!(
+            check(&real_migration, &StubInputs::default()).await,
+            Verdict::Invalid(_)
+        );
+        let mut duplicated = valid_record(vec![sl_tx(), sl_tx()]);
+        duplicated.block_context.block_number = 1;
+        assert_verdict!(
+            check(&duplicated, &StubInputs::default()).await,
+            Verdict::Invalid(_)
+        );
+    }
+
+    #[tokio::test]
+    async fn v31_upgrade_block_requires_the_sl_chain_id_tx() {
+        let mut parent = parent();
+        parent.protocol_version = version("0.30.0");
+        let record = valid_record(Vec::new());
+        let verdict = check_proposal(
+            &parent,
+            &record,
+            HONEST_ENCODED_SIZE,
+            NOW,
+            &StubInputs::default(),
+            &config(),
+        )
+        .await;
+        assert_verdict!(verdict, Verdict::Invalid(_));
     }
 
     #[tokio::test]

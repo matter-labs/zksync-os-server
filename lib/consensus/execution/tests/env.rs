@@ -578,6 +578,10 @@ fn rig_validation(
         config: Arc::new(ValidityConfig {
             max_timestamp_skew: std::time::Duration::from_secs(3600),
             chain_id: rig.genesis.context.chain_id,
+            // The hand-assembled fixture chains never include the boundary
+            // `SetSLChainId` transaction (tolerated at the genesis-shaped
+            // boundary); any settlement chain id works.
+            sl_chain_id: 1,
             fee_collector_address: alloy::primitives::Address::ZERO,
             gas_limit: 100_000_000,
             pubdata_limit: 100_000_000,

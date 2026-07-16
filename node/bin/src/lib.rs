@@ -985,6 +985,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config: std::sync::Arc::new(zksync_os_consensus_execution::ValidityConfig {
                 max_timestamp_skew: config.consensus_config.max_timestamp_skew,
                 chain_id,
+                // Same source as the builder's `sl_chain_id` above.
+                sl_chain_id: node_startup_state.l1_state.l1_chain_id,
                 fee_collector_address: config.sequencer_config.fee_collector_address,
                 gas_limit: config.sequencer_config.block_gas_limit,
                 pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,

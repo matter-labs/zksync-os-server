@@ -583,6 +583,15 @@ impl Tester {
             config.network_config.port = 0;
             config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
         }
+        // local_dev.yaml arms the dev-mode revert-on-divergence, which config
+        // validation rejects under consensus (a finalized block cannot be locally
+        // rebuilt). In-process test nodes skip config validation, but their configs
+        // should stay ones the real binary would accept.
+        if config.consensus_config.enabled {
+            config
+                .sequencer_config
+                .revm_consistency_checker_revert_on_divergence = false;
+        }
     }
 
     async fn launch_node_inner(

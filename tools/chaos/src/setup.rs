@@ -388,6 +388,9 @@ observability:
 sequencer:
   fee_collector_address: '{fee_collector}'
   block_dump_path: /db/block_dumps
+  # local_dev.yaml (layered underneath) arms the dev-mode revert-on-divergence,
+  # which config validation rejects under consensus.
+  revm_consistency_checker_revert_on_divergence: false
 batcher:
   enabled: {batcher_enabled}
 prover_api:

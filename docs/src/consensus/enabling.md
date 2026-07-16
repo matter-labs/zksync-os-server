@@ -356,6 +356,30 @@ proof trail, and the floors for every future rebuild.
 > Day-two operations — the alarm table, timing characteristics, and the
 > incident playbook — live in [Operating a committee](operating.md).
 
+## Unsupported configurations
+
+Configuration validation rejects, loudly and at startup, the modes that do not
+compose with consensus (each error names the reason):
+
+- `general.state_backend = Compacted` — the compacted backend cannot replay
+  history below its compaction start, which verification recovery, batcher
+  rebuild, and disaster truncation all rely on. Run validators on `FullDiffs`.
+- `general.ephemeral` — a temporary data directory discards the consensus vote
+  journals (the double-sign protection) and the recorded consensus era on
+  every run.
+- `sequencer.revm_consistency_checker_revert_on_divergence` — reverting a
+  finalized block is single-sequencer authority; under consensus a divergence
+  is recovered via the [disaster runbook](disaster.md). The checker itself
+  (warn-only mode) runs normally on every validator.
+- `sequencer.rebuild` block-rebuild modes and `sequencer.max_blocks_to_produce`
+  (see their own validation messages).
+
+Interop is not supported under consensus yet: proposal verification rejects
+interop system transactions outright (they have no authenticity rule the way
+L1 priority transactions do), and the corresponding input cursors are pinned.
+The greppable registry of these deliberate holds is `TODO(consensus)` in the
+source tree.
+
 ## The committee as the batch-verification set
 
 Batch verification ("2FA") gates every L1 commit on threshold co-signatures

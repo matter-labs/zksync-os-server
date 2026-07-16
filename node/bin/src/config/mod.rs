@@ -410,6 +410,14 @@ pub struct GeneralConfig {
     /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
     #[config(with = Serde![str])]
+    #[config_validate(custom(
+        |root: &Config, value: &StateBackendConfig| {
+            !root.consensus_config.enabled || matches!(value, StateBackendConfig::FullDiffs)
+        },
+        "consensus requires the FullDiffs state backend: the compacted backend cannot \
+         replay history below its compaction start (verification recovery, batcher \
+         rebuild, disaster truncation all depend on it)"
+    ))]
     pub state_backend: StateBackendConfig,
 
     /// Min number of blocks to retain in memory
@@ -442,6 +450,12 @@ pub struct GeneralConfig {
     /// The directory is removed once the process shuts down.
     /// Disables all HTTP APIs except JSON RPC.
     #[config(default_t = false, alias = "sandbox")]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| { !(*value && root.consensus_config.enabled) },
+        "cannot be enabled together with `consensus.enabled`: ephemeral mode discards \
+         the consensus vote journals (the double-sign protection) and the recorded \
+         consensus era on every run"
+    ))]
     pub ephemeral: bool,
 
     /// Path to ephemeral state to load at startup.
@@ -1172,6 +1186,9 @@ pub struct SequencerConfig {
     /// Only affects the Main Node.
     /// Useful for mitigation/operations.
     #[config(default_t = None)]
+    // TODO(consensus): the consensus-mode equivalent of this ops knob — a leader that
+    // passes its turns after producing N blocks — is straightforward if operations
+    // ever needs it; rejected rather than silently ignored until then.
     #[config_validate(custom(
         |root: &Config, value: &Option<u64>| {
             !root.consensus_config.enabled || value.is_none()
@@ -1199,6 +1216,12 @@ pub struct SequencerConfig {
     pub revm_consistency_checker_enabled: bool,
     /// If enabled, node will revert block with divergence detected by REVM consistency checker.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| { !(*value && root.consensus_config.enabled) },
+        "cannot be enabled together with `consensus.enabled`: reverting a finalized \
+         block is single-sequencer authority — under BFT consensus a divergence is \
+         recovered via the disaster-fork runbook, not a local rebuild"
+    ))]
     pub revm_consistency_checker_revert_on_divergence: bool,
 
     /// Block rebuild / L1 revert options. See [`RebuildConfig`] for the three modes.
@@ -2870,6 +2893,25 @@ mod tests {
         assert!(err.contains(
             "`sequencer.rebuild` cannot rebuild local blocks when `consensus.enabled=true`"
         ));
+    }
+
+    #[tokio::test]
+    async fn consensus_rejects_unsupported_modes() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.consensus_config.enabled = true;
+        config.consensus_config.network_key = Some("network-secret".into());
+        config.consensus_config.bls_key = Some("bls-secret".into());
+        config.consensus_config.validators = vec!["validator-a".into(), "validator-b".into()];
+        config.general_config.state_backend = StateBackendConfig::Compacted;
+        config.general_config.ephemeral = true;
+        config
+            .sequencer_config
+            .revm_consistency_checker_revert_on_divergence = true;
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(err.contains("consensus requires the FullDiffs state backend"));
+        assert!(err.contains("ephemeral mode discards the consensus vote journals"));
+        assert!(err.contains("reverting a finalized block is single-sequencer authority"));
     }
 
     #[tokio::test]
