@@ -18,10 +18,12 @@ use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 /// The output layout is:
 ///
 /// ```text
-/// <output_root>/<block_number>/<block_hash>/<session>
+/// <output_root>/<block_number>/<block_hash>/<copy>
 /// ```
 ///
-/// This keeps all session copies for the same replay record next to each other.
+/// where `<copy>` is the legacy session name for session-prefixed keys and a fixed `record`
+/// name for flat-layout keys. This keeps all copies of the same replay record next to each
+/// other so they can be cross-checked.
 ///
 /// Objects already present under `output_root` are skipped without re-downloading, so an
 /// interrupted download can be restarted with the same arguments.
@@ -363,22 +365,30 @@ async fn scan_existing_downloaded_objects(
                 continue;
             }
 
-            let mut session_entries = tokio::fs::read_dir(hash_entry.path()).await?;
-            while let Some(session_entry) = session_entries.next_entry().await? {
-                let file_name = session_entry.file_name();
+            let mut copy_entries = tokio::fs::read_dir(hash_entry.path()).await?;
+            while let Some(copy_entry) = copy_entries.next_entry().await? {
+                let file_name = copy_entry.file_name();
                 let file_name = file_name.to_string_lossy();
                 // Session node ids may contain dots, so a `.partial` leftover would parse
                 // as a session; exclude it explicitly.
                 if file_name.ends_with(".partial") {
                     continue;
                 }
-                let Ok(session) = file_name.parse::<ReplayArchiveSession>() else {
+                let session = if file_name == crate::FLAT_COPY_FILE_NAME {
+                    None
+                } else if let Ok(session) = file_name.parse::<ReplayArchiveSession>() {
+                    Some(session)
+                } else {
                     continue;
                 };
-                if !session_entry.file_type().await?.is_file() {
+                if !copy_entry.file_type().await?.is_file() {
                     continue;
                 }
-                existing.insert(ReplayArchiveKey::new(session, block_number, block_hash));
+                existing.insert(ReplayArchiveKey {
+                    session,
+                    block_number,
+                    block_hash,
+                });
             }
         }
     }
@@ -394,7 +404,7 @@ async fn write_downloaded_object(
     let output_path = output_root
         .join(key.block_number.to_string())
         .join(format_block_hash(key.block_hash))
-        .join(key.session.folder_name());
+        .join(key.copy_file_name());
 
     let parent = output_path
         .parent()
@@ -409,7 +419,7 @@ async fn write_downloaded_object(
     // Write to a temporary name and rename so that an object file only exists under its
     // final name once fully written; interrupted downloads leave `.partial` files that the
     // resume scan ignores and the next attempt overwrites.
-    let partial_path = output_path.with_file_name(format!("{}.partial", key.session.folder_name()));
+    let partial_path = output_path.with_file_name(format!("{}.partial", key.copy_file_name()));
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -666,8 +676,7 @@ pub fn parse_age_x25519_identity(identity: &str) -> anyhow::Result<age::x25519::
 mod tests {
     use super::*;
     use crate::{
-        FileSystemReplayArchiveReader, FileSystemReplayArchiveStorage, ReplayArchiveSession,
-        ReplayArchiveStorage,
+        FileSystemReplayArchiveReader, FileSystemReplayArchiveStorage, ReplayArchiveStorage,
     };
     use age::secrecy::ExposeSecret as _;
     use alloy::primitives::{B256, U256};
@@ -675,28 +684,31 @@ mod tests {
     use zksync_os_storage_api::ReadReplay;
 
     #[tokio::test]
-    async fn filesystem_reader_downloads_objects_grouped_by_block_and_hash() {
+    async fn filesystem_reader_downloads_both_layouts_grouped_by_block_and_hash() {
         let archive_root = tempfile::tempdir().unwrap();
         let output_root = tempfile::tempdir().unwrap();
         let block_hash = B256::with_last_byte(1);
 
-        let first_session = ReplayArchiveSession::new(42, "node-a").unwrap();
-        let first_storage =
-            FileSystemReplayArchiveStorage::init(archive_root.path().to_path_buf(), first_session)
-                .await
-                .unwrap();
-        first_storage
-            .append_object(7, block_hash, b"first".to_vec())
+        // A copy in the legacy session-prefixed layout, as written by an old node version.
+        let legacy_path = archive_root
+            .path()
+            .join("42-node-a")
+            .join("7")
+            .join(crate::format_block_hash(block_hash));
+        tokio::fs::create_dir_all(legacy_path.parent().unwrap())
             .await
             .unwrap();
+        tokio::fs::write(&legacy_path, b"legacy").await.unwrap();
 
-        let second_session = ReplayArchiveSession::new(43, "node-b").unwrap();
-        let second_storage =
-            FileSystemReplayArchiveStorage::init(archive_root.path().to_path_buf(), second_session)
-                .await
-                .unwrap();
-        second_storage
-            .append_object(7, block_hash, b"second".to_vec())
+        // A flat-layout copy written through the current storage API.
+        let storage = FileSystemReplayArchiveStorage::init(
+            archive_root.path().to_path_buf(),
+            "node-b".to_owned(),
+        )
+        .await
+        .unwrap();
+        storage
+            .put_new_object(7, block_hash, b"flat".to_vec(), "digest")
             .await
             .unwrap();
 
@@ -717,7 +729,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            b"first"
+            b"legacy"
         );
         assert_eq!(
             tokio::fs::read(
@@ -725,11 +737,11 @@ mod tests {
                     .path()
                     .join("7")
                     .join(&block_hash)
-                    .join("43-node-b")
+                    .join(crate::FLAT_COPY_FILE_NAME)
             )
             .await
             .unwrap(),
-            b"second"
+            b"flat"
         );
     }
 
@@ -739,17 +751,18 @@ mod tests {
         let output_root = tempfile::tempdir().unwrap();
         let block_hash = B256::with_last_byte(1);
 
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-        let storage =
-            FileSystemReplayArchiveStorage::init(archive_root.path().to_path_buf(), session)
-                .await
-                .unwrap();
+        let storage = FileSystemReplayArchiveStorage::init(
+            archive_root.path().to_path_buf(),
+            "node-a".to_owned(),
+        )
+        .await
+        .unwrap();
         storage
-            .append_object(7, block_hash, b"first".to_vec())
+            .put_new_object(7, block_hash, b"first".to_vec(), "digest-7")
             .await
             .unwrap();
         storage
-            .append_object(8, block_hash, b"second".to_vec())
+            .put_new_object(8, block_hash, b"second".to_vec(), "digest-8")
             .await
             .unwrap();
 
@@ -771,25 +784,32 @@ mod tests {
             .path()
             .join("8")
             .join(crate::format_block_hash(block_hash));
-        tokio::fs::remove_file(hash_dir.join("42-node-a"))
+        tokio::fs::remove_file(hash_dir.join(crate::FLAT_COPY_FILE_NAME))
             .await
             .unwrap();
-        tokio::fs::write(hash_dir.join("42-node-a.partial"), b"sec")
-            .await
-            .unwrap();
+        tokio::fs::write(
+            hash_dir.join(format!("{}.partial", crate::FLAT_COPY_FILE_NAME)),
+            b"sec",
+        )
+        .await
+        .unwrap();
 
         let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
             .await
             .unwrap();
         assert_eq!(downloaded, 1);
         assert_eq!(
-            tokio::fs::read(hash_dir.join("42-node-a")).await.unwrap(),
+            tokio::fs::read(hash_dir.join(crate::FLAT_COPY_FILE_NAME))
+                .await
+                .unwrap(),
             b"second"
         );
         assert!(
-            !tokio::fs::try_exists(hash_dir.join("42-node-a.partial"))
-                .await
-                .unwrap()
+            !tokio::fs::try_exists(
+                hash_dir.join(format!("{}.partial", crate::FLAT_COPY_FILE_NAME))
+            )
+            .await
+            .unwrap()
         );
     }
 

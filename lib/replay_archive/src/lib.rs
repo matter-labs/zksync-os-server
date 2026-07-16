@@ -1,4 +1,5 @@
 use alloy::primitives::{BlockHash, BlockNumber};
+use anyhow::Context as _;
 use async_trait::async_trait;
 use std::fmt;
 use std::str::FromStr;
@@ -10,6 +11,7 @@ mod component;
 mod filesystem;
 mod gate_component;
 mod gcs;
+mod identity;
 mod init;
 mod kms;
 mod metrics;
@@ -29,6 +31,7 @@ pub use gcs::{
     GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
     GcsReplayArchiveStorage,
 };
+pub use identity::{IDENTITY_DIGEST_METADATA_KEY, replay_record_identity_digest};
 pub use init::{
     InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
     init_replay_archive,
@@ -52,11 +55,16 @@ pub const REPLAY_ARCHIVE_QUEUE_SIZE: usize = 128;
 /// Replay archive layout:
 ///
 /// ```text
-/// <timestamp_millis>-<node_id>/<block_number>/<block_hash>
+/// <block_number>/<block_hash>
 /// ```
 ///
-/// The stored object value is the replay record bytes chosen by a concrete backend. No batch
-/// metadata or extra envelope is part of the value; all lookup metadata is encoded in the key.
+/// Every node writes into the same flat namespace; conditional create-if-absent (GCS
+/// `if_generation_match(0)`, S3 `If-None-Match: *`) guarantees exactly one stored copy per
+/// block, and the identity digest attached as object metadata lets losers of a write race —
+/// and verify-only nodes — confirm the stored record matches theirs without the decryption key.
+///
+/// Archives written before the flat layout used `<timestamp_millis>-<node_id>/<block_number>/
+/// <block_hash>`; those session-prefixed keys are still parsed for recovery.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ReplayArchiveSession {
     timestamp_millis: u64,
@@ -109,34 +117,66 @@ impl FromStr for ReplayArchiveSession {
     }
 }
 
+/// Local file name used for a flat-layout record copy in the recovery download tree, where
+/// legacy copies are named after their session. Cannot collide with a session name: sessions
+/// always start with `<timestamp_millis>-`.
+pub(crate) const FLAT_COPY_FILE_NAME: &str = "record";
+
 /// Full storage key for a single replay record object.
+///
+/// `session` is `None` for the current flat layout and `Some` for keys parsed out of legacy
+/// session-prefixed archives.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ReplayArchiveKey {
-    pub session: ReplayArchiveSession,
+    pub session: Option<ReplayArchiveSession>,
     pub block_number: BlockNumber,
     pub block_hash: BlockHash,
 }
 
 impl ReplayArchiveKey {
-    pub fn new(
+    pub fn flat(block_number: BlockNumber, block_hash: BlockHash) -> Self {
+        Self {
+            session: None,
+            block_number,
+            block_hash,
+        }
+    }
+
+    pub fn in_session(
         session: ReplayArchiveSession,
         block_number: BlockNumber,
         block_hash: BlockHash,
     ) -> Self {
         Self {
-            session,
+            session: Some(session),
             block_number,
             block_hash,
         }
     }
 
     pub fn object_path(&self) -> String {
-        format!(
-            "{}/{}/{}",
-            self.session,
-            self.block_number,
-            format_block_hash(self.block_hash)
-        )
+        match &self.session {
+            Some(session) => format!(
+                "{}/{}/{}",
+                session,
+                self.block_number,
+                format_block_hash(self.block_hash)
+            ),
+            None => format!(
+                "{}/{}",
+                self.block_number,
+                format_block_hash(self.block_hash)
+            ),
+        }
+    }
+
+    /// File name distinguishing this copy from other copies of the same block in the recovery
+    /// download tree.
+    pub(crate) fn copy_file_name(&self) -> String {
+        match &self.session {
+            Some(session) => session.folder_name(),
+            None => FLAT_COPY_FILE_NAME.to_owned(),
+        }
     }
 }
 
@@ -172,89 +212,200 @@ fn format_block_hash(block_hash: BlockHash) -> String {
     alloy::hex::encode_prefixed(block_hash.0)
 }
 
-/// Marker object name written under `<session>/` to mark a session as created.
+/// Marker object name written under `<session>/` by legacy archives; skipped when listing.
 pub(crate) const SESSION_MARKER_FILE_NAME: &str = ".session";
 
-/// Backend-agnostic key for the marker object that marks a session as created.
-pub(crate) fn session_marker_key(session: &ReplayArchiveSession) -> String {
-    format!("{session}/{SESSION_MARKER_FILE_NAME}")
-}
-
-/// Parses a flat object-store key back into a [`ReplayArchiveKey`], skipping the session marker
-/// and any key that doesn't match the `<session>/<block_number>/<block_hash>` layout. Foreign
-/// keys sharing the bucket are logged and skipped instead of failing the listing.
+/// Parses a flat object-store key back into a [`ReplayArchiveKey`].
+///
+/// Both the current `<block_number>/<block_hash>` layout and the legacy
+/// `<session>/<block_number>/<block_hash>` layout are accepted. Legacy session markers and any
+/// key that matches neither layout (a shared bucket may hold foreign objects) are logged and
+/// skipped instead of failing the listing.
 pub(crate) fn parse_archive_object_key(object_key: &str) -> Option<ReplayArchiveKey> {
     let parts = object_key.split('/').collect::<Vec<_>>();
-    if parts.len() != 3 || parts[2] == SESSION_MARKER_FILE_NAME {
-        return None;
-    }
-
-    let session = parts[0].parse::<ReplayArchiveSession>();
-    let block_number = parts[1].parse::<BlockNumber>();
-    let block_hash = parts[2].parse::<BlockHash>();
-    match (session, block_number, block_hash) {
-        (Ok(session), Ok(block_number), Ok(block_hash)) => {
-            Some(ReplayArchiveKey::new(session, block_number, block_hash))
+    let key = match parts.as_slice() {
+        [block_number, block_hash] => match (
+            block_number.parse::<BlockNumber>(),
+            block_hash.parse::<BlockHash>(),
+        ) {
+            (Ok(block_number), Ok(block_hash)) => {
+                Some(ReplayArchiveKey::flat(block_number, block_hash))
+            }
+            _ => None,
+        },
+        [session, block_number, block_hash] => {
+            if *block_hash == SESSION_MARKER_FILE_NAME {
+                return None;
+            }
+            match (
+                session.parse::<ReplayArchiveSession>(),
+                block_number.parse::<BlockNumber>(),
+                block_hash.parse::<BlockHash>(),
+            ) {
+                (Ok(session), Ok(block_number), Ok(block_hash)) => Some(
+                    ReplayArchiveKey::in_session(session, block_number, block_hash),
+                ),
+                _ => None,
+            }
         }
-        _ => {
-            tracing::warn!(
-                object_key,
-                "Skipping object key that is not a replay archive record"
-            );
-            None
-        }
+        _ => None,
+    };
+    if key.is_none() && !object_key.ends_with(&format!("/{SESSION_MARKER_FILE_NAME}")) {
+        tracing::warn!(
+            object_key,
+            "Skipping object key that is not a replay archive record"
+        );
     }
+    key
 }
 
-/// Session-bound byte storage using the session/block/hash layout.
+/// Outcome of a conditional archive put.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutOutcome {
+    /// The object did not exist and was created by this call.
+    Created,
+    /// An object already exists at this key; nothing was written.
+    AlreadyExists,
+}
+
+/// Metadata of a stored archive object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveObjectMeta {
+    /// Identity digest recorded when the object was archived, if present.
+    pub identity_digest: Option<String>,
+}
+
+/// Outcome of ensuring a replay record is archived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveOutcome {
+    /// This node created the archive object.
+    Written,
+    /// Another writer already archived this block; the stored identity digest was verified to
+    /// match the local record.
+    VerifiedExisting,
+}
+
+/// Shared byte storage using the flat `<block_number>/<block_hash>` layout.
 ///
-/// Implementations must be append-only. Creating storage must create or mark exactly one session
-/// and must fail if that session already exists. Appending an object must fail if data already
-/// exists at `<session>/<block_number>/<block_hash>`, even if the stored value is byte-for-byte
-/// identical. This is intentionally stricter than idempotent object-store writes so that bugs do
-/// not silently replace archived replay data.
+/// Multiple nodes write into the same namespace concurrently. Implementations must guarantee
+/// that [`ReplayArchiveStorage::put_new_object`] creates the object *only* if no object exists
+/// at the key yet (atomic create-if-absent), reports [`PutOutcome::AlreadyExists`] otherwise,
+/// and attaches the identity digest to the object atomically with its creation — a stored
+/// object without its digest must be impossible, since verification relies on it.
 #[async_trait]
 pub trait ReplayArchiveStorage: Sized + Send + Sync + 'static {
-    /// Backend-specific configuration needed to create session-bound storage.
+    /// Backend-specific configuration needed to create the storage.
     type Config: Send;
 
-    /// Initializes or marks `<session>/` and returns storage bound to that session.
+    /// Initializes storage access.
     ///
-    /// Object stores that do not have real directories should write a marker object or use another
-    /// backend-specific existence check. Returning success for an already existing session violates
-    /// the append-only contract.
-    async fn init(config: Self::Config, session: ReplayArchiveSession) -> anyhow::Result<Self>;
+    /// `writer_node_id` identifies this node in forensic object metadata; it plays no role in
+    /// the object layout.
+    async fn init(config: Self::Config, writer_node_id: String) -> anyhow::Result<Self>;
 
-    /// Appends `object` at `<session>/<block_number>/<block_hash>`.
+    /// Creates `object` at `<block_number>/<block_hash>` if and only if the key is still free.
     ///
-    /// Implementations must not overwrite any existing object at this key.
-    async fn append_object(
+    /// Returns [`PutOutcome::AlreadyExists`] without overwriting when any object (even a
+    /// byte-for-byte identical one) already exists at the key.
+    async fn put_new_object(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
         object: Vec<u8>,
-    ) -> anyhow::Result<()>;
+        identity_digest: &str,
+    ) -> anyhow::Result<PutOutcome>;
 
-    /// Checks whether an object exists at `<session>/<block_number>/<block_hash>`.
-    async fn contains_object(
+    /// Fetches stored object metadata without downloading the payload.
+    ///
+    /// Returns `None` if no object exists at `<block_number>/<block_hash>`.
+    async fn stored_object_meta(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
-    ) -> anyhow::Result<bool>;
+    ) -> anyhow::Result<Option<ArchiveObjectMeta>>;
 }
 
-/// Session-bound archive for replay records.
+/// Ensures a record with the given identity digest is archived at
+/// `<block_number>/<block_hash>`, encoding the payload lazily only if a write is needed.
+///
+/// If an object already exists (either up front or after losing a write race), its stored
+/// identity digest must match `identity_digest`; a mismatch means two nodes disagree about the
+/// content of the same block and is returned as an error so the archive component crashes the
+/// node loudly instead of silently accepting divergent history.
+pub(crate) async fn ensure_object_archived<Storage, Encode>(
+    storage: &Storage,
+    block_number: BlockNumber,
+    block_hash: BlockHash,
+    identity_digest: &str,
+    encode: Encode,
+) -> anyhow::Result<ArchiveOutcome>
+where
+    Storage: ReplayArchiveStorage,
+    Encode: FnOnce() -> anyhow::Result<Vec<u8>> + Send,
+{
+    if let Some(meta) = storage.stored_object_meta(block_number, block_hash).await? {
+        verify_stored_digest(&meta, block_number, block_hash, identity_digest)?;
+        return Ok(ArchiveOutcome::VerifiedExisting);
+    }
+
+    let object = encode()?;
+    match storage
+        .put_new_object(block_number, block_hash, object, identity_digest)
+        .await?
+    {
+        PutOutcome::Created => Ok(ArchiveOutcome::Written),
+        PutOutcome::AlreadyExists => {
+            let meta = storage
+                .stored_object_meta(block_number, block_hash)
+                .await?
+                .with_context(|| {
+                    format!(
+                        "lost replay archive write race for block #{block_number}, \
+                         {block_hash}, but the winning object is missing"
+                    )
+                })?;
+            verify_stored_digest(&meta, block_number, block_hash, identity_digest)?;
+            Ok(ArchiveOutcome::VerifiedExisting)
+        }
+    }
+}
+
+fn verify_stored_digest(
+    meta: &ArchiveObjectMeta,
+    block_number: BlockNumber,
+    block_hash: BlockHash,
+    expected_digest: &str,
+) -> anyhow::Result<()> {
+    let stored_digest = meta.identity_digest.as_deref().with_context(|| {
+        format!(
+            "archived replay record for block #{block_number}, {block_hash} carries no \
+             identity digest metadata; refusing to assume it matches the local record"
+        )
+    })?;
+    anyhow::ensure!(
+        stored_digest == expected_digest,
+        "replay archive divergence detected for block #{block_number}, {block_hash}: local \
+         record identity digest {expected_digest} does not match archived digest \
+         {stored_digest}; this node's history differs from the already-archived one"
+    );
+    Ok(())
+}
+
+/// Archive for replay records over the shared flat layout.
 #[async_trait]
 pub trait ReplayArchiver: Send + Sync + 'static {
-    /// Appends `replay_record` at
-    /// `<session>/<replay_record.block_context.block_number>/<block_hash>`.
-    async fn append_replay_record(
+    /// Ensures `replay_record` is archived at
+    /// `<replay_record.block_context.block_number>/<block_hash>`.
+    ///
+    /// If the block is already archived (by this node or any other), verifies that the stored
+    /// record has the same identity digest as `replay_record` and errors on mismatch.
+    async fn ensure_replay_record(
         &self,
         block_hash: BlockHash,
         replay_record: ReplayRecord,
-    ) -> anyhow::Result<()>;
+    ) -> anyhow::Result<ArchiveOutcome>;
 
-    /// Checks whether an archived object exists at `<session>/<block_number>/<block_hash>`.
+    /// Checks whether an archived object exists at `<block_number>/<block_hash>`.
     ///
     /// This intentionally verifies presence only. Encrypted archive objects are randomized, so
     /// implementations must not depend on re-encrypting and comparing bytes.
@@ -270,13 +421,13 @@ impl<T> ReplayArchiver for Arc<T>
 where
     T: ReplayArchiver + ?Sized,
 {
-    async fn append_replay_record(
+    async fn ensure_replay_record(
         &self,
         block_hash: BlockHash,
         replay_record: ReplayRecord,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ArchiveOutcome> {
         self.as_ref()
-            .append_replay_record(block_hash, replay_record)
+            .ensure_replay_record(block_hash, replay_record)
             .await
     }
 
@@ -296,7 +447,99 @@ mod tests {
     use super::*;
     use crate::replay_record::encode_replay_record;
     use alloy::primitives::B256;
+    use std::sync::Mutex;
     use zksync_os_storage_api::ReplayRecord;
+
+    /// Storage stub simulating a concurrent writer that wins the race between this node's
+    /// existence pre-check and its put: the pre-check sees no object, the put reports
+    /// `AlreadyExists`, and the post-race metadata lookup returns the winner's digest.
+    struct RaceLosingStorage {
+        winner_digest: &'static str,
+        meta_reads: Mutex<usize>,
+    }
+
+    impl RaceLosingStorage {
+        fn new(winner_digest: &'static str) -> Self {
+            Self {
+                winner_digest,
+                meta_reads: Mutex::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ReplayArchiveStorage for RaceLosingStorage {
+        type Config = ();
+
+        async fn init(_config: (), _writer_node_id: String) -> anyhow::Result<Self> {
+            unimplemented!("constructed directly in tests")
+        }
+
+        async fn put_new_object(
+            &self,
+            _block_number: BlockNumber,
+            _block_hash: BlockHash,
+            _object: Vec<u8>,
+            _identity_digest: &str,
+        ) -> anyhow::Result<PutOutcome> {
+            Ok(PutOutcome::AlreadyExists)
+        }
+
+        async fn stored_object_meta(
+            &self,
+            _block_number: BlockNumber,
+            _block_hash: BlockHash,
+        ) -> anyhow::Result<Option<ArchiveObjectMeta>> {
+            let mut meta_reads = self.meta_reads.lock().unwrap();
+            *meta_reads += 1;
+            // First read is the pre-check before the winner's object landed.
+            if *meta_reads == 1 {
+                return Ok(None);
+            }
+            Ok(Some(ArchiveObjectMeta {
+                identity_digest: Some(self.winner_digest.to_owned()),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn losing_a_write_race_verifies_the_winning_digest() {
+        let storage = RaceLosingStorage::new("digest");
+
+        let outcome =
+            ensure_object_archived(
+                &storage,
+                7,
+                B256::ZERO,
+                "digest",
+                || Ok(b"payload".to_vec()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, ArchiveOutcome::VerifiedExisting);
+    }
+
+    #[tokio::test]
+    async fn losing_a_write_race_to_a_divergent_record_fails() {
+        let storage = RaceLosingStorage::new("other-digest");
+
+        let err =
+            ensure_object_archived(
+                &storage,
+                7,
+                B256::ZERO,
+                "digest",
+                || Ok(b"payload".to_vec()),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("divergence"),
+            "unexpected error: {err:#}"
+        );
+    }
 
     #[test]
     fn session_roundtrips_with_hyphenated_node_id() {
@@ -310,9 +553,19 @@ mod tests {
     }
 
     #[test]
-    fn key_uses_expected_layout() {
+    fn flat_key_uses_two_segment_layout() {
+        let key = ReplayArchiveKey::flat(7, B256::ZERO);
+
+        assert_eq!(
+            key.object_path(),
+            "7/0x0000000000000000000000000000000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn legacy_session_key_uses_three_segment_layout() {
         let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-        let key = ReplayArchiveKey::new(session, 7, B256::ZERO);
+        let key = ReplayArchiveKey::in_session(session, 7, B256::ZERO);
 
         assert_eq!(
             key.object_path(),
@@ -321,7 +574,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_archive_object_key() {
+    fn parses_flat_archive_object_key() {
+        let block_hash = B256::with_last_byte(1);
+        let object_key = format!("7/{}", format_block_hash(block_hash));
+
+        let parsed = parse_archive_object_key(&object_key).unwrap();
+
+        assert_eq!(parsed, ReplayArchiveKey::flat(7, block_hash));
+    }
+
+    #[test]
+    fn parses_legacy_session_archive_object_key() {
         let block_hash = B256::with_last_byte(1);
         let object_key = format!("42-node-a/7/{}", format_block_hash(block_hash));
 
@@ -329,7 +592,7 @@ mod tests {
 
         assert_eq!(
             parsed,
-            ReplayArchiveKey::new(
+            ReplayArchiveKey::in_session(
                 ReplayArchiveSession::new(42, "node-a").unwrap(),
                 7,
                 block_hash
@@ -344,52 +607,115 @@ mod tests {
     }
 
     #[test]
-    fn archive_object_key_parser_skips_foreign_three_segment_keys() {
+    fn archive_object_key_parser_skips_foreign_keys() {
         // A shared bucket may hold unrelated objects; they must be skipped, not abort listing.
         assert!(parse_archive_object_key("logs/2026/app.txt").is_none());
         assert!(parse_archive_object_key("42-node-a/7/not-a-hash").is_none());
         assert!(parse_archive_object_key("42-node-a/not-a-number/0x00").is_none());
+        assert!(parse_archive_object_key("7/not-a-hash").is_none());
+        assert!(parse_archive_object_key("single-segment").is_none());
     }
 
     #[tokio::test]
-    async fn filesystem_archive_creates_session_once() {
+    async fn filesystem_archive_init_is_idempotent() {
         let tempdir = tempfile::tempdir().unwrap();
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
 
-        FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), session.clone())
+        FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
             .await
             .unwrap();
-
-        let err = FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), session)
+        FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("failed to create append-only"));
+            .unwrap();
     }
 
     #[tokio::test]
-    async fn filesystem_archive_appends_and_checks_presence() {
+    async fn filesystem_archive_ensures_and_checks_presence() {
         let tempdir = tempfile::tempdir().unwrap();
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-        let storage = FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), session)
-            .await
-            .unwrap();
+        let storage =
+            FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
+                .await
+                .unwrap();
         let archive = FileSystemReplayArchiver::new(storage);
         let block_hash = B256::with_last_byte(1);
         let replay_record = test_replay_record(7);
 
         assert!(!archive.contains_replay_record(7, block_hash).await.unwrap());
 
-        archive
-            .append_replay_record(block_hash, replay_record.clone())
-            .await
-            .unwrap();
+        assert_eq!(
+            archive
+                .ensure_replay_record(block_hash, replay_record.clone())
+                .await
+                .unwrap(),
+            ArchiveOutcome::Written
+        );
 
         assert!(archive.contains_replay_record(7, block_hash).await.unwrap());
 
+        // Re-archiving the same record verifies the stored copy instead of failing.
+        assert_eq!(
+            archive
+                .ensure_replay_record(block_hash, replay_record)
+                .await
+                .unwrap(),
+            ArchiveOutcome::VerifiedExisting
+        );
+    }
+
+    #[tokio::test]
+    async fn filesystem_archive_rejects_divergent_record_for_same_block() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage =
+            FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
+                .await
+                .unwrap();
+        let archive = FileSystemReplayArchiver::new(storage);
+        let block_hash = B256::with_last_byte(1);
+        let replay_record = test_replay_record(7);
+
         archive
-            .append_replay_record(block_hash, replay_record)
+            .ensure_replay_record(block_hash, replay_record.clone())
+            .await
+            .unwrap();
+
+        let mut divergent = replay_record;
+        divergent.block_output_hash = B256::with_last_byte(2);
+        let err = archive
+            .ensure_replay_record(block_hash, divergent)
             .await
             .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("divergence"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn filesystem_archive_accepts_same_record_from_different_node_version() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage =
+            FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
+                .await
+                .unwrap();
+        let archive = FileSystemReplayArchiver::new(storage);
+        let block_hash = B256::with_last_byte(1);
+        let replay_record = test_replay_record(7);
+
+        archive
+            .ensure_replay_record(block_hash, replay_record.clone())
+            .await
+            .unwrap();
+
+        // MN and EN may run different binaries during a rolling upgrade; the identity digest
+        // must not treat that as divergence.
+        let mut other_version = replay_record;
+        other_version.node_version = "9.9.9".parse().unwrap();
+        assert_eq!(
+            archive
+                .ensure_replay_record(block_hash, other_version)
+                .await
+                .unwrap(),
+            ArchiveOutcome::VerifiedExisting
+        );
     }
 
     #[test]

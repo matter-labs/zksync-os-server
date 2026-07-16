@@ -12,6 +12,7 @@ categories.workspace = true
 [dependencies]
 zksync_os_storage.workspace = true
 zksync_os_storage_api.workspace = true
+zksync_os_types.workspace = true
 zksync_os_interface.workspace = true
 zksync_os_l1_sender.workspace = true
 zksync_os_pipeline.workspace = true
@@ -35,6 +36,7 @@ google-cloud-storage.workspace = true
 rand_core06.workspace = true
 reth-tasks.workspace = true
 rsa.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
@@ -47,4 +49,3 @@ vise.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
-zksync_os_types.workspace = true

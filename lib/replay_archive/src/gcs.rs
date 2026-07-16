@@ -1,6 +1,6 @@
 use crate::{
-    ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveSession, ReplayArchiveStorage,
-    ReplayArchiveStorageReader,
+    ArchiveObjectMeta, IDENTITY_DIGEST_METADATA_KEY, PutOutcome, ReplayArchiveKey,
+    ReplayArchiveKeyPage, ReplayArchiveStorage, ReplayArchiveStorageReader,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
@@ -10,6 +10,9 @@ use google_cloud_gax::error::rpc::Code;
 use google_cloud_gax::options::RequestOptionsBuilder as _;
 use google_cloud_storage::client::{Storage, StorageControl};
 use std::fmt;
+
+/// Object metadata key recording which node archived the object; forensic only.
+const ARCHIVED_BY_METADATA_KEY: &str = "archived-by";
 
 /// Authentication mode for GCS replay archive access.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,11 +90,20 @@ fn is_not_found(err: &google_cloud_storage::Error) -> bool {
             .is_some_and(|status| status.code == Code::NotFound)
 }
 
+/// `if_generation_match(0)` failures surface as HTTP 412 over JSON and `FAILED_PRECONDITION`
+/// over gRPC; both mean a live object already exists at the key.
+fn is_precondition_failed(err: &google_cloud_storage::Error) -> bool {
+    err.http_status_code() == Some(412)
+        || err
+            .status()
+            .is_some_and(|status| status.code == Code::FailedPrecondition)
+}
+
 /// GCS implementation of [`ReplayArchiveStorage`].
 #[derive(Clone)]
 pub struct GcsReplayArchiveStorage {
     config: GcsReplayArchiveConfig,
-    session: ReplayArchiveSession,
+    writer_node_id: String,
     clients: GcsClients,
 }
 
@@ -100,7 +112,7 @@ impl fmt::Debug for GcsReplayArchiveStorage {
         formatter
             .debug_struct("GcsReplayArchiveStorage")
             .field("config", &self.config)
-            .field("session", &self.session)
+            .field("writer_node_id", &self.writer_node_id)
             .finish_non_exhaustive()
     }
 }
@@ -110,35 +122,8 @@ impl GcsReplayArchiveStorage {
         &self.config
     }
 
-    pub fn session(&self) -> &ReplayArchiveSession {
-        &self.session
-    }
-
-    fn object_key(&self, block_number: BlockNumber, block_hash: BlockHash) -> String {
-        ReplayArchiveKey::new(self.session.clone(), block_number, block_hash).object_path()
-    }
-
-    async fn put_new_object(&self, key: &str, object: Vec<u8>) -> anyhow::Result<()> {
-        self.clients
-            .storage
-            .write_object(
-                self.config.bucket_resource(),
-                key,
-                bytes::Bytes::from(object),
-            )
-            // Succeeds only if no live version of this object exists yet — the GCS equivalent
-            // of S3's `if_none_match("*")`, enforcing the append-only contract. This also makes
-            // the upload safe to retry.
-            .set_if_generation_match(0)
-            .send_unbuffered()
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create append-only replay archive GCS object gs://{}/{}",
-                    self.config.bucket_base_url, key
-                )
-            })?;
-        Ok(())
+    fn object_key(block_number: BlockNumber, block_hash: BlockHash) -> String {
+        ReplayArchiveKey::flat(block_number, block_hash).object_path()
     }
 }
 
@@ -146,45 +131,66 @@ impl GcsReplayArchiveStorage {
 impl ReplayArchiveStorage for GcsReplayArchiveStorage {
     type Config = GcsReplayArchiveConfig;
 
-    async fn init(config: Self::Config, session: ReplayArchiveSession) -> anyhow::Result<Self> {
+    async fn init(config: Self::Config, writer_node_id: String) -> anyhow::Result<Self> {
         anyhow::ensure!(
             !config.bucket_base_url.is_empty(),
             "replay archive GCS bucket_base_url cannot be empty"
         );
         let clients = GcsClients::new(&config.auth_mode).await?;
-        let storage = Self {
+        Ok(Self {
             config,
-            session,
+            writer_node_id,
             clients,
-        };
-        storage
-            .put_new_object(&crate::session_marker_key(&storage.session), Vec::new())
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create append-only replay archive GCS session {}",
-                    storage.session
-                )
-            })?;
-        Ok(storage)
+        })
     }
 
-    async fn append_object(
+    async fn put_new_object(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
         object: Vec<u8>,
-    ) -> anyhow::Result<()> {
-        self.put_new_object(&self.object_key(block_number, block_hash), object)
-            .await
+        identity_digest: &str,
+    ) -> anyhow::Result<PutOutcome> {
+        let key = Self::object_key(block_number, block_hash);
+        let result = self
+            .clients
+            .storage
+            .write_object(
+                self.config.bucket_resource(),
+                &key,
+                bytes::Bytes::from(object),
+            )
+            // The identity digest travels in the same request as the payload, so the object
+            // and its digest become visible atomically: no observable state has one without
+            // the other.
+            .set_metadata([
+                (IDENTITY_DIGEST_METADATA_KEY, identity_digest),
+                (ARCHIVED_BY_METADATA_KEY, &self.writer_node_id),
+            ])
+            // Succeeds only if no live version of this object exists yet — the GCS equivalent
+            // of S3's `if_none_match("*")`. Exactly one concurrent writer wins; the rest see a
+            // precondition failure. This also makes the upload safe to retry.
+            .set_if_generation_match(0)
+            .send_unbuffered()
+            .await;
+        match result {
+            Ok(_) => Ok(PutOutcome::Created),
+            Err(err) if is_precondition_failed(&err) => Ok(PutOutcome::AlreadyExists),
+            Err(err) => Err(err).with_context(|| {
+                format!(
+                    "failed to create replay archive GCS object gs://{}/{}",
+                    self.config.bucket_base_url, key
+                )
+            }),
+        }
     }
 
-    async fn contains_object(
+    async fn stored_object_meta(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
-    ) -> anyhow::Result<bool> {
-        let key = self.object_key(block_number, block_hash);
+    ) -> anyhow::Result<Option<ArchiveObjectMeta>> {
+        let key = Self::object_key(block_number, block_hash);
         let result = self
             .clients
             .control
@@ -195,8 +201,10 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
             .send()
             .await;
         match result {
-            Ok(_) => Ok(true),
-            Err(err) if is_not_found(&err) => Ok(false),
+            Ok(object) => Ok(Some(ArchiveObjectMeta {
+                identity_digest: object.metadata.get(IDENTITY_DIGEST_METADATA_KEY).cloned(),
+            })),
+            Err(err) if is_not_found(&err) => Ok(None),
             Err(err) => Err(err).with_context(|| {
                 format!(
                     "failed to check replay archive GCS object gs://{}/{}",
@@ -307,6 +315,7 @@ mod tests {
     struct IdempotencyCheckingControl;
 
     const TEST_CLIENT_SECRET: &str = "credential-must-not-appear-in-debug";
+    const TEST_DIGEST: &str = "test-digest";
 
     impl fmt::Debug for IdempotencyCheckingControl {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -321,7 +330,10 @@ mod tests {
             options: RequestOptions,
         ) -> google_cloud_gax::Result<Response<Object>> {
             assert_eq!(options.idempotent(), Some(true));
-            Ok(Response::from(Object::new()))
+            Ok(Response::from(Object::new().set_metadata([(
+                IDENTITY_DIGEST_METADATA_KEY,
+                TEST_DIGEST,
+            )])))
         }
 
         async fn list_objects(
@@ -351,15 +363,28 @@ mod tests {
         assert_eq!(config.bucket_resource(), "projects/_/buckets/bucket");
     }
 
+    #[test]
+    fn gcs_uses_flat_object_keys() {
+        assert_eq!(
+            GcsReplayArchiveStorage::object_key(7, BlockHash::ZERO),
+            "7/0x0000000000000000000000000000000000000000000000000000000000000000"
+        );
+    }
+
     #[tokio::test]
-    async fn contains_object_marks_request_idempotent() {
+    async fn stored_object_meta_marks_request_idempotent_and_reads_digest() {
         let storage = GcsReplayArchiveStorage {
             config: GcsReplayArchiveConfig::anonymous("bucket"),
-            session: ReplayArchiveSession::new(42, "node-a").unwrap(),
+            writer_node_id: "node-a".to_owned(),
             clients: idempotency_checking_clients().await,
         };
 
-        assert!(storage.contains_object(7, BlockHash::ZERO).await.unwrap());
+        let meta = storage
+            .stored_object_meta(7, BlockHash::ZERO)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.identity_digest.as_deref(), Some(TEST_DIGEST));
     }
 
     #[tokio::test]
@@ -383,7 +408,7 @@ mod tests {
         let clients = idempotency_checking_clients().await;
         let storage = GcsReplayArchiveStorage {
             config: GcsReplayArchiveConfig::anonymous("bucket"),
-            session: ReplayArchiveSession::new(42, "node-a").unwrap(),
+            writer_node_id: "node-a".to_owned(),
             clients: clients.clone(),
         };
         let reader = GcsReplayArchiveReader {

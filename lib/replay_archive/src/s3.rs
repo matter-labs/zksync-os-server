@@ -1,14 +1,18 @@
 use crate::{
-    ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveSession, ReplayArchiveStorage,
-    ReplayArchiveStorageReader,
+    ArchiveObjectMeta, IDENTITY_DIGEST_METADATA_KEY, PutOutcome, ReplayArchiveKey,
+    ReplayArchiveKeyPage, ReplayArchiveStorage, ReplayArchiveStorageReader,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
 use async_trait::async_trait;
 use aws_config::{BehaviorVersion, ConfigLoader, Region, meta::region::RegionProviderChain};
 use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::{Client, primitives::ByteStream};
 use std::path::PathBuf;
+
+/// Object metadata key recording which node archived the object; forensic only.
+const ARCHIVED_BY_METADATA_KEY: &str = "archived-by";
 
 /// Authentication mode for S3 replay archive access.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,11 +61,23 @@ impl S3ReplayArchiveConfig {
     }
 }
 
+/// `If-None-Match: *` failures surface as HTTP 412 with code `PreconditionFailed`: a live
+/// object already exists at the key.
+fn is_precondition_failed<E, R>(err: &SdkError<E, R>) -> bool
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    matches!(
+        err.as_service_error().and_then(|err| err.code()),
+        Some("PreconditionFailed")
+    )
+}
+
 /// S3 implementation of [`ReplayArchiveStorage`].
 #[derive(Debug, Clone)]
 pub struct S3ReplayArchiveStorage {
     config: S3ReplayArchiveConfig,
-    session: ReplayArchiveSession,
+    writer_node_id: String,
     client: Client,
 }
 
@@ -70,30 +86,8 @@ impl S3ReplayArchiveStorage {
         &self.config
     }
 
-    pub fn session(&self) -> &ReplayArchiveSession {
-        &self.session
-    }
-
-    fn object_key(&self, block_number: BlockNumber, block_hash: BlockHash) -> String {
-        ReplayArchiveKey::new(self.session.clone(), block_number, block_hash).object_path()
-    }
-
-    async fn put_new_object(&self, key: &str, object: Vec<u8>) -> anyhow::Result<()> {
-        self.client
-            .put_object()
-            .bucket(&self.config.bucket_base_url)
-            .key(key)
-            .if_none_match("*")
-            .body(ByteStream::from(object))
-            .send()
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create append-only replay archive S3 object s3://{}/{}",
-                    self.config.bucket_base_url, key
-                )
-            })?;
-        Ok(())
+    fn object_key(block_number: BlockNumber, block_hash: BlockHash) -> String {
+        ReplayArchiveKey::flat(block_number, block_hash).object_path()
     }
 }
 
@@ -101,45 +95,58 @@ impl S3ReplayArchiveStorage {
 impl ReplayArchiveStorage for S3ReplayArchiveStorage {
     type Config = S3ReplayArchiveConfig;
 
-    async fn init(config: Self::Config, session: ReplayArchiveSession) -> anyhow::Result<Self> {
+    async fn init(config: Self::Config, writer_node_id: String) -> anyhow::Result<Self> {
         anyhow::ensure!(
             !config.bucket_base_url.is_empty(),
             "replay archive S3 bucket_base_url cannot be empty"
         );
         let client = create_s3_client(&config).await;
-        let storage = Self {
+        Ok(Self {
             config,
-            session,
+            writer_node_id,
             client,
-        };
-        storage
-            .put_new_object(&crate::session_marker_key(&storage.session), Vec::new())
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create append-only replay archive S3 session {}",
-                    storage.session
-                )
-            })?;
-        Ok(storage)
+        })
     }
 
-    async fn append_object(
+    async fn put_new_object(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
         object: Vec<u8>,
-    ) -> anyhow::Result<()> {
-        self.put_new_object(&self.object_key(block_number, block_hash), object)
-            .await
+        identity_digest: &str,
+    ) -> anyhow::Result<PutOutcome> {
+        let key = Self::object_key(block_number, block_hash);
+        let result = self
+            .client
+            .put_object()
+            .bucket(&self.config.bucket_base_url)
+            .key(&key)
+            // Object and identity digest land in one request, so they become visible
+            // atomically. `If-None-Match: *` lets exactly one concurrent writer win.
+            .metadata(IDENTITY_DIGEST_METADATA_KEY, identity_digest)
+            .metadata(ARCHIVED_BY_METADATA_KEY, &self.writer_node_id)
+            .if_none_match("*")
+            .body(ByteStream::from(object))
+            .send()
+            .await;
+        match result {
+            Ok(_) => Ok(PutOutcome::Created),
+            Err(err) if is_precondition_failed(&err) => Ok(PutOutcome::AlreadyExists),
+            Err(err) => Err(err).with_context(|| {
+                format!(
+                    "failed to create replay archive S3 object s3://{}/{}",
+                    self.config.bucket_base_url, key
+                )
+            }),
+        }
     }
 
-    async fn contains_object(
+    async fn stored_object_meta(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
-    ) -> anyhow::Result<bool> {
-        let key = self.object_key(block_number, block_hash);
+    ) -> anyhow::Result<Option<ArchiveObjectMeta>> {
+        let key = Self::object_key(block_number, block_hash);
         match self
             .client
             .head_object()
@@ -148,9 +155,14 @@ impl ReplayArchiveStorage for S3ReplayArchiveStorage {
             .send()
             .await
         {
-            Ok(_) => Ok(true),
+            Ok(head) => Ok(Some(ArchiveObjectMeta {
+                identity_digest: head
+                    .metadata()
+                    .and_then(|metadata| metadata.get(IDENTITY_DIGEST_METADATA_KEY))
+                    .cloned(),
+            })),
             Err(err) if matches!(err.as_service_error(), Some(err) if err.is_not_found()) => {
-                Ok(false)
+                Ok(None)
             }
             Err(err) => Err(err).with_context(|| {
                 format!(
@@ -287,6 +299,14 @@ mod tests {
             S3ReplayArchiveAuthMode::AuthenticatedWithCredentialFile(PathBuf::from(
                 "/path/to/credentials"
             ))
+        );
+    }
+
+    #[test]
+    fn s3_uses_flat_object_keys() {
+        assert_eq!(
+            S3ReplayArchiveStorage::object_key(7, BlockHash::ZERO),
+            "7/0x0000000000000000000000000000000000000000000000000000000000000000"
         );
     }
 }

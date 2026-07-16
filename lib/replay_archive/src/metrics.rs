@@ -1,5 +1,5 @@
 use std::time::Duration;
-use vise::{Buckets, Gauge, Histogram, LabeledFamily, Metrics, Unit};
+use vise::{Buckets, Counter, Gauge, Histogram, LabeledFamily, Metrics, Unit};
 
 const LATENCIES: Buckets = Buckets::exponential(0.00001..=10.0, 10.0);
 const BYTES: Buckets = Buckets::exponential(1.0..=128.0 * 1024.0 * 1024.0, 2.0);
@@ -31,6 +31,11 @@ pub(crate) struct ReplayArchiveMetrics {
     /// Subtract `encryption_time` to isolate the storage write.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES)]
     pub archive_time: Histogram<Duration>,
+
+    /// Per-outcome counts of ensured records: `written` when this node created the object,
+    /// `verified_existing` when another writer already had and the identity digest matched.
+    #[metrics(labels = ["outcome"])]
+    pub ensure_outcome: LabeledFamily<&'static str, Counter>,
 }
 
 #[vise::register]
