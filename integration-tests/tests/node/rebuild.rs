@@ -22,7 +22,7 @@ use zksync_os_integration_tests::wallets::load_operator_private_key;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, StoppedTester, TestEnvironment, Tester, test_multisetup,
 };
-use zksync_os_l1_watcher::{fetch_batch, fetch_batch_commit_tx_hash};
+use zksync_os_l1_watcher::fetch_live_committed_batch;
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_server::config::{RebuildBounds, RebuildConfig};
 
@@ -36,12 +36,7 @@ async fn fetch_committed_batch(
     batch_number: u64,
 ) -> anyhow::Result<(B256, u64, u64)> {
     let l1_state = fetch_l1_state(tester).await?;
-    let batch = fetch_batch(
-        &l1_state.diamond_proxy_sl,
-        batch_number,
-        tester.config().l1_watcher_config.max_blocks_to_process,
-    )
-    .await?;
+    let (batch, _) = fetch_live_committed_batch(&l1_state.diamond_proxy_l1, batch_number).await?;
     Ok((
         batch.batch_info.hash(),
         batch.first_block_number(),
@@ -60,12 +55,9 @@ async fn fetch_on_chain_batch_commit_tx_hash(
     batch_number: u64,
 ) -> anyhow::Result<B256> {
     let l1_state = fetch_l1_state(tester).await?;
-    fetch_batch_commit_tx_hash(
-        &l1_state.diamond_proxy_sl,
-        batch_number,
-        tester.config().l1_watcher_config.max_blocks_to_process,
-    )
-    .await
+    let (_, commit_tx_hash) =
+        fetch_live_committed_batch(&l1_state.diamond_proxy_l1, batch_number).await?;
+    Ok(commit_tx_hash)
 }
 
 /// Returns the hash of L2 block `block_number`, erroring if the block does not exist.

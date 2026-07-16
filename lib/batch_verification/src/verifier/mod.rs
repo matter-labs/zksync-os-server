@@ -25,7 +25,7 @@ type VerificationInput = TreeBlock;
 /// Batch verification responder that consumes requests from the network.
 pub struct BatchVerificationResponder<Finality, ReadState> {
     chain_id: u64,
-    diamond_proxy_sl: Address,
+    diamond_proxy: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
     block_cache: BlockCache<Finality, TreeBlock>,
@@ -50,7 +50,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: u64,
-        diamond_proxy_sl: Address,
+        diamond_proxy: Address,
         private_key: SecretString,
         finality: Finality,
         l1_state: L1State,
@@ -71,7 +71,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
 
         Self {
             chain_id,
-            diamond_proxy_sl,
+            diamond_proxy,
             l1_state,
             signer,
             block_cache: BlockCache::new(finality),
@@ -120,7 +120,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
             self.chain_id,
             request.batch_number,
             request.pubdata_mode,
-            self.l1_state.sl_chain_id,
+            self.l1_state.l1_chain_id,
             multichain_root,
             &blocks.first().unwrap().1.protocol_version,
             &last_replay_record.block_context.block_hashes.0,
@@ -137,9 +137,9 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory>
         let signature = BatchSignature::sign_batch(
             &request.prev_commit_data,
             &batch_info.commit_info,
-            self.diamond_proxy_sl,
-            self.l1_state.sl_chain_id,
-            self.l1_state.validator_timelock_sl,
+            self.diamond_proxy,
+            self.l1_state.l1_chain_id,
+            self.l1_state.validator_timelock,
             &blocks.first().unwrap().1.protocol_version,
             &self.signer,
         )

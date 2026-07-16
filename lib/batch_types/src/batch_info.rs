@@ -285,7 +285,7 @@ struct DAFields {
 
 fn calculate_da_fields(pubdata: &[u8], pubdata_mode: PubdataMode) -> DAFields {
     let (da_commitment, operator_da_input, blob_sidecar) = match pubdata_mode {
-        PubdataMode::Calldata | PubdataMode::RelayedL2Calldata => {
+        PubdataMode::Calldata => {
             let mut operator_da_input = Vec::with_capacity(32 * 3 + 1 + pubdata.len() + 1 + 32);
 
             // reference for this header is taken from zk_ee: https://github.com/matter-labs/zk_ee/blob/ad-aggregation-program/aggregator/src/aggregation/da_commitment.rs#L27

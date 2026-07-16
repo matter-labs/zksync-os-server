@@ -12,11 +12,16 @@ categories.workspace = true
 [dependencies]
 alloy = { workspace = true, default-features = false, features = [
     "signer-local",
-    "signer-gcp",
     "k256",
     "network",
     "consensus",
 ] }
+alloy-signer.workspace = true
+async-trait.workspace = true
+crc32c.workspace = true
+google-cloud-gax.workspace = true
+google-cloud-kms-v1.workspace = true
+k256.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 anyhow.workspace = true

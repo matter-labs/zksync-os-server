@@ -46,7 +46,6 @@ Pubdata price depends on what DA chain uses. If chain is a validium then price i
 For rollups that settle to L1:
 - if blobs are used, then L1 blob price is used for calculation
 - if calldata is used, then L1 gas price is used for calculation
-If rollup settles to Gateway, then gateway pubdate price is used.
 
 Pricing for blobs case is special because calculation of blob commitments is proven so it results in additional proving costs,
 thus pubdata price also depends on native price.

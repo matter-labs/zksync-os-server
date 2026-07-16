@@ -31,11 +31,6 @@ filter = 'test(~external_node) | test(~batch_verification) | test(~upgrade)'
 threads-required = 3
 
 [[profile.default.overrides]]
-# All to gateway tests spin gateway + L2 chain.
-filter = 'test(~to_gateway)'
-threads-required = 2
-
-[[profile.default.overrides]]
 # Consensus tests spin up 3 L2 nodes + an L1 anvil and have tight 20s raft
 # timeouts; without throttling, parallel scheduling causes flaky failures.
 filter = 'test(~consensus)'
