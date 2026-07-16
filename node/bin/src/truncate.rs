@@ -93,19 +93,6 @@ pub async fn run_truncate(
         ProviderKind::L1,
     )
     .await;
-    let gateway_provider = match &config.gateway_provider_config {
-        Some(gw_config) => Some(
-            build_node_provider(
-                gw_config,
-                config.l1_watcher_config.poll_interval,
-                config.l1_watcher_config.finalized_poll_interval,
-                config.l1_watcher_config.logs_cache_capacity,
-                ProviderKind::Gateway,
-            )
-            .await,
-        ),
-        None => None,
-    };
     let bridgehub_address = config
         .genesis_config
         .bridgehub_address
@@ -116,15 +103,10 @@ pub async fn run_truncate(
         .context("`genesis.chain_id` is required to verify the L1-executed floor")?;
     // The *latest* L1 view, deliberately: an execution that is not yet
     // L1-finalized may still become final, so it already binds the floor.
-    let l1_state = L1State::fetch_with_finality(
-        false,
-        l1_provider.clone(),
-        gateway_provider,
-        bridgehub_address,
-        chain_id,
-    )
-    .await
-    .context("failed to fetch L1 state for the executed-batch floor")?;
+    let l1_state =
+        L1State::fetch_with_finality(false, l1_provider.clone(), bridgehub_address, chain_id)
+            .await
+            .context("failed to fetch L1 state for the executed-batch floor")?;
     let floor_block = if l1_state.last_executed_batch == 0 {
         0
     } else {

@@ -76,7 +76,7 @@ impl SettlerIdentity {
 /// action) and fund its addresses.
 pub async fn authorize_and_fund(node: &Tester, identity: &SettlerIdentity) -> anyhow::Result<()> {
     let l1_state = fetch_l1_state(node).await?;
-    let timelock = l1_state.validator_timelock_sl;
+    let timelock = l1_state.validator_timelock;
     let chain_admin = l1_state.diamond_proxy_l1.get_admin().await?;
     let chain_id = node.l2_provider.get_chain_id().await?;
     let provider = node.l1_provider();
