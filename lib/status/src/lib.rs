@@ -3,6 +3,8 @@
 //! - `GET /status` — general node status, including consensus state on nodes
 //!   running BFT consensus.
 //! - `GET /status/health` — liveness endpoint. Always 200 while the process is up.
+//! - `GET /status/ready` — readiness probe: 200 once the RPC server is serving,
+//!   503 while starting up.
 //! - `GET /status/pipeline` — per-component backpressure and lag snapshot for
 //!   diagnostics and dashboards.
 //! - `GET /status/consensus-metrics` — the consensus runtime's own prometheus
@@ -13,14 +15,14 @@ mod health;
 mod pipeline;
 mod status;
 
-use crate::health::health;
+use crate::health::{health, ready};
 use crate::pipeline::pipeline;
 use crate::status::status;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Router, routing::get};
 use reth_tasks::shutdown::GracefulShutdown;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::{net::TcpListener, sync::watch};
 use zksync_os_backpressure::PipelineSnapshot;
 
@@ -36,6 +38,7 @@ pub struct StatusServerState {
     /// Present only on nodes running BFT consensus (`Arc` because the source is
     /// not clonable while axum state must be).
     pub consensus: Arc<Option<ConsensusStatusSource>>,
+    pub ready: Arc<OnceLock<()>>,
 }
 
 pub(crate) type AppState = StatusServerState;
@@ -62,6 +65,7 @@ pub async fn run_status_server(
     let app = Router::new()
         .route("/status", get(status))
         .route("/status/health", get(health))
+        .route("/status/ready", get(ready))
         .route("/status/pipeline", get(pipeline))
         .route("/status/consensus-metrics", get(consensus_metrics))
         .with_state(state);

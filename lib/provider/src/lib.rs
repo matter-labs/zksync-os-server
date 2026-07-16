@@ -1,7 +1,7 @@
 //! The node's canonical Ethereum-network provider.
 //!
 //! [`NodeProvider`] is an object-safe, wallet-capable wrapper over
-//! [`alloy::providers::Provider<Ethereum>`] used everywhere the node talks to an L1, Gateway, or L2
+//! [`alloy::providers::Provider<Ethereum>`] used everywhere the node talks to an L1 or L2
 //! RPC. On top of the plain provider it caches per-address contract deployment blocks (see
 //! [`NodeProvider::deployment_block`]), so the many startup binary searches over L1 history can use
 //! a tight lower bound without each rediscovering it.

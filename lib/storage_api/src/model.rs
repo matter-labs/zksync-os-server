@@ -265,7 +265,7 @@ impl AnyBlockContext for BlockContext {
     }
 
     fn is_gateway(&self) -> bool {
-        // todo: source from a new optional field?
+        // This node never runs a Gateway chain; the VM interface still requires the flag.
         false
     }
 }

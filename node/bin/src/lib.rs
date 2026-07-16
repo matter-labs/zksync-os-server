@@ -59,7 +59,7 @@ use anyhow::Context;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -210,21 +210,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         ProviderKind::L1,
     )
     .await;
-    let gateway_provider = if let Some(gw_config) = &config.gateway_provider_config {
-        Some(
-            build_node_provider(
-                gw_config,
-                config.l1_watcher_config.poll_interval,
-                config.l1_watcher_config.finalized_poll_interval,
-                config.l1_watcher_config.logs_cache_capacity,
-                ProviderKind::Gateway,
-            )
-            .await,
-        )
-    } else {
-        None
-    };
-
     // Genesis and the repository manager are initialized here (before the startup revert) so
     // that the `from_block_hash` guard can read the current local block hash.
     let diamond_proxy_l1 =
@@ -278,17 +263,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         node_role,
         rebuild_config.as_ref(),
         &l1_provider,
-        gateway_provider.as_ref(),
         bridgehub_address,
         chain_id,
     )
     .await
     .expect("failed to determine L1 state");
-
-    assert_eq!(
-        l1_state.sl_chain_id, l1_state.l1_chain_id,
-        "chain settles on Gateway; this is no longer supported"
-    );
 
     tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
@@ -309,10 +288,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
     if let (Some(pubdata_mode), true) = (effective_pubdata_mode, node_role.is_main()) {
         match (pubdata_mode, l1_state.da_input_mode) {
-            (
-                PubdataMode::Calldata | PubdataMode::Blobs | PubdataMode::RelayedL2Calldata,
-                BatchDaInputMode::Validium,
-            )
+            (PubdataMode::Calldata | PubdataMode::Blobs, BatchDaInputMode::Validium)
             | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
                 panic!(
                     "Pubdata mode doesn't correspond to pricing mode from the l1. \
@@ -613,11 +589,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 commit watcher",
         L1CommitWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
-            l1_state.sl_block_number,
-            node_startup_state.l1_state.l1_chain_id,
+            l1_state.l1_block_number,
             // Only nodes that actually submit commit txs locally should arm the
             // `UnexpectedCommit` guard — a main node running with
             // `batcher_config.enabled = false` must not panic when a commit submitted
@@ -633,10 +608,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 execute watcher",
         L1ExecuteWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
-            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -647,7 +621,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 finalized execute watcher",
         L1FinalizedExecuteWatcher::create_finalized_watcher(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
         )
@@ -662,12 +636,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             "l1 revert watcher",
             L1RevertWatcher::create_watcher(
                 config.l1_watcher_config.clone().into(),
-                node_startup_state.l1_state.diamond_proxy_sl.clone(),
-                node_startup_state.l1_state.sl_block_number,
-                node_startup_state.l1_state.l1_chain_id,
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.l1_block_number,
             )
-            .await
-            .expect("failed to start L1 revert watcher")
             .run(),
         );
     }
@@ -821,7 +792,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         zksync_os_mempool::Config {
             node_role,
             chain_id,
-            gateway_chain_id: config.general_config.gateway_chain_id,
             interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
             bytecode_supplier_address,
             l1_watcher_config: {
@@ -943,7 +913,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             fee_provider,
             zksync_os_consensus_execution::BuilderConfig {
                 l2_chain_id: chain_id,
-                sl_chain_id: node_startup_state.l1_state.sl_chain_id,
+                // With Gateway settlement removed, the settlement layer is always L1
+                // (mirrors the sequencer's `set_sl_chain_id(l1_chain_id)`).
+                sl_chain_id: node_startup_state.l1_state.l1_chain_id,
                 gas_limit: config.sequencer_config.block_gas_limit,
                 pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
                 fee_collector_address: config.sequencer_config.fee_collector_address,
@@ -1321,6 +1293,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         rx
     };
 
+    let rpc_ready: Arc<OnceLock<()>> = Arc::new(OnceLock::new());
+
     // ======== Start Status Server ========
     let status_port = if config.status_server_config.enabled {
         let status_listener = prebound_status_listener
@@ -1332,6 +1306,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let status_state = StatusServerState {
             pipeline_snapshot: pipeline_snapshot_rx,
             consensus: Arc::new(consensus_status_source),
+            ready: rpc_ready.clone(),
         };
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
@@ -1358,6 +1333,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         repositories_for_wait
             .wait_for_db_ready_to_process_blocks()
             .await;
+        // `rpc::spawn` awaits this future before serving.
+        let _ = rpc_ready.set(());
     };
     let rpc_policy_client = config
         .sequencer_config
@@ -1376,7 +1353,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         combined_acceptance_rx,
         last_constructed_block_ctx_receiver,
         tx_forwarder,
-        gateway_provider.map(|p| p.erased()),
         rpc_policy_client,
         runtime,
         wait_for_db,
@@ -1440,7 +1416,6 @@ async fn fetch_l1_state_with_startup_revert(
     node_role: NodeRole,
     rebuild: Option<&RebuildConfig>,
     l1_provider: &NodeProvider,
-    gateway_provider: Option<&NodeProvider>,
     bridgehub_address: Address,
     chain_id: u64,
 ) -> anyhow::Result<L1State> {
@@ -1453,7 +1428,6 @@ async fn fetch_l1_state_with_startup_revert(
     let l1_state = L1State::fetch_with_finality(
         use_finalized,
         l1_provider.clone(),
-        gateway_provider.cloned(),
         bridgehub_address,
         chain_id,
     )
@@ -1473,7 +1447,6 @@ async fn fetch_l1_state_with_startup_revert(
             return L1State::fetch_with_finality(
                 use_finalized,
                 l1_provider.clone(),
-                gateway_provider.cloned(),
                 bridgehub_address,
                 chain_id,
             )
@@ -1624,7 +1597,7 @@ async fn run_main_node_pipeline(
             config.batch_verification_config.client_enabled,
             BatchVerificationResponder::new(
                 chain_id,
-                node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+                node_state_on_startup.l1_state.diamond_proxy_address(),
                 config.batch_verification_config.signing_key.clone(),
                 finality.clone(),
                 node_state_on_startup.l1_state.clone(),
@@ -1772,8 +1745,10 @@ async fn run_main_node_pipeline(
                 last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
             },
             chain_id,
-            sl_chain_id: node_state_on_startup.l1_state.sl_chain_id,
-            chain_address_sl: node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+            // Feeds the committed `CommitBatchInfo.sl_chain_id` (part of the v31+ public input
+            // hash); the settlement layer is always L1 now.
+            sl_chain_id: node_state_on_startup.l1_state.l1_chain_id,
+            chain_address: node_state_on_startup.l1_state.diamond_proxy_address(),
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
             pubdata_mode,
@@ -1796,7 +1771,7 @@ async fn run_main_node_pipeline(
             batch_verification_l1_config: node_state_on_startup.l1_state.batch_verification.clone(),
         })
         .pipe(UpgradeGatekeeper::new(
-            node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
+            node_state_on_startup.l1_state.diamond_proxy_l1.clone(),
         ))
         .pipe_opt(replay_archiver.map(|replay_archiver| {
             ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
@@ -1804,10 +1779,9 @@ async fn run_main_node_pipeline(
         .pipe(L1Sender::<CommitCommand> {
             provider: l1_provider.clone(),
             config: commit_sender_config,
-            to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: false,
+            to_address: node_state_on_startup.l1_state.validator_timelock,
             commit_submitted_tx: Some(commit_submitted_tx),
-            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
+            l1_block_number: node_state_on_startup.l1_state.l1_block_number,
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
@@ -1816,10 +1790,9 @@ async fn run_main_node_pipeline(
         .pipe(L1Sender::<ProofCommand> {
             provider: l1_provider.clone(),
             config: prove_sender_config,
-            to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: false,
+            to_address: node_state_on_startup.l1_state.validator_timelock,
             commit_submitted_tx: None,
-            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
+            l1_block_number: node_state_on_startup.l1_state.l1_block_number,
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1833,10 +1806,9 @@ async fn run_main_node_pipeline(
         .pipe(L1Sender {
             provider: l1_provider,
             config: execute_sender_config,
-            to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: false,
+            to_address: node_state_on_startup.l1_state.validator_timelock,
             commit_submitted_tx: None,
-            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
+            l1_block_number: node_state_on_startup.l1_state.l1_block_number,
         })
         .pipe(BatchSink::new(internal_config_manager));
 
@@ -1926,7 +1898,7 @@ async fn run_en_pipeline(
             config.batch_verification_config.client_enabled,
             BatchVerificationResponder::new(
                 chain_id,
-                node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+                node_state_on_startup.l1_state.diamond_proxy_address(),
                 config.batch_verification_config.signing_key.clone(),
                 finality.clone(),
                 node_state_on_startup.l1_state.clone(),

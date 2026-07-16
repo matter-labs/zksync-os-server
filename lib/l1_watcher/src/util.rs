@@ -1,18 +1,15 @@
 use crate::watcher::L1WatcherError;
 use alloy::consensus::Transaction;
-use alloy::primitives::{Address, B256, BlockNumber, Log, TxHash, U256};
+use alloy::primitives::{B256, BlockNumber, Log, TxHash, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use anyhow::Context as _;
 use backon::{ConstantBuilder, Retryable};
-use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
-use zksync_os_contract_interface::IChainAssetHandler;
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
-use zksync_os_contract_interface::is_method_missing;
 use zksync_os_contract_interface::models::CommitBatchInfo;
 use zksync_os_contract_interface::{IExecutor, ZkChain};
 use zksync_os_provider::NodeProvider;
@@ -22,83 +19,6 @@ use zksync_os_provider::NodeProvider;
 const COMMIT_DATA_RETRY_POLICY: ConstantBuilder = ConstantBuilder::new()
     .with_delay(Duration::from_millis(200))
     .with_max_times(50);
-
-/// Distance of the first downward gallop probe from the latest block.
-///
-/// Startup searches almost always target transitions within the last few hundred L1 blocks (the
-/// unfinalized frontier), so bracketing from the tip costs O(log(distance-from-tip)) probes at
-/// recent — and therefore warm — state instead of O(log(range)) probes at deep-history blocks,
-/// which archive RPCs serve much more slowly.
-const GALLOP_INITIAL_DISTANCE: u64 = 1_000;
-
-/// Finds the first block where `IChainAssetHandler::migrationNumber(chain_id) >= migration_number`
-/// using binary search. Returns latest block if migration number is not reached yet.
-///
-/// Used by [`GatewayMigrationWatcher`][crate::GatewayMigrationWatcher] (on L1) to determine the
-/// block from which to start scanning for migration events.
-pub async fn find_block_by_migration_number(
-    zk_chain: &ZkChain<NodeProvider>,
-    chain_asset_handler: Address,
-    chain_id: u64,
-    migration_number: u64,
-) -> anyhow::Result<BlockNumber> {
-    let instance = Arc::new(IChainAssetHandler::new(
-        chain_asset_handler,
-        zk_chain.provider().clone(),
-    ));
-    let target = U256::from(migration_number);
-    let latest = instance.provider().get_block_number().await?;
-    let latest_migration_number = match instance
-        .migrationNumber(U256::from(chain_id))
-        .block(latest.into())
-        .call()
-        .await
-    {
-        Ok(n) => n,
-        // Pre-V31 `ChainAssetHandler` does not expose `migrationNumber`. No Gateway migrations can
-        // exist in that era, so there is nothing to scan for — start from the latest block.
-        Err(err) if is_method_missing(&err) => return Ok(latest),
-        Err(err) => return Err(err.into()),
-    };
-    // If this migration has not been reached yet, return the latest block.
-    if latest_migration_number < migration_number {
-        return Ok(latest);
-    }
-
-    // The chain's diamond proxy deployment block is a safe lower bound for CAH searches: the proxy
-    // can only exist when the bridgehub ecosystem (including CAH, when present) is at least
-    // partially up. The predicate still guards against CAH being absent for the V30→V31 migration
-    // window where the proxy existed before CAH was deployed.
-    let start_block = zk_chain.deployment_block().await?;
-    find_l1_block_by_predicate(zk_chain.provider(), start_block, move |block| {
-        let instance = instance.clone();
-        async move {
-            let code = instance
-                .provider()
-                .get_code_at(*instance.address())
-                .block_id(block.into())
-                .await?;
-            if code.0.is_empty() {
-                return Ok(false);
-            }
-            // At this block the address may have code but not yet be the ChainAssetHandler
-            // (e.g. a proxy upgraded to it only later), so `migrationNumber` reverts. Treat a
-            // revert as "not deployed yet" (false); real RPC errors still propagate.
-            let res = match instance
-                .migrationNumber(U256::from(chain_id))
-                .block(block.into())
-                .call()
-                .await
-            {
-                Ok(res) => res,
-                Err(err) if is_method_missing(&err) => return Ok(false),
-                Err(err) => return Err(err.into()),
-            };
-            Ok(res >= target)
-        }
-    })
-    .await
-}
 
 /// Block windows for scanning `[0, latest]` newest-first: `[latest-chunk+1, latest]`,
 /// then the next `chunk` blocks below, ending with a (possibly shorter) window that
@@ -153,73 +73,6 @@ async fn find_last_batch_event_block<E: SolEvent>(
         }
     }
     Ok(None)
-}
-
-/// Searches `[start_block_number, latest]` for the first block at which `predicate` returns
-/// `true`. The predicate must be monotonic over the search range (caller's responsibility).
-///
-/// Postcondition relied upon by callers: `predicate(result) == true`, and either
-/// `predicate(result - 1) == false` or `result == start_block_number`.
-///
-/// **Caller must ensure `start_block_number >= contract.deployment_block`** — the predicate is
-/// invoked without a code-presence guard, so calling it at blocks where the contract is not yet
-/// deployed will produce undefined results (typically an RPC error or a `false`-returning revert).
-pub async fn find_l1_block_by_predicate<Fut: Future<Output = anyhow::Result<bool>>>(
-    provider: &NodeProvider,
-    start_block_number: BlockNumber,
-    predicate: impl Fn(BlockNumber) -> Fut,
-) -> anyhow::Result<BlockNumber> {
-    let latest = provider.get_block_number().await?;
-
-    // Ensure the predicate is true by the upper bound, or bail early.
-    if !predicate(latest).await? {
-        anyhow::bail!(
-            "Condition not satisfied up to latest block: contract not deployed yet \
-             or target not reached.",
-        );
-    }
-
-    find_first_true_block(start_block_number, latest, predicate).await
-}
-
-/// Core of [`find_l1_block_by_predicate`]: gallop from the tip, then binary-search the bracket.
-///
-/// Requires `predicate(latest) == true` (checked by the caller). Far-from-tip transitions cost up
-/// to ~log2(range / initial distance) extra probes over a plain binary search.
-async fn find_first_true_block<Fut: Future<Output = anyhow::Result<bool>>>(
-    start_block_number: BlockNumber,
-    latest: BlockNumber,
-    predicate: impl Fn(BlockNumber) -> Fut,
-) -> anyhow::Result<BlockNumber> {
-    // Gallop: probe latest-d, latest-2d, latest-4d, ... until the predicate is false or the
-    // probe clamps at `start_block_number`.
-    let (mut lo, mut hi) = (start_block_number, latest);
-    let mut distance = GALLOP_INITIAL_DISTANCE;
-    while lo < hi {
-        let probe = latest.saturating_sub(distance).max(lo);
-        if predicate(probe).await? {
-            hi = probe;
-            if probe == lo {
-                break;
-            }
-            distance = distance.saturating_mul(2);
-        } else {
-            lo = probe + 1;
-            break;
-        }
-    }
-
-    // Binary search on [lo, hi] for the first block where the predicate is true.
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if predicate(mid).await? {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-
-    Ok(lo)
 }
 
 /// Finds the settlement-layer block containing the live (non-reverted) commit of `batch_number`,
@@ -454,13 +307,12 @@ pub(crate) async fn fetch_commit_batch_info(
 
 #[cfg(test)]
 mod tests {
-    use super::{backward_windows, find_first_true_block, find_l1_commit_block_by_batch_number};
+    use super::{backward_windows, find_l1_commit_block_by_batch_number};
     use alloy::network::EthereumWallet;
     use alloy::primitives::{Address, B256, Bytes, U64, U256};
     use alloy::providers::ProviderBuilder;
     use alloy::rpc::types::{Block, Header, Log};
     use alloy::transports::mock::Asserter;
-    use std::sync::Mutex;
     use zksync_os_contract_interface::ZkChain;
     use zksync_os_provider::NodeProvider;
 
@@ -550,64 +402,5 @@ mod tests {
             backward_windows(2, 0).collect::<Vec<_>>(),
             vec![(2, 2), (1, 1), (0, 0)]
         );
-    }
-
-    /// Runs the search against a synthetic monotonic predicate (`block >= first_true`) and
-    /// returns the result along with every probed block.
-    fn search_with_probes(start: u64, latest: u64, first_true: u64) -> (u64, Vec<u64>) {
-        let probes = Mutex::new(Vec::new());
-        let result = futures::executor::block_on(find_first_true_block(start, latest, |block| {
-            probes.lock().unwrap().push(block);
-            async move { Ok(block >= first_true) }
-        }))
-        .unwrap();
-        (result, probes.into_inner().unwrap())
-    }
-
-    #[test]
-    fn finds_transition_near_tip_with_few_shallow_probes() {
-        let (result, probes) = search_with_probes(9_200_000, 11_270_000, 11_269_900);
-        assert_eq!(result, 11_269_900);
-        // Bracketing from the tip must beat a full-range binary search (~21 probes here) and
-        // stay within recent blocks.
-        assert!(
-            probes.len() <= 15,
-            "took {} probes: {probes:?}",
-            probes.len()
-        );
-        assert!(probes.iter().all(|&block| block >= 11_260_000));
-    }
-
-    #[test]
-    fn finds_deep_transition() {
-        let (result, probes) = search_with_probes(0, 11_270_000, 42);
-        assert_eq!(result, 42);
-        assert!(probes.iter().all(|&block| block <= 11_270_000));
-    }
-
-    #[test]
-    fn returns_start_when_predicate_true_everywhere() {
-        let (result, _) = search_with_probes(9_200_000, 11_270_000, 0);
-        assert_eq!(result, 9_200_000);
-    }
-
-    #[test]
-    fn returns_latest_when_transition_at_latest() {
-        let (result, _) = search_with_probes(0, 11_270_000, 11_270_000);
-        assert_eq!(result, 11_270_000);
-    }
-
-    #[test]
-    fn probes_never_go_below_start() {
-        let (result, probes) = search_with_probes(11_269_000, 11_270_000, 11_269_500);
-        assert_eq!(result, 11_269_500);
-        assert!(probes.iter().all(|&block| block >= 11_269_000));
-    }
-
-    #[test]
-    fn handles_start_equal_to_latest() {
-        let (result, probes) = search_with_probes(5, 5, 3);
-        assert_eq!(result, 5);
-        assert!(probes.is_empty());
     }
 }

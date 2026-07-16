@@ -38,11 +38,6 @@ threads-required = 4
 filter = 'test(~external_node) | test(~batch_verification) | test(~upgrade)'
 threads-required = 3
 
-[[profile.default.overrides]]
-# All to gateway tests spin gateway + L2 chain.
-filter = 'test(~to_gateway)'
-threads-required = 2
-
 # Wide seed sweeps of the consensus simulation corpus (the nightly lane sets
 # CONSENSUS_SIM_SEEDS, multiplying every scenario's runtime by the sweep size) —
 # scenarios legitimately run far past the default per-test timeout.

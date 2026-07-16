@@ -33,7 +33,4 @@ pub use committed_batch_provider::{CommittedBatchProvider, fetch_live_committed_
 mod persist_batch_watcher;
 pub use persist_batch_watcher::L1PersistBatchWatcher;
 
-mod gateway_migration_watcher;
-pub use gateway_migration_watcher::GatewayMigrationWatcher;
-
 pub mod util;

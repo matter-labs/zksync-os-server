@@ -403,17 +403,17 @@ fn startup_batch_numbers(
     (prioritized_in_range, remaining_batch_numbers)
 }
 
-/// Resolves the currently live (non-reverted) commit of `batch_number` from the settlement layer,
+/// Resolves the currently live (non-reverted) commit of `batch_number` from L1,
 /// returning the discovered batch together with the hash of the transaction that committed it
 /// (not to be confused with the batch header hash itself). See
 /// [`util::find_l1_commit_block_by_batch_number`] for how liveness is established.
 pub async fn fetch_live_committed_batch(
-    diamond_proxy_sl: &ZkChain<NodeProvider>,
+    diamond_proxy: &ZkChain<NodeProvider>,
     batch_number: u64,
     max_blocks_per_query: u64,
 ) -> anyhow::Result<(DiscoveredCommittedBatch, TxHash)> {
-    let (sl_block_with_commit, live_hash) = util::find_l1_commit_block_by_batch_number(
-        diamond_proxy_sl,
+    let (l1_block_with_commit, live_hash) = util::find_l1_commit_block_by_batch_number(
+        diamond_proxy,
         batch_number,
         max_blocks_per_query,
     )
@@ -421,14 +421,14 @@ pub async fn fetch_live_committed_batch(
     .with_context(|| format!("failed to find live L1 commit block for batch {batch_number}"))?;
 
     let (batch, commit_tx_hash) =
-        util::fetch_stored_batch_data(diamond_proxy_sl, sl_block_with_commit, batch_number)
+        util::fetch_stored_batch_data(diamond_proxy, l1_block_with_commit, batch_number)
             .await?
             .with_context(|| format!("failed to find committed batch {batch_number} on L1"))?;
-    // A mismatch means the commit events in `sl_block_with_commit` disagree with
+    // A mismatch means the commit events in `l1_block_with_commit` disagree with
     // `storedBatchHash` (e.g. a revert landed mid-lookup) — fail rather than return stale data.
     anyhow::ensure!(
         batch.batch_info.hash() == live_hash,
-        "batch {batch_number} reconstructed from L1 block {sl_block_with_commit} does not hash \
+        "batch {batch_number} reconstructed from L1 block {l1_block_with_commit} does not hash \
          to the live `storedBatchHash` value {live_hash}",
     );
     Ok((batch, commit_tx_hash))
