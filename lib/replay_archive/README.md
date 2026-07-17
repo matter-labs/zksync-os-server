@@ -9,37 +9,35 @@ recovered from L1 committed batch range events once block replay records are ava
 
 ## Storage Layout
 
-Every node process creates one session. The session name is:
+All nodes and process restarts write to one shared namespace. New replay records use:
 
 ```text
-<timestamp_millis>-<node_id>
-```
-
-Replay records are stored under:
-
-```text
-<session>/<block_number>/<block_hash>
+<block_number>/<block_hash>
 ```
 
 For the filesystem backend, the full path is:
 
 ```text
-<archive_root>/<timestamp_millis>-<node_id>/<block_number>/<block_hash>
+<archive_root>/<block_number>/<block_hash>
 ```
 
-For the S3 and GCS backends, the object key is:
+S3 and GCS use the same `<block_number>/<block_hash>` value as the object key.
+
+Archives created before the shared layout used a session prefix:
 
 ```text
 <timestamp_millis>-<node_id>/<block_number>/<block_hash>
 ```
 
+Readers and recovery support both layouts so old and new objects can coexist during migration.
+
 The object value is the replay record payload only. There is no wrapper, batch number, block range,
 or extra archive metadata in the object body.
 
-Implementations of `ReplayArchiveStorage` must be append-only:
+Implementations of `ReplayArchiveStorage` must provide idempotent, append-only writes:
 
-- `init` must fail if the session already exists.
-- `append_object` must fail if the object key already exists.
+- `contains_object` checks whether a key is already present.
+- `put_object_if_absent` creates a missing key and treats an existing key as success.
 - Existing archive data must never be overwritten, even with identical bytes.
 
 ## Write Path
@@ -53,14 +51,40 @@ component. If the queue is full, backpressure is applied to replay storage write
 
 The current queue size is `REPLAY_ARCHIVE_QUEUE_SIZE`.
 
+### Concurrent Writes
+
+`ReplayArchiveComponent` processes up to `MAX_PARALLEL_OBJECT_PUTS` archive operations
+concurrently. The same storage contract handles races between those operations and writers in
+other nodes.
+
+For each replay record, the archiver first checks whether `<block_number>/<block_hash>` already
+exists. If it does, the write succeeds immediately without serializing or encrypting the payload.
+This check is an optimization; it is not the concurrency guarantee.
+
+If the key is missing, the archiver builds the payload and performs an atomic conditional create:
+
+- GCS uses `if_generation_match(0)`.
+- S3 uses `If-None-Match: *`.
+- The filesystem writes a complete temporary file and hard-links it to the final path.
+
+When several nodes race, exactly one conditional create publishes the object. The other writers
+observe that the key already exists and also return success. A restart follows the same path and
+normally stops at the initial existence check. Errors other than an already-existing key are
+propagated and fail the archive component.
+
+First-writer-wins applies to the exact `(block_number, block_hash)` pair. Different block hashes at
+the same height are separate objects. If writers provide different replay records for the same key,
+the first stored payload is retained; writers do not download, decrypt, or compare the existing
+payload.
+
 ## Implementations
 
 Current archive implementations:
 
-- `FileSystemReplayArchiveStorage`: append-only object storage on local disk.
+- `FileSystemReplayArchiveStorage`: conditional object creation on local disk.
 - `FileSystemReplayArchiver`: filesystem archiver that stores plaintext JSON replay records.
-- `S3ReplayArchiveStorage`: append-only object storage in S3 or an S3-compatible service.
-- `GcsReplayArchiveStorage`: append-only object storage in Google Cloud Storage.
+- `S3ReplayArchiveStorage`: conditional object creation in S3 or an S3-compatible service.
+- `GcsReplayArchiveStorage`: conditional object creation in Google Cloud Storage.
 - `AgeEncryptedReplayArchiver`: wrapper that JSON-encodes replay records and encrypts them with
   age before storing them in any `ReplayArchiveStorage`. Supports X25519 recipients and GCP KMS
   asymmetric keys.
@@ -73,7 +97,7 @@ Current reader implementation:
 
 Other storage backends should implement:
 
-- `ReplayArchiveStorage` for node-side append/check operations.
+- `ReplayArchiveStorage` for node-side conditional-create/check operations.
 - `ReplayArchiveStorageReader` for recovery-side object listing.
 
 ## Encryption
@@ -94,7 +118,7 @@ RSA-OAEP; no private key material exists outside KMS. During recovery, unwrappin
 a record copy takes one KMS `AsymmetricDecrypt` call (requiring
 `cloudkms.cryptoKeyVersions.useToDecrypt`), so key access can be revoked and audited. Recovery
 currently decodes each archived copy once during the canonical chain walk and again when writing
-to RocksDB, so budget roughly two `AsymmetricDecrypt` calls per record per session copy.
+to RocksDB, so budget roughly two `AsymmetricDecrypt` calls per stored record copy.
 Note that KMS-encrypted objects use a custom age stanza and can only be decrypted by the recovery
 tool, not by the stock `age` CLI.
 
@@ -129,8 +153,10 @@ Recovery has two steps.
 First, download all archive objects into a local recovery layout:
 
 ```text
-<output_root>/<block_number>/<block_hash>/<session>
+<output_root>/<block_number>/<block_hash>/<copy>
 ```
+
+For the shared layout, `<copy>` is named `record`. For a legacy object, it is the session name.
 
 Second, rebuild the node replay RocksDB from a canonical anchor:
 
@@ -151,8 +177,8 @@ The recovery logic starts from the anchor, reads the replay record for that bloc
 previous block hash from the replay record, and walks backward until block `0`. It then writes the
 canonical chain into RocksDB from genesis upward using the node replay storage format.
 
-If several sessions contain the same `(block_number, block_hash)`, recovery verifies that the
-session copies agree before writing the record.
+If several downloaded copies contain the same `(block_number, block_hash)`, recovery verifies that
+they agree before writing the record.
 
 ## CLI
 
@@ -217,7 +243,7 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
 
 KMS uses the same ADC configuration as GCS. Every record copy decode costs one KMS
 `AsymmetricDecrypt` call, and recovery decodes records during the chain walk and again while
-writing to RocksDB (roughly two calls per record per session copy); `--decrypt-concurrency`
+writing to RocksDB (roughly two calls per stored record copy); `--decrypt-concurrency`
 (default 32) bounds the number of in-flight KMS requests.
 
 Rebuild replay RocksDB from an unencrypted archive:
