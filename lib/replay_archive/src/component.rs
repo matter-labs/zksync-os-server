@@ -1,5 +1,5 @@
 use crate::metrics::REPLAY_ARCHIVE_METRICS;
-use crate::{ArchiveOutcome, REPLAY_ARCHIVE_QUEUE_SIZE, ReplayArchiver};
+use crate::{REPLAY_ARCHIVE_QUEUE_SIZE, ReplayArchiver};
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
@@ -81,25 +81,11 @@ where
     let block_number = replay_record.block_context.block_number;
     tracing::info!("Archiving replay record for block #{block_number}, {block_hash}");
     let archive_time = REPLAY_ARCHIVE_METRICS.archive_time.start();
-    let outcome = archive
+    archive
         .ensure_replay_record(block_hash, replay_record)
         .await
         .with_context(|| format!("failed to archive replay record for block {block_number}"))?;
     archive_time.observe();
-    match outcome {
-        ArchiveOutcome::Written => {
-            REPLAY_ARCHIVE_METRICS.ensure_outcome[&"written"].inc();
-        }
-        ArchiveOutcome::VerifiedExisting => {
-            REPLAY_ARCHIVE_METRICS.ensure_outcome[&"verified_existing"].inc();
-            // Expected when another node won the write race or after a restart; a persistent
-            // pattern of only verified writes on the sequencer deserves a look.
-            tracing::info!(
-                "Replay record for block #{block_number}, {block_hash} was already archived \
-                 by another writer; identity digest verified"
-            );
-        }
-    }
     Ok(block_number)
 }
 
@@ -123,9 +109,9 @@ mod tests {
             &self,
             _block_hash: BlockHash,
             _replay_record: ReplayRecord,
-        ) -> anyhow::Result<ArchiveOutcome> {
+        ) -> anyhow::Result<()> {
             self.appended.fetch_add(1, Ordering::SeqCst);
-            Ok(ArchiveOutcome::Written)
+            Ok(())
         }
 
         async fn contains_replay_record(

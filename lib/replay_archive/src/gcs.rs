@@ -1,6 +1,5 @@
 use crate::{
-    ArchiveObjectMeta, IDENTITY_DIGEST_METADATA_KEY, PutOutcome, ReplayArchiveKey,
-    ReplayArchiveKeyPage, ReplayArchiveStorage, ReplayArchiveStorageReader,
+    ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveStorage, ReplayArchiveStorageReader,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
@@ -144,13 +143,12 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
         })
     }
 
-    async fn put_new_object(
+    async fn put_object_if_absent(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
         object: Vec<u8>,
-        identity_digest: &str,
-    ) -> anyhow::Result<PutOutcome> {
+    ) -> anyhow::Result<()> {
         let key = Self::object_key(block_number, block_hash);
         let result = self
             .clients
@@ -160,13 +158,7 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
                 &key,
                 bytes::Bytes::from(object),
             )
-            // The identity digest travels in the same request as the payload, so the object
-            // and its digest become visible atomically: no observable state has one without
-            // the other.
-            .set_metadata([
-                (IDENTITY_DIGEST_METADATA_KEY, identity_digest),
-                (ARCHIVED_BY_METADATA_KEY, &self.writer_node_id),
-            ])
+            .set_metadata([(ARCHIVED_BY_METADATA_KEY, &self.writer_node_id)])
             // Succeeds only if no live version of this object exists yet — the GCS equivalent
             // of S3's `if_none_match("*")`. Exactly one concurrent writer wins; the rest see a
             // precondition failure. This also makes the upload safe to retry.
@@ -174,8 +166,8 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
             .send_unbuffered()
             .await;
         match result {
-            Ok(_) => Ok(PutOutcome::Created),
-            Err(err) if is_precondition_failed(&err) => Ok(PutOutcome::AlreadyExists),
+            Ok(_) => Ok(()),
+            Err(err) if is_precondition_failed(&err) => Ok(()),
             Err(err) => Err(err).with_context(|| {
                 format!(
                     "failed to create replay archive GCS object gs://{}/{}",
@@ -185,11 +177,11 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
         }
     }
 
-    async fn stored_object_meta(
+    async fn contains_object(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
-    ) -> anyhow::Result<Option<ArchiveObjectMeta>> {
+    ) -> anyhow::Result<bool> {
         let key = Self::object_key(block_number, block_hash);
         let result = self
             .clients
@@ -201,10 +193,8 @@ impl ReplayArchiveStorage for GcsReplayArchiveStorage {
             .send()
             .await;
         match result {
-            Ok(object) => Ok(Some(ArchiveObjectMeta {
-                identity_digest: object.metadata.get(IDENTITY_DIGEST_METADATA_KEY).cloned(),
-            })),
-            Err(err) if is_not_found(&err) => Ok(None),
+            Ok(_) => Ok(true),
+            Err(err) if is_not_found(&err) => Ok(false),
             Err(err) => Err(err).with_context(|| {
                 format!(
                     "failed to check replay archive GCS object gs://{}/{}",
@@ -315,8 +305,6 @@ mod tests {
     struct IdempotencyCheckingControl;
 
     const TEST_CLIENT_SECRET: &str = "credential-must-not-appear-in-debug";
-    const TEST_DIGEST: &str = "test-digest";
-
     impl fmt::Debug for IdempotencyCheckingControl {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(TEST_CLIENT_SECRET)
@@ -330,10 +318,7 @@ mod tests {
             options: RequestOptions,
         ) -> google_cloud_gax::Result<Response<Object>> {
             assert_eq!(options.idempotent(), Some(true));
-            Ok(Response::from(Object::new().set_metadata([(
-                IDENTITY_DIGEST_METADATA_KEY,
-                TEST_DIGEST,
-            )])))
+            Ok(Response::from(Object::new()))
         }
 
         async fn list_objects(
@@ -372,19 +357,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stored_object_meta_marks_request_idempotent_and_reads_digest() {
+    async fn contains_object_marks_request_idempotent() {
         let storage = GcsReplayArchiveStorage {
             config: GcsReplayArchiveConfig::anonymous("bucket"),
             writer_node_id: "node-a".to_owned(),
             clients: idempotency_checking_clients().await,
         };
 
-        let meta = storage
-            .stored_object_meta(7, BlockHash::ZERO)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(meta.identity_digest.as_deref(), Some(TEST_DIGEST));
+        assert!(storage.contains_object(7, BlockHash::ZERO).await.unwrap());
     }
 
     #[tokio::test]

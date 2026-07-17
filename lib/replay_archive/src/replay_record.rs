@@ -1,6 +1,5 @@
-use crate::identity::replay_record_identity_digest;
 use crate::metrics::REPLAY_ARCHIVE_METRICS;
-use crate::{ArchiveOutcome, ReplayArchiveStorage, ReplayArchiver, ensure_object_archived};
+use crate::{ReplayArchiveStorage, ReplayArchiver, ensure_object_archived};
 use alloy::primitives::{BlockHash, BlockNumber};
 use async_trait::async_trait;
 use zksync_os_storage_api::ReplayRecord;
@@ -30,20 +29,13 @@ where
         &self,
         block_hash: BlockHash,
         replay_record: ReplayRecord,
-    ) -> anyhow::Result<ArchiveOutcome> {
+    ) -> anyhow::Result<()> {
         let block_number = replay_record.block_context.block_number;
-        let identity_digest = replay_record_identity_digest(&replay_record);
-        ensure_object_archived(
-            &self.storage,
-            block_number,
-            block_hash,
-            &identity_digest,
-            || {
-                let encoded = encode_replay_record(&replay_record);
-                REPLAY_ARCHIVE_METRICS.object_bytes[&"stored"].observe(encoded.len());
-                Ok(encoded)
-            },
-        )
+        ensure_object_archived(&self.storage, block_number, block_hash, || {
+            let encoded = encode_replay_record(&replay_record);
+            REPLAY_ARCHIVE_METRICS.object_bytes[&"stored"].observe(encoded.len());
+            Ok(encoded)
+        })
         .await
     }
 
@@ -52,11 +44,7 @@ where
         block_number: BlockNumber,
         block_hash: BlockHash,
     ) -> anyhow::Result<bool> {
-        Ok(self
-            .storage
-            .stored_object_meta(block_number, block_hash)
-            .await?
-            .is_some())
+        self.storage.contains_object(block_number, block_hash).await
     }
 }
 

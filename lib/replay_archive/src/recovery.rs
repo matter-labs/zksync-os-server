@@ -708,7 +708,7 @@ mod tests {
         .await
         .unwrap();
         storage
-            .put_new_object(7, block_hash, b"flat".to_vec(), "digest")
+            .put_object_if_absent(7, block_hash, b"flat".to_vec())
             .await
             .unwrap();
 
@@ -758,11 +758,11 @@ mod tests {
         .await
         .unwrap();
         storage
-            .put_new_object(7, block_hash, b"first".to_vec(), "digest-7")
+            .put_object_if_absent(7, block_hash, b"first".to_vec())
             .await
             .unwrap();
         storage
-            .put_new_object(8, block_hash, b"second".to_vec(), "digest-8")
+            .put_object_if_absent(8, block_hash, b"second".to_vec())
             .await
             .unwrap();
 

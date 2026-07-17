@@ -1,6 +1,5 @@
 use crate::{
-    ArchiveObjectMeta, IDENTITY_DIGEST_METADATA_KEY, PutOutcome, ReplayArchiveKey,
-    ReplayArchiveKeyPage, ReplayArchiveStorage, ReplayArchiveStorageReader,
+    ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveStorage, ReplayArchiveStorageReader,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
@@ -108,30 +107,26 @@ impl ReplayArchiveStorage for S3ReplayArchiveStorage {
         })
     }
 
-    async fn put_new_object(
+    async fn put_object_if_absent(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
         object: Vec<u8>,
-        identity_digest: &str,
-    ) -> anyhow::Result<PutOutcome> {
+    ) -> anyhow::Result<()> {
         let key = Self::object_key(block_number, block_hash);
         let result = self
             .client
             .put_object()
             .bucket(&self.config.bucket_base_url)
             .key(&key)
-            // Object and identity digest land in one request, so they become visible
-            // atomically. `If-None-Match: *` lets exactly one concurrent writer win.
-            .metadata(IDENTITY_DIGEST_METADATA_KEY, identity_digest)
             .metadata(ARCHIVED_BY_METADATA_KEY, &self.writer_node_id)
             .if_none_match("*")
             .body(ByteStream::from(object))
             .send()
             .await;
         match result {
-            Ok(_) => Ok(PutOutcome::Created),
-            Err(err) if is_precondition_failed(&err) => Ok(PutOutcome::AlreadyExists),
+            Ok(_) => Ok(()),
+            Err(err) if is_precondition_failed(&err) => Ok(()),
             Err(err) => Err(err).with_context(|| {
                 format!(
                     "failed to create replay archive S3 object s3://{}/{}",
@@ -141,11 +136,11 @@ impl ReplayArchiveStorage for S3ReplayArchiveStorage {
         }
     }
 
-    async fn stored_object_meta(
+    async fn contains_object(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
-    ) -> anyhow::Result<Option<ArchiveObjectMeta>> {
+    ) -> anyhow::Result<bool> {
         let key = Self::object_key(block_number, block_hash);
         match self
             .client
@@ -155,14 +150,9 @@ impl ReplayArchiveStorage for S3ReplayArchiveStorage {
             .send()
             .await
         {
-            Ok(head) => Ok(Some(ArchiveObjectMeta {
-                identity_digest: head
-                    .metadata()
-                    .and_then(|metadata| metadata.get(IDENTITY_DIGEST_METADATA_KEY))
-                    .cloned(),
-            })),
+            Ok(_) => Ok(true),
             Err(err) if matches!(err.as_service_error(), Some(err) if err.is_not_found()) => {
-                Ok(None)
+                Ok(false)
             }
             Err(err) => Err(err).with_context(|| {
                 format!(

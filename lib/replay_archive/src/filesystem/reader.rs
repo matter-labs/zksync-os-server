@@ -1,4 +1,3 @@
-use super::storage::DIGEST_SIDECAR_EXTENSION;
 use crate::{
     ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveSession, ReplayArchiveStorageReader,
     format_block_hash,
@@ -63,12 +62,10 @@ impl FileSystemReplayArchiveReader {
             let Some(file_name) = file_name.to_str() else {
                 continue;
             };
-            // Digest sidecars and interrupted-write leftovers accompany data files in the
-            // flat layout; only plain block hash names are archive objects.
+            // Interrupted-write leftovers accompany data files in the flat layout; only plain
+            // block hash names are archive objects.
             let Ok(block_hash) = BlockHash::from_str(file_name) else {
-                if !file_name.ends_with(&format!(".{DIGEST_SIDECAR_EXTENSION}"))
-                    && !file_name.contains(".partial")
-                {
+                if !file_name.contains(".partial") {
                     tracing::warn!(
                         path = %object_entry.path().display(),
                         "Skipping replay archive entry that is not a block hash"
