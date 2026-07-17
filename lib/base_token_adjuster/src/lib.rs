@@ -45,7 +45,7 @@ pub struct BaseTokenPriceUpdaterConfig {
     /// Signer configuration to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// It's not used for chains with ETH as base token and it's expected to be set for all other chains.
-    /// Supports both local private keys and GCP KMS keys.
+    /// Supports local private keys, GCP KMS keys, and Azure Key Vault keys.
     pub token_multiplier_setter_signer: Option<SignerConfig>,
     /// Max fee per gas we are willing to spend (in wei).
     pub max_fee_per_gas_wei: u128,
