@@ -457,7 +457,14 @@ impl BlockReplayStorage {
         block_number: BlockNumber,
     ) -> Option<ReplayRecord> {
         let key = block_number.to_be_bytes();
-        let block_context = self.get_legacy_context(&key)?;
+        let Some(block_context) = self.get_legacy_context(&key) else {
+            // The legacy copy exists for everything this binary writes; it can only be missing
+            // after rolling back from a version whose migration deleted it. Reconstruction keeps
+            // override writes (e.g. an EN re-writing blocks on restart) working in that state;
+            // it is only inexact for an in-flight multi-block override wave, which a rolled-back
+            // binary should not be running.
+            return self.get_replay_record(block_number);
+        };
         Some(self.assemble_replay_record(block_number, &key, block_context))
     }
 
@@ -995,6 +1002,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(storage.get_replay_record(5), Some(next));
+    }
+
+    #[tokio::test]
+    async fn override_write_tolerates_contracted_rows() {
+        // After the contract migration (next release) deletes legacy rows, a rollback to this
+        // binary must still handle override writes: an EN re-writes existing blocks on restart.
+        let dir = tempfile::tempdir().unwrap();
+        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
+        let chain = make_chain(5);
+        for sealed in &chain {
+            storage.write(sealed.clone(), false).await.unwrap();
+        }
+        // Contract block 3: the stripped row and `CanonicalHash` stay, the legacy row goes.
+        let mut batch = storage.db.new_write_batch();
+        batch.delete_cf(BlockReplayColumnFamily::Context, &3u64.to_be_bytes());
+        storage.db.write(batch).unwrap();
+
+        // An identical re-write proceeds without panicking or archiving anything.
+        assert!(storage.write(chain[3].clone(), true).await.unwrap());
+        assert_eq!(
+            storage.get_replay_record(3).as_ref(),
+            Some(chain[3].as_ref())
+        );
     }
 
     #[tokio::test]
