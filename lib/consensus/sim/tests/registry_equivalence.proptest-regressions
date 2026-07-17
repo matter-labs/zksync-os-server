@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 198943c41cf8b1803ed73d75eb46f41ab787984cd397123d91c1506623e79ef4 # shrinks to plan = EquivalencePlan { epoch_length: 3, flip: 2, entry: Some((0, [1, 2])), sabotage_from_epoch: Some(2), lifecycles: [ShadowVeteran, Fresh] }

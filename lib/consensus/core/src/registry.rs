@@ -222,14 +222,24 @@ pub async fn run_registry_derivation<R, S, L>(
         // committee stays — the newest recorded derivation, or (before any) the
         // config schedule's answer. Rotation is what a broken registry blocks;
         // the chain is not.
+        //
+        // The carry is fenced at the flip: a governed epoch may only chain
+        // from *governed* recordings. Sub-flip (shadow-era) trails differ per
+        // node — a fresh joiner has none, a veteran has some, a veteran that
+        // slept through boundaries is missing exactly those (shadow skips
+        // them) — so carrying one into governance would make the committee a
+        // function of node-local history and split it. Before the first
+        // governed recording, the config schedule's entry (consensus-uniform,
+        // the documented mirror) is the carry base on every node.
         let config_committee = committees
             .config_schedule()
             .entry_for(crate::types::Epoch::new(target))
             .committee
             .clone();
+        let carry_floor = committees.registry_from().unwrap_or(0);
         let carried = || {
             committees
-                .last_derived_before(target)
+                .last_derived_in(carry_floor, target)
                 .unwrap_or_else(|| config_committee.clone())
         };
         let (outcome, refusal, committee) = match reading {

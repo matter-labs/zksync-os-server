@@ -285,12 +285,22 @@ impl CommitteeSource {
         derived.insert(epoch, committee);
     }
 
-    /// The newest recorded derivation strictly before `epoch`, if any — the
-    /// "last known committee" a refused or empty derivation carries forward.
-    pub fn last_derived_before(&self, epoch: u64) -> Option<Committee> {
+    /// The newest recorded derivation with epoch in `[floor, before)`, if any —
+    /// the "last known committee" a refused or empty derivation carries
+    /// forward.
+    ///
+    /// The floor is the carry's authority boundary and it is deliberately a
+    /// required argument: a governed epoch's carry must never chain from
+    /// sub-flip (shadow-era) recordings, because *which* shadow recordings a
+    /// node holds depends on its operational history — when it joined, which
+    /// mode it ran before, which boundaries it slept through (shadow skips
+    /// them) — and a consensus-critical answer derived from node-local
+    /// history splits the committee. Below the floor, the config schedule
+    /// (consensus-uniform by definition) is the only legitimate carry base.
+    pub fn last_derived_in(&self, floor: u64, before: u64) -> Option<Committee> {
         let derived = self.inner.derived.read().unwrap();
         derived
-            .range(..epoch)
+            .range(floor..before)
             .next_back()
             .map(|(_, committee)| committee.clone())
     }
@@ -661,8 +671,11 @@ mod tests {
         assert_eq!(c.len(), 2, "the newest derivation carries past its epoch");
 
         // Carry helpers: the newest derivation strictly below an epoch.
-        assert_eq!(source.last_derived_before(9).expect("epoch 4").len(), 3);
-        assert!(source.last_derived_before(4).is_none());
+        assert_eq!(source.last_derived_in(0, 9).expect("epoch 4").len(), 3);
+        assert!(source.last_derived_in(0, 4).is_none());
+        // The floor fences the carry at an authority boundary: recordings
+        // below it are invisible even when present.
+        assert!(source.last_derived_in(5, 9).is_none());
         assert_eq!(source.latest_derived_epoch(), Some(9));
     }
 
