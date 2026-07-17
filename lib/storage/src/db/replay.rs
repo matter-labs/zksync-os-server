@@ -816,13 +816,11 @@ impl Migration<BlockReplayColumnFamily> for ContractBlockContexts {
                 );
             }
 
-            if db
-                .get_cf(BlockReplayColumnFamily::ContextV2, &key)?
-                .is_none()
-            {
-                let legacy_bytes = legacy.as_deref().with_context(|| {
-                    format!("block {number} has neither a stripped nor a legacy context row")
-                })?;
+            if let Some(legacy_bytes) = legacy.as_deref() {
+                // The legacy row is authoritative: rebuild the stripped row from it even when
+                // one already exists. A rebuild executed under a pre-stripped-format binary
+                // (possible during a rollback) updates only the legacy row, leaving a stale
+                // stripped copy behind; this heals it.
                 let context: BlockContext =
                     bincode::serde::decode_from_slice(legacy_bytes, bincode::config::standard())
                         .context("failed to deserialize legacy context")?
@@ -833,11 +831,14 @@ impl Migration<BlockReplayColumnFamily> for ContractBlockContexts {
                 )
                 .context("failed to serialize stripped context")?;
                 batch.put_cf(BlockReplayColumnFamily::ContextV2, &key, &stripped);
-            }
-
-            if legacy.is_some() {
                 batch.delete_cf(BlockReplayColumnFamily::Context, &key);
                 deleted += 1;
+            } else {
+                anyhow::ensure!(
+                    db.get_cf(BlockReplayColumnFamily::ContextV2, &key)?
+                        .is_some(),
+                    "block {number} has neither a stripped nor a legacy context row"
+                );
             }
 
             blocks_in_batch += 1;
@@ -1102,6 +1103,22 @@ mod tests {
         // predate the `CanonicalHash` CF, so their hashes must be recovered from successors.
         make_rows_legacy_only(&storage, &chain[..200]);
         delete_canonical_hash_entries(&storage, 0..=100);
+        // Block 50 also carries a stale stripped row (a rebuild under an old binary updates
+        // only the legacy row); the migration must rebuild it from the legacy one.
+        let mut stale = chain[50].block_context;
+        stale.timestamp += 999;
+        let stale_value = bincode::encode_to_vec(
+            StoredBlockContextV2::strip(stale),
+            bincode::config::standard(),
+        )
+        .unwrap();
+        let mut batch = storage.db.new_write_batch();
+        batch.put_cf(
+            BlockReplayColumnFamily::ContextV2,
+            &50u64.to_be_bytes(),
+            &stale_value,
+        );
+        storage.db.write(batch).unwrap();
 
         ContractBlockContexts.run(&storage.db).unwrap();
         // Idempotency: rerunning (e.g. after a crash before the version stamp) is a no-op.
