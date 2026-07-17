@@ -144,13 +144,21 @@ jobs:
       - name: Check that replay wire format version is set correctly
         shell: bash
         run: |
-          # get latest tag (latest release)
-          TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
+          # Latest release tag, exact vX.Y.Z only — suffixed tags (vX.Y.Z-hotfix)
+          # are not release baselines, and git's `v[0-9]*` glob would match them.
+          TAG=$(git tag -l 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          echo "checking released wire formats against $TAG"
 
-          # check that released wire format files that still exist are unchanged
-          DIR=lib/network/src/wire/replays
+          # Released replay wire-format files are immutable: a file that exists
+          # both here and at the release tag must be identical.
+          DIR=lib/wire/src/replays
           git fetch --depth=1 origin tag "$TAG"
+          FOUND=0
           for FILE in "$DIR"/v*.rs; do
+            # An unmatched glob iterates literally; a missing file here means
+            # the directory is gone (moved again?) — handled after the loop.
+            [ -f "$FILE" ] || continue
+            FOUND=1
             if git show "$TAG:$FILE" > /tmp/old_wire_format.rs 2>/dev/null; then
               if ! diff -q /tmp/old_wire_format.rs "$FILE"; then
                 echo "Change detected in already released wire format: $FILE"
@@ -160,6 +168,10 @@ jobs:
               echo "New wire format created in this change: $FILE"
             fi
           done
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No wire-format files found under $DIR — did the formats move again? Update this job."
+            exit 1
+          fi
 
 
   ####################################
