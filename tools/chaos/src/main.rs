@@ -50,6 +50,9 @@ enum Command {
     PromoteSettler(promote_settler::PromoteSettlerArgs),
     /// Put transaction load on a running cluster (fund + spam + report).
     Load(load::LoadArgs),
+    /// Restore a cluster to full health (start/unpause/reconnect/clear-netem
+    /// everything, tolerantly) — the resume step after a finding froze the scene.
+    Heal(drive::HealArgs),
 }
 
 #[tokio::main]
@@ -60,5 +63,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Promote(args) => promote::run(args).await,
         Command::PromoteSettler(args) => promote_settler::run(args).await,
         Command::Load(args) => load::run(args).await,
+        Command::Heal(args) => drive::heal(args).await,
     }
 }

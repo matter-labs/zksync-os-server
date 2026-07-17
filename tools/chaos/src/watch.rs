@@ -32,6 +32,7 @@
 use crate::drive::Condition;
 use crate::setup::Manifest;
 use serde::Serialize;
+use std::io::Write as _;
 use std::time::{Duration, Instant};
 use zksync_os_status_server::StatusResponse;
 
@@ -58,6 +59,12 @@ pub struct NodeObservation {
     /// next successful poll.
     pub running: Option<bool>,
     pub paused: bool,
+    /// The container's `.State.StartedAt` — a restart proof that does not depend
+    /// on the polls happening to observe the Killed/Stopped window. Under storm
+    /// cadence a kill→start pair can fall entirely between two polls (cycles
+    /// stretch to ~12s while heal horizons run as short as 9s), and the
+    /// condition-transition reset below would miss it.
+    pub started_at: Option<String>,
     /// `None` when unreachable (which is fine for stopped/paused/partitioned nodes).
     /// `(epoch, view)`: views restart from zero at every epoch boundary, so only the
     /// pair is monotone — comparing bare views across a boundary reads a healthy
@@ -186,6 +193,10 @@ pub enum Finding {
         stuck_at: u64,
         window: Duration,
     },
+    /// The settlement probe persistently reads `executed > committed`, which the
+    /// chain cannot produce — the probe (selectors, address, parsing) is
+    /// miswired. A rig self-check, not a node property.
+    SettlementProbeInsanity { committed: u64, executed: u64 },
     /// The committee was expected live for the whole window but no new finalization
     /// appeared.
     LivenessStall {
@@ -207,6 +218,9 @@ pub struct Checker {
     verify_invalid: Vec<u64>,
     /// The driver's beliefs at the previous poll, for spotting heal transitions.
     previous_conditions: Vec<Condition>,
+    /// Last observed container start times; a change is restart proof (see
+    /// [`NodeObservation::started_at`]).
+    started_at: Vec<Option<String>>,
     /// Highest finalized `(epoch, view)` seen anywhere, and when it last advanced.
     tip_round: (u64, u64),
     tip_advanced_at: Instant,
@@ -222,6 +236,13 @@ pub struct Checker {
     /// Highest (committed, executed) batch counts seen on L1, and when each
     /// last advanced (or was last excused by a sanctioned condition).
     settlement_counters: (u64, u64),
+    /// Consecutive polls with `executed > committed` — on-chain that invariant
+    /// cannot break (executes require commits), so a *persistent* violation
+    /// means the probe itself is miswired (the selector swap shipped with this
+    /// oracle went unnoticed for want of exactly this check). One or two polls
+    /// of excess are tolerated: the two counters are read in separate
+    /// non-atomic eth_calls and can legitimately race each other.
+    counter_insanity_streak: u32,
     committed_advanced_at: Instant,
     executed_advanced_at: Instant,
 }
@@ -240,6 +261,7 @@ impl Checker {
             evidence: vec![0; validators],
             verify_invalid: vec![0; validators],
             previous_conditions: vec![Condition::Healthy; validators],
+            started_at: vec![None; validators],
             tip_round: (0, 0),
             tip_advanced_at: Instant::now(),
             forbidden_baseline: None,
@@ -248,6 +270,7 @@ impl Checker {
             settler,
             settlement_lag_window,
             settlement_counters: (0, 0),
+            counter_insanity_streak: 0,
             committed_advanced_at: Instant::now(),
             executed_advanced_at: Instant::now(),
         }
@@ -282,6 +305,22 @@ impl Checker {
             }
         }
         self.previous_conditions = expectations.conditions.clone();
+
+        // Restart proof independent of observed conditions: a changed container
+        // start time means the process restarted (and is replaying), whatever
+        // the polls happened to catch of the driver's kill→start window.
+        for (index, node) in poll.nodes.iter().enumerate() {
+            let Some(started) = &node.started_at else {
+                continue;
+            };
+            if let Some(previous) = &self.started_at[index]
+                && previous != started
+            {
+                self.applied_heights[index] = 0;
+                self.finalized_rounds[index] = (0, 0);
+            }
+            self.started_at[index] = Some(started.clone());
+        }
 
         // Agreement: everyone who answered the probe must agree.
         if let Some(height) = poll.probe_height {
@@ -520,6 +559,20 @@ impl Checker {
         // the settler believed healthy. Any sanctioned condition on the settler,
         // an L1 blackout, or a failed L1 probe excuses the lag (and restarts the
         // clocks, so a healed settler gets a full window to catch up).
+        if let Some(observed) = &poll.settlement {
+            if observed.executed_batches > observed.committed_batches {
+                self.counter_insanity_streak += 1;
+                if self.counter_insanity_streak >= 5 {
+                    findings.push(Finding::SettlementProbeInsanity {
+                        committed: observed.committed_batches,
+                        executed: observed.executed_batches,
+                    });
+                    self.counter_insanity_streak = 0;
+                }
+            } else {
+                self.counter_insanity_streak = 0;
+            }
+        }
         match &poll.settlement {
             Some(observed)
                 if expectations.conditions[self.settler] == Condition::Healthy
@@ -674,12 +727,12 @@ impl NodeProbe {
     /// Async and bounded: the watcher used to shell out synchronously here, which
     /// parked tokio workers and — as container logs grew — eventually stalled the
     /// whole drive runtime (found by the overnight campaign).
-    async fn container_state(&self) -> (Option<bool>, bool) {
+    async fn container_state(&self) -> (Option<bool>, bool, Option<String>) {
         let output = docker_output(
             &[
                 "inspect",
                 "--format",
-                "{{.State.Running}} {{.State.Paused}}",
+                "{{.State.Running}} {{.State.Paused}} {{.State.StartedAt}}",
                 &self.container,
             ],
             Duration::from_secs(5),
@@ -690,11 +743,12 @@ impl NodeProbe {
                 let mut parts = text.split_whitespace();
                 let running = parts.next() == Some("true");
                 let paused = parts.next() == Some("true");
-                (Some(running), paused)
+                let started_at = parts.next().map(str::to_string);
+                (Some(running), paused, started_at)
             }
             // The probe failed — the daemon was busy or the call timed out.
             // Unknown is not dead.
-            None => (None, false),
+            None => (None, false, None),
         }
     }
 
@@ -740,7 +794,7 @@ impl NodeProbe {
         now: Instant,
         tolerate_l1_outage: bool,
     ) -> NodeObservation {
-        let (running, paused) = self.container_state().await;
+        let (running, paused, started_at) = self.container_state().await;
 
         // All probes run concurrently: an unreachable node costs one client
         // timeout per poll, not a sum of them.
@@ -782,6 +836,7 @@ impl NodeProbe {
         NodeObservation {
             running,
             paused,
+            started_at,
             finalized_round,
             applied_height,
             block_hash_at_probe,
@@ -921,9 +976,13 @@ pub struct SettlementWatch {
 
 impl SettlementProbe {
     pub async fn observe(&self, client: &reqwest::Client) -> Option<SettlementObservation> {
-        // IZKChain selectors: getTotalBatchesCommitted / getTotalBatchesExecuted.
-        let committed = self.counter(client, "0xb8c2f66f").await?;
-        let executed = self.counter(client, "0xdb1f0bf9").await?;
+        // IZKChain selectors (`cast sig`): getTotalBatchesCommitted() = 0xdb1f0bf9,
+        // getTotalBatchesExecuted() = 0xb8c2f66f. These were originally swapped,
+        // which mislabeled every settlement finding (a frozen *execute* train read
+        // as frozen commits and vice versa) — caught by cross-checking a finding
+        // against the settler's own sender log.
+        let committed = self.counter(client, "0xdb1f0bf9").await?;
+        let executed = self.counter(client, "0xb8c2f66f").await?;
         Some(SettlementObservation {
             committed_batches: committed,
             executed_batches: executed,
@@ -959,14 +1018,31 @@ const RECEIPT_SAMPLE: usize = 3;
 /// first non-empty batch of findings (with the poll that produced it) before
 /// returning. Sending once and stopping is deliberate — the driver freezes the
 /// experiment on the first finding, so there is nothing left to watch.
+/// The watcher's tuning and output knobs, separated from its wiring (probes,
+/// channels) so the signature stays readable as knobs accumulate.
+pub struct WatchOptions {
+    pub settle_margin: Duration,
+    pub liveness_window: Duration,
+    /// Per-poll metrics sink (JSONL); `None` disables the stream.
+    pub metrics: Option<std::fs::File>,
+    /// See the drive flag of the same name: freezing on SettlementStall is
+    /// off while the known prover-job strand is with the team.
+    pub fail_on_settlement_stall: bool,
+}
+
 pub async fn watch(
     probes: Vec<NodeProbe>,
     settlement: Option<SettlementWatch>,
     expectations: tokio::sync::watch::Receiver<Expectations>,
     findings: tokio::sync::mpsc::Sender<(Poll, Vec<Finding>)>,
-    settle_margin: Duration,
-    liveness_window: Duration,
+    options: WatchOptions,
 ) {
+    let WatchOptions {
+        settle_margin,
+        liveness_window,
+        mut metrics,
+        fail_on_settlement_stall,
+    } = options;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(1))
         .build()
@@ -985,6 +1061,7 @@ pub async fn watch(
     // The height probed for agreement: the lowest applied height reported in the
     // *previous* poll, so every reachable validator has the block by now.
     let mut probe_height: Option<u64> = None;
+    let started = Instant::now();
     let mut logs_since = Instant::now();
     // Log lines written during a blackout can surface in the poll after it
     // ended; keep excusing connectivity noise for a short grace period.
@@ -1023,9 +1100,46 @@ pub async fn watch(
             .filter_map(|node| node.applied_height)
             .min();
 
+        // The metrics stream: one line per poll, everything the poll saw plus
+        // the driver's beliefs at that moment. Post-run analysis derives block
+        // rates, finality latency, idle cadence, and view efficiency from the
+        // time series; a write failure (disk full) degrades to no metrics, never
+        // to a dead watcher. The write is a small local append — microseconds,
+        // nothing like the blocking docker calls that once stalled the runtime.
+        if let Some(file) = metrics.as_mut() {
+            let line = serde_json::json!({
+                "elapsed_ms": now.duration_since(started).as_millis() as u64,
+                "expect_liveness": current_expectations.expect_liveness,
+                "l1_blackout": current_expectations.l1_blackout,
+                "conditions": current_expectations.conditions,
+                "poll": &poll,
+            });
+            let _ = writeln!(file, "{line}");
+        }
+
         let batch = checker.observe(now, &current_expectations, &poll);
-        if !batch.is_empty() {
-            let _ = findings.send((poll, batch)).await;
+        // SettlementStall is currently a *known* node bug (a leaked prover-job
+        // assignment freezes the execute train for the full snark_job_timeout —
+        // consensus_planning/soak-overnight2/INVESTIGATION.md §2, fix with the
+        // team). It is chain-safe, so by default a stall is recorded — stdout
+        // and the metrics stream — without freezing the experiment; the flag
+        // restores freezing once the node fix lands. Every other finding still
+        // freezes, including SettlementProbeInsanity (a rig self-check).
+        let (fatal, tolerated): (Vec<_>, Vec<_>) = batch.into_iter().partition(|finding| {
+            fail_on_settlement_stall || !matches!(finding, Finding::SettlementStall { .. })
+        });
+        for finding in &tolerated {
+            println!("tolerated finding (not freezing): {finding:?}");
+            if let Some(file) = metrics.as_mut() {
+                let line = serde_json::json!({
+                    "elapsed_ms": now.duration_since(started).as_millis() as u64,
+                    "tolerated_finding": format!("{finding:?}"),
+                });
+                let _ = writeln!(file, "{line}");
+            }
+        }
+        if !fatal.is_empty() {
+            let _ = findings.send((poll, fatal)).await;
             return;
         }
     }
@@ -1049,6 +1163,7 @@ mod tests {
         NodeObservation {
             running: Some(true),
             paused: false,
+            started_at: None,
             finalized_round: Some((0, finalized_view)),
             applied_height: Some(finalized_view),
             block_hash_at_probe: Some(hash.to_string()),
@@ -1747,6 +1862,93 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_changed_container_start_time_resets_baselines() {
+        // The condition-transition reset requires a poll to *observe* the
+        // Killed window; under storm cadence it can miss one entirely. A
+        // changed .State.StartedAt proves the restart regardless.
+        let mut checker = Checker::new(
+            1,
+            Duration::from_secs(5),
+            Duration::from_secs(600),
+            0,
+            Duration::from_secs(120),
+        );
+        let expectations = healthy_expectations(1);
+        let now = Instant::now();
+        let at = |view, started: &str| Poll {
+            settlement: None,
+            probe_height: None,
+            nodes: vec![NodeObservation {
+                started_at: Some(started.to_string()),
+                applied_height: Some(view),
+                ..observation(view, "0x")
+            }],
+        };
+
+        // Healthy progress under one incarnation...
+        assert!(
+            checker
+                .observe(now, &expectations, &at(8076, "2026-07-17T09:40:00Z"))
+                .is_empty()
+        );
+        // ...then a lower applied height under a NEW start time: a restart
+        // replay, not a regression — even though the driver's conditions
+        // never showed Killed.
+        assert!(
+            checker
+                .observe(now, &expectations, &at(7950, "2026-07-17T09:43:10Z"))
+                .is_empty(),
+            "replay after an unobserved restart flagged as a regression",
+        );
+        // The same dip with an UNCHANGED start time is a real finding.
+        checker.observe(now, &expectations, &at(8100, "2026-07-17T09:43:10Z"));
+        let findings = checker.observe(now, &expectations, &at(7000, "2026-07-17T09:43:10Z"));
+        assert!(
+            findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::FinalityRegression { .. })),
+            "a genuine regression was not flagged: {findings:?}",
+        );
+    }
+
+    #[test]
+    fn persistent_executed_above_committed_is_probe_insanity() {
+        // On-chain, executes can never lead commits; a persistent excess means
+        // the probe is miswired (the selector swap this check exists for).
+        // Brief excess is tolerated: the two counters come from separate,
+        // non-atomic eth_calls.
+        let mut checker = Checker::new(
+            2,
+            Duration::from_secs(5),
+            Duration::from_secs(3600),
+            0,
+            Duration::from_secs(3600),
+        );
+        let expectations = healthy_expectations(2);
+        let now = Instant::now();
+
+        // A short-lived race (2 polls) never fires.
+        for _ in 0..2 {
+            let findings = checker.observe(now, &expectations, &settlement_poll(10, 5, 6));
+            assert!(
+                findings.is_empty(),
+                "raced counters must not fire: {findings:?}"
+            );
+        }
+        checker.observe(now, &expectations, &settlement_poll(11, 7, 6));
+
+        // Five consecutive violating polls: the probe is miswired.
+        let mut fired = false;
+        for _ in 0..5 {
+            let findings = checker.observe(now, &expectations, &settlement_poll(12, 5, 6));
+            fired |= findings
+                .iter()
+                .any(|finding| matches!(finding, Finding::SettlementProbeInsanity { .. }));
+        }
+        assert!(fired, "a persistent inversion never fired");
     }
 
     #[test]

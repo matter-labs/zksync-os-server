@@ -87,6 +87,20 @@ pub struct SetupArgs {
     /// `--node-env MALLOC_CONF=prof:true,prof_final:true,prof_prefix:/db/jeprof`.
     #[arg(long = "node-env")]
     pub node_env: Vec<String>,
+    /// The nodes' idle policy: 0s pins the legacy always-build cadence (steady
+    /// block production regardless of traffic); anything else makes idle leaders
+    /// decline and the chain heartbeat at this interval — the production shape.
+    /// Idle soaks want an interval comfortably inside the watcher's liveness
+    /// window (e.g. 20s against the default 60s).
+    #[arg(long, default_value = "0s")]
+    pub idle_heartbeat: humantime::Duration,
+    /// Schedule a committee-rotation band: from epoch 2 up to this epoch, every
+    /// second epoch alternates the committee between all validators and all but
+    /// the last one — the last validator repeatedly leaves (and follows as a
+    /// non-member) and rejoins. Exercises epoch handoff, the scout/follower
+    /// path, and sprint-to-activation. 0 = static committee (the default).
+    #[arg(long, default_value_t = 0)]
+    pub rotation_band: u64,
 }
 
 /// Everything the driver (and any external monitor) needs to know about the cluster.
@@ -149,6 +163,14 @@ pub struct Materials {
     /// promote-settler` moves it and regenerates the overlays.
     #[serde(default)]
     pub settler: usize,
+    /// The cluster's idle policy, humantime-formatted ("0s" = legacy cadence).
+    /// Carried here so overlay regeneration (`chaos promote`) preserves it.
+    #[serde(default = "default_idle_heartbeat")]
+    pub idle_heartbeat: String,
+}
+
+fn default_idle_heartbeat() -> String {
+    "0s".to_string()
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -159,11 +181,15 @@ pub struct ScheduleStep {
 
 impl Materials {
     /// Nodes that hold (or will hold) a committee seat — validator-role nodes.
+    /// The maximum across entries, not the last one: a rotation band's schedule
+    /// shrinks and re-grows, and a node seated in *any* entry needs its signing
+    /// key deployed (it must not be generated as an observer).
     pub fn scheduled_validators(&self) -> usize {
         self.schedule
-            .last()
+            .iter()
+            .map(|step| step.validators)
+            .max()
             .expect("a schedule always has its epoch-0 entry")
-            .validators
     }
 }
 
@@ -235,16 +261,43 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
     let mut fee_collector_bytes = [0u8; 20];
     rand08::RngCore::fill_bytes(&mut rng, &mut fee_collector_bytes);
     let fee_collector = alloy::primitives::Address::from(fee_collector_bytes);
+    anyhow::ensure!(
+        args.rotation_band == 0 || args.validators >= 3,
+        "a rotation band needs at least 3 validators (the shrunken committee must keep 2)",
+    );
+    // The rotation band: every second epoch flips between the full committee and
+    // the full committee minus its last member (prefix semantics — see the
+    // `schedule` field docs). Entries stay prefixes, so `chaos promote` composes.
+    let mut schedule = vec![ScheduleStep {
+        activation_epoch: 0,
+        validators: args.validators,
+    }];
+    let mut shrunken = true;
+    for epoch in (2..=args.rotation_band).step_by(2) {
+        schedule.push(ScheduleStep {
+            activation_epoch: epoch,
+            validators: args.validators - usize::from(shrunken),
+        });
+        shrunken = !shrunken;
+    }
+    // End restored: past the band the steady-state committee is everyone (and
+    // the last validator holds a seat again rather than idling out the soak).
+    if let Some(last) = schedule.last()
+        && last.validators != args.validators
+    {
+        schedule.push(ScheduleStep {
+            activation_epoch: last.activation_epoch + 2,
+            validators: args.validators,
+        });
+    }
     let materials = Materials {
         nodes,
-        schedule: vec![ScheduleStep {
-            activation_epoch: 0,
-            validators: args.validators,
-        }],
+        schedule,
         fee_collector: format!("{fee_collector}"),
         epoch_length: args.epoch_length,
         epoch_retention: args.epoch_retention,
         settler: 0,
+        idle_heartbeat: args.idle_heartbeat.to_string(),
     };
 
     let bridgehub_address = read_bridgehub_address(&repo.join(&args.chain).join("config.yaml"))?;
@@ -327,6 +380,7 @@ pub fn node_overlay(materials: &Materials, index: usize) -> String {
     let fee_collector = &materials.fee_collector;
     let epoch_length = materials.epoch_length;
     let epoch_retention = materials.epoch_retention;
+    let idle_heartbeat = &materials.idle_heartbeat;
     let node = &materials.nodes[index];
     let network_key_hex = &node.network_key_hex;
 
@@ -405,10 +459,10 @@ consensus:
   allow_private_ips: true
   epoch_length: {epoch_length}
   epoch_retention: {epoch_retention}
-  # Rig clusters pin the legacy idle behavior (constant empty blocks): the
-  # watcher's liveness window and the soak metrics assume steady progress.
-  # Idle-policy experiments override this deliberately.
-  idle_heartbeat: 0s
+  # 0s pins the legacy always-build cadence; a real interval runs the
+  # production idle policy (decline / heartbeat / sprint-to-activation). The
+  # watcher's liveness window must stay above the interval either way.
+  idle_heartbeat: {idle_heartbeat}
 {committees}{observers}"
     )
 }
@@ -568,6 +622,7 @@ mod tests {
             epoch_length: 240,
             epoch_retention: 0,
             settler: 0,
+            idle_heartbeat: "0s".into(),
         }
     }
 

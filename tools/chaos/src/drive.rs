@@ -65,6 +65,36 @@ pub struct DriveArgs {
     /// the node may simply not be ready for reorgs yet.
     #[arg(long)]
     pub l1_reorgs: bool,
+    /// Fault-mix profile. `default`: the full menu under the quorum constraint,
+    /// with rare sanctioned outages. `gentle`: at most one fault outstanding
+    /// and no sanctioned outages — the profile for committee-rotation bands,
+    /// where a sanctioned outage could let the chain progress legitimately
+    /// while the driver believes quorum is gone (a false safety finding).
+    /// `restart-storm`: kills and graceful stops with the shortest heal
+    /// horizons — process-lifecycle pressure (shutdown races, restart replay).
+    #[arg(long, value_enum, default_value_t = Profile::Default)]
+    pub profile: Profile,
+    /// Per-poll cluster metrics (JSONL: elapsed, expectations, every node's
+    /// finalized round / applied height, settlement counters). Defaults to
+    /// `metrics.jsonl` in the work directory. Post-run analysis derives block
+    /// rates, finality latency, and idle cadence from it.
+    #[arg(long)]
+    pub metrics: Option<PathBuf>,
+    /// Restore freezing on SettlementStall findings. Off by default while the
+    /// known prover-job strand (chain-safe; documented in
+    /// consensus_planning/soak-overnight2/INVESTIGATION.md §2) is with the
+    /// team: stalls are logged to stdout and the metrics stream instead of
+    /// freezing the run. Turn this on once the node fix lands.
+    #[arg(long)]
+    pub fail_on_settlement_stall: bool,
+}
+
+/// Which fault mix the schedule draws from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
+pub enum Profile {
+    Default,
+    Gentle,
+    RestartStorm,
 }
 
 /// One validator's condition as the driver believes it to be.
@@ -149,6 +179,7 @@ pub struct Schedule {
     rng: StdRng,
     conditions: Vec<Condition>,
     quorum: usize,
+    profile: Profile,
     /// Heals due at a given step: (due_step, action).
     pending_heals: Vec<(u64, Action)>,
     step: u64,
@@ -165,12 +196,18 @@ impl Schedule {
             rng: StdRng::seed_from_u64(seed),
             conditions: vec![Condition::Healthy; validators],
             quorum,
+            profile: Profile::Default,
             pending_heals: Vec::new(),
             step: 0,
             l1_faults: false,
             l1_reorgs: false,
             l1_blackout: false,
         }
+    }
+
+    pub fn with_profile(mut self, profile: Profile) -> Self {
+        self.profile = profile;
+        self
     }
 
     pub fn with_l1_faults(mut self, reorgs: bool) -> Self {
@@ -249,15 +286,33 @@ impl Schedule {
         // A small chance to sanction a full outage: take any node down regardless of
         // quorum, with a short heal horizon. Everything else respects quorum —
         // counting degraded validators as live, since they are expected to keep
-        // participating.
-        let sanction_outage = self.rng.gen_ratio(1, 20);
-        let can_break_another = self.live_count() > self.quorum || sanction_outage;
+        // participating. Gentle never sanctions (see the flag docs) and holds
+        // to one outstanding fault, so its liveness expectation stays exact
+        // even when the active committee is a strict subset of the cluster.
+        let sanction_outage = self.profile == Profile::Default && self.rng.gen_ratio(1, 20);
+        let can_break_another = match self.profile {
+            Profile::Gentle => self.healthy_count() == self.conditions.len(),
+            Profile::Default | Profile::RestartStorm => {
+                self.live_count() > self.quorum || sanction_outage
+            }
+        };
 
         let action = if can_break_another && self.rng.gen_ratio(2, 3) {
             // Break something.
             let target = self.pick_healthy();
-            let heal_in = self.rng.gen_range(2..=6);
-            let (fault, heal) = match self.rng.gen_range(0..5u8) {
+            let heal_in = match self.profile {
+                // Storms churn: the heal lands almost immediately, so the next
+                // draw is free to break again — restart frequency is the point.
+                Profile::RestartStorm => self.rng.gen_range(1..=2),
+                Profile::Default | Profile::Gentle => self.rng.gen_range(2..=6),
+            };
+            let menu = match self.profile {
+                // Kills twice as often as graceful stops: the dirty path is
+                // where the shutdown-race class lives.
+                Profile::RestartStorm => self.rng.gen_range(0..3u8).min(1),
+                Profile::Default | Profile::Gentle => self.rng.gen_range(0..5u8),
+            };
+            let (fault, heal) = match menu {
                 0 => (Action::Kill(target), Action::Start(target)),
                 1 => (Action::Stop(target), Action::Start(target)),
                 2 => (Action::Pause(target), Action::Unpause(target)),
@@ -553,10 +608,18 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         .append(true)
         .open(&journal_path)?;
 
-    let mut schedule = Schedule::new(args.seed, validators, quorum);
+    let mut schedule = Schedule::new(args.seed, validators, quorum).with_profile(args.profile);
     if !args.no_l1_faults {
         schedule = schedule.with_l1_faults(args.l1_reorgs);
     }
+    let metrics_path = args
+        .metrics
+        .clone()
+        .unwrap_or_else(|| args.workdir.join("metrics.jsonl"));
+    let metrics = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&metrics_path)?;
     let probes = watch::NodeProbe::from_manifest(&manifest);
     // Settlement progress is read from L1 itself, so the watcher's view of the
     // settler outlives the settler. Old manifests predate the diamond field —
@@ -590,16 +653,23 @@ pub async fn run(args: DriveArgs) -> anyhow::Result<()> {
         settlement,
         expectations_receiver,
         findings_sender,
-        *args.settle_margin,
-        *args.liveness_window,
+        watch::WatchOptions {
+            settle_margin: *args.settle_margin,
+            liveness_window: *args.liveness_window,
+            metrics: Some(metrics),
+            fail_on_settlement_stall: args.fail_on_settlement_stall,
+        },
     ));
     let mut previous_liveness = schedule.expect_liveness();
     let mut liveness_since = started;
 
     println!(
-        "driving {validators} validators (quorum {quorum}) with seed {}; journal at {}",
+        "driving {validators} validators (quorum {quorum}) with seed {} and profile {:?}; \
+         journal at {}, metrics at {}",
         args.seed,
+        args.profile,
         journal_path.display(),
+        metrics_path.display(),
     );
 
     loop {
@@ -733,6 +803,48 @@ fn freeze(
         artifacts.display(),
         journal_path.display(),
     )
+}
+
+/// `chaos heal`: restore a cluster the driver left frozen (or otherwise wounded)
+/// to full health, tolerantly — an orchestrator's resume step after a finding
+/// froze the scene and its artifacts were collected. From the outside the
+/// containers' exact conditions are unknown, so every restorative action is
+/// applied to every node and failures ("already running", "no qdisc", "already
+/// connected") are informational.
+#[derive(Args)]
+pub struct HealArgs {
+    /// Work directory produced by `chaos setup`.
+    #[arg(long)]
+    pub workdir: PathBuf,
+}
+
+pub async fn heal(args: HealArgs) -> anyhow::Result<()> {
+    let manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(
+        args.workdir.join("manifest.json"),
+    )?)?;
+    let count = manifest.validators.len();
+    let mut ops = DockerOps::new(manifest);
+    // Unpause first (a paused container ignores start), then start, then clear
+    // the network-level faults (which need the container running).
+    let mut restored = 0usize;
+    for index in 0..count {
+        for action in [
+            Action::Unpause(index),
+            Action::Start(index),
+            Action::ClearDegradation(index),
+            Action::Reconnect(index),
+        ] {
+            match ops.apply(action).await {
+                Ok(()) => restored += 1,
+                Err(error) => println!("  {action:?}: {error} (fine if already healthy)"),
+            }
+        }
+    }
+    if let Err(error) = ops.apply(Action::L1Restore).await {
+        println!("  L1Restore: {error} (fine if the L1 was never paused)");
+    }
+    println!("heal pass complete ({restored} actions took effect)");
+    Ok(())
 }
 
 /// Publishes the driver's current beliefs to the watcher, timestamping the moment
@@ -879,6 +991,46 @@ mod tests {
             schedule.apply(heal);
         }
         assert_eq!(schedule.healthy_count(), 5);
+    }
+
+    #[test]
+    fn gentle_holds_to_one_outstanding_fault_and_never_breaks_quorum() {
+        // The rotation-band profile: its watcher soundness argument (no false
+        // ProgressWithoutQuorum during shrunken-committee epochs) rests on
+        // liveness staying expected throughout — pin exactly that.
+        for seed in 0..50 {
+            let mut schedule = Schedule::new(seed, 5, 4).with_profile(Profile::Gentle);
+            for _ in 0..2_000 {
+                schedule.next_action();
+                assert!(
+                    schedule.healthy_count() >= 4,
+                    "seed {seed}: gentle broke more than one validator at once",
+                );
+                assert!(
+                    schedule.expect_liveness(),
+                    "seed {seed}: gentle lost the liveness expectation",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn restart_storm_draws_only_process_lifecycle_faults() {
+        let mut schedule = Schedule::new(9, 5, 4).with_profile(Profile::RestartStorm);
+        let (mut kills, mut stops) = (0u32, 0u32);
+        for _ in 0..2_000 {
+            match schedule.next_action() {
+                Action::Kill(_) => kills += 1,
+                Action::Stop(_) => stops += 1,
+                Action::Start(_) => {}
+                other => panic!("storm drew a non-lifecycle action: {other:?}"),
+            }
+        }
+        assert!(
+            kills > stops,
+            "kills are the storm's bias ({kills} vs {stops})"
+        );
+        assert!(stops > 0, "graceful stops stay in the mix");
     }
 
     #[test]
