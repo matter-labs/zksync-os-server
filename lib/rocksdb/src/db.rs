@@ -32,6 +32,14 @@ use crate::metrics::{
 /// Not properly dropped RocksDB instances can lead to DB corruption.
 static ROCKSDB_INSTANCE_COUNTER: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
 
+/// Name of the reserved column family holding wrapper-managed metadata (currently the schema
+/// version stamped by [`crate::migrations`]). Managed outside [`NamedColumnFamily::ALL`] so that
+/// per-database CF enums don't need to declare it.
+pub(crate) const SCHEMA_META_CF_NAME: &str = "__schema_meta";
+
+/// Key under [`SCHEMA_META_CF_NAME`] holding the database schema version.
+pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
+
 /// Describes column family used in a [`RocksDB`] instance.
 pub trait NamedColumnFamily: 'static + Copy {
     /// Name of the database. Used in metrics reporting.
@@ -416,6 +424,7 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
                 // The default CF is created on RocksDB instantiation in any case; it doesn't need
                 // to be explicitly opened.
                 let is_obsolete = cf_name != rocksdb::DEFAULT_COLUMN_FAMILY_NAME
+                    && cf_name != SCHEMA_META_CF_NAME
                     && !cfs_and_options.contains_key(cf_name);
                 is_obsolete.then_some(cf_name)
             })
@@ -433,7 +442,9 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         let cf_names = cfs_and_options.keys().copied().collect();
         let all_cfs_and_options = cfs_and_options
             .into_iter()
-            .chain(obsolete_cfs.into_iter().map(|name| (name, (false, None))));
+            .chain(obsolete_cfs.into_iter().map(|name| (name, (false, None))))
+            // Created on first open thanks to `create_missing_column_families`.
+            .chain([(SCHEMA_META_CF_NAME, (false, None))]);
         let cfs = all_cfs_and_options.map(|(cf_name, (requires_tuning, prefix_extractor_len))| {
             let mut block_based_options = BlockBasedOptions::default();
             block_based_options.set_bloom_filter(10.0, false);
@@ -618,6 +629,51 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
             .db
             .cf_handle(cf.name())
             .unwrap_or_else(|| panic!("Column family `{}` doesn't exist", cf.name()))
+    }
+
+    fn schema_meta_cf(&self) -> &ColumnFamily {
+        self.inner
+            .db
+            .cf_handle(SCHEMA_META_CF_NAME)
+            .expect("`__schema_meta` column family is created on open")
+    }
+
+    /// Reads the schema version stamped by [`crate::migrations`]. `None` means the database was
+    /// last written by a binary predating the migration runner (treated as version 0).
+    pub fn schema_version(&self) -> Result<Option<u32>, rocksdb::Error> {
+        Ok(self
+            .inner
+            .db
+            .get_cf(self.schema_meta_cf(), SCHEMA_VERSION_KEY)?
+            .map(|bytes| {
+                u32::from_be_bytes(
+                    bytes
+                        .as_slice()
+                        .try_into()
+                        .expect("schema version must be 4 bytes"),
+                )
+            }))
+    }
+
+    pub(crate) fn stamp_schema_version(&self, version: u32) -> Result<(), rocksdb::Error> {
+        let mut options = WriteOptions::new();
+        options.set_sync(self.sync_writes);
+        self.inner.db.put_cf_opt(
+            self.schema_meta_cf(),
+            SCHEMA_VERSION_KEY,
+            version.to_be_bytes(),
+            &options,
+        )
+    }
+
+    /// Compacts the whole key range of the column family. Used by migrations after bulk deletes
+    /// so that tombstoned space is actually reclaimed instead of waiting for background
+    /// compaction to get to it.
+    pub fn compact_range_cf(&self, cf: CF) {
+        let cf = self.column_family(cf);
+        self.inner
+            .db
+            .compact_range_cf(cf, None::<&[u8]>, None::<&[u8]>);
     }
 
     /// Returns size stats for the specified column family.
