@@ -16847,6 +16847,7 @@ dependencies = [
 name = "zksync_os_rocksdb"
 version = "0.21.0"
 dependencies = [
+ "anyhow",
  "num_cpus",
  "once_cell",
  "rocksdb",
