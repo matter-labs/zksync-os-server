@@ -67,6 +67,15 @@ struct IdleShared {
     policy: zksync_os_consensus_core::idle_policy::IdlePolicy,
     /// Units of pending work; each built block consumes one.
     pending_work: u64,
+    /// Heights whose unit is already spent. Consensus may abandon a built
+    /// block (a nullified view) and ask a later leader to rebuild the same
+    /// height; the real pool re-offers a transaction until a block carrying
+    /// it *commits*, so the rebuild must carry the same work — not spend a
+    /// second unit, and not (once units run dry) fall through to the policy
+    /// and quietly drop the work altogether. Found by the proptest sweep:
+    /// under a decline-only policy a nullified work block stalled its burst's
+    /// wait forever.
+    work_heights: std::collections::HashSet<u64>,
     /// Virtual-clock seconds each height was first built at. The production
     /// policy reads the *parent block's timestamp* — chain data, so a freshly
     /// built (even not-yet-committed) parent already reads as fresh and the
@@ -91,6 +100,7 @@ impl IdleWork {
         Self(Arc::new(Mutex::new(IdleShared {
             policy,
             pending_work: 0,
+            work_heights: std::collections::HashSet::new(),
             built_at: std::collections::HashMap::new(),
             last_progress: start,
             now,
@@ -208,8 +218,12 @@ impl ExecutionEnv for MockExecution {
             if let Some(work) = &inner.idle {
                 let mut shared = work.0.lock().unwrap();
                 let now = (shared.now)();
-                if shared.pending_work > 0 {
+                let child = parent.height_u64() + 1;
+                if shared.work_heights.contains(&child) {
+                    // An abandoned work block being rebuilt: same work, no new unit.
+                } else if shared.pending_work > 0 {
                     shared.pending_work -= 1;
+                    shared.work_heights.insert(child);
                 } else {
                     use zksync_os_consensus_core::idle_policy::IdleDecision;
                     let parent_number = parent.height_u64();
@@ -218,7 +232,7 @@ impl ExecutionEnv for MockExecution {
                         .get(&parent_number)
                         .copied()
                         .unwrap_or(shared.last_progress);
-                    match shared.policy.decide(parent_number, parent_time, now) {
+                    match shared.policy.decide(parent.era_height(), parent_time, now) {
                         IdleDecision::Decline => return None,
                         IdleDecision::BuildEmpty(_) => {}
                     }

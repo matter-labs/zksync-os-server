@@ -925,6 +925,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 idle_block_deadline: config.sequencer_config.block_time,
                 max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
                 interop_roots_per_block: config.sequencer_config.interop_roots_per_block,
+                // Same anchor the ChainAnchor below is resolved from: epochs count
+                // from the consensus genesis, not from chain height 0.
+                era_anchor: config.consensus_config.genesis_height,
             },
             idle_policy,
         );

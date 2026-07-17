@@ -22,6 +22,7 @@
 use commonware_cryptography::sha256::Digest;
 use futures::StreamExt as _;
 use tokio::time::Instant;
+use zksync_os_consensus_core::era::EraHeight;
 use zksync_os_consensus_core::idle_policy::{IdleDecision, IdlePolicy};
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool, StreamOutcome};
@@ -92,6 +93,10 @@ pub struct BuilderConfig {
     pub idle_block_deadline: std::time::Duration,
     pub max_transactions_in_block: usize,
     pub interop_roots_per_block: u64,
+    /// The chain height of the era anchor (era height 0): the block consensus
+    /// starts from — 0 on a fresh chain, the cutover height on a migrated one.
+    /// Needed wherever building reasons about epochs, which are era-relative.
+    pub era_anchor: u64,
 }
 
 /// Owns the mempool and fee sourcing; produces executed blocks on request.
@@ -192,10 +197,10 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
                     .duration_since(std::time::UNIX_EPOCH)
                     .expect("time went backwards")
                     .as_secs();
-                match self
-                    .idle_policy
-                    .decide(parent.number, parent.timestamp, now)
-                {
+                // The idle policy reasons in era coordinates (epochs are
+                // counted from the anchor); `parent.number` is absolute.
+                let parent_era = EraHeight::from_chain(parent.number, self.config.era_anchor);
+                match self.idle_policy.decide(parent_era, parent.timestamp, now) {
                     IdleDecision::Decline => return Ok(None),
                     IdleDecision::BuildEmpty(reason) => {
                         tracing::debug!(?reason, parent = parent.number, "building empty block");

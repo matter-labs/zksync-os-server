@@ -10,6 +10,7 @@ use commonware_codec::{EncodeSize, Error, Read, ReadExt, Write};
 use commonware_consensus::types::Height;
 use commonware_cryptography::sha256::Digest;
 use commonware_cryptography::{Digestible, Hasher, Sha256};
+use zksync_os_consensus_core::era::EraHeight;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimBlock {
@@ -60,6 +61,11 @@ impl SimBlock {
     /// era-relative height consensus sees through `Heightable`.
     pub fn height_u64(&self) -> u64 {
         self.height
+    }
+
+    /// The era-relative height, in the typed coordinate era math takes.
+    pub fn era_height(&self) -> EraHeight {
+        EraHeight::from_chain(self.height, self.era_anchor)
     }
 
     fn assemble(height: u64, era_anchor: u64, parent: Digest, seed: u64) -> Self {

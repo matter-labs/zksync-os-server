@@ -34,6 +34,7 @@
 pub mod application;
 pub mod committer;
 pub mod conformance;
+pub mod era;
 pub mod execution;
 pub mod idle_policy;
 pub mod registry;

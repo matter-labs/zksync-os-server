@@ -16424,6 +16424,7 @@ dependencies = [
  "commonware-runtime",
  "commonware-utils",
  "futures",
+ "proptest",
  "rand 0.8.7",
  "tracing",
  "tracing-subscriber 0.3.22",

@@ -38,6 +38,14 @@ threads-required = 4
 filter = 'test(~external_node) | test(~batch_verification) | test(~upgrade)'
 threads-required = 3
 
+[[profile.default.overrides]]
+# The property-based scenario sweep runs many full simulations inside one test,
+# and on a genuine failure proptest re-runs the scenario once per shrink attempt
+# (failing attempts each stall for the whole virtual budget) — minimizing a real
+# counterexample legitimately takes tens of minutes.
+filter = 'binary(proptest_scenarios)'
+slow-timeout = { period = "5m", terminate-after = 12 }
+
 # Wide seed sweeps of the consensus simulation corpus (the nightly lane sets
 # CONSENSUS_SIM_SEEDS, multiplying every scenario's runtime by the sweep size) —
 # scenarios legitimately run far past the default per-test timeout.

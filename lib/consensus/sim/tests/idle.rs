@@ -221,6 +221,72 @@ fn a_pending_activation_sprints_an_idle_chain_to_its_boundary() {
     );
 }
 
+/// The sprint works the same on a *migrated* chain: epochs are era-relative
+/// (chain height minus the era anchor), so a pending activation must sprint an
+/// anchored idle chain to its boundary exactly as it does a fresh one.
+///
+/// Regression: the idle policy once computed epochs from absolute chain
+/// heights. On any anchored chain that inflated `next_epoch` past every
+/// scheduled entry, so the sprint silently never fired and an idle migrated
+/// chain crawled toward activations one heartbeat per block.
+#[test]
+fn a_pending_activation_sprints_an_idle_migrated_chain_too() {
+    run_scenario(
+        "idle_sprint_to_activation_anchored",
+        0..3,
+        Duration::from_secs(3_600),
+        |context| async move {
+            // The pre-consensus era: enough blocks that absolute heights land
+            // several epochs past every scheduled activation.
+            const ANCHOR: u64 = 20;
+            let behaviors = vec![Behavior::Honest; 4];
+            let schedule = vec![(0, vec![0, 1, 2, 3]), (2, vec![0, 1, 2])];
+            let policy = IdlePolicy::heartbeat(
+                // Heartbeats effectively off: only the sprint can move the chain.
+                Duration::from_secs(100_000),
+                NonZeroU64::new(EPOCH_LENGTH).expect("nonzero"),
+                vec![2],
+            );
+            let work = idle_work(context.child("idle_work"), policy);
+            let cluster = SimCluster::start_era(
+                context,
+                &behaviors,
+                links::healthy(),
+                |_index, _context| {
+                    let env = MockExecution::anchored(ANCHOR);
+                    env.attach_idle(work.clone());
+                    env
+                },
+                EraOptions {
+                    stack_tuner: short_epochs(),
+                    schedule,
+                    ..EraOptions::default()
+                },
+            )
+            .await;
+
+            // The epoch-1 boundary block in era coordinates, as a chain height.
+            let boundary = ANCHOR + 2 * EPOCH_LENGTH - 1;
+            cluster.wait_for_committed_height_all(boundary).await;
+
+            // ...and stops there: the entry is active, normal idle rules resume.
+            cluster.settle(Duration::from_secs(24)).await;
+            for validator in 0..4 {
+                assert_eq!(
+                    cluster.validators[validator].env.committed_tip(),
+                    Some(boundary),
+                    "validator {validator} kept sprinting past the activation boundary",
+                );
+            }
+
+            // Work proves the chain is live under the new (smaller) committee.
+            work.enqueue(1);
+            cluster.wait_for_committed_height_all(boundary + 1).await;
+            cluster.assert_committed_chains_agree(2 * EPOCH_LENGTH);
+        },
+    );
+}
+
 /// Heartbeats alone eventually carry an idle chain across epoch boundaries:
 /// rotation works at a crawl, one block per interval.
 #[test]

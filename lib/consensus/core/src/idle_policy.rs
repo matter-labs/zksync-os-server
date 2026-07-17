@@ -32,6 +32,7 @@
 //! validators with differing configurations (or none of this policy at all)
 //! interoperate freely; the policy only shapes when blocks get made.
 
+use crate::era::EraHeight;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
@@ -98,11 +99,14 @@ impl IdlePolicy {
         }
     }
 
-    /// The verdict for building block `parent_number + 1` at `now` (unix
-    /// seconds, the proposer's clock). Pure: every input is chain data or
-    /// static configuration, so the decision is cheap and unit-testable, and
-    /// a leader needs no channels or shared state to make it.
-    pub fn decide(&self, parent_number: u64, parent_timestamp: u64, now: u64) -> IdleDecision {
+    /// The verdict for building the child of `parent` at `now` (unix seconds,
+    /// the proposer's clock). The parent height is *era-relative* —
+    /// [`EraHeight`] because epochs are counted from the era anchor, and an
+    /// absolute chain height here would silently disable the sprint on every
+    /// migrated chain. Pure: every input is chain data or static
+    /// configuration, so the decision is cheap and unit-testable, and a
+    /// leader needs no channels or shared state to make it.
+    pub fn decide(&self, parent: EraHeight, parent_timestamp: u64, now: u64) -> IdleDecision {
         match &self.mode {
             Mode::AlwaysBuild => IdleDecision::BuildEmpty(EmptyBlockReason::LegacyCadence),
             Mode::Heartbeat {
@@ -110,7 +114,7 @@ impl IdlePolicy {
                 epoch_length,
                 activation_epochs,
             } => {
-                let next_epoch = (parent_number + 1) / epoch_length.get();
+                let next_epoch = parent.next().epoch(*epoch_length);
                 if activation_epochs.iter().any(|epoch| *epoch > next_epoch) {
                     return IdleDecision::BuildEmpty(EmptyBlockReason::SprintToActivation);
                 }
@@ -135,10 +139,15 @@ mod tests {
         )
     }
 
+    /// A fresh chain's parent height: era == chain coordinates (anchor 0).
+    fn fresh(parent_number: u64) -> EraHeight {
+        EraHeight::from_chain(parent_number, 0)
+    }
+
     #[test]
     fn legacy_always_builds() {
         assert_eq!(
-            IdlePolicy::legacy().decide(5, 1_000, 1_000),
+            IdlePolicy::legacy().decide(fresh(5), 1_000, 1_000),
             IdleDecision::BuildEmpty(EmptyBlockReason::LegacyCadence),
         );
     }
@@ -146,14 +155,14 @@ mod tests {
     #[test]
     fn fresh_parent_declines_and_stale_parent_heartbeats() {
         let policy = policy(600, 100, &[]);
-        assert_eq!(policy.decide(5, 1_000, 1_599), IdleDecision::Decline);
+        assert_eq!(policy.decide(fresh(5), 1_000, 1_599), IdleDecision::Decline);
         assert_eq!(
-            policy.decide(5, 1_000, 1_600),
+            policy.decide(fresh(5), 1_000, 1_600),
             IdleDecision::BuildEmpty(EmptyBlockReason::Heartbeat),
         );
         // A parent timestamp ahead of the local clock (peer skew) reads as
         // fresh, not as a huge negative age.
-        assert_eq!(policy.decide(5, 2_000, 1_000), IdleDecision::Decline);
+        assert_eq!(policy.decide(fresh(5), 2_000, 1_000), IdleDecision::Decline);
     }
 
     #[test]
@@ -162,14 +171,37 @@ mod tests {
         let policy = policy(600, 100, &[2]);
         // Fresh parent, but the boundary is ahead: sprint.
         assert_eq!(
-            policy.decide(150, 1_000, 1_001),
+            policy.decide(fresh(150), 1_000, 1_001),
             IdleDecision::BuildEmpty(EmptyBlockReason::SprintToActivation),
         );
         // Next block is 200 = first height of epoch 2: the entry is active;
         // normal idle rules resume immediately.
-        assert_eq!(policy.decide(199, 1_000, 1_001), IdleDecision::Decline);
+        assert_eq!(
+            policy.decide(fresh(199), 1_000, 1_001),
+            IdleDecision::Decline
+        );
         // Long-past entries stay inert.
-        assert_eq!(policy.decide(950, 1_000, 1_001), IdleDecision::Decline);
+        assert_eq!(
+            policy.decide(fresh(950), 1_000, 1_001),
+            IdleDecision::Decline
+        );
+    }
+
+    #[test]
+    fn sprint_uses_era_coordinates_on_a_migrated_chain() {
+        // Epoch length 100, entry at epoch 2; the chain migrated at height
+        // 100_000. Chain height 100_150 is era height 150 — epoch 1, boundary
+        // ahead: sprint. (With absolute heights this read as epoch ~1000 and
+        // the sprint never fired.)
+        let policy = policy(600, 100, &[2]);
+        assert_eq!(
+            policy.decide(EraHeight::from_chain(100_150, 100_000), 1_000, 1_001),
+            IdleDecision::BuildEmpty(EmptyBlockReason::SprintToActivation),
+        );
+        assert_eq!(
+            policy.decide(EraHeight::from_chain(100_199, 100_000), 1_000, 1_001),
+            IdleDecision::Decline,
+        );
     }
 
     #[test]
@@ -178,7 +210,7 @@ mod tests {
         // should see why the chain is suddenly producing at full cadence).
         let policy = policy(600, 100, &[5]);
         assert_eq!(
-            policy.decide(10, 1_000, 5_000),
+            policy.decide(fresh(10), 1_000, 5_000),
             IdleDecision::BuildEmpty(EmptyBlockReason::SprintToActivation),
         );
     }
