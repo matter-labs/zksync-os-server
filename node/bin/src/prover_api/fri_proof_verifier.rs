@@ -10,7 +10,7 @@ use zksync_os_types::ProvingVersion;
 /// (zksync-os 0.4.0) batch public input is
 /// `keccak(state_before || state_after || chain_config_hash || batch_output)`, where
 /// `batch_output` uses the 0.4.0 layout without the leading chain id
-/// (see [`PendingBatchInfo::v8_batch_output_hash`](zksync_os_batch_types::PendingBatchInfo)).
+/// (see [`PendingBatchInfo::v32_batch_output_hash`](zksync_os_batch_types::PendingBatchInfo)).
 pub fn expected_public_input_registers(
     proving_version: ProvingVersion,
     batch_metadata: &BatchMetadata,
@@ -20,7 +20,7 @@ pub fn expected_public_input_registers(
         ProvingVersion::V8 => {
             let batch_info = &batch_metadata.batch_info;
             let chain_config_hash =
-                zksync_os_native_pig::v8_chain_config_hash(batch_info.commit_info.chain_id)
+                zksync_os_native_pig::v32_chain_config_hash(batch_info.commit_info.chain_id)
                     .map_err(|err| {
                         SubmitError::Other(format!("cannot compute V8 chain config hash: {err:#}"))
                     })?;
@@ -29,7 +29,7 @@ pub fn expected_public_input_registers(
                     state_before.0,
                     batch_info.commit_info.new_state_commitment.0,
                     chain_config_hash.0,
-                    batch_info.v8_batch_output_hash().0,
+                    batch_info.v32_batch_output_hash().0,
                 ]
                 .concat(),
             )

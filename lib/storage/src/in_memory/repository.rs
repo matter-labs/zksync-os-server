@@ -383,11 +383,10 @@ impl TransactionReceiptRepository {
             .map(|tx_hash| *tx_hash)
     }
 
-    /// Removes tx data for `tx_hashes`, but only entries still owned by `block_number`.
-    /// A tx with the same hash can occur in a later block (e.g. the deterministic
-    /// `SetSLChainId` placeholder is injected both on the first block of a fresh chain and
-    /// on every protocol upgrade); that block's re-insert overwrites the entry, and removing
-    /// it here would lose data the later block still needs for persistence.
+    /// Removes tx data for `tx_hashes`, but only entries still owned by `block_number` -
+    /// defensive against a later block re-inserting an entry under the same hash (the
+    /// re-insert overwrites the entry, and removing it here would lose data the later
+    /// block still needs for persistence).
     pub fn remove_by_hashes(&self, tx_hashes: &[TxHash], block_number: BlockNumber) {
         for tx_hash in tx_hashes {
             self.tx_data

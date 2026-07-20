@@ -11,7 +11,7 @@ use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
 use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataMode};
 
 pub mod tree;
-mod v8;
+mod v32;
 
 /// Per-block input to [`generate_batch_run`].
 #[derive(Debug, Clone, Copy)]
@@ -105,13 +105,13 @@ impl NativeBatchRunOutput {
 
         // Reconstruct the batch public input exactly as `verify_fri_proof_v8` will and compare
         // it with the value the batch program computed; catches batch-output layout drift.
-        let chain_config_hash = v8::chain_config_hash(chain_id)?;
+        let chain_config_hash = v32::chain_config_hash(chain_id)?;
         let reconstructed_public_input_hash = keccak256(
             [
                 self.previous_state_commitment.0,
                 batch_info.commit_info.new_state_commitment.0,
                 chain_config_hash.0,
-                batch_info.v8_batch_output_hash().0,
+                batch_info.v32_batch_output_hash().0,
             ]
             .concat(),
         );
@@ -125,17 +125,17 @@ impl NativeBatchRunOutput {
     }
 }
 
-/// The chain config all V8 executions (block and native batch) run with. Its hash is part of
-/// the V8 batch public input, so every construction site must go through this function.
-pub fn v8_chain_config(
+/// The chain config all v32 executions (block and native batch) run with. Its hash is part of
+/// the v32 batch public input, so every construction site must go through this function.
+pub fn v32_chain_config(
     chain_id: u64,
 ) -> anyhow::Result<zk_ee_0_4_0::system::metadata::chain_config::ChainConfig> {
-    v8::chain_config(chain_id)
+    v32::chain_config(chain_id)
 }
 
-/// keccak256 commitment of [`v8_chain_config`], as committed to in the V8 batch public input.
-pub fn v8_chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
-    v8::chain_config_hash(chain_id)
+/// keccak256 commitment of [`v32_chain_config`], as committed to in the v32 batch public input.
+pub fn v32_chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
+    v32::chain_config_hash(chain_id)
 }
 
 pub fn generate_batch_run<ReadState: ReadStateHistory>(
@@ -146,7 +146,9 @@ pub fn generate_batch_run<ReadState: ReadStateHistory>(
     pubdata_mode: PubdataMode,
 ) -> anyhow::Result<NativeBatchRunOutput> {
     match proving_version {
-        ProvingVersion::V8 => v8::generate_batch_run(blocks, read_state, merkle_tree, pubdata_mode),
+        ProvingVersion::V8 => {
+            v32::generate_batch_run(blocks, read_state, merkle_tree, pubdata_mode)
+        }
         _ => anyhow::bail!("native batch proving is unsupported for {proving_version:?}"),
     }
 }
