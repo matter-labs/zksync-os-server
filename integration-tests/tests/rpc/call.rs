@@ -7,9 +7,9 @@ use alloy::rpc::types::state::{AccountOverride, StateOverride};
 use std::collections::HashMap;
 use zksync_os_integration_tests::assert_traits::EthCallAssert;
 use zksync_os_integration_tests::contracts::{EventEmitter, SimpleRevert, TracingSecondary};
-use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_L1, Tester, test_multisetup};
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 async fn call_genesis(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can run `eth_call` on genesis
     tester
@@ -20,7 +20,7 @@ async fn call_genesis(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 async fn call_pending(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can run `eth_call` on pending block
     tester

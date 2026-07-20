@@ -1,9 +1,10 @@
 use alloy::primitives::BlockNumber;
 use anyhow::Context;
 use async_trait::async_trait;
+use reth_tasks::Runtime;
 use std::path::Path;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use vise::{Buckets, Gauge, Histogram, Metrics, Unit};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_genesis::Genesis;
@@ -20,6 +21,7 @@ const MAX_BLOCKS_PER_ITERATION: usize = 32;
 
 pub(crate) struct TreeManager {
     pub tree: MerkleTree<RocksDBWrapper>,
+    pub runtime: Runtime,
 }
 
 #[async_trait]
@@ -65,10 +67,11 @@ impl PipelineComponent for TreeManager {
             let first_block_number = blocks[0].block_number();
             if first_block_number <= last_processed_block {
                 let mut tree_clone = self.tree.clone();
-                tokio::task::spawn_blocking(move || {
+                self.spawn_tree_task(move || {
                     tree_clone.truncate_recent_versions(first_block_number)
                 })
-                .await??;
+                .await
+                .context("tree truncation task dropped its result sender")??;
             }
 
             let last_block_number = blocks.last().unwrap().block_number();
@@ -78,23 +81,25 @@ impl PipelineComponent for TreeManager {
             );
 
             let db_clone = self.tree.db().clone();
-            let tree_blocks = tokio::task::spawn_blocking(move || {
-                let patched = Patched::new(db_clone);
-                let mut patched_tree = MerkleTree::new(patched)?;
-                let tree_blocks = blocks
-                    .into_iter()
-                    .map(|block| Self::update_tree(&mut patched_tree, block))
-                    .collect::<anyhow::Result<Vec<_>>>()?;
+            let tree_blocks = self
+                .spawn_tree_task(move || {
+                    let patched = Patched::new(db_clone);
+                    let mut patched_tree = MerkleTree::new(patched)?;
+                    let tree_blocks = blocks
+                        .into_iter()
+                        .map(|block| Self::update_tree(&mut patched_tree, block))
+                        .collect::<anyhow::Result<Vec<_>>>()?;
 
-                // Single RocksDB write for all blocks.
-                let flush_time = TREE_METRICS.flush_time.start();
-                patched_tree.flush()?;
-                let flush_time = flush_time.observe();
-                tracing::debug!(?flush_time, "flushed Merkle tree updates to disk");
+                    // Single RocksDB write for all blocks.
+                    let flush_time = TREE_METRICS.flush_time.start();
+                    patched_tree.flush()?;
+                    let flush_time = flush_time.observe();
+                    tracing::debug!(?flush_time, "flushed Merkle tree updates to disk");
 
-                anyhow::Ok(tree_blocks)
-            })
-            .await??;
+                    anyhow::Ok(tree_blocks)
+                })
+                .await
+                .context("tree update task dropped its result sender")??;
 
             let range_time = range_time.observe();
             tracing::debug!(
@@ -136,6 +141,35 @@ impl PipelineComponent for TreeManager {
 }
 
 impl TreeManager {
+    /// Runs a tree RocksDB operation on the blocking pool, tracked as a graceful task.
+    /// Pipeline shutdown drops the segment's `run` future mid-await, but blocking tasks
+    /// cannot be cancelled; holding the shutdown guard until the task finishes guarantees
+    /// the tree RocksDB is not written to after [graceful_shutdown_with_timeout] returns.
+    fn spawn_tree_task<T, F>(&self, f: F) -> oneshot::Receiver<anyhow::Result<T>>
+    where
+        F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (result_tx, result_rx) = oneshot::channel();
+        let mut handle = tokio::task::spawn_blocking(f);
+        self.runtime.spawn_critical_with_graceful_shutdown_signal(
+            "tree update",
+            |shutdown| async move {
+                tokio::select! {
+                    result = &mut handle => {
+                        let _ = result_tx.send(result.map_err(anyhow::Error::from).and_then(|r| r));
+                    }
+                    _guard = shutdown => {
+                        // Wait for the blocking task while holding the shutdown guard. This blocks
+                        // shutdown until the tree update finishes and frees up the tree DB.
+                        let _ = handle.await;
+                    }
+                }
+            },
+        );
+        result_rx
+    }
+
     pub async fn load_or_initialize_tree(
         path: &Path,
         genesis: &Genesis,

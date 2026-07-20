@@ -1,16 +1,14 @@
 //! Live end-to-end test for the zksync-os 0.4.0 lane (protocol v32.0, execution V7,
 //! proving V8, native batch PIG):
 //!
-//! 1. Start a v31.0 gateway + one settling chain with fake FRI/SNARK provers, then perform
-//!    a protocol upgrade of the chain to v32.0.
-//!    (The gateway topology is used because the v31.0 `local-chains` L1 state only contains
-//!    the gateway/multi-chain deployment — the `default` single-chain layout is stale.)
+//! 1. Start a v31.0 chain settling on L1 with fake FRI/SNARK provers, then perform
+//!    a protocol upgrade to v32.0.
 //! 2. Wait for the fake pipeline to settle everything produced so far.
-//! 3. Restart the chain node with fake FRI provers disabled and spawn an externally built
-//!    `zksync_os_fri_prover` (zksync-airbender-prover) against the chain's prover API.
+//! 3. Restart the node with fake FRI provers disabled and spawn an externally built
+//!    `zksync_os_fri_prover` (zksync-airbender-prover) against the node's prover API.
 //! 4. Success when a post-restart transaction's block is finalized — i.e. its batch was
 //!    committed, FRI-proven for real (proof verified by the server), fake-SNARKed and
-//!    proven+executed on the settlement layer.
+//!    proven+executed on L1.
 //!
 //! Required environment:
 //!   V8_FRI_PROVER_BIN        path to the `zksync_os_fri_prover` binary (may be a wrapper script)
@@ -26,7 +24,7 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
-use zksync_os_integration_tests::GatewayTester;
+use zksync_os_integration_tests::TestCase;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::upgrade::UpgradeTester;
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
@@ -46,18 +44,19 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
     );
     let cpu_worker_threads = std::env::var("V8_PROVER_CPU_THREADS").ok();
 
-    // Phase 1: v31.0 gateway + one settling chain; fake FRI + SNARK provers keep the
-    // pipeline moving everywhere.
-    let gateway_tester = GatewayTester::builder()
-        .protocol_version(PROTOCOL_VERSION_V31_0)
-        .num_chains(1)
-        .build()
-        .await?;
-    let tester = gateway_tester.chain(0);
+    // Phase 1: v31.0 chain settling on L1; fake FRI + SNARK provers keep the
+    // pipeline moving.
+    let tester = TestCase {
+        protocol_version: PROTOCOL_VERSION_V31_0,
+    }
+    .environment()
+    .await?
+    .launch_default()
+    .await?;
 
     // Upgrade v31.0 -> v32.0 (execution V7 / proving V8).
     {
-        let upgrade_tester = UpgradeTester::for_default_upgrade(tester).await?;
+        let upgrade_tester = UpgradeTester::for_default_upgrade(&tester).await?;
         let protocol_upgrade = upgrade_tester
             .protocol_upgrade_builder()
             .await?
@@ -85,11 +84,9 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
         .await?;
     tracing::info!("post-upgrade tx executed on L1; all earlier batches settled");
 
-    // Phase 2: restart the chain node with real FRI proving. The gateway stays alive as the
-    // settlement layer. Fake SNARK provers stay on (no GPU/CRS here), so finalization of the
-    // probe tx requires exactly one real V8 FRI proof.
-    let (_gateway, mut chains) = gateway_tester.into_parts();
-    let tester = chains.pop().expect("gateway tester has one chain");
+    // Phase 2: restart the node with real FRI proving. Fake SNARK provers stay on
+    // (no GPU/CRS here), so finalization of the probe tx requires exactly one real
+    // V8 FRI proof.
     let tester = tester
         .stop()
         .await?

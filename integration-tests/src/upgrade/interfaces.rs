@@ -237,10 +237,4 @@ alloy::sol! {
         ) external;
     }
 
-    #[sol(rpc)]
-    contract GatewayTransactionFilterer {
-        mapping(address sender => bool whitelisted) public whitelistedSenders;
-        function grantWhitelist(address sender) external;
-        function owner() external view returns (address);
-    }
 }

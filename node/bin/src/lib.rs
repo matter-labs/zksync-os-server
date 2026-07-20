@@ -57,7 +57,7 @@ use anyhow::Context;
 use priority_tree_pipeline_step::PriorityTreePipelineStep;
 use reth_tasks::Runtime;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -82,7 +82,6 @@ use zksync_os_l1_watcher::{
     CommittedBatchProvider, L1CommitWatcher, L1ExecuteWatcher, L1FinalizedExecuteWatcher,
     L1RevertWatcher,
 };
-use zksync_os_mempool::LocalEthCall;
 use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
@@ -107,7 +106,7 @@ use zksync_os_replay_archive::{
 };
 use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
-use zksync_os_rpc::{EthCallHandler, RpcStorage};
+use zksync_os_rpc::RpcStorage;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
 use zksync_os_status_server::{StatusServerState, run_status_server};
@@ -207,21 +206,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         ProviderKind::L1,
     )
     .await;
-    let gateway_provider = if let Some(gw_config) = &config.gateway_provider_config {
-        Some(
-            build_node_provider(
-                gw_config,
-                config.l1_watcher_config.poll_interval,
-                config.l1_watcher_config.finalized_poll_interval,
-                config.l1_watcher_config.logs_cache_capacity,
-                ProviderKind::Gateway,
-            )
-            .await,
-        )
-    } else {
-        None
-    };
-
     // Genesis and the repository manager are initialized here (before the startup revert) so
     // that the `from_block_hash` guard can read the current local block hash.
     let diamond_proxy_l1 =
@@ -275,49 +259,32 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         node_role,
         rebuild_config.as_ref(),
         &l1_provider,
-        gateway_provider.as_ref(),
         bridgehub_address,
         chain_id,
     )
     .await
     .expect("failed to determine L1 state");
 
-    let settles_on_gateway = l1_state.settles_on_gateway();
-    let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
-        l1_provider.clone()
-    } else {
-        gateway_provider.clone().unwrap()
-    };
-
-    tracing::info!(?l1_state, settles_on_gateway, "L1 state");
+    tracing::info!(?l1_state, "L1 state");
     l1_state.report_metrics();
     if node_role.is_main() {
         check_batch_verification_mismatch(
             &config.batch_verification_config,
             &l1_state.batch_verification,
         );
-        check_required_operator_keys(&config, settles_on_gateway);
+        check_required_operator_keys(&config);
     }
 
-    // Effective pubdata mode used by all block-producing components: read from config only when
-    // the chain settles on L1. When settling on Gateway, it is derived from the gateway's DA
-    // input mode: Rollup gateway -> RelayedL2Calldata, Validium gateway -> Validium.
+    // Effective pubdata mode used by all block-producing components.
     let effective_pubdata_mode: Option<PubdataMode> = if node_role.is_main() {
-        Some(effective_main_node_pubdata_mode(
-            &config,
-            settles_on_gateway,
-            l1_state.da_input_mode,
-        ))
+        Some(effective_main_node_pubdata_mode(&config))
     } else {
         // External nodes do not produce blocks; pubdata mode is irrelevant for them.
         None
     };
     if let (Some(pubdata_mode), true) = (effective_pubdata_mode, node_role.is_main()) {
         match (pubdata_mode, l1_state.da_input_mode) {
-            (
-                PubdataMode::Calldata | PubdataMode::Blobs | PubdataMode::RelayedL2Calldata,
-                BatchDaInputMode::Validium,
-            )
+            (PubdataMode::Calldata | PubdataMode::Blobs, BatchDaInputMode::Validium)
             | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
                 panic!(
                     "Pubdata mode doesn't correspond to pricing mode from the l1. \
@@ -593,11 +560,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 commit watcher",
         L1CommitWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
-            l1_state.sl_block_number,
-            node_startup_state.l1_state.l1_chain_id,
+            l1_state.l1_block_number,
             // Only nodes that actually submit commit txs locally should arm the
             // `UnexpectedCommit` guard — otherwise consensus followers configured with
             // `batcher_config.enabled = false` panic the moment the leader's commit lands on L1.
@@ -612,10 +578,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 execute watcher",
         L1ExecuteWatcher::create_watcher(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
-            node_startup_state.l1_state.l1_chain_id,
         )
         .await
         .expect("failed to start L1 execute watcher")
@@ -626,7 +591,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "l1 finalized execute watcher",
         L1FinalizedExecuteWatcher::create_finalized_watcher(
             config.l1_watcher_config.clone().into(),
-            node_startup_state.l1_state.diamond_proxy_sl.clone(),
+            node_startup_state.l1_state.diamond_proxy_l1.clone(),
             committed_batch_provider.clone(),
             finality_storage.clone(),
         )
@@ -641,12 +606,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             "l1 revert watcher",
             L1RevertWatcher::create_watcher(
                 config.l1_watcher_config.clone().into(),
-                node_startup_state.l1_state.diamond_proxy_sl.clone(),
-                node_startup_state.l1_state.sl_block_number,
-                node_startup_state.l1_state.l1_chain_id,
+                node_startup_state.l1_state.diamond_proxy_l1.clone(),
+                node_startup_state.l1_state.l1_block_number,
             )
-            .await
-            .expect("failed to start L1 revert watcher")
             .run(),
         );
     }
@@ -736,7 +698,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             config.l1_sender_config.max_priority_fee_per_gas.0,
         );
         let gas_adjuster = GasAdjuster::new(
-            sl_provider.clone().erased(),
+            l1_provider.clone().erased(),
             gas_adjuster_config,
             pubdata_price_sender,
             blob_fill_ratio_sender,
@@ -794,18 +756,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         tree_for_rpc,
     );
 
-    // Mini-component capable of doing local `eth_call` without going through RPC. Needed for
-    // interop fee updater so it can query the current interop fee.
-    let local_eth_call = Box::new(EthCallHandler::new(
-        config.rpc_config.clone().into(),
-        rpc_storage.clone(),
-        chain_id,
-        last_constructed_block_ctx_receiver.clone(),
-        // Interop fee updater runs inside the node and is not a user-facing
-        // RPC surface, so the admit boundary doesn't apply.
-        None,
-    )) as Box<dyn LocalEthCall>;
-
     let pool = Pool::new(
         runtime.clone(),
         genesis.clone(),
@@ -813,14 +763,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         zksync_os_mempool::Config {
             node_role,
             chain_id,
-            gateway_chain_id: config.general_config.gateway_chain_id,
             interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
             bytecode_supplier_address,
             l1_watcher_config: config.l1_watcher_config.clone().into(),
             interop_fee_updater_config: config.interop_fee_updater_config.clone().into(),
         },
-        local_eth_call,
-        base_token_price_handle.clone(),
         // todo: eventually this should be initialized inside `Pool::new`
         l2_subpool.clone(),
     )
@@ -841,7 +788,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
             interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
         },
-        &node_startup_state.l1_state.settlement_layer_intervals,
         last_constructed_block_ctx_sender,
     );
 
@@ -849,15 +795,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     runtime.spawn_critical_task("l1 batch persist watcher", {
         let config = config.l1_watcher_config.clone();
-        let settlement_layer_intervals = node_startup_state
-            .l1_state
-            .settlement_layer_intervals
-            .clone();
+        let diamond_proxy_l1 = node_startup_state.l1_state.diamond_proxy_l1.clone();
         let persistent_batch_storage = persistent_batch_storage.clone();
         async move {
             L1PersistBatchWatcher::create_watcher(
                 config.into(),
-                settlement_layer_intervals,
+                diamond_proxy_l1,
                 persistent_batch_storage,
             )
             .run(())
@@ -899,7 +842,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     } = if node_role.is_main() {
         run_main_node_pipeline(
             &config,
-            sl_provider.clone(),
+            l1_provider.clone(),
             node_startup_state,
             archiving_block_replay_storage,
             runtime,
@@ -920,7 +863,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             commit_submitted_tx,
             verify_request_tx,
             verify_result_rx,
-            settles_on_gateway,
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
             replay_archiver,
             prebound_prover_api_listener,
@@ -958,6 +900,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         rx
     };
 
+    let rpc_ready: Arc<OnceLock<()>> = Arc::new(OnceLock::new());
+
     // ======== Start Status Server ========
     let status_port = if config.status_server_config.enabled {
         let status_listener = prebound_status_listener
@@ -969,6 +913,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let status_state = StatusServerState {
             pipeline_snapshot: pipeline_snapshot_rx,
             consensus_raft_status_rx: raft_status_rx,
+            ready: rpc_ready.clone(),
         };
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "status server",
@@ -995,6 +940,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         repositories_for_wait
             .wait_for_db_ready_to_process_blocks()
             .await;
+        // `rpc::spawn` awaits this future before serving.
+        let _ = rpc_ready.set(());
     };
     let rpc_policy_client = config
         .sequencer_config
@@ -1013,7 +960,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         combined_acceptance_rx,
         last_constructed_block_ctx_receiver,
         tx_forwarder,
-        gateway_provider.map(|p| p.erased()),
         rpc_policy_client,
         runtime,
         wait_for_db,
@@ -1077,7 +1023,6 @@ async fn fetch_l1_state_with_startup_revert(
     node_role: NodeRole,
     rebuild: Option<&RebuildConfig>,
     l1_provider: &NodeProvider,
-    gateway_provider: Option<&NodeProvider>,
     bridgehub_address: Address,
     chain_id: u64,
 ) -> anyhow::Result<L1State> {
@@ -1090,7 +1035,6 @@ async fn fetch_l1_state_with_startup_revert(
     let l1_state = L1State::fetch_with_finality(
         use_finalized,
         l1_provider.clone(),
-        gateway_provider.cloned(),
         bridgehub_address,
         chain_id,
     )
@@ -1100,15 +1044,7 @@ async fn fetch_l1_state_with_startup_revert(
     if node_role.is_main()
         && let Some(rebuild) = rebuild
     {
-        let sl_provider = if l1_state.l1_chain_id == l1_state.sl_chain_id {
-            l1_provider.clone()
-        } else {
-            gateway_provider
-                .cloned()
-                .context("chain settles on Gateway but no gateway RPC provider is configured")?
-        };
-
-        let l1_revert_ran = revert_l1_on_startup(rebuild, config, &l1_state, &sl_provider)
+        let l1_revert_ran = revert_l1_on_startup(rebuild, config, &l1_state, l1_provider)
             .await
             .context("startup l1 revert failed")?;
 
@@ -1118,7 +1054,6 @@ async fn fetch_l1_state_with_startup_revert(
             return L1State::fetch_with_finality(
                 use_finalized,
                 l1_provider.clone(),
-                gateway_provider.cloned(),
                 bridgehub_address,
                 chain_id,
             )
@@ -1143,7 +1078,7 @@ struct PipelineHandles {
 #[allow(clippy::too_many_arguments)]
 async fn run_main_node_pipeline(
     config: &Config,
-    sl_provider: NodeProvider,
+    l1_provider: NodeProvider,
     node_state_on_startup: NodeStateOnStartup,
     block_replay_storage: impl WriteReplay + Clone,
     runtime: &Runtime,
@@ -1164,7 +1099,6 @@ async fn run_main_node_pipeline(
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
-    settles_on_gateway: bool,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
     prebound_prover_api_listener: Option<TcpListener>,
@@ -1227,7 +1161,10 @@ async fn run_main_node_pipeline(
                     )
                 }),
         )
-        .pipe(TreeManager { tree: tree.clone() });
+        .pipe(TreeManager {
+            tree: tree.clone(),
+            runtime: runtime.clone(),
+        });
 
     if !config.batcher_config.enabled {
         tracing::warn!(
@@ -1306,27 +1243,12 @@ async fn run_main_node_pipeline(
         );
     }
 
-    // Pick the L1Sender config based on whether the chain is currently settling on Gateway:
-    // when it is, gateway_sender operator keys (funded on Gateway) and gateway_sender fee caps are used;
-    // otherwise the L1-targeted l1_sender config is used.
     let commit_sender_config: zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> =
-        if settles_on_gateway {
-            config.gateway_sender_config.clone().into()
-        } else {
-            config.l1_sender_config.clone().into()
-        };
+        config.l1_sender_config.clone().into();
     let prove_sender_config: zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> =
-        if settles_on_gateway {
-            config.gateway_sender_config.clone().into()
-        } else {
-            config.l1_sender_config.clone().into()
-        };
+        config.l1_sender_config.clone().into();
     let execute_sender_config: zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> =
-        if settles_on_gateway {
-            config.gateway_sender_config.clone().into()
-        } else {
-            config.l1_sender_config.clone().into()
-        };
+        config.l1_sender_config.clone().into();
 
     let pipeline = pipeline
         .pipe(ProverInputGenerator {
@@ -1347,8 +1269,10 @@ async fn run_main_node_pipeline(
                 last_persisted_block: node_state_on_startup.block_replay_storage_last_block,
             },
             chain_id,
-            sl_chain_id: node_state_on_startup.l1_state.sl_chain_id,
-            chain_address_sl: node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+            // Feeds the committed `CommitBatchInfo.sl_chain_id` (part of the v31+ public input
+            // hash); the settlement layer is always L1 now.
+            sl_chain_id: node_state_on_startup.l1_state.l1_chain_id,
+            chain_address: node_state_on_startup.l1_state.diamond_proxy_address(),
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
             pubdata_mode,
@@ -1372,30 +1296,28 @@ async fn run_main_node_pipeline(
             batch_verification_l1_config: node_state_on_startup.l1_state.batch_verification.clone(),
         })
         .pipe(UpgradeGatekeeper::new(
-            node_state_on_startup.l1_state.diamond_proxy_sl.clone(),
+            node_state_on_startup.l1_state.diamond_proxy_l1.clone(),
         ))
         .pipe_opt(replay_archiver.map(|replay_archiver| {
             ReplayArchiveGateComponent::new(replay_archiver, block_replay_storage.clone())
         }))
         .pipe(L1Sender::<CommitCommand> {
-            provider: sl_provider.clone(),
+            provider: l1_provider.clone(),
             config: commit_sender_config,
-            to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: settles_on_gateway,
+            to_address: node_state_on_startup.l1_state.validator_timelock,
             commit_submitted_tx: Some(commit_submitted_tx),
-            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
+            l1_block_number: node_state_on_startup.l1_state.l1_block_number,
         })
         .pipe(snark_proving_step)
         .pipe(GaplessL1ProofSender::new(
             node_state_on_startup.l1_state.last_executed_batch + 1,
         ))
         .pipe(L1Sender::<ProofCommand> {
-            provider: sl_provider.clone(),
+            provider: l1_provider.clone(),
             config: prove_sender_config,
-            to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: settles_on_gateway,
+            to_address: node_state_on_startup.l1_state.validator_timelock,
             commit_submitted_tx: None,
-            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
+            l1_block_number: node_state_on_startup.l1_state.l1_block_number,
         })
         .pipe(
             PriorityTreePipelineStep::new(
@@ -1407,12 +1329,11 @@ async fn run_main_node_pipeline(
             .unwrap(),
         )
         .pipe(L1Sender {
-            provider: sl_provider,
+            provider: l1_provider,
             config: execute_sender_config,
-            to_address: node_state_on_startup.l1_state.validator_timelock_sl,
-            gateway: settles_on_gateway,
+            to_address: node_state_on_startup.l1_state.validator_timelock,
             commit_submitted_tx: None,
-            sl_block_number: node_state_on_startup.l1_state.sl_block_number,
+            l1_block_number: node_state_on_startup.l1_state.l1_block_number,
         })
         .pipe(BatchSink::new(internal_config_manager));
 
@@ -1494,12 +1415,15 @@ async fn run_en_pipeline(
                     )
                 }),
         )
-        .pipe(TreeManager { tree: tree.clone() })
+        .pipe(TreeManager {
+            tree: tree.clone(),
+            runtime: runtime.clone(),
+        })
         .pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationResponder::new(
                 chain_id,
-                node_state_on_startup.l1_state.diamond_proxy_address_sl(),
+                node_state_on_startup.l1_state.diamond_proxy_address(),
                 config.batch_verification_config.signing_key.clone(),
                 finality.clone(),
                 node_state_on_startup.l1_state.clone(),
@@ -1601,71 +1525,39 @@ fn check_batch_verification_mismatch(
     false
 }
 
-/// Returns the pubdata mode used by all block-producing components on the Main Node, taking
-/// settlement-layer discovery into account: when the chain settles on Gateway, the mode is
-/// derived from the gateway's DA input mode (`Rollup` → [`PubdataMode::RelayedL2Calldata`],
-/// `Validium` → [`PubdataMode::Validium`]); when it settles on L1, the configured
-/// `l1_sender.pubdata_mode` is used (and its presence is enforced here).
-fn effective_main_node_pubdata_mode(
-    config: &Config,
-    settles_on_gateway: bool,
-    da_input_mode: BatchDaInputMode,
-) -> PubdataMode {
-    if settles_on_gateway {
-        match da_input_mode {
-            BatchDaInputMode::Rollup => PubdataMode::RelayedL2Calldata,
-            BatchDaInputMode::Validium => PubdataMode::Validium,
-        }
-    } else {
-        config
-            .l1_sender_config
-            .pubdata_mode
-            .expect("`l1_sender.pubdata_mode` is required on the Main Node when settling on L1")
-    }
+/// Returns the pubdata mode used by all block-producing components on the Main Node: the
+/// configured `l1_sender.pubdata_mode` (its presence is enforced here).
+fn effective_main_node_pubdata_mode(config: &Config) -> PubdataMode {
+    config
+        .l1_sender_config
+        .pubdata_mode
+        .expect("`l1_sender.pubdata_mode` is required on the Main Node")
 }
 
-/// Validates that the operator keys required for the L1Sender pipeline are present in config,
-/// based on the settlement layer discovered at startup. When settling on L1, `l1_sender.operator_*_sk`
-/// are required; when settling on Gateway, `gateway_sender.operator_*_sk` are required. Reports all
-/// missing keys at once via panic so the operator can fix them in a single restart.
-fn check_required_operator_keys(config: &Config, settles_on_gateway: bool) {
-    let (section, missing): (&str, Vec<&str>) = if settles_on_gateway {
-        let gw = &config.gateway_sender_config;
-        let mut missing = vec![];
-        if gw.operator_commit_sk.is_none() {
-            missing.push("operator_commit_sk");
-        }
-        if gw.operator_prove_sk.is_none() {
-            missing.push("operator_prove_sk");
-        }
-        if gw.operator_execute_sk.is_none() {
-            missing.push("operator_execute_sk");
-        }
-        ("gateway_sender", missing)
-    } else {
-        let l1 = &config.l1_sender_config;
-        let mut missing = vec![];
-        if l1.operator_commit_sk.is_none() {
-            missing.push("operator_commit_sk");
-        }
-        if l1.operator_prove_sk.is_none() {
-            missing.push("operator_prove_sk");
-        }
-        if l1.operator_execute_sk.is_none() {
-            missing.push("operator_execute_sk");
-        }
-        ("l1_sender", missing)
-    };
+/// Validates that the `l1_sender.operator_*_sk` keys required for the L1Sender pipeline are
+/// present in config. Reports all missing keys at once via panic so the operator can fix them in
+/// a single restart.
+fn check_required_operator_keys(config: &Config) {
+    let l1 = &config.l1_sender_config;
+    let mut missing = vec![];
+    if l1.operator_commit_sk.is_none() {
+        missing.push("operator_commit_sk");
+    }
+    if l1.operator_prove_sk.is_none() {
+        missing.push("operator_prove_sk");
+    }
+    if l1.operator_execute_sk.is_none() {
+        missing.push("operator_execute_sk");
+    }
     if !missing.is_empty() {
-        let target = if settles_on_gateway { "Gateway" } else { "L1" };
         let formatted = missing
             .iter()
-            .map(|k| format!("`{section}.{k}`"))
+            .map(|k| format!("`l1_sender.{k}`"))
             .collect::<Vec<_>>()
             .join(", ");
         panic!(
-            "missing operator keys required for settling on {target}: {formatted}. \
-             Set them in the `{section}` config section."
+            "missing operator keys required for settling on L1: {formatted}. \
+             Set them in the `l1_sender` config section."
         );
     }
 }

@@ -1,8 +1,16 @@
 use crate::config::Config;
 use anyhow::Context;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::time::Instant;
 use zksync_os_network::NetworkPorts;
+
+/// How long to keep retrying a bind that fails with `AddrInUse`; a port pinned across restart
+/// (e.g. in integration tests) may be transiently occupied by another process's socket.
+const BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+const BIND_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Actual ports bound by each service after `run()` starts.
 /// Fields are `None` when the corresponding service is disabled in config.
@@ -86,7 +94,18 @@ async fn bind_tcp_listener(address: &str, service: Service) -> anyhow::Result<Tc
     let addr: SocketAddr = address
         .parse()
         .with_context(|| format!("malformed {service} bind address {address:?}"))?;
-    TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to prebind {service} listener at {address}"))
+    let deadline = Instant::now() + BIND_RETRY_TIMEOUT;
+    loop {
+        match TcpListener::bind(addr).await {
+            Ok(listener) => return Ok(listener),
+            Err(err) if err.kind() == ErrorKind::AddrInUse && Instant::now() < deadline => {
+                tracing::warn!(%addr, %service, "bind address in use; retrying");
+                tokio::time::sleep(BIND_RETRY_INTERVAL).await;
+            }
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to prebind {service} listener at {address}"));
+            }
+        }
+    }
 }

@@ -16,7 +16,6 @@ use zksync_os_provider::NodeProvider;
 #[metrics(label = "provider", rename_all = "snake_case")]
 pub(crate) enum ProviderKind {
     L1,
-    Gateway,
 }
 
 pub(crate) async fn build_node_provider(

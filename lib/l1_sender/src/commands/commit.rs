@@ -81,7 +81,7 @@ impl SendToL1 for CommitCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::CommitL1Passthrough;
 
-    fn solidity_call(&self, _gateway: bool, _operator: &Address) -> Bytes {
+    fn solidity_call(&self, _operator: &Address) -> Bytes {
         if let Some(signatures_set) = &self.signatures {
             let mut signatures = signatures_set.to_vec().clone();
             signatures.sort_by(|a, b| a.signer().cmp(b.signer()));

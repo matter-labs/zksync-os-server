@@ -45,7 +45,7 @@ pub struct Batcher<ReadState> {
     pub startup_config: BatcherStartupConfig,
     pub chain_id: u64,
     pub sl_chain_id: u64,
-    pub chain_address_sl: Address,
+    pub chain_address: Address,
     pub pubdata_limit_bytes: u64,
     pub batcher_config: BatcherConfig,
     pub pubdata_mode: PubdataMode,
@@ -335,7 +335,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         pubdata_mode: PubdataMode,
     ) -> anyhow::Result<BatchForSigning<ProverInput>> {
         let chain_id = self.chain_id;
-        let chain_address_sl = self.chain_address_sl;
+        let chain_address = self.chain_address;
         let sl_chain_id = self.sl_chain_id;
         let read_state = self.read_state.clone();
         let merkle_tree = self.merkle_tree.clone();
@@ -345,7 +345,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 prev_batch_info,
                 batch_number,
                 chain_id,
-                chain_address_sl,
+                chain_address,
                 pubdata_mode,
                 sl_chain_id,
                 &read_state,

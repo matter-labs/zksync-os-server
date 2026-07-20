@@ -29,7 +29,7 @@ type VerificationInput = TreeBlock;
 /// Batch verification responder that consumes requests from the network.
 pub struct BatchVerificationResponder<Finality, ReadState> {
     chain_id: u64,
-    diamond_proxy_sl: Address,
+    diamond_proxy: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
     // `Arc` so verification requests can hand the blocks to a blocking task without
@@ -59,7 +59,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: u64,
-        diamond_proxy_sl: Address,
+        diamond_proxy: Address,
         private_key: SecretString,
         finality: Finality,
         l1_state: L1State,
@@ -81,7 +81,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
 
         Self {
             chain_id,
-            diamond_proxy_sl,
+            diamond_proxy,
             l1_state,
             signer,
             block_cache: BlockCache::new(finality),
@@ -165,7 +165,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
                 request.pubdata_mode,
                 &protocol_version,
                 self.chain_id,
-                self.l1_state.sl_chain_id,
+                self.l1_state.l1_chain_id,
             )?
         } else {
             PendingBatchInfo::build(
@@ -182,7 +182,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
                 self.chain_id,
                 request.batch_number,
                 request.pubdata_mode,
-                self.l1_state.sl_chain_id,
+                self.l1_state.l1_chain_id,
                 multichain_root,
                 &protocol_version,
                 &last_replay_record.block_context.block_hashes.0,
@@ -200,9 +200,9 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
         let signature = BatchSignature::sign_batch(
             &request.prev_commit_data,
             &batch_info.commit_info,
-            self.diamond_proxy_sl,
-            self.l1_state.sl_chain_id,
-            self.l1_state.validator_timelock_sl,
+            self.diamond_proxy,
+            self.l1_state.l1_chain_id,
+            self.l1_state.validator_timelock,
             &blocks.first().unwrap().record.protocol_version,
             &self.signer,
         )
@@ -300,10 +300,8 @@ mod tests {
     use alloy::network::EthereumWallet;
     use alloy::primitives::{Address, B256, U256, address, keccak256};
     use alloy::providers::ProviderBuilder;
-    use alloy::rpc::json_rpc::ErrorPayload;
     use alloy::transports::mock::Asserter;
     use blake2::{Blake2s256, Digest};
-    use std::borrow::Cow;
     use std::collections::{BTreeMap, HashMap};
     use std::ops::RangeInclusive;
     use std::path::PathBuf;
@@ -313,7 +311,6 @@ mod tests {
     use zksync_os_batch_types::PendingBatchInfo;
     use zksync_os_batch_types::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
     use zksync_os_contract_interface::models::{BatchDaInputMode, StoredBatchInfo};
-    use zksync_os_contract_interface::settlement_layer_intervals::SettlementLayerIntervals;
     use zksync_os_contract_interface::{Bridgehub, ZkChain};
     use zksync_os_genesis::{FileGenesisInputSource, GenesisState, build_genesis};
     use zksync_os_interface::traits::{PreimageSource, ReadStorage};
@@ -725,51 +722,28 @@ mod tests {
             .connect_mocked_client(asserter.clone());
         let provider = NodeProvider::new(provider).await.unwrap();
 
-        asserter.push_failure(ErrorPayload {
-            code: -32601,
-            message: Cow::Borrowed("method missing"),
-            data: None,
-        });
-
         let diamond_proxy_l1 = ZkChain::new(
             address!("0x00000000000000000000000000000000000000c1"),
             provider.clone(),
         );
-        let settlement_layer_intervals = SettlementLayerIntervals::discover(
-            address!("0x00000000000000000000000000000000000000b1"),
-            diamond_proxy_l1.clone(),
-            None,
-            CHAIN_ID,
-        )
-        .await
-        .unwrap();
 
         L1State {
             bridgehub_l1: Bridgehub::new(
                 address!("0x00000000000000000000000000000000000000a1"),
-                provider.clone(),
-                CHAIN_ID,
-            ),
-            bridgehub_sl: Bridgehub::new(
-                address!("0x00000000000000000000000000000000000000a2"),
-                provider.clone(),
+                provider,
                 CHAIN_ID,
             ),
             diamond_proxy_l1,
-            diamond_proxy_sl: ZkChain::new(DIAMOND_PROXY_SL, provider),
-            validator_timelock_sl: VALIDATOR_TIMELOCK,
+            validator_timelock: VALIDATOR_TIMELOCK,
             batch_verification: BatchVerificationSL::Disabled,
             last_committed_batch: 0,
             last_proved_batch: 0,
             last_executed_batch: 0,
             last_finalized_executed_batch: 0,
-            sl_block_number: 0,
-            finalized_sl_block_number: 0,
+            l1_block_number: 0,
+            finalized_l1_block_number: 0,
             da_input_mode: BatchDaInputMode::Rollup,
-            l1_chain_id: 1,
-            sl_chain_id: SL_CHAIN_ID,
-            settlement_layer_address: Address::ZERO,
-            settlement_layer_intervals,
+            l1_chain_id: SL_CHAIN_ID,
         }
     }
 
