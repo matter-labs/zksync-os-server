@@ -156,6 +156,11 @@ impl Genesis {
         }
     }
 
+    /// Cheap accessor: `chain_id` is known upfront and doesn't require building genesis state.
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
     pub async fn state(&self) -> &GenesisState {
         let protocol_version = &self.genesis_upgrade_tx().await.protocol_version;
         self.state

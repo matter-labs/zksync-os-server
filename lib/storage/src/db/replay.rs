@@ -115,7 +115,7 @@ impl BlockReplayStorage {
 
         let this = Self {
             db,
-            chain_id: genesis.state().await.context.chain_id,
+            chain_id: genesis.chain_id(),
         };
         let inserted_genesis = if this.latest_record_checked().is_none() {
             let genesis_tx = genesis.genesis_upgrade_tx().await;
@@ -720,8 +720,8 @@ pub struct StorageForcePreimages {
 
 /// [`BlockContext`] as persisted in the `ContextV2` CF: without the 256 previous block hashes
 /// (derivable from the `CanonicalHash` CF, ~8 KiB per block; see
-/// [`BlockReplayStorage::read_block_hashes`]) and without the chain id (shared by all blocks,
-/// stored once in the `Meta` CF).
+/// [`BlockReplayStorage::read_block_hashes`]) and without the chain id (shared by all blocks, not
+/// persisted at all — supplied by [`BlockReplayStorage`]'s in-memory `chain_id` field on read).
 ///
 /// The exhaustive destructuring in the conversions below keeps this struct in sync with
 /// [`BlockContext`]: a field added there fails compilation here, prompting a decision on whether
