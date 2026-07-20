@@ -11,6 +11,9 @@ use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 
+/// Default number of archive objects fetched concurrently during download.
+pub const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 32;
+
 /// Downloads every archive object into a local layout grouped by block number and block hash.
 ///
 /// The output layout is:
@@ -21,27 +24,9 @@ use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 ///
 /// Objects already present under `output_root` are skipped without re-downloading, so an
 /// interrupted download can be restarted with the same arguments.
+///
+/// `download_concurrency` bounds how many objects are fetched from the archive at once.
 pub async fn download_all_replay_archive_objects<Reader>(
-    reader: &Reader,
-    output_root: &Path,
-) -> anyhow::Result<usize>
-where
-    Reader: ReplayArchiveStorageReader + Sync,
-{
-    download_all_replay_archive_objects_with_concurrency(
-        reader,
-        output_root,
-        DEFAULT_DOWNLOAD_CONCURRENCY,
-    )
-    .await
-}
-
-/// Default number of archive objects fetched concurrently during download.
-pub const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 32;
-
-/// Same as [`download_all_replay_archive_objects`] with an explicit bound on the number of
-/// objects fetched from the archive concurrently.
-pub async fn download_all_replay_archive_objects_with_concurrency<Reader>(
     reader: &Reader,
     output_root: &Path,
     download_concurrency: usize,
@@ -634,15 +619,23 @@ mod tests {
             .unwrap();
 
         let reader = FileSystemReplayArchiveReader::new(archive_root.path().to_path_buf());
-        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
-            .await
-            .unwrap();
+        let downloaded = download_all_replay_archive_objects(
+            &reader,
+            output_root.path(),
+            DEFAULT_DOWNLOAD_CONCURRENCY,
+        )
+        .await
+        .unwrap();
         assert_eq!(downloaded, 2);
 
         // A fully downloaded tree is a no-op to re-download.
-        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
-            .await
-            .unwrap();
+        let downloaded = download_all_replay_archive_objects(
+            &reader,
+            output_root.path(),
+            DEFAULT_DOWNLOAD_CONCURRENCY,
+        )
+        .await
+        .unwrap();
         assert_eq!(downloaded, 0);
 
         // Simulate an interrupted download: one object exists only as a truncated
@@ -655,9 +648,13 @@ mod tests {
         tokio::fs::remove_file(&record_path).await.unwrap();
         tokio::fs::write(&partial_path, b"sec").await.unwrap();
 
-        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
-            .await
-            .unwrap();
+        let downloaded = download_all_replay_archive_objects(
+            &reader,
+            output_root.path(),
+            DEFAULT_DOWNLOAD_CONCURRENCY,
+        )
+        .await
+        .unwrap();
         assert_eq!(downloaded, 1);
         assert_eq!(tokio::fs::read(&record_path).await.unwrap(), b"second");
         assert!(!tokio::fs::try_exists(partial_path).await.unwrap());

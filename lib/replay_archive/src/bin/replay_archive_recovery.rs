@@ -4,8 +4,8 @@ use zksync_os_replay_archive::{
     ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity,
     GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
     S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader,
-    download_all_replay_archive_objects_with_concurrency, parse_age_x25519_identity,
-    read_age_x25519_identity, recover_replay_records_to_rocksdb_with_optional_decryption,
+    download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
+    recover_replay_records_to_rocksdb_with_optional_decryption,
 };
 
 #[derive(Debug, Parser)]
@@ -83,11 +83,8 @@ enum Command {
             conflicts_with_all = ["identity_file", "kms_key_version"]
         )]
         age_secret_key: Option<String>,
-        /// GCP KMS key version resource name
-        /// (`projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..`).
-        /// If provided, records are decrypted in memory. Each record decode costs one KMS
-        /// asymmetric decrypt call; records are decoded during the chain walk and again when
-        /// writing to RocksDB.
+        /// KMS key version (`projects/../cryptoKeyVersions/..`). If set, records are decrypted in
+        /// memory, costing one KMS asymmetric-decrypt call per record decode.
         #[arg(long, conflicts_with_all = ["identity_file", "age_secret_key"])]
         kms_key_version: Option<String>,
         /// Number of replay records decoded concurrently. With KMS decryption every record decode
@@ -123,12 +120,8 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let downloaded = if let Some(archive_root) = archive_root {
                 let reader = FileSystemReplayArchiveReader::new(archive_root);
-                download_all_replay_archive_objects_with_concurrency(
-                    &reader,
-                    &output_root,
-                    download_concurrency,
-                )
-                .await?
+                download_all_replay_archive_objects(&reader, &output_root, download_concurrency)
+                    .await?
             } else if let Some(gcs_bucket_base_url) = gcs_bucket_base_url {
                 let reader = GcsReplayArchiveReader::new(GcsReplayArchiveConfig {
                     bucket_base_url: gcs_bucket_base_url,
@@ -139,12 +132,8 @@ async fn main() -> anyhow::Result<()> {
                     },
                 })
                 .await?;
-                download_all_replay_archive_objects_with_concurrency(
-                    &reader,
-                    &output_root,
-                    download_concurrency,
-                )
-                .await?
+                download_all_replay_archive_objects(&reader, &output_root, download_concurrency)
+                    .await?
             } else {
                 let auth_mode = if let Some(path) = s3_credential_file_path {
                     S3ReplayArchiveAuthMode::AuthenticatedWithCredentialFile(path)
@@ -163,12 +152,8 @@ async fn main() -> anyhow::Result<()> {
                     region: s3_region,
                 })
                 .await;
-                download_all_replay_archive_objects_with_concurrency(
-                    &reader,
-                    &output_root,
-                    download_concurrency,
-                )
-                .await?
+                download_all_replay_archive_objects(&reader, &output_root, download_concurrency)
+                    .await?
             };
             println!("Downloaded {downloaded} replay archive objects");
         }

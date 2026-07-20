@@ -46,10 +46,9 @@ impl GcsReplayArchiveConfig {
     }
 }
 
-/// The two GCS clients used by this backend: `Storage` reads and writes object data over JSON;
-/// `StorageControl` performs metadata operations (existence checks, listing) over gRPC. Both
-/// retry transient errors internally, following the GCS retry guidance; writes are retried
-/// because the `if_generation_match` precondition makes them idempotent.
+/// The two GCS clients this backend uses: `Storage` reads/writes object data over JSON,
+/// `StorageControl` does metadata ops (existence checks, listing) over gRPC. Both retry transient
+/// errors internally; writes stay idempotent via the `if_generation_match` precondition.
 #[derive(Clone)]
 struct GcsClients {
     storage: Storage,

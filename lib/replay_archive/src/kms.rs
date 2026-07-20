@@ -56,10 +56,8 @@ fn kms_retry_policy() -> impl RetryPolicy {
 /// GCP KMS key configuration for replay archive encryption using Application Default Credentials.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcpKmsConfig {
-    /// Full key version resource name:
-    /// `projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..`.
-    /// The key must have purpose `ASYMMETRIC_DECRYPT` and an `RSA_DECRYPT_OAEP_*_SHA256`
-    /// algorithm.
+    /// Key version resource name (`projects/../cryptoKeyVersions/..`), purpose
+    /// `ASYMMETRIC_DECRYPT` with an `RSA_DECRYPT_OAEP_*_SHA256` algorithm.
     pub key_version: String,
 }
 
