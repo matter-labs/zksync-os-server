@@ -78,7 +78,7 @@ pub struct TxGasRateLimitConfig {
     pub gas_per_second: u64,
     /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`.
     pub max_credit_seconds: f64,
-    /// Hysteresis: credit required to reopen the gate, in seconds' worth of `gas_per_second`.
+    /// Credit required to reopen the gate, in seconds' worth of `gas_per_second`.
     pub reopen_credit_seconds: f64,
     /// Max remembered deficit, in seconds' worth of `gas_per_second`. `0` clamps the bank at zero.
     pub deficit_floor_seconds: f64,

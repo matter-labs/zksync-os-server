@@ -1121,14 +1121,8 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
     }
 }
 
-/// Rate limiter for incoming L2 transactions based on *executed* gas throughput.
-///
-/// Sealed blocks drain a shared "gas bank" by the gas they executed; wall-clock time
-/// refills it at `gas_per_second`. While the bank is exhausted, non-exempt submissions
-/// are rejected with `-32005` and a `retryAfterMs` hint.
-///
-/// Only effective on the main node: other roles forward txs to the main node, whose
-/// limiter is authoritative, so the section is ignored there with a warning.
+/// Rate limiter for incoming L2 transactions based on executed gas throughput.
+/// Only effective on the main node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(validate(
     Self::check_credit_windows,
@@ -1142,8 +1136,8 @@ pub struct TxGasRateLimitConfig {
     #[config(default_t = 2.0)]
     pub max_credit_seconds: f64,
 
-    /// Hysteresis: credit required to resume acceptance after the bank was exhausted,
-    /// in seconds' worth of `gas_per_second`.
+    /// Credit required to resume acceptance after the bank was exhausted, in seconds'
+    /// worth of `gas_per_second`.
     #[config(default_t = 1.0)]
     pub reopen_credit_seconds: f64,
 

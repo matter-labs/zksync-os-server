@@ -7,14 +7,11 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Rate limiter for incoming L2 transactions based on *executed* gas throughput.
+/// Rate limiter for incoming L2 transactions based on executed gas throughput.
 ///
 /// A shared "gas bank" is drained by each sealed block's executed gas and refilled by
 /// wall-clock time at `gas_per_second`. The gate closes when the bank is exhausted and
-/// reopens once it recovers `reopen_credit`, so acceptance flips in windows of seconds
-/// rather than per tx. Non-obvious properties:
-/// - Declared `gas_limit` is never consulted: draining the bank requires getting txs
-///   executed and paid for, so padding buys an attacker nothing.
+/// reopens once it recovers `reopen_credit`. Non-obvious properties:
 /// - The bank goes negative down to `-deficit_floor`: overshoot is repaid before
 ///   reopening, keeping the long-run executed average at `gas_per_second`.
 /// - The drain is block-granular; overshoot admitted within a block self-corrects via
@@ -24,7 +21,7 @@ pub struct TxGasRateLimiter {
     rate: f64,
     /// Bank capacity: idle burst headroom, gas.
     max_credit: f64,
-    /// Hysteresis: bank level required to reopen the gate, gas.
+    /// Bank level required to reopen the gate, gas.
     reopen_credit: f64,
     /// Lowest allowed bank level (`<= 0`): max remembered deficit, gas.
     floor: f64,
@@ -40,11 +37,6 @@ struct Bank {
 
 impl TxGasRateLimiter {
     pub fn new(config: &TxGasRateLimitConfig) -> Self {
-        // Guards the retry-after division; node-level config makes 0 unrepresentable.
-        assert!(
-            config.gas_per_second > 0,
-            "tx_gas_rate_limit.gas_per_second must be positive"
-        );
         let rate = config.gas_per_second as f64;
         let limiter = Self {
             rate,
@@ -83,9 +75,9 @@ impl TxGasRateLimiter {
             Ok(())
         } else {
             let base_secs = ((self.reopen_credit - bank.level) / self.rate).max(0.0);
-            // Capped at 1h: hints beyond that are useless, and the cap keeps
-            // `from_secs_f64` panic-free for any accepted config.
-            let secs = (base_secs * (1.0 + jitter() * 0.5)).min(3600.0);
+            // Misconfig guard to keep `from_secs_f64` panic-free (since `f64::min` discards
+            // NaN/inf in favor of the other operand).
+            let secs = (base_secs * (1.0 + jitter() * 0.5)).min(300.0);
             Err(Duration::from_secs_f64(secs))
         }
     }
@@ -99,8 +91,6 @@ impl TxGasRateLimiter {
         self.refill(&mut bank, now);
         bank.level = (bank.level - block_gas_used as f64).max(self.floor);
         self.update_gate(&mut bank);
-        // Block-granular is fresh enough for a scraped gauge; keeping the write out of
-        // `try_admit` keeps the admission critical section minimal.
         TX_GAS_RATE_LIMITER.bank_level_gas.set(bank.level as i64);
     }
 
@@ -131,11 +121,6 @@ impl TxGasRateLimiter {
     }
 }
 
-/// The broadcast channel behind the block stream holds 256 notifications, so a live
-/// consumer can never miss more than that; larger gaps can only come from prolonged
-/// stalls, where a repository fetch storm would hurt more than the lost drain.
-const MAX_BACKFILL_BLOCKS: u64 = 256;
-
 /// Drains the gas bank from the block stream.
 /// If the stream ends (shutdown), parks forever so the select exits via the shutdown arm.
 pub async fn run_drain<RpcStorage: ReadRpcStorage>(
@@ -154,55 +139,26 @@ pub async fn run_drain<RpcStorage: ReadRpcStorage>(
     let mut next_expected: Option<u64> = None;
     while let Some(notification) = blocks.next().await {
         let number = notification.block.header.number;
-        // The broadcast stream silently skips notifications when this consumer lags;
-        // backfill from the repository so missed blocks still drain the bank
-        // (otherwise the limiter fails open exactly when the node is busiest).
+        // The broadcast stream silently skips notifications when this consumer lags.
+        // Missed blocks' gas is simply not drained: a brief, self-correcting
+        // under-enforcement window, accepted as the cost of not fetching them back.
         if let Some(expected) = next_expected
             && expected < number
         {
-            if number - expected > MAX_BACKFILL_BLOCKS {
-                tracing::warn!(
-                    from = expected,
-                    to = number,
-                    "tx gas rate limiter: block gap too large to backfill, skipping"
-                );
-            } else {
-                for missed in expected..number {
-                    match storage.repository().get_block_by_number(missed) {
-                        Ok(Some(block)) => drain_block(
-                            &limiter,
-                            started_at,
-                            block.header.timestamp,
-                            block.header.gas_used,
-                        ),
-                        Ok(None) => {}
-                        Err(err) => tracing::warn!(
-                            %err,
-                            block = missed,
-                            "tx gas rate limiter: failed to backfill skipped block"
-                        ),
-                    }
-                }
-            }
+            tracing::warn!(
+                from = expected,
+                to = number,
+                "tx gas rate limiter: missed block notifications, bank under-drained for this gap"
+            );
         }
         next_expected = Some(number + 1);
 
-        drain_block(
-            &limiter,
-            started_at,
-            notification.block.header.timestamp,
-            notification.block.header.gas_used,
-        );
+        if notification.block.header.timestamp >= started_at {
+            limiter.on_block(notification.block.header.gas_used);
+        }
     }
     tracing::warn!("block stream ended; tx gas rate limiter will not drain anymore");
     std::future::pending::<()>().await
-}
-
-fn drain_block(limiter: &TxGasRateLimiter, started_at: u64, block_timestamp: u64, gas_used: u64) {
-    if block_timestamp < started_at {
-        return;
-    }
-    limiter.on_block(gas_used);
 }
 
 #[cfg(test)]
