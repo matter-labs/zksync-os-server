@@ -1,6 +1,5 @@
 use crate::{
-    ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveSession, ReplayArchiveStorageReader,
-    format_block_hash,
+    ReplayArchiveKey, ReplayArchiveKeyPage, ReplayArchiveStorageReader, format_block_hash,
 };
 use alloy::primitives::{BlockHash, BlockNumber};
 use anyhow::Context as _;
@@ -10,9 +9,7 @@ use std::str::FromStr as _;
 
 /// File-system implementation of [`ReplayArchiveStorageReader`].
 ///
-/// Lists both the current flat layout (`<root>/<block_number>/<block_hash>`) and the legacy
-/// session layout (`<root>/<session>/<block_number>/<block_hash>`): archive roots written
-/// before the flat layout hold session directories, and both can coexist during migration.
+/// Lists the flat layout (`<root>/<block_number>/<block_hash>`).
 #[derive(Debug, Clone)]
 pub struct FileSystemReplayArchiveReader {
     root_path: PathBuf,
@@ -28,18 +25,14 @@ impl FileSystemReplayArchiveReader {
     }
 
     fn object_path(&self, key: &ReplayArchiveKey) -> PathBuf {
-        let mut path = self.root_path.clone();
-        if let Some(session) = &key.session {
-            path = path.join(session.folder_name());
-        }
-        path.join(key.block_number.to_string())
+        self.root_path
+            .join(key.block_number.to_string())
             .join(format_block_hash(key.block_hash))
     }
 
     async fn list_block_dir_objects(
         &self,
         block_dir: &Path,
-        session: Option<&ReplayArchiveSession>,
         block_number: BlockNumber,
         keys: &mut Vec<ReplayArchiveKey>,
     ) -> anyhow::Result<()> {
@@ -73,11 +66,7 @@ impl FileSystemReplayArchiveReader {
                 }
                 continue;
             };
-            keys.push(ReplayArchiveKey {
-                session: session.cloned(),
-                block_number,
-                block_hash,
-            });
+            keys.push(ReplayArchiveKey::new(block_number, block_hash));
         }
         Ok(())
     }
@@ -118,47 +107,15 @@ impl ReplayArchiveStorageReader for FileSystemReplayArchiveReader {
                 continue;
             };
 
-            if let Ok(block_number) = dir_name.parse::<BlockNumber>() {
-                self.list_block_dir_objects(&root_entry.path(), None, block_number, &mut keys)
-                    .await?;
-                continue;
-            }
-
-            let Ok(session) = dir_name.parse::<ReplayArchiveSession>() else {
+            let Ok(block_number) = dir_name.parse::<BlockNumber>() else {
                 tracing::warn!(
                     path = %root_entry.path().display(),
-                    "Skipping replay archive root entry that is neither a block number nor a session"
+                    "Skipping replay archive root entry that is not a block number"
                 );
                 continue;
             };
-
-            let mut block_entries =
-                tokio::fs::read_dir(root_entry.path())
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to read replay archive session {}",
-                            root_entry.path().display()
-                        )
-                    })?;
-            while let Some(block_entry) = block_entries.next_entry().await.with_context(|| {
-                format!(
-                    "failed to read replay archive session entry {}",
-                    root_entry.path().display()
-                )
-            })? {
-                if !block_entry.file_type().await?.is_dir() {
-                    continue;
-                }
-                let block_number = parse_block_number_entry(&block_entry)?;
-                self.list_block_dir_objects(
-                    &block_entry.path(),
-                    Some(&session),
-                    block_number,
-                    &mut keys,
-                )
+            self.list_block_dir_objects(&root_entry.path(), block_number, &mut keys)
                 .await?;
-            }
         }
 
         Ok(ReplayArchiveKeyPage {
@@ -173,18 +130,4 @@ impl ReplayArchiveStorageReader for FileSystemReplayArchiveReader {
             .await
             .with_context(|| format!("failed to read replay archive object {}", path.display()))
     }
-}
-
-fn parse_block_number_entry(entry: &tokio::fs::DirEntry) -> anyhow::Result<BlockNumber> {
-    entry
-        .file_name()
-        .to_str()
-        .context("replay archive block number path is not valid UTF-8")?
-        .parse()
-        .with_context(|| {
-            format!(
-                "failed to parse replay archive block number {}",
-                entry.path().display()
-            )
-        })
 }

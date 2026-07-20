@@ -9,7 +9,7 @@ recovered from L1 committed batch range events once block replay records are ava
 
 ## Storage Layout
 
-All nodes and process restarts write to one shared namespace. New replay records use:
+All nodes and process restarts write to one shared namespace. Replay records use:
 
 ```text
 <block_number>/<block_hash>
@@ -22,14 +22,6 @@ For the filesystem backend, the full path is:
 ```
 
 S3 and GCS use the same `<block_number>/<block_hash>` value as the object key.
-
-Archives created before the shared layout used a session prefix:
-
-```text
-<timestamp_millis>-<node_id>/<block_number>/<block_hash>
-```
-
-Readers and recovery support both layouts so old and new objects can coexist during migration.
 
 The object value is the replay record payload only. There is no wrapper, batch number, block range,
 or extra archive metadata in the object body.
@@ -114,11 +106,11 @@ projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
 
 The node fetches the public key once at startup (requiring only
 `cloudkms.cryptoKeyVersions.viewPublicKey`) and wraps the per-record age file key locally with
-RSA-OAEP; no private key material exists outside KMS. During recovery, unwrapping the file key of
-a record copy takes one KMS `AsymmetricDecrypt` call (requiring
+RSA-OAEP; no private key material exists outside KMS. During recovery, unwrapping a record's file
+key takes one KMS `AsymmetricDecrypt` call (requiring
 `cloudkms.cryptoKeyVersions.useToDecrypt`), so key access can be revoked and audited. Recovery
-currently decodes each archived copy once during the canonical chain walk and again when writing
-to RocksDB, so budget roughly two `AsymmetricDecrypt` calls per stored record copy.
+currently decodes each archived record once during the canonical chain walk and again when writing
+to RocksDB, so budget roughly two `AsymmetricDecrypt` calls per stored record.
 Note that KMS-encrypted objects use a custom age stanza and can only be decrypted by the recovery
 tool, not by the stock `age` CLI.
 
@@ -153,10 +145,8 @@ Recovery has two steps.
 First, download all archive objects into a local recovery layout:
 
 ```text
-<output_root>/<block_number>/<block_hash>/<copy>
+<output_root>/<block_number>/<block_hash>
 ```
-
-For the shared layout, `<copy>` is named `record`. For a legacy object, it is the session name.
 
 Second, rebuild the node replay RocksDB from a canonical anchor:
 
@@ -176,9 +166,6 @@ provided. Decrypted replay records are not written to disk.
 The recovery logic starts from the anchor, reads the replay record for that block, extracts the
 previous block hash from the replay record, and walks backward until block `0`. It then writes the
 canonical chain into RocksDB from genesis upward using the node replay storage format.
-
-If several downloaded copies contain the same `(block_number, block_hash)`, recovery verifies that
-they agree before writing the record.
 
 ## CLI
 
@@ -241,9 +228,9 @@ cargo run -p zksync_os_replay_archive --bin replay_archive_recovery -- \
   --kms-key-version projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..
 ```
 
-KMS uses the same ADC configuration as GCS. Every record copy decode costs one KMS
+KMS uses the same ADC configuration as GCS. Every record decode costs one KMS
 `AsymmetricDecrypt` call, and recovery decodes records during the chain walk and again while
-writing to RocksDB (roughly two calls per stored record copy); `--decrypt-concurrency`
+writing to RocksDB (roughly two calls per stored record); `--decrypt-concurrency`
 (default 32) bounds the number of in-flight KMS requests.
 
 Rebuild replay RocksDB from an unencrypted archive:

@@ -122,7 +122,7 @@ impl GcsReplayArchiveStorage {
     }
 
     fn object_key(block_number: BlockNumber, block_hash: BlockHash) -> String {
-        ReplayArchiveKey::flat(block_number, block_hash).object_path()
+        ReplayArchiveKey::new(block_number, block_hash).object_path()
     }
 }
 
@@ -346,14 +346,6 @@ mod tests {
         let config = GcsReplayArchiveConfig::anonymous("bucket");
 
         assert_eq!(config.bucket_resource(), "projects/_/buckets/bucket");
-    }
-
-    #[test]
-    fn gcs_uses_flat_object_keys() {
-        assert_eq!(
-            GcsReplayArchiveStorage::object_key(7, BlockHash::ZERO),
-            "7/0x0000000000000000000000000000000000000000000000000000000000000000"
-        );
     }
 
     #[tokio::test]

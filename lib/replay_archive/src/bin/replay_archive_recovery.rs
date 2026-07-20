@@ -85,7 +85,7 @@ enum Command {
         age_secret_key: Option<String>,
         /// GCP KMS key version resource name
         /// (`projects/../locations/../keyRings/../cryptoKeys/../cryptoKeyVersions/..`).
-        /// If provided, records are decrypted in memory. Each record copy decode costs one KMS
+        /// If provided, records are decrypted in memory. Each record decode costs one KMS
         /// asymmetric decrypt call; records are decoded during the chain walk and again when
         /// writing to RocksDB.
         #[arg(long, conflicts_with_all = ["identity_file", "age_secret_key"])]

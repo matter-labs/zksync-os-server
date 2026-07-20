@@ -47,4 +47,3 @@ vise.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
-zksync_os_types.workspace = true

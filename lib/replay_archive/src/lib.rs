@@ -1,7 +1,6 @@
 use alloy::primitives::{BlockHash, BlockNumber};
 use async_trait::async_trait;
 use std::fmt;
-use std::str::FromStr;
 use std::sync::Arc;
 use zksync_os_storage_api::ReplayRecord;
 
@@ -57,121 +56,27 @@ pub const REPLAY_ARCHIVE_QUEUE_SIZE: usize = 128;
 ///
 /// Every node writes into the same flat namespace; conditional create-if-absent (GCS
 /// `if_generation_match(0)`, S3 `If-None-Match: *`) guarantees exactly one stored copy per block.
-///
-/// Archives written before the flat layout used `<timestamp_millis>-<node_id>/<block_number>/
-/// <block_hash>`; those session-prefixed keys are still parsed for recovery.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ReplayArchiveSession {
-    timestamp_millis: u64,
-    node_id: String,
-}
-
-impl ReplayArchiveSession {
-    pub fn new(
-        timestamp_millis: u64,
-        node_id: impl Into<String>,
-    ) -> Result<Self, InvalidReplayArchiveSession> {
-        let node_id = node_id.into();
-        validate_node_id(&node_id)?;
-        Ok(Self {
-            timestamp_millis,
-            node_id,
-        })
-    }
-
-    pub fn node_id(&self) -> &str {
-        &self.node_id
-    }
-
-    pub fn timestamp_millis(&self) -> u64 {
-        self.timestamp_millis
-    }
-
-    pub fn folder_name(&self) -> String {
-        format!("{}-{}", self.timestamp_millis, self.node_id)
-    }
-}
-
-impl fmt::Display for ReplayArchiveSession {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.folder_name())
-    }
-}
-
-impl FromStr for ReplayArchiveSession {
-    type Err = InvalidReplayArchiveSession;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (timestamp_millis, node_id) = value
-            .split_once('-')
-            .ok_or(InvalidReplayArchiveSession::MissingTimestamp)?;
-        let timestamp_millis = timestamp_millis
-            .parse()
-            .map_err(|_| InvalidReplayArchiveSession::InvalidTimestamp)?;
-        Self::new(timestamp_millis, node_id)
-    }
-}
-
-/// Local file name used for a flat-layout record copy in the recovery download tree, where
-/// legacy copies are named after their session. Cannot collide with a session name: sessions
-/// always start with `<timestamp_millis>-`.
-pub(crate) const FLAT_COPY_FILE_NAME: &str = "record";
-
 /// Full storage key for a single replay record object.
-///
-/// `session` is `None` for the current flat layout and `Some` for keys parsed out of legacy
-/// session-prefixed archives.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ReplayArchiveKey {
-    pub session: Option<ReplayArchiveSession>,
     pub block_number: BlockNumber,
     pub block_hash: BlockHash,
 }
 
 impl ReplayArchiveKey {
-    pub fn flat(block_number: BlockNumber, block_hash: BlockHash) -> Self {
+    pub fn new(block_number: BlockNumber, block_hash: BlockHash) -> Self {
         Self {
-            session: None,
-            block_number,
-            block_hash,
-        }
-    }
-
-    pub fn in_session(
-        session: ReplayArchiveSession,
-        block_number: BlockNumber,
-        block_hash: BlockHash,
-    ) -> Self {
-        Self {
-            session: Some(session),
             block_number,
             block_hash,
         }
     }
 
     pub fn object_path(&self) -> String {
-        match &self.session {
-            Some(session) => format!(
-                "{}/{}/{}",
-                session,
-                self.block_number,
-                format_block_hash(self.block_hash)
-            ),
-            None => format!(
-                "{}/{}",
-                self.block_number,
-                format_block_hash(self.block_hash)
-            ),
-        }
-    }
-
-    /// File name distinguishing this copy from other copies of the same block in the recovery
-    /// download tree.
-    pub(crate) fn copy_file_name(&self) -> String {
-        match &self.session {
-            Some(session) => session.folder_name(),
-            None => FLAT_COPY_FILE_NAME.to_owned(),
-        }
+        format!(
+            "{}/{}",
+            self.block_number,
+            format_block_hash(self.block_hash)
+        )
     }
 }
 
@@ -181,41 +86,14 @@ impl fmt::Display for ReplayArchiveKey {
     }
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum InvalidReplayArchiveSession {
-    #[error("replay archive node id cannot be empty")]
-    EmptyNodeId,
-    #[error("replay archive node id cannot contain path separators")]
-    NodeIdContainsPathSeparator,
-    #[error("replay archive session name must start with <timestamp_millis>-")]
-    MissingTimestamp,
-    #[error("replay archive session timestamp must be an unsigned integer")]
-    InvalidTimestamp,
-}
-
-fn validate_node_id(node_id: &str) -> Result<(), InvalidReplayArchiveSession> {
-    if node_id.is_empty() {
-        return Err(InvalidReplayArchiveSession::EmptyNodeId);
-    }
-    if node_id.contains('/') || node_id.contains('\\') {
-        return Err(InvalidReplayArchiveSession::NodeIdContainsPathSeparator);
-    }
-    Ok(())
-}
-
 fn format_block_hash(block_hash: BlockHash) -> String {
     alloy::hex::encode_prefixed(block_hash.0)
 }
 
-/// Marker object name written under `<session>/` by legacy archives; skipped when listing.
-pub(crate) const SESSION_MARKER_FILE_NAME: &str = ".session";
-
 /// Parses a flat object-store key back into a [`ReplayArchiveKey`].
 ///
-/// Both the current `<block_number>/<block_hash>` layout and the legacy
-/// `<session>/<block_number>/<block_hash>` layout are accepted. Legacy session markers and any
-/// key that matches neither layout (a shared bucket may hold foreign objects) are logged and
-/// skipped instead of failing the listing.
+/// Keys that do not match `<block_number>/<block_hash>` are logged and skipped instead of
+/// failing the listing because a shared bucket may hold foreign objects.
 pub(crate) fn parse_archive_object_key(object_key: &str) -> Option<ReplayArchiveKey> {
     let parts = object_key.split('/').collect::<Vec<_>>();
     let key = match parts.as_slice() {
@@ -224,28 +102,13 @@ pub(crate) fn parse_archive_object_key(object_key: &str) -> Option<ReplayArchive
             block_hash.parse::<BlockHash>(),
         ) {
             (Ok(block_number), Ok(block_hash)) => {
-                Some(ReplayArchiveKey::flat(block_number, block_hash))
+                Some(ReplayArchiveKey::new(block_number, block_hash))
             }
             _ => None,
         },
-        [session, block_number, block_hash] => {
-            if *block_hash == SESSION_MARKER_FILE_NAME {
-                return None;
-            }
-            match (
-                session.parse::<ReplayArchiveSession>(),
-                block_number.parse::<BlockNumber>(),
-                block_hash.parse::<BlockHash>(),
-            ) {
-                (Ok(session), Ok(block_number), Ok(block_hash)) => Some(
-                    ReplayArchiveKey::in_session(session, block_number, block_hash),
-                ),
-                _ => None,
-            }
-        }
         _ => None,
     };
-    if key.is_none() && !object_key.ends_with(&format!("/{SESSION_MARKER_FILE_NAME}")) {
+    if key.is_none() {
         tracing::warn!(
             object_key,
             "Skipping object key that is not a replay archive record"
@@ -366,90 +229,30 @@ mod tests {
     use zksync_os_storage_api::ReplayRecord;
 
     #[test]
-    fn session_roundtrips_with_hyphenated_node_id() {
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-
-        assert_eq!(session.folder_name(), "42-node-a");
-        assert_eq!(
-            "42-node-a".parse::<ReplayArchiveSession>().unwrap(),
-            session
-        );
-    }
-
-    #[test]
-    fn flat_key_uses_two_segment_layout() {
-        let key = ReplayArchiveKey::flat(7, B256::ZERO);
+    fn archive_key_roundtrips_flat_layout() {
+        let key = ReplayArchiveKey::new(7, B256::ZERO);
 
         assert_eq!(
             key.object_path(),
             "7/0x0000000000000000000000000000000000000000000000000000000000000000"
         );
-    }
-
-    #[test]
-    fn legacy_session_key_uses_three_segment_layout() {
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-        let key = ReplayArchiveKey::in_session(session, 7, B256::ZERO);
-
-        assert_eq!(
-            key.object_path(),
-            "42-node-a/7/0x0000000000000000000000000000000000000000000000000000000000000000"
-        );
-    }
-
-    #[test]
-    fn parses_flat_archive_object_key() {
-        let block_hash = B256::with_last_byte(1);
-        let object_key = format!("7/{}", format_block_hash(block_hash));
-
-        let parsed = parse_archive_object_key(&object_key).unwrap();
-
-        assert_eq!(parsed, ReplayArchiveKey::flat(7, block_hash));
-    }
-
-    #[test]
-    fn parses_legacy_session_archive_object_key() {
-        let block_hash = B256::with_last_byte(1);
-        let object_key = format!("42-node-a/7/{}", format_block_hash(block_hash));
-
-        let parsed = parse_archive_object_key(&object_key).unwrap();
-
-        assert_eq!(
-            parsed,
-            ReplayArchiveKey::in_session(
-                ReplayArchiveSession::new(42, "node-a").unwrap(),
-                7,
-                block_hash
-            )
-        );
-    }
-
-    #[test]
-    fn archive_object_key_parser_skips_session_marker_and_non_archive_keys() {
-        assert!(parse_archive_object_key("other/key").is_none());
-        assert!(parse_archive_object_key("42-node-a/.session").is_none());
+        assert_eq!(parse_archive_object_key(&key.object_path()), Some(key));
     }
 
     #[test]
     fn archive_object_key_parser_skips_foreign_keys() {
         // A shared bucket may hold unrelated objects; they must be skipped, not abort listing.
         assert!(parse_archive_object_key("logs/2026/app.txt").is_none());
+        assert!(
+            parse_archive_object_key(
+                "prefix/7/0x0000000000000000000000000000000000000000000000000000000000000001"
+            )
+            .is_none()
+        );
         assert!(parse_archive_object_key("42-node-a/7/not-a-hash").is_none());
         assert!(parse_archive_object_key("42-node-a/not-a-number/0x00").is_none());
         assert!(parse_archive_object_key("7/not-a-hash").is_none());
         assert!(parse_archive_object_key("single-segment").is_none());
-    }
-
-    #[tokio::test]
-    async fn filesystem_archive_init_is_idempotent() {
-        let tempdir = tempfile::tempdir().unwrap();
-
-        FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
-            .await
-            .unwrap();
-        FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
@@ -469,7 +272,7 @@ mod tests {
 
         let reader = FileSystemReplayArchiveReader::new(tempdir.path().to_path_buf());
         let stored = reader
-            .fetch_object(&ReplayArchiveKey::flat(7, block_hash))
+            .fetch_object(&ReplayArchiveKey::new(7, block_hash))
             .await
             .unwrap();
         assert!(stored == b"first payload" || stored == b"second payload");
@@ -493,32 +296,6 @@ mod tests {
         })
         .await
         .unwrap();
-    }
-
-    #[tokio::test]
-    async fn filesystem_archive_ensures_and_checks_presence() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let storage =
-            FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
-                .await
-                .unwrap();
-        let archive = FileSystemReplayArchiver::new(storage);
-        let block_hash = B256::with_last_byte(1);
-        let replay_record = test_replay_record(7);
-
-        assert!(!archive.contains_replay_record(7, block_hash).await.unwrap());
-
-        archive
-            .ensure_replay_record(block_hash, replay_record.clone())
-            .await
-            .unwrap();
-
-        assert!(archive.contains_replay_record(7, block_hash).await.unwrap());
-
-        archive
-            .ensure_replay_record(block_hash, replay_record)
-            .await
-            .unwrap();
     }
 
     #[tokio::test]
@@ -546,7 +323,7 @@ mod tests {
 
         let reader = FileSystemReplayArchiveReader::new(tempdir.path().to_path_buf());
         let stored = reader
-            .fetch_object(&ReplayArchiveKey::flat(7, block_hash))
+            .fetch_object(&ReplayArchiveKey::new(7, block_hash))
             .await
             .unwrap();
         let stored: ReplayRecord = serde_json::from_slice(&stored).unwrap();

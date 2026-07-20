@@ -16605,7 +16605,6 @@ dependencies = [
  "zksync_os_pipeline",
  "zksync_os_storage",
  "zksync_os_storage_api",
- "zksync_os_types",
 ]
 
 [[package]]

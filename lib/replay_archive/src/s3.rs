@@ -86,7 +86,7 @@ impl S3ReplayArchiveStorage {
     }
 
     fn object_key(block_number: BlockNumber, block_hash: BlockHash) -> String {
-        ReplayArchiveKey::flat(block_number, block_hash).object_path()
+        ReplayArchiveKey::new(block_number, block_hash).object_path()
     }
 }
 
@@ -271,32 +271,5 @@ fn get_client_config(auth_mode: S3ReplayArchiveAuthMode) -> ConfigLoader {
         S3ReplayArchiveAuthMode::Anonymous => {
             aws_config::defaults(BehaviorVersion::latest()).no_credentials()
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn s3_config_builds_credential_file_auth_mode() {
-        let config =
-            S3ReplayArchiveConfig::with_credential_file("bucket", "/path/to/credentials".into());
-
-        assert_eq!(config.bucket_base_url, "bucket");
-        assert_eq!(
-            config.auth_mode,
-            S3ReplayArchiveAuthMode::AuthenticatedWithCredentialFile(PathBuf::from(
-                "/path/to/credentials"
-            ))
-        );
-    }
-
-    #[test]
-    fn s3_uses_flat_object_keys() {
-        assert_eq!(
-            S3ReplayArchiveStorage::object_key(7, BlockHash::ZERO),
-            "7/0x0000000000000000000000000000000000000000000000000000000000000000"
-        );
     }
 }

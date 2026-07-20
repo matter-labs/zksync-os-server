@@ -1,7 +1,5 @@
 use crate::kms::GcpKmsIdentity;
-use crate::{
-    ReplayArchiveKey, ReplayArchiveSession, ReplayArchiveStorageReader, format_block_hash,
-};
+use crate::{ReplayArchiveKey, ReplayArchiveStorageReader, format_block_hash};
 use age_core::format::{FileKey, Stanza};
 use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context as _;
@@ -18,12 +16,8 @@ use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 /// The output layout is:
 ///
 /// ```text
-/// <output_root>/<block_number>/<block_hash>/<copy>
+/// <output_root>/<block_number>/<block_hash>
 /// ```
-///
-/// where `<copy>` is the legacy session name for session-prefixed keys and a fixed `record`
-/// name for flat-layout keys. This keeps all copies of the same replay record next to each
-/// other so they can be cross-checked.
 ///
 /// Objects already present under `output_root` are skipped without re-downloading, so an
 /// interrupted download can be restarted with the same arguments.
@@ -108,9 +102,8 @@ where
 /// Rebuilds node replay RocksDB from downloaded plaintext replay records.
 ///
 /// Starting from `anchor_block_number` and `anchor_block_hash`, this walks backwards through the
-/// previous block hash recorded inside every replay record, verifies that all session copies for
-/// the same `(block_number, block_hash)` are equal, and writes the recovered canonical chain into
-/// `replay_db_path` using the node replay storage format.
+/// previous block hash recorded inside every replay record and writes the recovered canonical
+/// chain into `replay_db_path` using the node replay storage format.
 pub async fn recover_replay_records_to_rocksdb(
     input_root: &Path,
     replay_db_path: &Path,
@@ -323,9 +316,8 @@ fn log_recovery_progress(count: usize, log: impl FnOnce()) {
 
 /// Scans an existing download output root for already-downloaded objects.
 ///
-/// Entries that do not parse as `<block_number>/<block_hash>/<session>` are ignored,
-/// including `.partial` files left behind by an interrupted write: they get re-downloaded
-/// and overwritten.
+/// Entries that do not parse as `<block_number>/<block_hash>` are ignored, including `.partial`
+/// files left behind by an interrupted write: they get re-downloaded and overwritten.
 async fn scan_existing_downloaded_objects(
     output_root: &Path,
 ) -> anyhow::Result<HashSet<ReplayArchiveKey>> {
@@ -361,35 +353,10 @@ async fn scan_existing_downloaded_objects(
             else {
                 continue;
             };
-            if !hash_entry.file_type().await?.is_dir() {
+            if !hash_entry.file_type().await?.is_file() {
                 continue;
             }
-
-            let mut copy_entries = tokio::fs::read_dir(hash_entry.path()).await?;
-            while let Some(copy_entry) = copy_entries.next_entry().await? {
-                let file_name = copy_entry.file_name();
-                let file_name = file_name.to_string_lossy();
-                // Session node ids may contain dots, so a `.partial` leftover would parse
-                // as a session; exclude it explicitly.
-                if file_name.ends_with(".partial") {
-                    continue;
-                }
-                let session = if file_name == crate::FLAT_COPY_FILE_NAME {
-                    None
-                } else if let Ok(session) = file_name.parse::<ReplayArchiveSession>() {
-                    Some(session)
-                } else {
-                    continue;
-                };
-                if !copy_entry.file_type().await?.is_file() {
-                    continue;
-                }
-                existing.insert(ReplayArchiveKey {
-                    session,
-                    block_number,
-                    block_hash,
-                });
-            }
+            existing.insert(ReplayArchiveKey::new(block_number, block_hash));
         }
     }
 
@@ -403,8 +370,7 @@ async fn write_downloaded_object(
 ) -> anyhow::Result<()> {
     let output_path = output_root
         .join(key.block_number.to_string())
-        .join(format_block_hash(key.block_hash))
-        .join(key.copy_file_name());
+        .join(format_block_hash(key.block_hash));
 
     let parent = output_path
         .parent()
@@ -419,7 +385,7 @@ async fn write_downloaded_object(
     // Write to a temporary name and rename so that an object file only exists under its
     // final name once fully written; interrupted downloads leave `.partial` files that the
     // resume scan ignores and the next attempt overwrites.
-    let partial_path = output_path.with_file_name(format!("{}.partial", key.copy_file_name()));
+    let partial_path = output_path.with_extension("partial");
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -487,7 +453,7 @@ async fn read_candidate_records(
                 entry.path().display()
             )
         })?;
-        if !file_type.is_dir() {
+        if !file_type.is_file() {
             continue;
         }
         let file_name = entry.file_name();
@@ -495,10 +461,12 @@ async fn read_candidate_records(
             .to_str()
             .and_then(|name| name.parse::<BlockHash>().ok())
         else {
-            tracing::warn!(
-                path = %entry.path().display(),
-                "Skipping replay archive directory entry that is not a block hash"
-            );
+            if !file_name.to_string_lossy().ends_with(".partial") {
+                tracing::warn!(
+                    path = %entry.path().display(),
+                    "Skipping replay archive entry that is not a block hash"
+                );
+            }
             continue;
         };
         let record =
@@ -518,71 +486,20 @@ async fn read_verified_replay_record(
     block_hash: BlockHash,
     decoder: &Arc<ReplayRecordDecoder>,
 ) -> anyhow::Result<ReplayRecord> {
-    let replay_record_dir = input_root
+    let replay_record_path = input_root
         .join(block_number.to_string())
         .join(format_block_hash(block_hash));
-    let mut entries = tokio::fs::read_dir(&replay_record_dir)
+    let record_bytes = tokio::fs::read(&replay_record_path)
         .await
         .with_context(|| {
             format!(
-                "missing replay archive records for block #{block_number}, {block_hash} at {}",
-                replay_record_dir.display()
+                "missing replay archive record for block #{block_number}, {block_hash} at {}",
+                replay_record_path.display()
             )
         })?;
-
-    let mut canonical_record: Option<ReplayRecord> = None;
-    let mut canonical_path: Option<PathBuf> = None;
-    let mut records_count = 0;
-    while let Some(entry) = entries.next_entry().await.with_context(|| {
-        format!(
-            "failed to read replay archive records directory {}",
-            replay_record_dir.display()
-        )
-    })? {
-        let file_type = entry.file_type().await.with_context(|| {
-            format!(
-                "failed to read replay archive record file type {}",
-                entry.path().display()
-            )
-        })?;
-        if !file_type.is_file() {
-            continue;
-        }
-        // Session node ids may contain dots, so a `.partial` leftover from an interrupted
-        // download would parse as a session copy; exclude it explicitly (mirrors
-        // `scan_existing_downloaded_objects`).
-        if entry.file_name().to_string_lossy().ends_with(".partial") {
-            continue;
-        }
-
-        let record_bytes = tokio::fs::read(entry.path()).await.with_context(|| {
-            format!(
-                "failed to read replay archive record file {}",
-                entry.path().display()
-            )
-        })?;
-        let record = decoder
-            .decode_off_thread(record_bytes, entry.path())
-            .await?;
-        if let Some(canonical_record) = &canonical_record {
-            anyhow::ensure!(
-                canonical_record == &record,
-                "Replay archive record differs between sessions for block #{block_number}, {block_hash}. Paths: {}, {}",
-                entry.path().display(),
-                canonical_path.unwrap().display(),
-            );
-        } else {
-            canonical_record = Some(record);
-            canonical_path = Some(entry.path());
-        }
-        records_count += 1;
-    }
-
-    anyhow::ensure!(
-        records_count > 0,
-        "no replay archive record files found for block #{block_number}, {block_hash}"
-    );
-    canonical_record.context("replay archive record count was non-zero but no record was loaded")
+    decoder
+        .decode_off_thread(record_bytes, replay_record_path)
+        .await
 }
 
 /// age identity used for replay archive record decryption.
@@ -684,68 +601,6 @@ mod tests {
     use zksync_os_storage_api::ReadReplay;
 
     #[tokio::test]
-    async fn filesystem_reader_downloads_both_layouts_grouped_by_block_and_hash() {
-        let archive_root = tempfile::tempdir().unwrap();
-        let output_root = tempfile::tempdir().unwrap();
-        let block_hash = B256::with_last_byte(1);
-
-        // A copy in the legacy session-prefixed layout, as written by an old node version.
-        let legacy_path = archive_root
-            .path()
-            .join("42-node-a")
-            .join("7")
-            .join(crate::format_block_hash(block_hash));
-        tokio::fs::create_dir_all(legacy_path.parent().unwrap())
-            .await
-            .unwrap();
-        tokio::fs::write(&legacy_path, b"legacy").await.unwrap();
-
-        // A flat-layout copy written through the current storage API.
-        let storage = FileSystemReplayArchiveStorage::init(
-            archive_root.path().to_path_buf(),
-            "node-b".to_owned(),
-        )
-        .await
-        .unwrap();
-        storage
-            .put_object_if_absent(7, block_hash, b"flat".to_vec())
-            .await
-            .unwrap();
-
-        let reader = FileSystemReplayArchiveReader::new(archive_root.path().to_path_buf());
-        let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
-            .await
-            .unwrap();
-
-        assert_eq!(downloaded, 2);
-        let block_hash = crate::format_block_hash(block_hash);
-        assert_eq!(
-            tokio::fs::read(
-                output_root
-                    .path()
-                    .join("7")
-                    .join(&block_hash)
-                    .join("42-node-a")
-            )
-            .await
-            .unwrap(),
-            b"legacy"
-        );
-        assert_eq!(
-            tokio::fs::read(
-                output_root
-                    .path()
-                    .join("7")
-                    .join(&block_hash)
-                    .join(crate::FLAT_COPY_FILE_NAME)
-            )
-            .await
-            .unwrap(),
-            b"flat"
-        );
-    }
-
-    #[tokio::test]
     async fn restarted_download_skips_complete_objects_and_redownloads_partial_ones() {
         let archive_root = tempfile::tempdir().unwrap();
         let output_root = tempfile::tempdir().unwrap();
@@ -780,37 +635,20 @@ mod tests {
 
         // Simulate an interrupted download: one object exists only as a truncated
         // `.partial` leftover. It must be re-downloaded, not treated as complete.
-        let hash_dir = output_root
+        let record_path = output_root
             .path()
             .join("8")
             .join(crate::format_block_hash(block_hash));
-        tokio::fs::remove_file(hash_dir.join(crate::FLAT_COPY_FILE_NAME))
-            .await
-            .unwrap();
-        tokio::fs::write(
-            hash_dir.join(format!("{}.partial", crate::FLAT_COPY_FILE_NAME)),
-            b"sec",
-        )
-        .await
-        .unwrap();
+        let partial_path = record_path.with_extension("partial");
+        tokio::fs::remove_file(&record_path).await.unwrap();
+        tokio::fs::write(&partial_path, b"sec").await.unwrap();
 
         let downloaded = download_all_replay_archive_objects(&reader, output_root.path())
             .await
             .unwrap();
         assert_eq!(downloaded, 1);
-        assert_eq!(
-            tokio::fs::read(hash_dir.join(crate::FLAT_COPY_FILE_NAME))
-                .await
-                .unwrap(),
-            b"second"
-        );
-        assert!(
-            !tokio::fs::try_exists(
-                hash_dir.join(format!("{}.partial", crate::FLAT_COPY_FILE_NAME))
-            )
-            .await
-            .unwrap()
-        );
+        assert_eq!(tokio::fs::read(&record_path).await.unwrap(), b"second");
+        assert!(!tokio::fs::try_exists(partial_path).await.unwrap());
     }
 
     #[tokio::test]
@@ -822,30 +660,8 @@ mod tests {
         let genesis_record = test_replay_record(0, B256::ZERO);
         let block_record = test_replay_record(1, genesis_hash);
 
-        write_downloaded_replay_record(
-            input_root.path(),
-            0,
-            genesis_hash,
-            "42-node-a",
-            &genesis_record,
-        )
-        .await;
-        write_downloaded_replay_record(
-            input_root.path(),
-            1,
-            block_hash,
-            "42-node-a",
-            &block_record,
-        )
-        .await;
-        write_downloaded_replay_record(
-            input_root.path(),
-            1,
-            block_hash,
-            "43-node-b",
-            &block_record,
-        )
-        .await;
+        write_downloaded_replay_record(input_root.path(), 0, genesis_hash, &genesis_record).await;
+        write_downloaded_replay_record(input_root.path(), 1, block_hash, &block_record).await;
 
         let recovered =
             recover_replay_records_to_rocksdb(input_root.path(), replay_db.path(), 1, block_hash)
@@ -875,7 +691,6 @@ mod tests {
             input_root.path(),
             0,
             genesis_hash,
-            "42-node-a",
             &genesis_record,
             &recipient,
         )
@@ -884,7 +699,6 @@ mod tests {
             input_root.path(),
             1,
             block_hash,
-            "42-node-a",
             &block_record,
             &recipient,
         )
@@ -921,16 +735,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recover_records_ignores_non_block_hash_directories() {
+    async fn recover_records_ignores_non_block_hash_entries() {
         let input_root = tempfile::tempdir().unwrap();
         let replay_db = tempfile::tempdir().unwrap();
         let block_hash = B256::with_last_byte(1);
         let record = test_replay_record(0, B256::ZERO);
 
-        write_downloaded_replay_record(input_root.path(), 0, block_hash, "42-node-a", &record)
-            .await;
-        // A stray directory next to the block hash directories (e.g. `lost+found` or a
-        // user-created backup) must not abort recovery.
+        write_downloaded_replay_record(input_root.path(), 0, block_hash, &record).await;
+        // A stray directory next to the block hash files must not abort recovery.
         tokio::fs::create_dir(input_root.path().join("0").join("backup"))
             .await
             .unwrap();
@@ -951,15 +763,13 @@ mod tests {
         let reorged_out_hash = B256::with_last_byte(2);
         let record = test_replay_record(0, B256::ZERO);
 
-        write_downloaded_replay_record(input_root.path(), 0, canonical_hash, "42-node-a", &record)
-            .await;
+        write_downloaded_replay_record(input_root.path(), 0, canonical_hash, &record).await;
         // A record from a reorged-out block that cannot be decoded must not abort recovery
         // of the intact canonical chain.
         let reorged_out_path = input_root
             .path()
             .join("0")
-            .join(format_block_hash(reorged_out_hash))
-            .join("42-node-a");
+            .join(format_block_hash(reorged_out_hash));
         tokio::fs::create_dir_all(reorged_out_path.parent().unwrap())
             .await
             .unwrap();
@@ -986,20 +796,14 @@ mod tests {
         let block_hash = B256::with_last_byte(1);
         let record = test_replay_record(0, B256::ZERO);
 
-        write_downloaded_replay_record(input_root.path(), 0, block_hash, "42-node-a", &record)
-            .await;
-        // A truncated `.partial` file left by an interrupted download must not be decoded
-        // as a session copy.
-        tokio::fs::write(
-            input_root
-                .path()
-                .join("0")
-                .join(format_block_hash(block_hash))
-                .join("42-node-a.partial"),
-            b"trunc",
-        )
-        .await
-        .unwrap();
+        write_downloaded_replay_record(input_root.path(), 0, block_hash, &record).await;
+        // A truncated `.partial` file left by an interrupted download must not be decoded.
+        let partial_path = input_root
+            .path()
+            .join("0")
+            .join(format_block_hash(B256::with_last_byte(2)))
+            .with_extension("partial");
+        tokio::fs::write(partial_path, b"trunc").await.unwrap();
 
         let recovered =
             recover_replay_records_to_rocksdb(input_root.path(), replay_db.path(), 0, block_hash)
@@ -1007,79 +811,17 @@ mod tests {
                 .unwrap();
 
         assert_eq!(recovered, 1);
-    }
-
-    #[tokio::test]
-    async fn recover_records_round_trips_system_transactions() {
-        let input_root = tempfile::tempdir().unwrap();
-        let replay_db = tempfile::tempdir().unwrap();
-        let block_hash = B256::with_last_byte(1);
-        let mut record = test_replay_record(0, B256::ZERO);
-        // System transactions have custom JSON serialization; a record containing one must
-        // survive the archive's JSON round-trip.
-        record.transactions =
-            vec![zksync_os_types::SystemTxEnvelope::set_sl_chain_id(11155111, 0).into()];
-
-        write_downloaded_replay_record(input_root.path(), 0, block_hash, "42-node-a", &record)
-            .await;
-
-        let recovered =
-            recover_replay_records_to_rocksdb(input_root.path(), replay_db.path(), 0, block_hash)
-                .await
-                .unwrap();
-
-        let replay_storage = BlockReplayStorage::new_without_genesis(replay_db.path());
-        assert_eq!(recovered, 1);
-        assert_eq!(replay_storage.get_replay_record(0).unwrap(), record);
-    }
-
-    #[tokio::test]
-    async fn recover_records_rejects_different_session_copies() {
-        let input_root = tempfile::tempdir().unwrap();
-        let replay_db = tempfile::tempdir().unwrap();
-        let block_hash = B256::with_last_byte(1);
-        let record = test_replay_record(0, B256::ZERO);
-        let mut different_record = record.clone();
-        different_record.block_output_hash = B256::with_last_byte(2);
-
-        write_downloaded_replay_record(input_root.path(), 0, block_hash, "42-node-a", &record)
-            .await;
-        write_downloaded_replay_record(
-            input_root.path(),
-            0,
-            block_hash,
-            "43-node-b",
-            &different_record,
-        )
-        .await;
-
-        let err =
-            recover_replay_records_to_rocksdb(input_root.path(), replay_db.path(), 0, block_hash)
-                .await
-                .unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("failed to recover replay record #0"),
-            "{err:#}"
-        );
-        assert!(
-            format!("{err:#}").contains("differs between sessions"),
-            "{err:#}"
-        );
     }
 
     async fn write_downloaded_replay_record(
         input_root: &Path,
         block_number: BlockNumber,
         block_hash: BlockHash,
-        session: &str,
         record: &ReplayRecord,
     ) {
         let path = input_root
             .join(block_number.to_string())
-            .join(format_block_hash(block_hash))
-            .join(session);
+            .join(format_block_hash(block_hash));
         tokio::fs::create_dir_all(path.parent().unwrap())
             .await
             .unwrap();
@@ -1092,14 +834,12 @@ mod tests {
         input_root: &Path,
         block_number: BlockNumber,
         block_hash: BlockHash,
-        session: &str,
         record: &ReplayRecord,
         recipient: &age::x25519::Recipient,
     ) {
         let path = input_root
             .join(block_number.to_string())
-            .join(format_block_hash(block_hash))
-            .join(session);
+            .join(format_block_hash(block_hash));
         tokio::fs::create_dir_all(path.parent().unwrap())
             .await
             .unwrap();
