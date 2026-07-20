@@ -98,12 +98,11 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         }
 
         // Before the policy simulation so a flood rejection costs only decode + ecrecover.
-        if let Some(gas_rate_limiter) = &self.gas_rate_limiter {
-            if gas_rate_limiter.is_exempt(&l2_tx.signer()) {
-                gas_rate_limiter.note_exempt_admission();
-            } else if let Err(retry_after) = gas_rate_limiter.try_admit() {
-                return Err(EthSendRawTransactionError::GasRateLimited { retry_after });
-            }
+        if let Some(gas_rate_limiter) = &self.gas_rate_limiter
+            && !gas_rate_limiter.is_exempt(&l2_tx.signer())
+            && let Err(retry_after) = gas_rate_limiter.try_admit()
+        {
+            return Err(EthSendRawTransactionError::GasRateLimited { retry_after });
         }
 
         if let Some(policy_client) = &self.policy_client {

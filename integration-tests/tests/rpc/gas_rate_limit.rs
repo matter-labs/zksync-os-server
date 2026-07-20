@@ -12,6 +12,7 @@ use tokio::time::{Instant, sleep, timeout};
 use zksync_os_integration_tests::CURRENT_TO_L1;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
+use zksync_os_server::config::TxGasRateLimitConfig;
 
 /// EIP-1474 "Limit exceeded", returned when the executed-gas rate limiter's bank is exhausted.
 const RATE_LIMIT_ERROR_CODE: i64 = -32005;
@@ -94,9 +95,13 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
 
     let env = CURRENT_TO_L1.environment().await?;
     let mut config = env.default_config().await?;
-    config.rpc_config.tx_gas_rate_limit.gas_per_second = NonZeroU64::new(GAS_PER_SECOND);
-    config.rpc_config.tx_gas_rate_limit.max_credit_seconds = MAX_CREDIT_SECONDS;
-    config.rpc_config.tx_gas_rate_limit.exempt_senders = [rich].into_iter().collect();
+    config.rpc_config.tx_gas_rate_limit = Some(TxGasRateLimitConfig {
+        gas_per_second: NonZeroU64::new(GAS_PER_SECOND).unwrap(),
+        max_credit_seconds: MAX_CREDIT_SECONDS,
+        reopen_credit_seconds: 1.0,
+        deficit_floor_seconds: 2.0,
+        exempt_senders: [rich].into_iter().collect(),
+    });
     let mut tester = env.launch(config).await?;
     tester
         .l2_provider

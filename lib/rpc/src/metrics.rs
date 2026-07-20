@@ -142,11 +142,6 @@ pub struct TxGasRateLimiterMetrics {
     pub gate_open: Gauge<u64>,
     /// Number of times the gate closed.
     pub gate_closes: Counter,
-    /// Transactions from exempt senders admitted while the gate was closed.
-    pub exempt_admitted_while_closed: Counter,
-    /// `gas_limit - gas_used` of executed L2 transactions: how much users over-declare.
-    #[metrics(buckets = GAS_BUCKETS)]
-    pub gas_padding: Histogram<u64>,
 }
 
 #[vise::register]

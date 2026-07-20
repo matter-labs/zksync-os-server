@@ -6,7 +6,6 @@ use futures::StreamExt;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use zksync_os_types::ZkEnvelope;
 
 /// Rate limiter for incoming L2 transactions based on *executed* gas throughput.
 ///
@@ -68,17 +67,6 @@ impl TxGasRateLimiter {
 
     pub fn is_exempt(&self, sender: &Address) -> bool {
         self.exempt_senders.contains(sender)
-    }
-
-    pub fn note_exempt_admission(&self) {
-        let mut bank = self.bank.lock().unwrap();
-        // Refresh first: after an idle stretch the gate may already be reopenable,
-        // and counting against the stale state would overstate closed time.
-        self.refill(&mut bank, Instant::now());
-        self.update_gate(&mut bank);
-        if !bank.gate_open {
-            TX_GAS_RATE_LIMITER.exempt_admitted_while_closed.inc();
-        }
     }
 
     /// On rejection returns a suggested retry delay: a lower bound until the gate can
@@ -148,7 +136,7 @@ impl TxGasRateLimiter {
 /// stalls, where a repository fetch storm would hurt more than the lost drain.
 const MAX_BACKFILL_BLOCKS: u64 = 256;
 
-/// Drains the gas bank from the block stream and emits per-tx padding metrics.
+/// Drains the gas bank from the block stream.
 /// If the stream ends (shutdown), parks forever so the select exits via the shutdown arm.
 pub async fn run_drain<RpcStorage: ReadRpcStorage>(
     limiter: Arc<TxGasRateLimiter>,
@@ -205,15 +193,6 @@ pub async fn run_drain<RpcStorage: ReadRpcStorage>(
             notification.block.header.timestamp,
             notification.block.header.gas_used,
         );
-        for stored in notification.transactions.values() {
-            // L1/upgrade/system txs have protocol-assigned gas limits; padding is
-            // only meaningful for user txs.
-            if matches!(stored.tx.envelope(), ZkEnvelope::L2(_)) {
-                TX_GAS_RATE_LIMITER
-                    .gas_padding
-                    .observe(stored.tx.gas_limit().saturating_sub(stored.meta.gas_used));
-            }
-        }
     }
     tracing::warn!("block stream ended; tx gas rate limiter will not drain anymore");
     std::future::pending::<()>().await

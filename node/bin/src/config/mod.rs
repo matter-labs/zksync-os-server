@@ -1072,8 +1072,9 @@ pub struct RpcConfig {
     pub rate_limits: RpcRateLimitsConfig,
 
     /// Rate limiter for incoming L2 transactions based on executed gas throughput.
+    /// Absent = disabled.
     #[config(nest)]
-    pub tx_gas_rate_limit: TxGasRateLimitConfig,
+    pub tx_gas_rate_limit: Option<TxGasRateLimitConfig>,
 
     /// List of disabled methods.
     /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
@@ -1129,15 +1130,13 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
 /// Only effective on the main node: other roles forward txs to the main node, whose
 /// limiter is authoritative, so the section is ignored there with a warning.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
-#[config(derive(Default))]
 #[config(validate(
     Self::check_credit_windows,
     "max_credit_seconds must be positive, other windows non-negative, and reopen_credit_seconds must not exceed max_credit_seconds"
 ))]
 pub struct TxGasRateLimitConfig {
     /// Target sustained executed-gas throughput, in gas per second.
-    /// Unset = rate limiter disabled.
-    pub gas_per_second: Option<NonZeroU64>,
+    pub gas_per_second: NonZeroU64,
 
     /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`.
     #[config(default_t = 2.0)]
@@ -1187,23 +1186,14 @@ impl TxGasRateLimitConfig {
         Ok(())
     }
 
-    fn into_lib(self) -> Option<zksync_os_rpc::TxGasRateLimitConfig> {
-        let Some(gas_per_second) = self.gas_per_second else {
-            if !self.exempt_senders.is_empty() {
-                tracing::warn!(
-                    "rpc.tx_gas_rate_limit.exempt_senders is set but the rate limiter is \
-                     disabled (gas_per_second is unset); the list has no effect"
-                );
-            }
-            return None;
-        };
-        Some(zksync_os_rpc::TxGasRateLimitConfig {
-            gas_per_second: gas_per_second.get(),
+    fn into_lib(self) -> zksync_os_rpc::TxGasRateLimitConfig {
+        zksync_os_rpc::TxGasRateLimitConfig {
+            gas_per_second: self.gas_per_second.get(),
             max_credit_seconds: self.max_credit_seconds,
             reopen_credit_seconds: self.reopen_credit_seconds,
             deficit_floor_seconds: self.deficit_floor_seconds,
             exempt_senders: self.exempt_senders,
-        })
+        }
     }
 }
 
@@ -1970,7 +1960,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
             rate_limits: c.rate_limits.into(),
-            tx_gas_rate_limit: c.tx_gas_rate_limit.into_lib(),
+            tx_gas_rate_limit: c.tx_gas_rate_limit.map(TxGasRateLimitConfig::into_lib),
             method_filter: c.method_filter,
         }
     }
