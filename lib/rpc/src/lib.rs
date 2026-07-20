@@ -55,7 +55,7 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use hyper::Method;
 use jsonrpsee::RpcModule;
-use jsonrpsee::server::{ServerBuilder, ServerConfigBuilder};
+use jsonrpsee::server::{BatchRequestConfig, ServerBuilder, ServerConfigBuilder};
 use jsonrpsee::ws_client::RpcServiceBuilder;
 use reth_rpc_eth_types::EthSubscriptionIdProvider;
 use reth_tasks::Runtime;
@@ -151,6 +151,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let middleware = tower::ServiceBuilder::new().layer(cors);
 
     let max_response_size_bytes = config.max_response_size_bytes();
+    let parallel_batches = config.parallel_batches;
     let limiter = LoggingLimiter::new(Limiter::new(config.rate_limits.clone().into_limits()));
     let rate_limit_logging = LoggingLimiter::run(limiter.clone());
     let method_filter = Arc::new(config.method_filter.clone());
@@ -160,7 +161,12 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let rpc_middleware = RpcServiceBuilder::new()
         // Monitoring is outermost so rate-limited responses still appear in error metrics.
         .layer_fn(move |service| {
-            Monitoring::new(service, max_response_size_bytes, known_methods.clone())
+            Monitoring::new(
+                service,
+                max_response_size_bytes,
+                known_methods.clone(),
+                parallel_batches,
+            )
         })
         .layer_fn(move |service| MethodFiltering::new(service, method_filter.clone()))
         .layer_fn(move |service| RateLimiting::new(service, limiter.clone()));
@@ -169,6 +175,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         .max_connections(config.max_connections)
         .max_request_body_size(config.max_request_size_bytes())
         .max_response_body_size(config.max_response_size_bytes())
+        .set_batch_request_config(BatchRequestConfig::Limit(config.max_batch_size))
         // `IdProvider` that generates hex-encoded numeric ids as expected in Ethereum
         .set_id_provider(EthSubscriptionIdProvider::default())
         .build();

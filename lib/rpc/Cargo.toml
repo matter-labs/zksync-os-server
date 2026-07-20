@@ -64,5 +64,8 @@ boa_gc.workspace = true
 
 tikv-jemalloc-ctl = { workspace = true, optional = true }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
 [features]
 jemalloc = ["dep:tikv-jemalloc-ctl", "tikv-jemalloc-ctl/stats"]
