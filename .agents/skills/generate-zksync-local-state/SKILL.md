@@ -9,11 +9,15 @@ Generate a self-consistent local fixture from a selected era-contracts commit. K
 snapshot compact by mining only submitted transactions during deployment. Do not package a
 node database or `contracts.yaml`.
 
-All process lifecycle — starting Anvil, waiting for it, flushing its `--dump-state` dump, and
-guaranteeing teardown of Anvil and every process a block spawned — is owned by the bundled
-`scripts/anvil-session.sh` harness. Everything else in this skill you perform directly with
-your own tools so it tracks zk-deployer as its schema and commands evolve. Do **not** freeze
-deployer specifics into a committed script.
+Generation uses zk-deployer's built-in auto-Anvil mode: with `l1_rpc_url` omitted from the
+intent, zk-deployer starts, dumps, and tears down its own Anvil per command and writes a
+compact `l1-state.json` (this requires a zk-deployer revision whose deploy-phase Anvil uses
+automine — see inputs below). Drive the deployer commands directly with your own tools so the
+skill tracks zk-deployer as its schema and commands evolve; do **not** freeze deployer
+specifics into a committed script.
+
+The bundled `scripts/anvil-session.sh` harness is used only for the **verify** step, where it
+starts a run-phase Anvil plus the node and guarantees teardown of both on any exit.
 
 ## Gather inputs
 
@@ -27,7 +31,9 @@ Determine:
 - L2 chain ID; default to `506` only when the user does not specify one.
 - zk-deployer repository and revision. Default to the sibling
   `zksync-os-integration-tests` checkout at `HEAD`; select a compatible revision if the chosen
-  contracts commit does not compile with it.
+  contracts commit does not compile with it. The revision must include the automine deploy-phase
+  Anvil builder (`deploy_builder` in `bin/zk-deployer/src/anvil.rs`); older revisions
+  interval-mine during deployment and produce a bloated snapshot full of idle blocks.
 
 Read the current zk-deployer README before generation because its intent schema and commands
 may evolve:
@@ -53,50 +59,49 @@ unrelated changes.
 
 ## Deploy against a throwaway L1
 
-Create a scratch deployment directory, then with `Write` create both files from the **current**
-README — do not assume the fields or command names from a previous run:
+Create a scratch deployment directory and `cd` into it. With `Write`, create `intent.yaml`
+from the **current** README for one direct-L1 rollup chain at the chosen chain ID, and **omit
+`l1_rpc_url`** so zk-deployer manages Anvil itself (auto-Anvil mode).
 
-- `intent.yaml` — the current intent schema for one direct-L1 rollup chain at the chosen chain
-  ID, pointing `l1_rpc_url` at `http://127.0.0.1:8545`.
-- `deploy-block.sh` — the current deployer command sequence, e.g.:
-
-  ```bash
-  set -Eeuo pipefail
-  cd "$WORKDIR"
-  "$ZK_DEPLOYER" build-contracts
-  "$ZK_DEPLOYER" bootstrap --broadcast
-  "$ZK_DEPLOYER" apply --broadcast
-  "$ZK_DEPLOYER" server-config --chain "$CHAIN_ID" --output server.yaml
-  ```
-
-Run the deployment through the harness. Anvil mines only submitted transactions (no block
-interval), so every saved block holds a deployment or funding transaction. `$WORKDIR` and
-`$L1_RPC` are exported into the block; export `$ZK_DEPLOYER` and `$CHAIN_ID` yourself:
+Run the deployer commands directly — no external Anvil, no harness. Command names and flags
+may have changed, so confirm each against the README:
 
 ```bash
-ZK_DEPLOYER=/path/to/zk-deployer CHAIN_ID=506 \
-  scripts/anvil-session.sh --workdir "$WORKDIR" --port 8545 \
-    --preserve-historical-states --slots-in-an-epoch 2 \
-    --dump-state "$WORKDIR/l1-state.json" \
-    -- bash "$WORKDIR/deploy-block.sh"
+cd "$DEPLOY_DIR"
+"$ZK_DEPLOYER" build-contracts
+"$ZK_DEPLOYER" bootstrap --broadcast   # starts automine Anvil, writes l1-state.json
+"$ZK_DEPLOYER" apply --broadcast       # restores l1-state.json, re-dumps it
+"$ZK_DEPLOYER" server-config --chain "$CHAIN_ID" --output server.yaml
 ```
 
-The harness SIGINTs Anvil on exit so the dump flushes, and reaps the deployer if anything
-fails. It never overwrites a fixture directory — that guard lives in the write step below.
+zk-deployer starts an automine Anvil for `bootstrap` (one block per submitted transaction, no
+interval-mined idle blocks) and kills it when the command exits; `apply` restores the dump,
+does its work, and re-dumps; `server-config` reads the persisted state. Nothing is left
+running afterward. The resulting `l1-state.json` is plain JSON (not gzip).
 
-## Assert the snapshot is transaction-only
+## Assert the snapshot is compact
 
-Read `l1-state.json` and confirm with `jq -e` that there are no idle/interval-mined blocks:
+Read `l1-state.json` and confirm the state is transaction-only in the meaningful sense — every
+historical state corresponds to a transaction and the tip matches the transaction count:
 
 ```bash
 jq -e '
   (.best_block_number == (.transactions | length))
   and ((.historical_states | length) == (.transactions | length))
-  and ((.blocks | length) == ((.transactions | length) + 1))
-' "$WORKDIR/l1-state.json"
+' "$DEPLOY_DIR/l1-state.json"
 ```
 
-If this fails, interval mining leaked in — stop and report; do not ship a bloated snapshot.
+Auto-Anvil restarts its managed Anvil between `bootstrap` and `apply`, so the `--load-state`
+boundary leaves at most one extra empty block (plus one duplicate block-number entry) beyond
+genesis — `blocks == transactions + 1` does **not** hold, and that is expected. Guard against
+*interval* mining leaking in by bounding the empty blocks instead:
+
+```bash
+[[ $(jq '[.blocks[] | select((.transactions|length)==0)] | length' "$DEPLOY_DIR/l1-state.json") -le 2 ]]
+```
+
+More than a couple of empty blocks means the zk-deployer revision predates the automine deploy
+builder. Stop and report; do not ship a bloated snapshot.
 
 ## Write the fixture
 
