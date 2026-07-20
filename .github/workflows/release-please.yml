@@ -26,7 +26,7 @@ jobs:
   release-please:
     uses: matter-labs/zksync-ci-common/.github/workflows/release-please.yaml@c3b31c6f11bada204069c8b4621044e4c1cbc1df
     secrets:
-      slack_webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}  # Slack webhook for release notifications  # Token for publishing to crates.io
+      slack_webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}  # Slack webhook for release notifications
       gh_token: ${{ secrets.RELEASE_TOKEN }}                # GitHub token for creating PRs and releases
     with:
       config: '.github/release-please/config.json'          # Path to the configuration file
