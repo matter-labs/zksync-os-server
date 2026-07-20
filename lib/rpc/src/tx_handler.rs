@@ -2,11 +2,13 @@ use crate::eth_call_handler::build_pending_block_context;
 use crate::eth_impl::build_api_receipt;
 use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
 use crate::tx_forwarder::{TxForwardError, TxForwarder};
+use crate::tx_gas_limiter::TxGasRateLimiter;
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{B256, Bytes, U256};
 use alloy::transports::RpcError;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_interface::error::InvalidTransaction;
@@ -44,6 +46,7 @@ pub struct TxHandler<RpcStorage, Mempool> {
     /// the sequencer has built at least one block; in that startup
     /// window we synthesize a pending block context from current state.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+    gas_rate_limiter: Option<Arc<TxGasRateLimiter>>,
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempool> {
@@ -57,6 +60,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         tx_forwarder: Option<TxForwarder>,
         policy_client: Option<PolicyClient>,
         last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+        gas_rate_limiter: Option<Arc<TxGasRateLimiter>>,
     ) -> Self {
         Self {
             config,
@@ -67,6 +71,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             tx_forwarder,
             policy_client,
             last_constructed_block_context,
+            gas_rate_limiter,
         }
     }
 
@@ -90,6 +95,15 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         let hash = *l2_tx.hash();
         if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
+        }
+
+        // Before the policy simulation so a flood rejection costs only decode + ecrecover.
+        if let Some(gas_rate_limiter) = &self.gas_rate_limiter {
+            if gas_rate_limiter.is_exempt(&l2_tx.signer()) {
+                gas_rate_limiter.note_exempt_admission();
+            } else if let Err(retry_after) = gas_rate_limiter.try_admit() {
+                return Err(EthSendRawTransactionError::GasRateLimited { retry_after });
+            }
         }
 
         if let Some(policy_client) = &self.policy_client {
@@ -294,6 +308,12 @@ pub enum EthSendRawTransactionError {
     ForwardError(#[from] TxForwardError),
     #[error("Signer is blacklisted")]
     BlacklistedSigner,
+    /// The executed-gas rate limiter is exhausted; retriable.
+    #[error(
+        "transaction gas rate limit exceeded: node is at capacity, retry in ~{}ms",
+        .retry_after.as_millis()
+    )]
+    GasRateLimited { retry_after: Duration },
     /// Policy service rejected the transaction.
     #[error("transaction denied by policy service")]
     PolicyDenied,
@@ -311,6 +331,7 @@ impl From<&EthSendRawTransactionError> for TxRejectionReason {
             EthSendRawTransactionError::InvalidTransactionSignature => Self::InvalidSignature,
             EthSendRawTransactionError::NotAcceptingTransactions(_) => Self::NotAccepting,
             EthSendRawTransactionError::BlacklistedSigner => Self::BlacklistedSigner,
+            EthSendRawTransactionError::GasRateLimited { .. } => Self::GasRateLimited,
             EthSendRawTransactionError::ForwardError(err) => match err {
                 TxForwardError::Rpc(RpcError::ErrorResp(_)) => Self::ForwardRejected,
                 _ => Self::ForwardTransportError,

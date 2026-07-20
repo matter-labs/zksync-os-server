@@ -4,6 +4,7 @@ use crate::eth_call_handler::EthCallHandler;
 use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
 use crate::result::{ToRpcResult, internal_rpc_err, unimplemented_rpc_err};
 use crate::rpc_storage::{ReadRpcStorage, RpcStorageError};
+use crate::tx_gas_limiter::TxGasRateLimiter;
 use crate::tx_handler::{EthSendRawTransactionSyncError, TxHandler};
 use alloy::consensus::TrieAccount;
 use alloy::consensus::transaction::Recovered;
@@ -23,6 +24,7 @@ use alloy::serde::JsonStorageKey;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use ruint::aliases::B160;
+use std::sync::Arc;
 use tokio::sync::watch;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_os_api::helpers::get_code;
@@ -61,6 +63,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
         tx_forwarder: Option<TxForwarder>,
         policy_client: Option<PolicyClient>,
         last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
+        gas_rate_limiter: Option<Arc<TxGasRateLimiter>>,
     ) -> Self {
         let tx_handler = TxHandler::new(
             config.clone(),
@@ -71,6 +74,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
             tx_forwarder,
             policy_client,
             last_constructed_block_context,
+            gas_rate_limiter,
         );
 
         Self {

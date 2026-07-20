@@ -4,6 +4,7 @@ mod debug;
 mod deployment_filter;
 mod fill_transaction;
 mod filter;
+mod gas_rate_limit;
 mod policy_client;
 mod pubsub;
 mod simulate;

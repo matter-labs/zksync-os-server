@@ -949,6 +949,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .build_client(zksync_os_tx_validators::policy_client::Component::Rpc);
     zksync_os_rpc::spawn(
         config.rpc_config.into(),
+        node_role,
         rpc_listener,
         chain_id,
         bridgehub_address,

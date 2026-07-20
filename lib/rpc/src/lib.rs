@@ -2,7 +2,7 @@ mod call_fees;
 
 mod config;
 
-pub use config::{RateLimits, RpcConfig};
+pub use config::{RateLimits, RpcConfig, TxGasRateLimitConfig};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -30,6 +30,7 @@ mod sandbox;
 mod trace_filter;
 mod tx_forwarder;
 pub use tx_forwarder::{TxForwardEndpoint, TxForwarder};
+mod tx_gas_limiter;
 mod tx_handler;
 mod txpool_impl;
 mod types;
@@ -74,11 +75,12 @@ use zksync_os_rpc_api::web3::Web3ApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_tx_validators::policy_client::PolicyClient;
-use zksync_os_types::TransactionAcceptanceState;
+use zksync_os_types::{NodeRole, TransactionAcceptanceState};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     config: RpcConfig,
+    node_role: NodeRole,
     listener: tokio::net::TcpListener,
     chain_id: u64,
     bridgehub_address: Address,
@@ -94,6 +96,37 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     metrics::register_task_monitor();
+
+    // The gas rate limiter models sequencer capacity, which only the main node owns:
+    // other roles forward txs to the main node, whose limiter is authoritative and
+    // whose rejections (incl. `retryAfterMs`) propagate back to the caller.
+    let gas_rate_limiter = match &config.tx_gas_rate_limit {
+        Some(c) if node_role.is_main() => Some(Arc::new(tx_gas_limiter::TxGasRateLimiter::new(c))),
+        Some(_) => {
+            tracing::warn!(
+                "rpc.tx_gas_rate_limit is ignored on non-main nodes; the executed-gas \
+                 rate limiter runs on the main node only"
+            );
+            None
+        }
+        None => None,
+    };
+    if gas_rate_limiter.is_none() {
+        // A disabled limiter never gates; without this, `gate_open == 0` (the gauge's
+        // default) would look like a permanently closed gate on nodes with the feature off.
+        metrics::TX_GAS_RATE_LIMITER.gate_open.set(1);
+    }
+    // Parks forever when the limiter is disabled so its select arm below stays inert.
+    let gas_bank_drain = {
+        let limiter = gas_rate_limiter.clone();
+        let storage = storage.clone();
+        async move {
+            match limiter {
+                Some(limiter) => tx_gas_limiter::run_drain(limiter, storage).await,
+                None => std::future::pending().await,
+            }
+        }
+    };
 
     let mut rpc = RpcModule::new(());
     let eth_call_handler = EthCallHandler::new(
@@ -114,6 +147,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             tx_forwarder,
             policy_client,
             last_constructed_block_context,
+            gas_rate_limiter,
         )
         .into_rpc(),
     )?;
@@ -216,6 +250,9 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             }
             _ = rate_limit_logging => {
                 unreachable!("LoggingLimiter::run is an infinite loop")
+            }
+            _ = gas_bank_drain => {
+                unreachable!("tx_gas_limiter::run_drain never returns")
             }
             // Graceful shutdown was requested; stop accepting RPC traffic and wait for the server to exit.
             _guard = &mut shutdown => {

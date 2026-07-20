@@ -16690,6 +16690,7 @@ dependencies = [
  "governor",
  "hyper",
  "jsonrpsee",
+ "rand 0.9.5",
  "reth-rpc-eth-types",
  "reth-tasks",
  "roaring",
