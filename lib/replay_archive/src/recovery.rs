@@ -166,6 +166,18 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
     // memory at once.
     let window_size = (decrypt_concurrency as u64) * 2;
 
+    // The chain id is shared by all blocks; take it from the anchor record.
+    let chain_id =
+        read_verified_replay_record(input_root, anchor_block_number, anchor_block_hash, &decoder)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to recover replay record #{anchor_block_number}, {anchor_block_hash}"
+                )
+            })?
+            .block_context
+            .chain_id;
+
     let mut canonical_chain = Vec::new();
     let mut window_top = anchor_block_number;
     let mut block_hash = anchor_block_hash;
@@ -254,7 +266,7 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
     );
     canonical_chain.reverse();
     let recovered_count = canonical_chain.len();
-    let replay_storage = BlockReplayStorage::new_without_genesis(replay_db_path);
+    let replay_storage = BlockReplayStorage::new_without_genesis(replay_db_path, chain_id);
     tracing::info!(
         recovered_count,
         replay_db_path = %replay_db_path.display(),
@@ -668,7 +680,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        let replay_storage = BlockReplayStorage::new_without_genesis(replay_db.path());
+        let replay_storage = BlockReplayStorage::new_without_genesis(replay_db.path(), 0);
         assert_eq!(recovered, 2);
         assert_eq!(replay_storage.latest_record(), 1);
         assert_eq!(replay_storage.get_replay_record(0).unwrap(), genesis_record);
@@ -728,7 +740,7 @@ mod tests {
         .await
         .unwrap();
 
-        let replay_storage = BlockReplayStorage::new_without_genesis(replay_db.path());
+        let replay_storage = BlockReplayStorage::new_without_genesis(replay_db.path(), 0);
         assert_eq!(recovered, 2);
         assert_eq!(replay_storage.get_replay_record(0).unwrap(), genesis_record);
         assert_eq!(replay_storage.get_replay_record(1).unwrap(), block_record);

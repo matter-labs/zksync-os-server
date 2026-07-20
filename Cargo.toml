@@ -83,6 +83,9 @@ aws-sdk-s3 = { version = "1.133.0", default-features = false, features = [
     "rt-tokio",
     "default-https-client",
 ] }
+azure_core = "1.1.0"
+azure_identity = "1.0.0"
+azure_security_keyvault_keys = "1.0.0"
 bytes = "1"
 crc32c = "0.6.8"
 google-cloud-auth = "1.14.0"
