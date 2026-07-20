@@ -17,19 +17,15 @@ use zksync_os_server::config::TxGasRateLimitConfig;
 /// EIP-1474 "Limit exceeded", returned when the executed-gas rate limiter's bank is exhausted.
 const RATE_LIMIT_ERROR_CODE: i64 = -32005;
 
-/// The default rich wallet address (derived from the well-known test private key).
-/// Configured as the exempt sender, so funding txs can never be rate-limited.
+/// The default rich wallet, configured as the exempt sender, so its txs can never be rate-limited.
 const RICH_WALLET: &str = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049";
 
 /// 100k gas/s refill with max credit capped at 1s (100k gas); defaults for the rest.
-/// A 10-transfer burst (210k executed gas) reliably exhausts the bank while staying
-/// under the mempool's 16-per-sender slot limit even with a few probe txs in flight.
+/// A 10-transfer burst (210k executed gas) reliably exhausts the bank.
 const GAS_PER_SECOND: u64 = 100_000;
 const MAX_CREDIT_SECONDS: f64 = 1.0;
 const BURST_TRANSFERS: u64 = 10;
 
-/// Fee/chain parameters fetched once: they are stable for the test's lifetime, and
-/// re-fetching them inside the polling loops would widen the timing windows.
 struct TxParams {
     chain_id: u64,
     max_fee_per_gas: u128,
@@ -87,6 +83,18 @@ async fn send_transfer(
     send_transfer_with_nonce(provider, params, from, to, value, nonce).await
 }
 
+/// Extracts the rate limiter's `retryAfterMs` hint from a `-32005` error's `data`.
+fn retry_after_ms(data: &serde_json::value::RawValue) -> u64 {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RetryData {
+        retry_after_ms: u64,
+    }
+    serde_json::from_str::<RetryData>(data.get())
+        .expect("rate limit error data should deserialize as {{ retryAfterMs }}")
+        .retry_after_ms
+}
+
 #[test_log::test(tokio::test)]
 async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
     let limited_signer = PrivateKeySigner::random();
@@ -112,7 +120,7 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
     let sink = Address::repeat_byte(0x42);
     let params = TxParams::fetch(&provider).await?;
 
-    // Fund the non-exempt account; the rich sender is exempt so this cannot be rate-limited.
+    // Fund the non-exempt account
     send_transfer(&provider, &params, rich, limited, parse_ether("1")?)
         .await?
         .expect_successful_receipt()
@@ -195,7 +203,8 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
                     .unwrap_or_else(|| panic!("expected JSON-RPC error response, got: {err:?}"));
                 assert_eq!(resp.code, RATE_LIMIT_ERROR_CODE);
                 assert!(Instant::now() < deadline, "gate did not reopen within 30s");
-                sleep(Duration::from_millis(500)).await;
+                let wait = retry_after_ms(resp.data.as_deref().expect("retry data present"));
+                sleep(Duration::from_millis(wait)).await;
             }
         }
     };
