@@ -4,8 +4,7 @@ use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
 use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, UpgradeTester};
-use zksync_os_integration_tests::{GatewayTester, Tester};
-use zksync_os_server::default_protocol_version::NEXT_PROTOCOL_VERSION;
+use zksync_os_integration_tests::{NEXT_TO_L1, Tester};
 
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
@@ -23,73 +22,6 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
     let upgrade_tester = UpgradeTester::for_default_upgrade(&tester).await?;
 
     // Prepare protocol upgrade
-    let protocol_upgrade = upgrade_tester
-        .protocol_upgrade_builder()
-        .await?
-        .bump_patch(1)
-        .with_force_deployments(BTreeMap::new())
-        .with_timestamp(upgrade_timestamp)
-        .build();
-
-    upgrade_tester
-        .execute_default_upgrade(
-            &protocol_upgrade,
-            deadline,
-            upgrade_timestamp,
-            true,
-            Vec::new(),
-        )
-        .await?;
-
-    Ok(())
-}
-
-#[test_log::test(tokio::test)]
-async fn upgrade_patch_no_deployments_gateway() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
-    let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
-
-    let gateway_tester = GatewayTester::builder()
-        .protocol_version(NEXT_PROTOCOL_VERSION)
-        .num_chains(0)
-        .build()
-        .await?;
-    let upgrade_tester = UpgradeTester::for_default_upgrade(gateway_tester.gateway()).await?;
-
-    // Prepare protocol upgrade
-    let protocol_upgrade = upgrade_tester
-        .protocol_upgrade_builder()
-        .await?
-        .bump_patch(1)
-        .with_force_deployments(BTreeMap::new())
-        .with_timestamp(upgrade_timestamp)
-        .build();
-
-    upgrade_tester
-        .execute_default_upgrade(
-            &protocol_upgrade,
-            deadline,
-            upgrade_timestamp,
-            true,
-            Vec::new(),
-        )
-        .await?;
-
-    Ok(())
-}
-
-#[test_log::test(tokio::test)]
-async fn upgrade_patch_no_deployments_settles_to_gateway() -> anyhow::Result<()> {
-    let upgrade_timestamp = U256::from(1);
-    let deadline = U256::MAX;
-
-    let gateway_tester = GatewayTester::builder()
-        .protocol_version(NEXT_PROTOCOL_VERSION)
-        .num_chains(1)
-        .build()
-        .await?;
-    let upgrade_tester = UpgradeTester::for_default_upgrade(gateway_tester.chain(0)).await?;
-
     let protocol_upgrade = upgrade_tester
         .protocol_upgrade_builder()
         .await?
@@ -199,9 +131,8 @@ async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
 }
 
 /// Performs V31->V32 protocol upgrade which also does a force deployment.
-/// Upgraded chain settles to gateway.
 #[test_log::test(tokio::test)]
-async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<()> {
+async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
@@ -216,12 +147,8 @@ async fn upgrade_to_v32_with_deployments_settles_to_gateway() -> anyhow::Result<
     .into_iter()
     .collect();
 
-    let gateway_tester = GatewayTester::builder()
-        .protocol_version(NEXT_PROTOCOL_VERSION)
-        .num_chains(1)
-        .build()
-        .await?;
-    let upgrade_tester = UpgradeTester::for_default_upgrade(gateway_tester.chain(0)).await?;
+    let tester = NEXT_TO_L1.environment().await?.launch_default().await?;
+    let upgrade_tester = UpgradeTester::for_default_upgrade(&tester).await?;
 
     // Publish the raw runtime bytecode from the force-deployment payload to the
     // L1 BytecodesSupplier. This exercises the supplier-backed path where the

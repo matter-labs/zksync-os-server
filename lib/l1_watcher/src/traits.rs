@@ -35,7 +35,7 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
     /// Invoked each time a new log matching the filter is found.
     ///
     /// `provider` is the settlement-layer provider the [`L1Watcher`](crate::L1Watcher) used to
-    /// fetch the log. SL-aware processors that follow batches across L1 ↔ Gateway boundaries can
+    /// fetch the log. Processors can
     /// use it to fetch additional data (e.g. commit calldata) against the right SL without
     /// storing a stale provider reference; single-SL processors can ignore it.
     async fn process_raw_event(

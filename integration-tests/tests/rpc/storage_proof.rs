@@ -99,14 +99,9 @@ async fn verify_storage_proof_with_l1_contract() -> anyhow::Result<()> {
     let chain_id = tester.l2_provider.get_chain_id().await?;
     let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
     tracing::info!(?bridgehub_address, chain_id, "fetched L1 state");
-    let l1_state = L1State::fetch(
-        tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
-        bridgehub_address,
-        chain_id,
-    )
-    .await?;
-    let diamond_proxy_address = l1_state.diamond_proxy_address_sl();
+    let l1_state =
+        L1State::fetch(tester.l1_provider().clone(), bridgehub_address, chain_id).await?;
+    let diamond_proxy_address = l1_state.diamond_proxy_address();
     tracing::info!(?diamond_proxy_address, "resolved diamond proxy");
 
     // Deploy a counter contract and write to it
@@ -246,14 +241,9 @@ async fn verify_storage_proof_empty_slot() -> anyhow::Result<()> {
     let bridgehub_address = tester.l2_zk_provider.get_bridgehub_contract().await?;
     let chain_id = tester.l2_provider.get_chain_id().await?;
     tracing::info!(?bridgehub_address, chain_id, "fetched L1 state");
-    let l1_state = L1State::fetch(
-        tester.l1_provider().clone(),
-        tester.gateway_eth_provider(),
-        bridgehub_address,
-        chain_id,
-    )
-    .await?;
-    let diamond_proxy_address = l1_state.diamond_proxy_address_sl();
+    let l1_state =
+        L1State::fetch(tester.l1_provider().clone(), bridgehub_address, chain_id).await?;
+    let diamond_proxy_address = l1_state.diamond_proxy_address();
     tracing::info!(?diamond_proxy_address, "resolved diamond proxy");
 
     // Deploy a counter contract but don't write to it

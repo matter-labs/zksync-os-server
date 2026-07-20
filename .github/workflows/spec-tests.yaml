@@ -65,7 +65,10 @@ jobs:
       - name: Install python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
-          python-version: 3.13
+          # coincurve 20.0.0 (pinned by execution-spec-tests) has no prebuilt cp313 wheel, and
+          # its source build is broken by scikit-build-core >= 1.0; 3.12 is the newest Python
+          # with a prebuilt wheel.
+          python-version: 3.12
 
       - name: Install pip dependencies
         run: pip install -r ./python-scripts/requirements.txt
