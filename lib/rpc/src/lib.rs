@@ -155,6 +155,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let max_response_size_bytes = config.max_response_size_bytes();
     let limiter = LoggingLimiter::new(Limiter::new(config.rate_limits.clone().into_limits()));
     let rate_limit_logging = LoggingLimiter::run(limiter.clone());
+    let (ready_tx, ready_rx) = watch::channel(false);
     let method_filter = Arc::new(config.method_filter.clone());
     // Snapshot the registered method names so monitoring can bound metric label cardinality:
     // any other method name (e.g. junk sent to pollute metrics) is collapsed to a single label.

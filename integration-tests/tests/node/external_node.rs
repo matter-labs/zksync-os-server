@@ -10,8 +10,8 @@ use backon::{ConstantBuilder, Retryable};
 use zksync_os_integration_tests::BATCH_VERIFICATION_KEYS;
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::{
-    CURRENT_TO_L1, TestEnvironment, Tester, assert_traits::ReceiptAssert, contracts::EventEmitter,
-    test_multisetup,
+    CURRENT_TO_L1, NEXT_TO_L1, TestEnvironment, Tester, assert_traits::ReceiptAssert,
+    contracts::EventEmitter, test_multisetup,
 };
 use zksync_os_server::config::Config;
 
@@ -164,7 +164,7 @@ async fn transaction_replay(main_node: Tester) -> anyhow::Result<()> {
 }
 
 /// EN2 boots from EN1 only (no direct path to MN), exercising the EN-EN block relay path.
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 async fn transaction_replay_en_chain(main_node: Tester) -> anyhow::Result<()> {
     let en1 = launch_en(&main_node, |_| {}).await?;
 
@@ -188,7 +188,7 @@ async fn transaction_replay_en_chain(main_node: Tester) -> anyhow::Result<()> {
 
 /// EN2 boots from EN1 only. After EN1 restarts (same peer ID), EN2 must reconnect and
 /// continue receiving blocks.
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 async fn en_chain_survives_en1_restart(main_node: Tester) -> anyhow::Result<()> {
     let en1 = launch_en(&main_node, |_| {}).await?;
     let en2 = launch_en(&en1, |_| {}).await?;
