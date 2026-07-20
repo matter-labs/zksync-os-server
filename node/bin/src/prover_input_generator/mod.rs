@@ -73,13 +73,19 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     return Ok(());
                 };
                 state_reporter.enter_state(GenericComponentState::Active);
+                // Even with PIG disabled, the V8+ batcher consumes per-block tree data at seal
+                // time (the native batch run produces the canonical commit data, not just the
+                // prover input); pre-V8 blocks don't need it.
+                let needs_tree_data =
+                    ProvingVersion::try_from(replay_record.protocol_version.clone())
+                        .is_ok_and(|v| v >= ProvingVersion::V8);
                 output.send_and_record(
                     ProverBlock {
                         output: block_output,
                         record: replay_record,
                         prover_input: ProverInput::Fake,
                         tree_output: tree.output,
-                        tree_data: Some(tree),
+                        tree_data: needs_tree_data.then_some(tree),
                     },
                     &state_reporter,
                 )?;

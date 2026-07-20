@@ -18,7 +18,7 @@ use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
 use zksync_os_types::{PubdataMode, ZksyncOsEncode};
 
-/// The chain config all V8 native batch runs are executed with. Its hash is part of the batch
+/// The chain config all v32 native batch runs are executed with. Its hash is part of the batch
 /// public input, so proof verification must reconstruct it identically.
 pub(crate) fn chain_config(chain_id: u64) -> anyhow::Result<ChainConfig> {
     ChainConfig::new(chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
@@ -52,7 +52,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
         .context("batch prover input requires a parent state version")?;
     let (root_hash, leaf_count) = merkle_tree
         .root_info(first_state_version)?
-        .context("missing Merkle tree state for the first V8 batch block")?;
+        .context("missing Merkle tree state for the first v32 batch block")?;
 
     let initial_proof_data = ProofData {
         state_root_view: StorageCommitment {

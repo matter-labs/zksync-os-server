@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use block_cache::BlockCache;
 use secrecy::{ExposeSecret, SecretString};
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_batch_types::{BatchSignature, PendingBatchInfo};
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
@@ -31,7 +32,9 @@ pub struct BatchVerificationResponder<Finality, ReadState> {
     diamond_proxy_sl: Address,
     l1_state: L1State,
     signer: PrivateKeySigner,
-    block_cache: BlockCache<Finality, TreeBlock>,
+    // `Arc` so verification requests can hand the blocks to a blocking task without
+    // deep-cloning replay records and tree data.
+    block_cache: BlockCache<Finality, Arc<TreeBlock>>,
     read_state: ReadState,
     merkle_tree: MerkleTree<RocksDBWrapper>,
     verify_request_rx: mpsc::Receiver<PeerVerifyBatch>,
@@ -103,39 +106,33 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
 
         let blocks = (request.first_block_number..=request.last_block_number)
             .map(|block_number| {
-                let cached = self
-                    .block_cache
+                self.block_cache
                     .get(block_number)
-                    .ok_or(BatchVerificationError::MissingBlock(block_number))?;
-                Ok((&cached.output, &cached.record, &cached.tree))
+                    .cloned()
+                    .ok_or(BatchVerificationError::MissingBlock(block_number))
             })
             .collect::<Result<Vec<_>, BatchVerificationError>>()?;
 
         let state_view = self.read_state.state_view_at(request.last_block_number)?;
         let multichain_root = read_multichain_root(state_view);
-        let (_, last_replay_record, _) = blocks.last().unwrap();
-        let protocol_version = blocks.first().unwrap().1.protocol_version.clone();
+        let last_replay_record = &blocks.last().unwrap().record;
+        let protocol_version = blocks.first().unwrap().record.protocol_version.clone();
         let proving_version =
             ProvingVersion::try_from(protocol_version.clone()).map_err(anyhow::Error::from)?;
 
         let (batch_info, _) = if proving_version >= ProvingVersion::V8 {
             // Native batch PIG re-executes the whole batch - run it on a blocking
             // thread to avoid stalling the async runtime.
-            let native_run_inputs = blocks
-                .iter()
-                .map(|(_, replay_record, tree_data)| {
-                    ((*replay_record).clone(), (*tree_data).clone())
-                })
-                .collect::<Vec<_>>();
+            let native_run_blocks = blocks.clone();
             let read_state = self.read_state.clone();
             let merkle_tree = self.merkle_tree.clone();
             let pubdata_mode = request.pubdata_mode;
             let native_batch_run = tokio::task::spawn_blocking(move || {
-                let native_blocks = native_run_inputs
+                let native_blocks = native_run_blocks
                     .iter()
-                    .map(|(replay_record, tree_data)| NativeBatchBlock {
-                        replay_record,
-                        tree_data,
+                    .map(|block| NativeBatchBlock {
+                        replay_record: &block.record,
+                        tree_data: &block.tree,
                     })
                     .collect::<Vec<_>>();
                 generate_batch_run(
@@ -174,11 +171,11 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
             PendingBatchInfo::build(
                 blocks
                     .iter()
-                    .map(|(block_output, replay_record, tree_data)| {
+                    .map(|block| {
                         (
-                            *block_output,
-                            replay_record.transactions.as_slice(),
-                            &tree_data.output,
+                            &block.output,
+                            block.record.transactions.as_slice(),
+                            &block.tree.output,
                         )
                     })
                     .collect(),
@@ -206,7 +203,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
             self.diamond_proxy_sl,
             self.l1_state.sl_chain_id,
             self.l1_state.validator_timelock_sl,
-            &blocks.first().unwrap().1.protocol_version,
+            &blocks.first().unwrap().record.protocol_version,
             &self.signer,
         )
         .await;
@@ -267,7 +264,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone> PipelineCompon
                             state_reporter.enter_state(GenericComponentState::Active);
                             let block_number = tree_block.record.block_context.block_number;
                             let block_timestamp = tree_block.record.block_context.timestamp;
-                            self.block_cache.insert(block_number, tree_block)?;
+                            self.block_cache.insert(block_number, Arc::new(tree_block))?;
                             state_reporter.record_processed(block_number, Some(block_timestamp), None);
                         }
                         None => return Ok(()),
@@ -436,7 +433,10 @@ mod tests {
             verify_request_rx,
             outgoing_verify_results,
         );
-        responder.block_cache.insert(1, tree_block).unwrap();
+        responder
+            .block_cache
+            .insert(1, Arc::new(tree_block))
+            .unwrap();
 
         let result = responder
             .handle_verification_message(request)
@@ -503,13 +503,13 @@ mod tests {
         .unwrap();
 
         let chain_config_hash =
-            zksync_os_native_pig::v8_chain_config_hash(batch_info.commit_info.chain_id).unwrap();
+            zksync_os_native_pig::v32_chain_config_hash(batch_info.commit_info.chain_id).unwrap();
         let reconstructed = keccak256(
             [
                 native_batch_run.previous_state_commitment.0,
                 batch_info.commit_info.new_state_commitment.0,
                 chain_config_hash.0,
-                batch_info.v8_batch_output_hash().0,
+                batch_info.v32_batch_output_hash().0,
             ]
             .concat(),
         );
@@ -526,7 +526,7 @@ mod tests {
     /// elsewhere (e.g. `cli prove --bin multiblock_batch.bin --input-file <hex> --backend cpu`).
     ///
     /// Run with:
-    ///   V8_PROVER_INPUT_OUT=/home/claude/v8-prover-input \
+    ///   V8_PROVER_INPUT_OUT=/tmp/v8-prover-input \
     ///   cargo test -p zksync_os_batch_verification dump_v8_simplest_batch_prover_input \
     ///     -- --ignored --nocapture
     #[tokio::test]
@@ -555,7 +555,7 @@ mod tests {
         let words = native_batch_run.prover_input;
 
         let out_dir = std::env::var("V8_PROVER_INPUT_OUT")
-            .unwrap_or_else(|_| "/home/claude/v8-prover-input".to_string());
+            .expect("set V8_PROVER_INPUT_OUT to the output directory for the dumped files");
         std::fs::create_dir_all(&out_dir).unwrap();
 
         // `--input-type hex` (the CLI default): each u32 word as 8 lowercase hex chars, concatenated.

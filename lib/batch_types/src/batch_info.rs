@@ -29,6 +29,10 @@ pub struct PendingBatchInfo {
     pub protocol_version: ProtocolSemanticVersion,
 }
 
+/// Batch-level commit values produced canonically by the native batch run: from protocol v32.0
+/// the batch program itself computes pubdata, DA/state commitments and L1/L2 tx counters, so
+/// [`PendingBatchInfo::build_from_canonical_output`] consumes this instead of the server
+/// re-accumulating per-block outputs ([`PendingBatchInfo::build`]).
 #[derive(Debug, Clone)]
 pub struct CanonicalBatchCommitData {
     pub first_block_number: u64,
@@ -291,7 +295,7 @@ impl PendingBatchInfo {
     /// instead. Used for server-side verification of V8 FRI proofs; the L1-facing commitment
     /// (`public_input_hash`) is intentionally left unchanged until v32.0 contracts define the
     /// on-chain layout.
-    pub fn v8_batch_output_hash(&self) -> B256 {
+    pub fn v32_batch_output_hash(&self) -> B256 {
         let commit_info = &self.commit_info;
         let upgrade_tx_hash = self.upgrade_tx_hash.unwrap_or(B256::ZERO);
         B256::from(keccak256(

@@ -131,8 +131,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             )
             .await
             .context("mempool is closed")?;
-        let upgrade_tx_in_stream = best_txs.upgrade_tx_in_stream;
-
         let timestamp = (millis_since_epoch() / 1000) as u64;
 
         // Check if we peeked an upgrade transaction info.
@@ -169,15 +167,14 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .try_into()
             .context("Cannot instantiate a block for unsupported execution version")?;
 
-        // Post-v31 protocols need the settlement-layer chain id to be explicitly re-established
-        // in the block whenever a protocol upgrade runs, since the upgrade may replace the system
-        // context implementation that exposes it to the batch commitment path. We also keep the
-        // original "exactly once on the v30->v31 boundary, or on the first block of a fresh
-        // post-v31 chain" behavior.
+        // The SetSLChainId placeholder runs exactly once per chain: on the v30->v31 upgrade
+        // boundary, or on the first block of a fresh post-v31 chain. The batch program reads
+        // the SL chain id from persistent SystemContext storage, so later protocol upgrades
+        // don't need to re-establish it.
         let first_post_v31_block = previous_record.protocol_version.minor < 31
             || previous_record.block_context.block_number == 0;
         let (tx_source, expect_sl_chain_id_tx_after_upgrade) =
-            if protocol_version.is_post_v31() && (upgrade_tx_in_stream || first_post_v31_block) {
+            if protocol_version.is_post_v31() && first_post_v31_block {
                 let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
                     self.current_sl_chain_id,
                     // We use `u64::MAX` as a placeholder, since it is not an actual migration

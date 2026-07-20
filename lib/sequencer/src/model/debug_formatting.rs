@@ -92,7 +92,7 @@ impl<'a> fmt::Debug for BlockOutputDebug<'a> {
             .field("published_preimages", &preimages)
             .field("pubdata", &BlockPubdataDbg(&o.pubdata))
             .field("pubdata_used", &o.pubdata_used())
-            .field("computaional_native_used", &o.computational_native_used)
+            .field("computational_native_used", &o.computational_native_used)
             .finish()
     }
 }

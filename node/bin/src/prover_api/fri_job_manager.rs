@@ -272,48 +272,54 @@ impl FriJobManager {
                 )));
             }
         };
-        if let Err(SubmitError::FriProofVerificationError {
-            expected_hash_u32s,
-            proof_final_register_values,
-        }) = result
-        {
-            tracing::warn!(
-                batch_number,
-                expected = ?expected_hash_u32s,
-                actual = ?proof_final_register_values,
-                "Proof verification failed",
-            );
-
-            // Persist the failed proof with some information about the batch for debugging
-            let failed_proof = FailedFriProof {
-                batch_number,
-                last_block_timestamp: batch_metadata.batch_info.commit_info.last_block_timestamp,
+        match result {
+            Ok(()) => Ok(()),
+            Err(SubmitError::FriProofVerificationError {
                 expected_hash_u32s,
                 proof_final_register_values,
-                vk_hash: batch_metadata
-                    .verification_key_hash()
-                    .expect("VK must exist")
-                    .to_string(),
-                proof_bytes: proof_bytes.clone(),
-            };
-
-            if let Err(save_err) = self.proof_storage.save_failed_proof(&failed_proof).await {
-                tracing::error!(
+            }) => {
+                tracing::warn!(
                     batch_number,
-                    ?save_err,
-                    "Failed to persist failed proof for debugging",
+                    expected = ?expected_hash_u32s,
+                    actual = ?proof_final_register_values,
+                    "Proof verification failed",
                 );
-            } else {
-                tracing::info!(batch_number, prover_id, "Failed proof saved for debugging",);
+
+                // Persist the failed proof with some information about the batch for debugging
+                let failed_proof = FailedFriProof {
+                    batch_number,
+                    last_block_timestamp: batch_metadata
+                        .batch_info
+                        .commit_info
+                        .last_block_timestamp,
+                    expected_hash_u32s,
+                    proof_final_register_values,
+                    vk_hash: batch_metadata
+                        .verification_key_hash()
+                        .expect("VK must exist")
+                        .to_string(),
+                    proof_bytes: proof_bytes.clone(),
+                };
+
+                if let Err(save_err) = self.proof_storage.save_failed_proof(&failed_proof).await {
+                    tracing::error!(
+                        batch_number,
+                        ?save_err,
+                        "Failed to persist failed proof for debugging",
+                    );
+                } else {
+                    tracing::info!(batch_number, prover_id, "Failed proof saved for debugging",);
+                }
+
+                Err(SubmitError::FriProofVerificationError {
+                    expected_hash_u32s,
+                    proof_final_register_values,
+                })
             }
-
-            return Err(SubmitError::FriProofVerificationError {
-                expected_hash_u32s,
-                proof_final_register_values,
-            });
+            // Any other error (deserialization, unsupported version, ...) must reject the
+            // submission too - falling through here would accept an unverified proof.
+            Err(err) => Err(err),
         }
-
-        Ok(())
     }
 
     /// Deserializes and cryptographically verifies the proof.
