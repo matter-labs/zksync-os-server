@@ -116,9 +116,10 @@ async fn sensitive_to_balance_changes(mut tester: Tester) -> anyhow::Result<()> 
 }
 
 /// A transaction with maxFeePerGas below the chain's base fee must not stall
-/// block production for other senders. Run on both V5 (intrinsic native check off) and V6
-/// (check on); on V6 this also exercises the `basefee > max_fee_per_gas` short-circuit in
-/// the validator that lets such txs into the pool instead of rejecting at ingress.
+/// block production for other senders. Run both pre-v31 (intrinsic native check off) and
+/// post-v31 (check on); post-v31 this also exercises the `basefee > max_fee_per_gas`
+/// short-circuit in the validator that lets such txs into the pool instead of rejecting
+/// at ingress.
 #[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
 async fn low_fee_tx_does_not_hang_block_executor(env: TestEnvironment) -> anyhow::Result<()> {
     // Use a deterministic base fee so the "low fee" value is unambiguous.
@@ -233,8 +234,8 @@ async fn low_fee_tx_does_not_hang_block_executor(env: TestEnvironment) -> anyhow
 
 /// FeeConfig that produces native_per_gas=1 and native_per_pubdata=0, so the only thing the
 /// mempool's intrinsic-native check has to cover is the constant computational native cost
-/// (order of hundreds of thousands). With `gas_limit = 100_000` the V6 check fails; with a
-/// multi-million gas_limit it passes.
+/// (order of hundreds of thousands). With `gas_limit = 100_000` the post-v31 check fails;
+/// with a multi-million gas_limit it passes.
 fn intrinsic_native_test_fee_config() -> FeeConfig {
     let price: u64 = 1_000_000_000;
     FeeConfig {
@@ -247,8 +248,8 @@ fn intrinsic_native_test_fee_config() -> FeeConfig {
     }
 }
 
-/// Negative case: on V6, a tx whose `gas_limit` covers the EVM intrinsic gas (100_000) but not
-/// the V6 intrinsic native cost is rejected at mempool ingress with `intrinsic gas too low`.
+/// Negative case: post-v31, a tx whose `gas_limit` covers the EVM intrinsic gas (100_000) but
+/// not the intrinsic native cost is rejected at mempool ingress with `intrinsic gas too low`.
 #[test_multisetup([NEXT_TO_GATEWAY])]
 async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
@@ -283,8 +284,8 @@ async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> an
     Ok(())
 }
 
-/// Positive case: on V6, a tx with enough gas_limit to cover the intrinsic native cost passes
-/// the new validator and is mined successfully.
+/// Positive case: post-v31, a tx with enough gas_limit to cover the intrinsic native cost
+/// passes the new validator and is mined successfully.
 #[test_multisetup([NEXT_TO_GATEWAY])]
 async fn intrinsic_native_check_accepts_well_funded_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
@@ -318,10 +319,10 @@ async fn intrinsic_native_check_accepts_well_funded_tx(env: TestEnvironment) -> 
     Ok(())
 }
 
-/// Gating: on V5 the V6 intrinsic-native check is bypassed. The same low-gas tx that the
-/// negative test rejects on V6 must be accepted at mempool ingress here.
+/// Gating: pre-v31 the intrinsic-native check is bypassed. The same low-gas tx that the
+/// negative test rejects post-v31 must be accepted at mempool ingress here.
 #[test_multisetup([CURRENT_TO_L1])]
-async fn intrinsic_native_check_disabled_pre_v6(env: TestEnvironment) -> anyhow::Result<()> {
+async fn intrinsic_native_check_disabled_pre_v31(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();
     let tester = env.launch(config).await?;
@@ -341,8 +342,8 @@ async fn intrinsic_native_check_disabled_pre_v6(env: TestEnvironment) -> anyhow:
     let envelope = tx.build(&tester.l2_wallet).await?;
     let encoded = envelope.encoded_2718();
 
-    // Submission must succeed: the V6 check is gated off on V5, so the mempool accepts this
-    // tx even though the gas budget would not satisfy V6 native intrinsic.
+    // Submission must succeed: the check is gated off pre-v31, so the mempool accepts this
+    // tx even though the gas budget would not satisfy the native intrinsic cost.
     let _ = tester.l2_provider.send_raw_transaction(&encoded).await?;
 
     Ok(())

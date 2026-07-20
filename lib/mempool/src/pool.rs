@@ -449,6 +449,15 @@ impl<T: L2Subpool> Pool<T> {
         // correct version for incoming txs.
         self.l2_subpool
             .update_pending_protocol_version(replay_record.protocol_version.clone());
+        // Refresh the validator's fee params from the executed block's context. This is the only
+        // fee source on nodes that don't produce blocks (external nodes never call
+        // `update_pending_block_fees`); on the main node these values are overwritten with the
+        // pending block's params at the start of each `produce()`.
+        self.l2_subpool.update_pending_fee_params(FeeParams {
+            eip1559_basefee: replay_record.block_context.eip1559_basefee,
+            native_price: replay_record.block_context.native_price,
+            pubdata_price: replay_record.block_context.pubdata_price,
+        });
 
         StateChangeOutcome {
             last_interop_log_id,

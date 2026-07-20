@@ -360,7 +360,13 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let state = State::new(&config.general_config, &genesis).await;
 
+    tracing::info!("Initializing mempools");
     let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
+    let l2_subpool = zksync_os_mempool::subpools::l2::in_memory(
+        zk_provider_factory.clone(),
+        config.mempool_config.clone().into(),
+        config.tx_validator_config.clone().into(),
+    );
 
     let (
         last_l1_committed_block,
@@ -503,7 +509,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     verify_result_tx: verify_result_tx.clone(),
                 }),
                 block_replay_storage.clone(),
-                zk_provider_factory.clone(),
+                zk_provider_factory,
                 raft_protocol_handler,
             )
             .await
@@ -536,7 +542,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                     }),
                 }),
                 block_replay_storage.clone(),
-                zk_provider_factory.clone(),
+                zk_provider_factory,
                 raft_protocol_handler,
             )
             .await
@@ -658,14 +664,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
              but current protocol version {current_protocol_version} uses {exec_version:?}"
         );
     }
-
-    tracing::info!("Initializing mempools");
-    let l2_subpool = zksync_os_mempool::subpools::l2::in_memory(
-        zk_provider_factory.clone(),
-        config.mempool_config.clone().into(),
-        config.tx_validator_config.clone().into(),
-        current_protocol_version.clone(),
-    );
 
     if config
         .sequencer_config

@@ -154,7 +154,6 @@ pub fn in_memory(
     >,
     pool_config: PoolConfig,
     validator_config: TxValidatorConfig,
-    protocol_version: ProtocolSemanticVersion,
 ) -> impl L2Subpool {
     let blob_store = NoopBlobStore::default();
     // Use `ViseRecorder` during mempool initialization to register metrics. This will make sure
@@ -171,7 +170,7 @@ pub fn in_memory(
                 .set_tx_fee_cap(0)
                 .build(blob_store);
         RethPool::new(
-            ZkTransactionValidator::new(eth_validator, protocol_version),
+            ZkTransactionValidator::new(eth_validator),
             CoinbaseTipOrdering::default(),
             blob_store,
             pool_config,

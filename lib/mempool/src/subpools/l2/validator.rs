@@ -17,7 +17,7 @@ use zksync_os_types::{FeeParams, ProtocolSemanticVersion};
 /// stateless validation on top of the standard Ethereum checks.
 ///
 /// The extra L2 checks rely only on the transaction and the latest fee params /
-/// execution version cached on `self`, so they don't need access to on-chain state and
+/// protocol version cached on `self`, so they don't need access to on-chain state and
 /// run during the stateless phase.
 ///
 /// The validation pipeline mirrors reth's own call chain:
@@ -34,15 +34,14 @@ pub(crate) struct ZkTransactionValidator<Client, Tx> {
     inner: EthTransactionValidator<Client, Tx, EthEvmConfig>,
     fee_params: RwLock<FeeParams>,
     /// Protocol version expected for the next produced block. Drives version-gated
-    /// stateless checks (e.g. intrinsic native resources, available from v31 / execution V6).
-    protocol_version: RwLock<ProtocolSemanticVersion>,
+    /// stateless checks (e.g. intrinsic native resources, available from v31).
+    /// Starts as `None` (version-gated checks disabled) and is populated on canonical state
+    /// changes — at least one block is replayed before block production starts.
+    protocol_version: RwLock<Option<ProtocolSemanticVersion>>,
 }
 
 impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
-    pub(crate) fn new(
-        inner: EthTransactionValidator<Client, Tx, EthEvmConfig>,
-        protocol_version: ProtocolSemanticVersion,
-    ) -> Self {
+    pub(crate) fn new(inner: EthTransactionValidator<Client, Tx, EthEvmConfig>) -> Self {
         // Before the first `update_fee_params` call, treat the chain as a 0 gas price chain with
         // unlimited native resource: basefee/pubdata are 0, native_price is 1 (not 0) so that any
         // divisions by native_price remain well-defined.
@@ -54,7 +53,7 @@ impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
         Self {
             inner,
             fee_params: RwLock::new(fee_params),
-            protocol_version: RwLock::new(protocol_version),
+            protocol_version: RwLock::new(None),
         }
     }
 
@@ -63,7 +62,7 @@ impl<Client, Tx> ZkTransactionValidator<Client, Tx> {
     }
 
     pub(crate) fn update_protocol_version(&self, protocol_version: ProtocolSemanticVersion) {
-        *self.protocol_version.write().expect("lock poisoned") = protocol_version;
+        *self.protocol_version.write().expect("lock poisoned") = Some(protocol_version);
     }
 }
 
@@ -129,7 +128,8 @@ where
             .protocol_version
             .read()
             .expect("lock poisoned")
-            .is_post_v31()
+            .as_ref()
+            .is_some_and(ProtocolSemanticVersion::is_post_v31)
         {
             self.validate_intrinsic_native_resources(transaction)?;
         }
