@@ -13,8 +13,7 @@ pub use config::{
     ZksProtocolConfig,
 };
 pub use connection::ZksConnection;
-pub(crate) use events::ConnectionRegistry;
-pub use events::{PeerConnectionHandle, ProtocolEvent};
+pub use events::ProtocolEvent;
 pub use handler::{ZksProtocolConnectionHandler, ZksProtocolHandler};
 pub use handler_shared_state::HandlerSharedState;
 

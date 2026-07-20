@@ -5,7 +5,8 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_storage_api::ReplayRecord;
 
-/// Dependencies required to run the main-node side of the `zks` protocol.
+/// Verifier dependencies provided by the main node. Consumed by the `zks_2fa` subprotocol
+/// handler; the replay-only `zks` protocol does not use them.
 #[derive(Debug, Clone)]
 pub struct MainNodeProtocolConfig {
     /// Accepted verifier signers for this main node.
@@ -26,6 +27,8 @@ pub struct ExternalNodeProtocolConfig {
     /// Channel used to forward replay records into the local sequencer.
     pub replay_sender: mpsc::Sender<ReplayRecord>,
     /// Optional verifier configuration. When absent, this EN only participates in replay sync.
+    /// Consumed by the `zks_2fa` subprotocol handler; the replay-only `zks` protocol does not
+    /// use it.
     pub verification: Option<ExternalNodeVerifierConfig>,
 }
 

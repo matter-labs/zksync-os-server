@@ -1,10 +1,9 @@
-use super::config::{ExternalNodeProtocolConfig, MainNodeProtocolConfig};
+use super::ProtocolEvent;
+use super::config::ExternalNodeProtocolConfig;
 use super::connection::ZksConnection;
 use super::en::run_en_connection;
-use super::events::PeerConnectionHandle;
 use super::handler_shared_state::HandlerSharedState;
 use super::mn::run_mn_connection;
-use super::{ConnectionRegistry, ProtocolEvent};
 use crate::version::ZksProtocolVersionSpec;
 use crate::wire::message::{ZKS_PROTOCOL, ZksMessage};
 use futures::{Stream, StreamExt};
@@ -26,10 +25,7 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 32;
 
 #[derive(Debug, Clone)]
 enum ProtocolRole<Replay> {
-    MainNode {
-        replay: Replay,
-        config: MainNodeProtocolConfig,
-    },
+    MainNode { replay: Replay },
     ExternalNode(ExternalNodeProtocolConfig),
 }
 
@@ -38,7 +34,6 @@ pub struct ZksProtocolHandler<P: ZksProtocolVersionSpec, Replay: Clone> {
     role: ProtocolRole<Replay>,
     /// Current state of the protocol.
     state: HandlerSharedState,
-    connection_registry: ConnectionRegistry,
     _phantom: PhantomData<P>,
 }
 
@@ -46,7 +41,6 @@ pub struct ZksProtocolConnectionHandler<P: ZksProtocolVersionSpec, Replay: Clone
     role: ProtocolRole<Replay>,
     /// Current state of the protocol.
     state: HandlerSharedState,
-    connection_registry: ConnectionRegistry,
     remote_addr: SocketAddr,
     /// Owned permit for a taken active connection slot, or `None` for a trusted peer that bypasses the cap.
     permit: Option<OwnedSemaphorePermit>,
@@ -54,16 +48,10 @@ pub struct ZksProtocolConnectionHandler<P: ZksProtocolVersionSpec, Replay: Clone
 }
 
 impl<P: ZksProtocolVersionSpec, Replay: Clone> ZksProtocolHandler<P, Replay> {
-    pub fn for_main_node(
-        replay: Replay,
-        config: MainNodeProtocolConfig,
-        state: HandlerSharedState,
-        connection_registry: ConnectionRegistry,
-    ) -> Self {
+    pub fn for_main_node(replay: Replay, state: HandlerSharedState) -> Self {
         Self {
-            role: ProtocolRole::MainNode { replay, config },
+            role: ProtocolRole::MainNode { replay },
             state,
-            connection_registry,
             _phantom: Default::default(),
         }
     }
@@ -72,12 +60,10 @@ impl<P: ZksProtocolVersionSpec, Replay: Clone> ZksProtocolHandler<P, Replay> {
         _replay: Replay,
         config: ExternalNodeProtocolConfig,
         state: HandlerSharedState,
-        connection_registry: ConnectionRegistry,
     ) -> Self {
         Self {
             role: ProtocolRole::ExternalNode(config),
             state,
-            connection_registry,
             _phantom: Default::default(),
         }
     }
@@ -90,7 +76,6 @@ impl<P: ZksProtocolVersionSpec, Replay: Clone> ZksProtocolHandler<P, Replay> {
         ZksProtocolConnectionHandler {
             role: self.role.clone(),
             state: self.state.clone(),
-            connection_registry: self.connection_registry.clone(),
             remote_addr,
             permit,
             _phantom: Default::default(),
@@ -190,33 +175,21 @@ impl<P: ZksProtocolVersionSpec, Replay: ReadReplay + Clone> ConnectionHandler
             .ok();
 
         let (outbound_tx, outbound_rx) = mpsc::channel(OUTBOUND_CHANNEL_CAPACITY);
-        self.connection_registry
-            .write()
-            .expect("protocol connection registry lock poisoned")
-            .insert(
-                peer_id,
-                PeerConnectionHandle {
-                    version: P::VERSION,
-                    outbound_tx: outbound_tx.clone(),
-                },
-            );
         let conn = into_message_stream::<P>(conn);
-        let connection_registry = self.connection_registry.clone();
 
         let task = match self.role {
-            ProtocolRole::MainNode { replay, config } => tokio::spawn(
+            ProtocolRole::MainNode { replay } => tokio::spawn(
                 run_mn_connection::<P, _>(
                     conn,
                     outbound_tx,
                     events_sender.clone(),
                     peer_id,
                     replay,
-                    config,
                 )
                 .instrument(tracing::info_span!("mn_connection", %peer_id)),
             ),
             ProtocolRole::ExternalNode(config) => tokio::spawn(
-                run_en_connection::<P>(conn, outbound_tx, peer_id, config)
+                run_en_connection::<P>(conn, outbound_tx, config)
                     .instrument(tracing::info_span!("en_connection", %peer_id)),
             ),
         };
@@ -226,7 +199,6 @@ impl<P: ZksProtocolVersionSpec, Replay: ReadReplay + Clone> ConnectionHandler
             task,
             events_sender,
             peer_id,
-            connection_registry,
             _permit: self.permit,
         }
     }
