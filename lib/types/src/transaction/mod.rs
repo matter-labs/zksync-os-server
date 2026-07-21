@@ -67,18 +67,29 @@ pub struct ZkTransaction {
     pub inner: Recovered<ZkEnvelope>,
 }
 
-// Serde uses the canonical EIP-2718 encoding (hex in human-readable formats like the JSON
-// replay archive records and block dumps). Field-level JSON projections of transactions
-// exist for RPC responses only and are lossy for non-Ethereum transaction types, while the
-// 2718 encoding is lossless by construction: the transaction hash commits to it.
-impl Serialize for ZkTransaction {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        Bytes::from(self.inner.encoded_2718()).serialize(serializer)
+/// `serde_with` adapter serializing a [`ZkTransaction`] as its canonical EIP-2718 encoding (hex in
+/// human-readable formats). Field-level JSON projections of transactions exist for RPC responses
+/// only and are lossy for non-Ethereum transaction types, while the 2718 encoding is lossless by
+/// construction: the transaction hash commits to it.
+///
+/// Applied explicitly at the JSON call sites (e.g. `#[serde_as(as = "Vec<Eip2718>")]`) rather than
+/// as a blanket `Serialize`/`Deserialize` on the type, so a serde consumer opts into this encoding
+/// deliberately.
+pub struct Eip2718;
+
+impl serde_with::SerializeAs<ZkTransaction> for Eip2718 {
+    fn serialize_as<S: serde::Serializer>(
+        source: &ZkTransaction,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Bytes::from(source.inner.encoded_2718()).serialize(serializer)
     }
 }
 
-impl<'de> Deserialize<'de> for ZkTransaction {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+impl<'de> serde_with::DeserializeAs<'de, ZkTransaction> for Eip2718 {
+    fn deserialize_as<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<ZkTransaction, D::Error> {
         let bytes = Bytes::deserialize(deserializer)?;
         let envelope =
             ZkEnvelope::decode_2718(&mut bytes.as_ref()).map_err(serde::de::Error::custom)?;
@@ -242,26 +253,36 @@ mod tests {
         )
     }
 
-    /// The replay archive (and block dumps) round-trip transactions through serde; the
-    /// canonical EIP-2718 encoding is the only representation that is lossless for every
-    /// transaction variant, so that is what the serde impls must use.
+    /// The replay archive (and block dumps) round-trip transactions through the [`Eip2718`]
+    /// `serde_as` adapter; the canonical EIP-2718 encoding is the only representation that is
+    /// lossless for every transaction variant, so that is what the adapter must use.
     #[test]
-    fn zk_transaction_serde_round_trips_via_canonical_2718_bytes() {
+    fn eip2718_serde_as_round_trips_via_canonical_2718_bytes() {
+        #[serde_with::serde_as]
+        #[derive(Serialize, Deserialize)]
+        struct Wrapper {
+            #[serde_as(as = "Vec<Eip2718>")]
+            txs: Vec<ZkTransaction>,
+        }
+
         let system_tx: ZkTransaction = SystemTxEnvelope::set_sl_chain_id(11155111, 7).into();
         let l2_tx = ZkEnvelope::fallback_decode(&mut live_legacy_raw_tx().as_ref())
             .unwrap()
             .try_into_recovered()
             .unwrap();
 
-        for tx in [system_tx, l2_tx] {
-            let json = serde_json::to_value(&tx).unwrap();
+        let wrapper = Wrapper {
+            txs: vec![system_tx, l2_tx],
+        };
+        let json = serde_json::to_value(&wrapper).unwrap();
+        for tx_json in json["txs"].as_array().unwrap() {
             assert!(
-                json.is_string(),
-                "transaction must serialize as canonical 2718 bytes, got: {json}"
+                tx_json.is_string(),
+                "transaction must serialize as canonical 2718 bytes, got: {tx_json}"
             );
-            let decoded: ZkTransaction = serde_json::from_value(json).unwrap();
-            assert_eq!(decoded, tx);
         }
+        let decoded: Wrapper = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.txs, wrapper.txs);
     }
 
     #[test]
