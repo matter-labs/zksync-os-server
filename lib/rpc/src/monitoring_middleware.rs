@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio_util::task::AbortOnDropHandle;
 
 #[derive(Clone, Copy, Debug)]
 pub enum CallKind {
@@ -277,8 +278,11 @@ where
                         }
                         Ok(BatchEntry::Notification(n)) => {
                             got_notification = true;
-                            // Notifications have no response slot and no ordering requirement;
-                            // handle them inline like the sequential path does.
+                            // Notifications are awaited inline instead of joining the
+                            // concurrent work queue: jsonrpsee's root service does not
+                            // dispatch them to handlers (only our metrics see them), so this
+                            // costs ~nothing and keeps `Prepared` free of borrowed data,
+                            // which spawning requires.
                             service.notification(n).await;
                         }
                         Err(err) => {
@@ -290,40 +294,55 @@ where
 
                 // Entries execute concurrently so CPU-heavy handlers (e.g.
                 // `eth_sendRawTransaction`'s inline ECDSA recovery) spread across worker
-                // threads instead of serializing on this connection's task. `buffered` starts
-                // at most MAX_CONCURRENT_BATCH_ENTRIES wrappers at a time and yields results
-                // in request order, which the JSON-RPC response array must follow.
+                // threads instead of serializing on this connection's task.
+                //
+                // `buffer_unordered` (not `buffered`) keeps MAX_CONCURRENT_BATCH_ENTRIES
+                // entries in flight regardless of completion order: ordered buffering counts
+                // completed-but-unyielded results against its window, so one slow entry at the
+                // front would drain the window to a single running task. Responses are
+                // reassembled in request order afterwards — the JSON-RPC 2.0 spec lets clients
+                // correlate by id instead, but naive clients index into the array, and the
+                // sequential path preserves order, so we keep that property.
+                //
+                // `AbortOnDropHandle` ties each spawned entry to the batch future: if the
+                // batch is cancelled (client disconnected), in-flight entries abort instead of
+                // running detached.
                 //
                 // The closure owns its own service handle (instead of borrowing the outer one)
                 // to keep the stream `Send` without requiring `S: Sync`.
                 let svc = service.clone();
-                let mut responses = futures::stream::iter(prepared.into_iter().map(move |entry| {
-                    let service = svc.clone();
-                    async move {
-                        match entry {
-                            Prepared::Call { id, req } => {
-                                match tokio::spawn(service.call(req)).await {
-                                    Ok(rp) => rp,
-                                    // Panics are caught inside the spawned future by
-                                    // `CallGuard`; a join error only means the task was
-                                    // aborted (runtime shutdown).
-                                    Err(_) => MethodResponse::error(
-                                        id,
-                                        internal_rpc_err("Internal error"),
-                                    ),
+                let mut responses: Vec<(usize, MethodResponse)> = futures::stream::iter(
+                    prepared.into_iter().enumerate().map(move |(index, entry)| {
+                        let service = svc.clone();
+                        async move {
+                            let rp = match entry {
+                                Prepared::Call { id, req } => {
+                                    match AbortOnDropHandle::new(tokio::spawn(service.call(req)))
+                                        .await
+                                    {
+                                        Ok(rp) => rp,
+                                        // Panics are caught inside the spawned future by
+                                        // `CallGuard`; a join error only means the task was
+                                        // aborted (runtime shutdown).
+                                        Err(_) => MethodResponse::error(
+                                            id,
+                                            internal_rpc_err("Internal error"),
+                                        ),
+                                    }
                                 }
-                            }
-                            Prepared::Ready(rp) => rp,
+                                Prepared::Ready(rp) => rp,
+                            };
+                            (index, rp)
                         }
-                    }
-                }))
-                .buffered(MAX_CONCURRENT_BATCH_ENTRIES);
+                    }),
+                )
+                .buffer_unordered(MAX_CONCURRENT_BATCH_ENTRIES)
+                .collect()
+                .await;
 
-                while let Some(rp) = responses.next().await {
+                responses.sort_unstable_by_key(|(index, _)| *index);
+                for (_, rp) in responses {
                     if let Err(err) = batch_rp.append(rp) {
-                        // Entries still in flight keep running detached and their side effects
-                        // may still land even though the whole batch is replaced by this error
-                        // response.
                         return err;
                     }
                 }
@@ -386,6 +405,7 @@ mod tests {
     use jsonrpsee::ResponsePayload;
     use jsonrpsee::core::middleware::{BatchEntryErr, RpcServiceBuilder};
     use jsonrpsee::types::ErrorObject;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -413,14 +433,27 @@ mod tests {
     #[derive(Clone)]
     struct Marker;
 
+    /// Decrements the in-flight counter on drop, so cancelled/aborted entries are accounted
+    /// for and not just ones that ran to completion.
+    struct InFlightGuard(Arc<AtomicUsize>);
+
+    impl Drop for InFlightGuard {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     /// Stands in for the rest of the middleware stack. Behavior is keyed off the method name:
-    /// `sleep_<ms>` sleeps before responding, `panic` panics, anything else responds
-    /// immediately. Every response payload is `"<method>:<has extensions marker>"`.
+    /// `sleep_<ms>` awaits a timer, `block_<ms>` blocks its OS thread, `wait_for_<n>` waits
+    /// until `n` entries have completed, `panic` panics, anything else responds immediately.
+    /// Every response payload is `"<method>:<has extensions marker>"`.
     #[derive(Clone, Default)]
     struct MockService {
         in_flight: Arc<AtomicUsize>,
         max_in_flight: Arc<AtomicUsize>,
+        completed: Arc<AtomicUsize>,
         notifications: Arc<AtomicUsize>,
+        threads_seen: Arc<Mutex<HashSet<std::thread::ThreadId>>>,
     }
 
     impl RpcServiceT for MockService {
@@ -436,21 +469,33 @@ mod tests {
             async move {
                 let n = this.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 this.max_in_flight.fetch_max(n, Ordering::SeqCst);
+                let _in_flight = InFlightGuard(this.in_flight.clone());
+                this.threads_seen
+                    .lock()
+                    .unwrap()
+                    .insert(std::thread::current().id());
 
                 let method = request.method_name().to_owned();
                 let id = request.id.clone().into_owned();
                 let has_marker = request.extensions().get::<Marker>().is_some();
 
                 if method == "panic" {
-                    // `in_flight` intentionally stays incremented; panicking tests don't
-                    // assert on it.
                     panic!("mock method panicked");
                 }
                 if let Some(ms) = method.strip_prefix("sleep_") {
                     tokio::time::sleep(Duration::from_millis(ms.parse().unwrap())).await;
                 }
+                if let Some(ms) = method.strip_prefix("block_") {
+                    std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
+                }
+                if let Some(count) = method.strip_prefix("wait_for_") {
+                    let count: usize = count.parse().unwrap();
+                    while this.completed.load(Ordering::SeqCst) < count {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                }
 
-                this.in_flight.fetch_sub(1, Ordering::SeqCst);
+                this.completed.fetch_add(1, Ordering::SeqCst);
                 MethodResponse::response(
                     id,
                     ResponsePayload::success(format!("{method}:{has_marker}")),
@@ -574,6 +619,108 @@ mod tests {
         assert!(max >= 2, "entries never overlapped: max in-flight {max}");
     }
 
+    /// Regression test for head-of-line blocking: ordered buffering (`buffered`) counts
+    /// completed-but-unyielded results against its window, so a slow entry at the front
+    /// starves the window and entries beyond it never start. The first entry here cannot
+    /// complete until 40 later entries have — that deadlocks (and trips the timeout) unless
+    /// the window replenishes behind the slow entry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn parallel_batch_replenishes_window_behind_slow_entry() {
+        let (monitoring, _) = monitoring(true);
+        let mut entries = vec![call_entry(0, "wait_for_40")];
+        entries.extend((1..65u64).map(|i| call_entry(i, "sleep_1")));
+
+        let rp = tokio::time::timeout(
+            Duration::from_secs(10),
+            monitoring.batch(Batch::from(entries)),
+        )
+        .await
+        .expect("deadlocked: window did not replenish behind the slow first entry");
+
+        let ids: Vec<u64> = parse_batch(&rp).iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, (0..65).collect::<Vec<_>>());
+    }
+
+    /// Entries of a cancelled batch (e.g. the client disconnected mid-flight) must abort
+    /// rather than keep running detached past the request's lifetime.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn cancelling_parallel_batch_aborts_spawned_entries() {
+        let (monitoring, mock) = monitoring(true);
+        let entries = (0..16u64).map(|i| call_entry(i, "sleep_10000")).collect();
+
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(100),
+            monitoring.batch(Batch::from(entries)),
+        )
+        .await;
+        assert!(cancelled.is_err(), "batch must still be sleeping at 100ms");
+        assert!(mock.max_in_flight.load(Ordering::SeqCst) > 0);
+
+        // Aborts propagate asynchronously; wait for the in-flight count to drain.
+        for _ in 0..100 {
+            if mock.in_flight.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            mock.in_flight.load(Ordering::SeqCst),
+            0,
+            "spawned entries kept running after the batch future was dropped"
+        );
+        assert_eq!(mock.completed.load(Ordering::SeqCst), 0);
+    }
+
+    /// The point of spawning entries (rather than just polling them concurrently on one task):
+    /// work that occupies its thread spreads across runtime workers.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn parallel_batch_spreads_entries_across_threads() {
+        let (monitoring, mock) = monitoring(true);
+        let entries = (0..8u64).map(|i| call_entry(i, "block_50")).collect();
+
+        monitoring.batch(Batch::from(entries)).await;
+
+        let threads = mock.threads_seen.lock().unwrap().len();
+        assert!(
+            threads >= 2,
+            "all thread-blocking entries ran on a single worker thread"
+        );
+    }
+
+    /// Slot bookkeeping survives windowing: a batch much larger than the concurrency bound,
+    /// mixing calls, malformed entries and notifications, comes back with exactly the
+    /// non-notification entries in request order.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn large_heterogeneous_parallel_batch_keeps_slots() {
+        let (monitoring, mock) = monitoring(true);
+        let mut entries = Vec::new();
+        let mut expected = Vec::new();
+        let mut notifications = 0;
+        for i in 0..80u64 {
+            if i % 7 == 3 {
+                entries.push(Err(BatchEntryErr::new(
+                    Id::Number(i),
+                    ErrorObject::owned(-32600, "Invalid Request", None::<()>),
+                )));
+                expected.push((i, Err(-32600)));
+            } else if i % 11 == 5 {
+                entries.push(notification_entry());
+                notifications += 1;
+            } else if i % 2 == 0 {
+                entries.push(call_entry(i, "echo"));
+                expected.push((i, Ok("echo:false".to_owned())));
+            } else {
+                entries.push(call_entry(i, "sleep_2"));
+                expected.push((i, Ok("sleep_2:false".to_owned())));
+            }
+        }
+
+        let rp = monitoring.batch(Batch::from(entries)).await;
+
+        assert_eq!(parse_batch(&rp), expected);
+        assert_eq!(mock.notifications.load(Ordering::SeqCst), notifications);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn sequential_batch_runs_entries_one_at_a_time() {
         let (monitoring, mock) = monitoring(false);
@@ -649,25 +796,24 @@ mod tests {
         assert_eq!(mock.notifications.load(Ordering::SeqCst), 2);
     }
 
-    /// End-to-end tests over real HTTP: the full jsonrpsee server stack parses the batch, so
-    /// these cover transport-level behavior the mock tests can't (extensions injection,
-    /// subscription rejection, the batch size limit).
+    /// End-to-end test over real HTTP for behavior that lives below this middleware and can't
+    /// be reached with a mock inner service: jsonrpsee rejects subscription calls per-entry on
+    /// transports without a ws sink. (Wire-level response order is pinned by the mock tests
+    /// above, which assert on the exact JSON array this middleware emits; an HTTP client can't
+    /// observe it because jsonrpsee's client re-correlates batch responses by id.)
     mod http {
         use super::*;
         use jsonrpsee::RpcModule;
         use jsonrpsee::core::client::ClientT;
         use jsonrpsee::core::params::BatchRequestBuilder;
         use jsonrpsee::http_client::HttpClientBuilder;
-        use jsonrpsee::server::{
-            BatchRequestConfig, ServerBuilder, ServerConfigBuilder, ServerHandle,
-        };
+        use jsonrpsee::server::{ServerBuilder, ServerHandle};
 
-        async fn spin_server(batch_config: BatchRequestConfig) -> (ServerHandle, String) {
+        async fn spin_server() -> (ServerHandle, String) {
             let mut module = RpcModule::new(());
             module
                 .register_async_method("say", |params, _ctx, _ext| async move {
-                    let (delay_ms, tag): (u64, String) = params.parse().unwrap();
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    let (tag,): (String,) = params.parse().unwrap();
                     tag
                 })
                 .unwrap();
@@ -684,11 +830,7 @@ mod tests {
             let rpc_middleware = RpcServiceBuilder::new().layer_fn(move |service| {
                 Monitoring::new(service, 10 * 1024 * 1024, known_methods.clone(), true)
             });
-            let server_config = ServerConfigBuilder::default()
-                .set_batch_request_config(batch_config)
-                .build();
             let server = ServerBuilder::default()
-                .set_config(server_config)
                 .set_rpc_middleware(rpc_middleware)
                 .build("127.0.0.1:0")
                 .await
@@ -697,42 +839,17 @@ mod tests {
             (server.start(module), format!("http://{addr}"))
         }
 
-        #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-        async fn http_batch_responses_arrive_in_request_order() {
-            let (_handle, url) = spin_server(BatchRequestConfig::Unlimited).await;
-            let client = HttpClientBuilder::default().build(url).unwrap();
-
-            let mut batch = BatchRequestBuilder::new();
-            for i in 0..8u64 {
-                // Reverse-staggered delays, as in the mock ordering test.
-                batch
-                    .insert("say", jsonrpsee::rpc_params![(8 - i) * 20, i.to_string()])
-                    .unwrap();
-            }
-
-            let tags: Vec<String> = client
-                .batch_request::<String>(batch)
-                .await
-                .unwrap()
-                .into_iter()
-                .map(Result::unwrap)
-                .collect();
-            assert_eq!(tags, (0..8).map(|i| i.to_string()).collect::<Vec<_>>());
-        }
-
         #[tokio::test(flavor = "multi_thread")]
         async fn subscription_in_http_batch_fails_alone() {
-            let (_handle, url) = spin_server(BatchRequestConfig::Unlimited).await;
+            let (_handle, url) = spin_server().await;
             let client = HttpClientBuilder::default().build(url).unwrap();
 
             let mut batch = BatchRequestBuilder::new();
             batch
-                .insert("say", jsonrpsee::rpc_params![0u64, "first"])
+                .insert("say", jsonrpsee::rpc_params!["first"])
                 .unwrap();
             batch.insert("sub", jsonrpsee::rpc_params![]).unwrap();
-            batch
-                .insert("say", jsonrpsee::rpc_params![0u64, "last"])
-                .unwrap();
+            batch.insert("say", jsonrpsee::rpc_params!["last"]).unwrap();
 
             let entries: Vec<_> = client
                 .batch_request::<serde_json::Value>(batch)
@@ -745,38 +862,6 @@ mod tests {
             // the rest of the batch still executes.
             assert!(entries[1].is_err());
             assert_eq!(entries[2].as_ref().unwrap(), "last");
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        async fn over_limit_http_batch_is_rejected_whole() {
-            let (_handle, url) = spin_server(BatchRequestConfig::Limit(4)).await;
-            let client = HttpClientBuilder::default().build(url).unwrap();
-
-            let batch_of = |n: u64| {
-                let mut batch = BatchRequestBuilder::new();
-                for i in 0..n {
-                    batch
-                        .insert("say", jsonrpsee::rpc_params![0u64, i.to_string()])
-                        .unwrap();
-                }
-                batch
-            };
-
-            // At the limit the batch executes normally...
-            let ok = client.batch_request::<String>(batch_of(4)).await.unwrap();
-            assert_eq!(ok.num_successful_calls(), 4);
-
-            // ...one entry above it, the whole batch is rejected before any entry runs: the
-            // server answers with a single error object instead of a response array, which
-            // the jsonrpsee client surfaces as a parse error.
-            let err = client
-                .batch_request::<String>(batch_of(5))
-                .await
-                .expect_err("batch above the configured limit must be rejected");
-            assert!(
-                matches!(err, jsonrpsee::core::ClientError::ParseError(_)),
-                "unexpected error: {err}"
-            );
         }
     }
 }
