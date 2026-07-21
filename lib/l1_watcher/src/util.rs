@@ -5,6 +5,9 @@ use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use backon::{ConstantBuilder, Retryable};
+use futures::{StreamExt, TryStreamExt};
+use std::collections::HashMap;
+use std::future::Future;
 use std::time::Duration;
 use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
@@ -18,6 +21,24 @@ use zksync_os_provider::NodeProvider;
 const COMMIT_DATA_RETRY_POLICY: ConstantBuilder = ConstantBuilder::new()
     .with_delay(Duration::from_millis(200))
     .with_max_times(50);
+
+/// Runs `fetch` over `items` with at most `limit` fetches in flight, collecting the keyed
+/// results into a map. The first error aborts the whole run.
+pub(crate) async fn prefetch_bounded<T, K, V, F, Fut>(
+    items: Vec<T>,
+    limit: usize,
+    fetch: F,
+) -> Result<HashMap<K, V>, L1WatcherError>
+where
+    K: std::hash::Hash + Eq,
+    F: Fn(T) -> Fut,
+    Fut: Future<Output = Result<(K, V), L1WatcherError>>,
+{
+    futures::stream::iter(items.into_iter().map(fetch))
+        .buffer_unordered(limit.max(1))
+        .try_collect()
+        .await
+}
 
 /// Distance of the first downward gallop probe from the latest block.
 ///
@@ -323,7 +344,51 @@ pub(crate) async fn fetch_commit_batch_info(
 #[cfg(test)]
 mod tests {
     use super::find_first_true_block;
+    use super::prefetch_bounded;
+    use crate::watcher::L1WatcherError;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn prefetch_bounded_never_exceeds_limit_but_runs_concurrently() {
+        const LIMIT: usize = 4;
+        let in_flight = AtomicUsize::new(0);
+        let max_seen = AtomicUsize::new(0);
+        let items: Vec<u64> = (0..16).collect();
+        let in_flight = &in_flight;
+        let max_seen = &max_seen;
+        let map = prefetch_bounded(items, LIMIT, |i| async move {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            max_seen.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok::<_, L1WatcherError>((i, ()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(map.len(), 16);
+        let max = max_seen.load(Ordering::SeqCst);
+        assert!(max <= LIMIT, "in-flight fetches exceeded limit: {max}");
+        assert!(max >= 2, "fetches ran serially (max in-flight {max})");
+    }
+
+    #[tokio::test]
+    async fn prefetch_bounded_is_actually_concurrent_within_limit() {
+        // All 8 fetches wait on one barrier: completes only if 8 run at once.
+        let barrier = tokio::sync::Barrier::new(8);
+        let barrier = &barrier;
+        let items: Vec<u64> = (0..8).collect();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            prefetch_bounded(items, 8, |i| async move {
+                barrier.wait().await;
+                Ok::<_, L1WatcherError>((i, ()))
+            }),
+        )
+        .await
+        .expect("deadlocked: fetches did not run concurrently");
+        assert_eq!(result.unwrap().len(), 8);
+    }
 
     /// Runs the search against a synthetic monotonic predicate (`block >= first_true`) and
     /// returns the result along with every probed block.

@@ -32,6 +32,16 @@ pub trait ProcessRawEvents: Send + Sync + 'static {
         None
     }
 
+    /// Invoked once per polling window before the ordered per-event processing, letting
+    /// processors fetch auxiliary data for many events concurrently. Defaults to a no-op.
+    async fn prefetch_events(
+        &mut self,
+        _provider: &NodeProvider,
+        _events: &[Log],
+    ) -> Result<(), L1WatcherError> {
+        Ok(())
+    }
+
     /// Invoked each time a new log matching the filter is found.
     ///
     /// `provider` is the settlement-layer provider the [`L1Watcher`](crate::L1Watcher) used to
