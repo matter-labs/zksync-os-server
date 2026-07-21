@@ -406,3 +406,67 @@ impl From<TxType> for alloy::consensus::TxType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::eips::eip2718::{Decodable2718, Encodable2718};
+    use alloy::eips::eip2930::AccessList;
+    use alloy::eips::eip7702::Authorization;
+    use alloy::primitives::{Bytes, U256, address};
+
+    /// EIP-7702 transactions must round-trip through the EIP-2718 (`0x04 || rlp(...)`) encoding
+    /// that ZKsync OS parses on the execution side. This locks the wire format — including the
+    /// authorization list — that the bootloader's `EIP7702Tx` decoder depends on.
+    #[test]
+    fn eip7702_encode_decode_2718_round_trip() {
+        let authorization = Authorization {
+            chain_id: U256::from(1u64),
+            address: address!("0x1111111111111111111111111111111111111111"),
+            nonce: 7,
+        };
+        let signed_authorization =
+            authorization.into_signed(Signature::new(U256::from(1u64), U256::from(2u64), false));
+
+        let tx = TxEip7702 {
+            chain_id: 271,
+            nonce: 3,
+            gas_limit: 100_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 1_000_000,
+            to: address!("0x2222222222222222222222222222222222222222"),
+            value: U256::from(42u64),
+            access_list: AccessList::default(),
+            authorization_list: vec![signed_authorization],
+            input: Bytes::from_static(&[0xab, 0xcd]),
+        };
+        let envelope = L2Envelope::Eip7702(tx.into_signed(Signature::new(
+            U256::from(3u64),
+            U256::from(4u64),
+            false,
+        )));
+
+        let encoded = envelope.encoded_2718();
+        assert_eq!(encoded[0], 0x04, "type byte must be 0x04 for EIP-7702");
+
+        let decoded = L2Envelope::decode_2718(&mut encoded.as_slice()).expect("decode 7702");
+        let signed = match &decoded {
+            L2Envelope::Eip7702(signed) => signed,
+            other => panic!("expected Eip7702, got {other:?}"),
+        };
+        assert_eq!(
+            signed.tx().to,
+            address!("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(signed.tx().value, U256::from(42u64));
+        assert_eq!(signed.tx().nonce, 3);
+        assert_eq!(signed.tx().chain_id, 271);
+        assert_eq!(signed.tx().authorization_list.len(), 1);
+        assert_eq!(
+            signed.tx().authorization_list[0].address,
+            address!("0x1111111111111111111111111111111111111111")
+        );
+        // Full byte-for-byte round trip.
+        assert_eq!(decoded.encoded_2718(), encoded);
+    }
+}

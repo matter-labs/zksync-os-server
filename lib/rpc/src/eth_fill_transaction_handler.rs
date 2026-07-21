@@ -18,9 +18,6 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         if request.has_eip4844_fields() {
             return Err(EthCallError::Eip4844NotSupported);
         }
-        if request.authorization_list.is_some() {
-            return Err(EthCallError::Eip7702NotSupported);
-        }
         if request.gas_price.is_some()
             && (request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some())
         {
@@ -63,10 +60,18 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut tx = self
             .create_tx_from_request(request, &block_context, false)?
             .into_envelope();
-        if let (Some(max_fee_per_gas), ZkEnvelope::L2(L2Envelope::Eip1559(inner))) =
-            (max_fee_per_gas, &mut tx)
-        {
-            inner.tx_mut().max_fee_per_gas = max_fee_per_gas;
+        // `create_tx_from_request` sets `max_fee_per_gas` to the *effective* gas price; restore
+        // the caller's requested fee cap on the returned (dynamic-fee) transaction.
+        if let Some(max_fee_per_gas) = max_fee_per_gas {
+            match &mut tx {
+                ZkEnvelope::L2(L2Envelope::Eip1559(inner)) => {
+                    inner.tx_mut().max_fee_per_gas = max_fee_per_gas;
+                }
+                ZkEnvelope::L2(L2Envelope::Eip7702(inner)) => {
+                    inner.tx_mut().max_fee_per_gas = max_fee_per_gas;
+                }
+                _ => {}
+            }
         }
         let raw = tx.encoded_2718().into();
         Ok(FillTransaction { raw, tx })

@@ -146,6 +146,7 @@ impl<Ok> ToRpcResult<Ok, EthCallError> for Result<Ok, EthCallError> {
                 None,
             ),
             EthCallError::CallFees(_) => invalid_params_rpc_err(err.to_string()),
+            EthCallError::Eip7702RequiresToAddress => invalid_params_rpc_err(err.to_string()),
             EthCallError::Storage(RpcStorageError::BlockNotFound(_)) => {
                 invalid_params_rpc_err(err.to_string())
             }

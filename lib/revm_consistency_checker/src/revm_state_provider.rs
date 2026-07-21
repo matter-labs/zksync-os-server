@@ -1,17 +1,28 @@
 use crate::helpers::get_unpadded_code;
-use alloy::primitives::{Address, B256, KECCAK256_EMPTY};
+use alloy::primitives::{Address, B256, Bytes, KECCAK256_EMPTY};
 use revm::DatabaseRef;
+use revm::bytecode::BytecodeKind;
 use revm::database_interface::DBErrorMarker;
 use revm::primitives::{StorageKey, StorageValue};
 use revm::state::{AccountInfo, Bytecode};
 use ruint::aliases::B160;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
-use zksync_os_storage_api::{BlockHashes, ViewState};
+use zksync_os_storage_api::{BlockHashes, ViewState, eip7702_delegation_designator};
 
 fn fixed_bytes_to_bytes32(x: B256) -> Bytes32 {
     let x: [u8; 32] = x.into();
     x.into()
+}
+
+/// Build a revm [`Bytecode`] from a ZKsync OS preimage. A 7702 delegation designator is trimmed
+/// to its 23 bytes (so revm follows the delegation); regular bytecode is wrapped verbatim.
+fn bytecode_from_preimage(full_bytecode: &[u8]) -> Bytecode {
+    match eip7702_delegation_designator(full_bytecode) {
+        Some(designator) => Bytecode::new_raw_checked(Bytes::copy_from_slice(designator))
+            .expect("valid EIP-7702 delegation designator"),
+        None => Bytecode::new_raw(Bytes::copy_from_slice(full_bytecode)),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +81,17 @@ where
                 } else {
                     let bytecode =
                         self.code_by_hash_ref(B256::from(props.bytecode_hash.as_u8_array()))?;
-                    Some(get_unpadded_code(bytecode.bytes_slice(), &props))
+                    Some(match bytecode.kind() {
+                        // A delegation designator is already exactly the 23-byte code; keep it as a
+                        // 7702 bytecode so revm follows the delegation instead of executing
+                        // `0xef01..` as legacy opcodes.
+                        BytecodeKind::Eip7702 => bytecode,
+                        // Legacy preimages still carry padding + artifacts; trim to the unpadded
+                        // code the EVM actually runs.
+                        BytecodeKind::LegacyAnalyzed => {
+                            get_unpadded_code(bytecode.bytes_slice(), &props)
+                        }
+                    })
                 };
 
                 Ok(AccountInfo {
@@ -90,7 +111,7 @@ where
             .state_view
             .clone()
             .get_preimage(code_hash)
-            .map(|bytes| Bytecode::new_raw(bytes.into()))
+            .map(|bytes| bytecode_from_preimage(&bytes))
             .unwrap_or_default())
     }
 

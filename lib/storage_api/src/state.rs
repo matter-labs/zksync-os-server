@@ -61,6 +61,21 @@ pub trait WriteState: Send + Sync + 'static {
         J: IntoIterator<Item = (B256, &'a Vec<u8>)>;
 }
 
+/// First three bytes of an EIP-7702 delegation designator: `0xef01` magic + version `0x00`.
+/// Matches `EIP7702_DELEGATION_MARKER` in ZKsync OS.
+const EIP7702_DELEGATION_PREFIX: [u8; 3] = [0xef, 0x01, 0x00];
+/// Full designator length: 3-byte prefix + 20-byte address.
+const EIP7702_DELEGATION_DESIGNATOR_LEN: usize = 23;
+
+/// If `preimage` starts with a delegation designator, returns the exact 23-byte designator;
+/// ZKsync OS stores it padded with trailing zeroes, but revm's 7702 parser requires exactly
+/// 23 bytes. Returns `None` for regular bytecode.
+pub fn eip7702_delegation_designator(preimage: &[u8]) -> Option<&[u8]> {
+    (preimage.len() >= EIP7702_DELEGATION_DESIGNATOR_LEN
+        && preimage.starts_with(&EIP7702_DELEGATION_PREFIX))
+    .then(|| &preimage[..EIP7702_DELEGATION_DESIGNATOR_LEN])
+}
+
 /// State reader result type.
 pub type StateResult<Ok> = Result<Ok, StateError>;
 

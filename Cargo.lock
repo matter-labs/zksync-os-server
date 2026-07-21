@@ -15932,7 +15932,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-revm"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-revm?tag=v0.1.0#b8ecfb814326afd527a43c84abc96e007a28df05"
+source = "git+https://github.com/matter-labs/zksync-os-revm?branch=cancun-7702-no-pectra#a9ed083eede45ecfa81970365da5d2bd93de9d81"
 dependencies = [
  "auto_impl",
  "revm 38.0.0",
@@ -16620,6 +16620,7 @@ dependencies = [
  "reth-storage-api",
  "reth-trie-common",
  "zksync_os_api",
+ "zksync_os_interface",
  "zksync_os_storage_api",
 ]
 

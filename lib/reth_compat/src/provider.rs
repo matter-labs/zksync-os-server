@@ -28,7 +28,10 @@ use std::fmt::Debug;
 use std::ops::{RangeBounds, RangeInclusive};
 use std::sync::Arc;
 use zk_os_api::helpers::{get_balance, get_nonce};
-use zksync_os_storage_api::{ReadRepository, ReadStateHistory, ViewState};
+use zksync_os_interface::traits::PreimageSource;
+use zksync_os_storage_api::{
+    ReadRepository, ReadStateHistory, ViewState, eip7702_delegation_designator,
+};
 
 #[derive(Debug, Clone)]
 pub struct ZkProviderFactory<State, Repository> {
@@ -46,10 +49,13 @@ impl<State: ReadStateHistory, Repository: ReadRepository> ZkProviderFactory<Stat
             .into_parts();
         let builder = ChainSpecBuilder::default()
             .chain(Chain::from(chain_id))
-            // Activate everything up to Cancun
-            // todo: does it make sense to active Cancun if we do not support 4844 transactions?
-            //       maybe drop down to Shanghai?
-            .cancun_activated()
+            // Activate everything up to Prague. Prague (Pectra) is required so that reth's
+            // mempool validator accepts EIP-7702 (set-code) transactions: it only admits type
+            // 0x04 txs when `fork_tracker.is_prague_activated()` is true, which is seeded from
+            // this chain spec. ZKsync OS itself executes 7702 unconditionally via the RLP path,
+            // so activating Prague here only affects mempool admission (this chain spec is not
+            // used for block execution or gas pricing).
+            .prague_activated()
             .genesis(Genesis {
                 // todo: evaluate whether genesis config needs to be tweaked
                 config: ChainConfig::default(),
@@ -161,10 +167,24 @@ impl<State: ReadStateHistory> AccountReader for ZkProvider<State> {
 }
 
 impl<ReadStorage: ReadStateHistory> BytecodeReader for ZkProvider<ReadStorage> {
-    fn bytecode_by_hash(&self, _code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
-        unimplemented!(
-            "reth mempool only calls this for EIP-7702 transactions which we do not support yet"
-        )
+    fn bytecode_by_hash(&self, code_hash: &B256) -> ProviderResult<Option<Bytecode>> {
+        // Called from reth's `validate_sender_bytecode` once Prague is active: a sender with
+        // bytecode may only send txs if that bytecode is a 7702 delegation designator. The
+        // designator must be trimmed to exactly 23 bytes; regular bytecode is returned verbatim
+        // (and reth rejects such a sender).
+        let mut view = self
+            .state
+            .state_view_at(self.latest_block)
+            .map_err(|_| ProviderError::StateAtBlockPruned(self.latest_block))?;
+        let Some(full_bytecode) = view.get_preimage(*code_hash) else {
+            return Ok(None);
+        };
+        let bytecode = match eip7702_delegation_designator(&full_bytecode) {
+            Some(designator) => Bytecode::new_raw_checked(Bytes::copy_from_slice(designator))
+                .map_err(ProviderError::other)?,
+            None => Bytecode::new_raw(full_bytecode.into()),
+        };
+        Ok(Some(bytecode))
     }
 }
 

@@ -293,7 +293,7 @@ reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0
 reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
 
-zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.1.0" }
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", branch = "cancun-7702-no-pectra" }
 revm = { version = "=38.0.0", features = ["optional_balance_check"] }
 
 # "Local" dependencies
