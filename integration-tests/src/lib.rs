@@ -46,6 +46,7 @@ pub mod assert_traits;
 pub mod config;
 pub mod contracts;
 pub mod l1_helpers;
+mod leash;
 mod node_log;
 mod prover_tester;
 pub mod provider;
@@ -851,6 +852,11 @@ impl AnvilL1 {
         })?;
         let address = provider.inner().anvil().endpoint();
 
+        // `AnvilInstance`'s Drop never runs if the test process is SIGKILLed or aborts,
+        // which would orphan an anvil that mines (and allocates) forever. The leash kills
+        // it whenever this process dies, no matter how.
+        leash::attach(provider.inner().anvil().child().id(), "anvil")?;
+
         let wallet = provider.wallet().clone();
 
         (|| async {
@@ -921,7 +927,7 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
     let path =
         download_prover_and_unpack(protocol_version, cfg!(feature = "gpu-prover-tests")).await;
 
-    let mut child = tokio::process::Command::new(path)
+    let mut child = tokio::process::Command::new(&path)
         .arg("--sequencer-urls")
         .arg(sequencer_urls.join(","))
         .arg("--app-bin-path")
@@ -937,8 +943,21 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
         .arg("--max-fris-per-snark")
         .arg("1")
         .arg("--disable-zk")
+        // Without this the prover keeps running after a panic: the wait-task below is
+        // dropped on runtime shutdown without ever signalling the child.
+        .kill_on_drop(true)
         .spawn()
         .expect("failed to spawn prover service");
+    let pid = child
+        .id()
+        .expect("newly spawned prover service has no process ID");
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .expect("prover binary path has no file name")
+        .to_string_lossy();
+    // Same rationale as for anvil: `kill_on_drop` never fires if the test process is
+    // SIGKILLed or aborts.
+    leash::attach(pid, &name).expect("failed to attach leash to prover service");
     tokio::task::spawn(async move {
         let code = child
             .wait()
