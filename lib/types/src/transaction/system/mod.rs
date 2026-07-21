@@ -23,7 +23,10 @@ pub use utils::{
 use zksync_os_contract_interface::IInteropCenter::setInteropFeeCall;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(into = "tx_serde::TransactionSerdeHelper")]
+#[serde(
+    into = "tx_serde::TransactionSerdeHelper",
+    try_from = "tx_serde::TransactionSerdeHelper"
+)]
 pub struct SystemTxEnvelope {
     /// Hash of the transaction
     /// Stored in an envelope and calculated separately from transaction as hash of transaction is not part of transaction itself.
@@ -179,6 +182,11 @@ mod tx_serde {
         pub max_priority_fee_per_gas: u128,
         #[serde(with = "alloy::serde::quantity")]
         pub nonce: u64,
+        /// Uniqueness salt of the system transaction. Not part of the Ethereum JSON-RPC
+        /// transaction shape, but required to reconstruct the transaction (and its hash)
+        /// from JSON.
+        #[serde(with = "alloy::serde::quantity")]
+        pub salt: u64,
         pub value: U256,
         pub input: Bytes,
 
@@ -202,6 +210,7 @@ mod tx_serde {
                 max_fee_per_gas: tx.max_fee_per_gas(),
                 max_priority_fee_per_gas: tx.max_priority_fee_per_gas().unwrap_or(0),
                 nonce: tx.nonce(),
+                salt: tx.inner.salt,
                 value: tx.value(),
                 input: Bytes::from(tx.input().to_vec()),
                 // Put defaults for signature fields
@@ -210,6 +219,33 @@ mod tx_serde {
                 s: U256::ZERO,
                 y_parity: false,
             }
+        }
+    }
+
+    // Deserialize: reconstruct the transaction from its calldata and salt, verifying the
+    // embedded hash so that a record that cannot be reconstructed exactly fails loudly.
+    impl TryFrom<TransactionSerdeHelper> for SystemTxEnvelope {
+        type Error = String;
+
+        fn try_from(helper: TransactionSerdeHelper) -> Result<Self, Self::Error> {
+            let inner = SystemTx {
+                to: helper.to,
+                input: helper.input,
+                salt: helper.salt,
+            };
+            let hash = inner.calculate_hash();
+            if hash != helper.hash {
+                return Err(format!(
+                    "system transaction hash mismatch: transaction with salt {} \
+                     hashes to {hash}, expected {}",
+                    inner.salt, helper.hash
+                ));
+            }
+            Ok(Self {
+                hash,
+                inner,
+                subtype: OnceLock::new(),
+            })
         }
     }
 }
@@ -417,6 +453,7 @@ mod tests {
   "maxFeePerGas": "0x0",
   "maxPriorityFeePerGas": "0x0",
   "nonce": "0x0",
+  "salt": "0x0",
   "value": "0x0",
   "input": "0xcca2f7bc00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
   "v": "0x0",
@@ -441,6 +478,7 @@ mod tests {
   "maxFeePerGas": "0x0",
   "maxPriorityFeePerGas": "0x0",
   "nonce": "0x0",
+  "salt": "0x0",
   "value": "0x0",
   "input": "0x040203e60000000000000000000000000000000000000000000000000000000000000001",
   "v": "0x0",
@@ -449,6 +487,57 @@ mod tests {
   "yParity": "0x0"
 }"#
         );
+    }
+
+    /// Replay archive records are JSON round-trips of `ReplayRecord`; system transactions
+    /// must deserialize back to the exact envelope they were serialized from.
+    #[test]
+    fn system_tx_json_round_trips() {
+        let txs = [
+            SystemTxEnvelope::set_sl_chain_id(11155111, 7),
+            SystemTxEnvelope::set_interop_fee(U256::from(42), 3),
+            SystemTxEnvelope::import_interop_roots(
+                vec![InteropRoot {
+                    chainId: Uint::from(1),
+                    blockOrBatchNumber: Uint::from(1),
+                    sides: vec![B256::ZERO],
+                }],
+                5,
+            ),
+        ];
+
+        for tx in txs {
+            let json = serde_json::to_string(&tx).unwrap();
+            let decoded: SystemTxEnvelope = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, tx, "{json}");
+        }
+    }
+
+    /// JSON without the `salt` field (written before the field existed) cannot be
+    /// reconstructed and must fail with a clear error instead of guessing.
+    #[test]
+    fn system_tx_json_rejects_records_without_salt() {
+        let tx = SystemTxEnvelope::set_sl_chain_id(11155111, 7);
+        let mut value = serde_json::to_value(&tx).unwrap();
+        value.as_object_mut().unwrap().remove("salt");
+
+        let err = serde_json::from_value::<SystemTxEnvelope>(value).unwrap_err();
+
+        assert!(err.to_string().contains("salt"), "{err}");
+    }
+
+    /// A record whose salt cannot be reconstructed (legacy record with non-zero salt, or
+    /// corrupted data) must fail loudly instead of producing a transaction with a
+    /// different hash.
+    #[test]
+    fn system_tx_json_rejects_hash_mismatch() {
+        let tx = SystemTxEnvelope::set_sl_chain_id(11155111, 7);
+        let mut value = serde_json::to_value(&tx).unwrap();
+        value["salt"] = serde_json::Value::String("0x0".to_owned());
+
+        let err = serde_json::from_value::<SystemTxEnvelope>(value).unwrap_err();
+
+        assert!(err.to_string().contains("hash"), "{err}");
     }
 
     #[test]
@@ -465,6 +554,7 @@ mod tests {
   "maxFeePerGas": "0x0",
   "maxPriorityFeePerGas": "0x0",
   "nonce": "0x0",
+  "salt": "0x0",
   "value": "0x0",
   "input": "0x08273d8a000000000000000000000000000000000000000000000000000000000000002a",
   "v": "0x0",

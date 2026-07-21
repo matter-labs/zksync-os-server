@@ -10,4 +10,5 @@ mod reconfig;
 mod registry;
 mod replay_archive;
 mod restart;
+mod revm_checker;
 mod settlement_ha;

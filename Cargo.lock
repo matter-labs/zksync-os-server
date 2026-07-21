@@ -2396,6 +2396,72 @@ dependencies = [
 ]
 
 [[package]]
+name = "azure_core"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e41cbd819986ba41904c207d8ffc4106f8f8352a548d773e9554906379bb2fb"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "azure_core_macros",
+ "bytes",
+ "futures",
+ "pin-project",
+ "rustc_version 0.4.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "typespec",
+ "typespec_client_core",
+]
+
+[[package]]
+name = "azure_core_macros"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9b52dba6a345f3ad2d42ff8d0d63df9d0994cfa29657bf18ffdbf149f78a4f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "tracing",
+]
+
+[[package]]
+name = "azure_identity"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32edf96b356ca7c51d7590c4925cc36efc3947a5da4468e8e0b25c56ecbb3de5"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "azure_core",
+ "futures",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "azure_security_keyvault_keys"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb869c31138eaf27e4bb4854e51810964cf689925d2ce0a790e9be37188e45fb"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "azure_core",
+ "futures",
+ "rustc_version 0.4.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "backon"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4230,7 +4296,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e75b2483e97a5a7da73ac68a05b629f9c53cff58d8ed1c77866079e18b00dba5"
 dependencies = [
  "digest 0.10.7",
- "spin",
+ "spin 0.10.0",
 ]
 
 [[package]]
@@ -5910,7 +5976,7 @@ dependencies = [
  "diatomic-waker",
  "futures-core",
  "pin-project-lite",
- "spin",
+ "spin 0.10.0",
 ]
 
 [[package]]
@@ -6222,6 +6288,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3494870d06f3cbbb3561ada6f234982549e3a2fb31e719ef258e6eadb9ae09a"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "base64 0.22.1",
  "bytes",
  "chrono",
@@ -6229,6 +6296,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "http 1.3.1",
+ "jsonwebtoken",
  "reqwest 0.13.4",
  "rustc_version 0.4.1",
  "rustls",
@@ -6401,6 +6469,46 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "google-cloud-storage"
+version = "1.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc4b1d78c88db5c2530b12461e373a7d0d3a6caa3f6c1fc14e5d824cf2aeb307"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "crc32c",
+ "futures",
+ "google-cloud-auth",
+ "google-cloud-gax",
+ "google-cloud-gax-internal",
+ "google-cloud-iam-v1",
+ "google-cloud-longrunning",
+ "google-cloud-lro",
+ "google-cloud-rpc",
+ "google-cloud-type",
+ "google-cloud-wkt",
+ "hex",
+ "http 1.3.1",
+ "http-body 1.0.1",
+ "md5",
+ "percent-encoding",
+ "prost 0.14.1",
+ "prost-types 0.14.1",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2 0.11.0",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -7785,6 +7893,7 @@ version = "10.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0529410abe238729a60b108898784df8984c87f6054c9c4fcacc47e4803c1ce1"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "getrandom 0.2.16",
  "js-sys",
@@ -7870,6 +7979,9 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+dependencies = [
+ "spin 0.9.9",
+]
 
 [[package]]
 name = "leb128"
@@ -8171,6 +8283,12 @@ dependencies = [
  "cfg-if",
  "digest 0.11.3",
 ]
+
+[[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "memchr"
@@ -8522,6 +8640,22 @@ dependencies = [
  "num-integer",
  "num-traits",
  "serde",
+]
+
+[[package]]
+name = "num-bigint-dig"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e661dda6640fad38e827a6d4a310ff4763082116fe217f279885c97f511bb0b7"
+dependencies = [
+ "lazy_static",
+ "libm",
+ "num-integer",
+ "num-iter",
+ "num-traits",
+ "rand 0.8.7",
+ "smallvec",
+ "zeroize",
 ]
 
 [[package]]
@@ -9194,6 +9328,17 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pkcs1"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8ffb9f10fa047879315e6625af03c164b16962a5368d724ed16323b68ace47f"
+dependencies = [
+ "der",
+ "pkcs8",
+ "spki",
+]
 
 [[package]]
 name = "pkcs8"
@@ -12065,6 +12210,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afab94fb28594581f62d981211a9a4d53cc8130bbcbbb89a0440d9b8e81a7746"
 
 [[package]]
+name = "rsa"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8573f03f5883dcaebdfcf4725caa1ecb9c15b2ef50c43a07b816e06799bb12d"
+dependencies = [
+ "const-oid 0.9.6",
+ "digest 0.10.7",
+ "num-bigint-dig",
+ "num-integer",
+ "num-traits",
+ "pkcs1",
+ "pkcs8",
+ "rand_core 0.6.4",
+ "signature",
+ "spki",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "ruint"
 version = "1.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13274,6 +13439,12 @@ dependencies = [
  "rand 0.8.7",
  "sha1 0.10.6",
 ]
+
+[[package]]
+name = "spin"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 
 [[package]]
 name = "spin"
@@ -14593,6 +14764,57 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 
 [[package]]
+name = "typespec"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "753a2fe021e407d4fc9ee6f4f0a33403cc306d5c54c4e4ebe1b8cbde0ca052b9"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "typespec_client_core"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0373af0f9d4f580b3a1a9d9639cedaabe015ed262b35bfbe13941bfb14fe1ea6"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "dyn-clone",
+ "futures",
+ "pin-project",
+ "rand 0.10.1",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "typespec",
+ "typespec_macros",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "typespec_macros"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c608f4427943f8adb211abc95c87672b1b98847152783507d54e3246e502f60"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc_version 0.4.1",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "ucd-trie"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14816,13 +15038,13 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.17.0"
+version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
+checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
- "getrandom 0.3.3",
+ "getrandom 0.4.2",
  "js-sys",
- "serde",
+ "serde_core",
  "wasm-bindgen",
 ]
 
@@ -16184,7 +16406,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_alloy_ext"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "serde",
@@ -16216,7 +16438,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_backpressure"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "futures",
  "reth-tasks",
@@ -16232,7 +16454,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_base_token_adjuster"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16250,7 +16472,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_types"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16271,7 +16493,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_verification"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16294,14 +16516,14 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batcher_metrics"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "vise",
 ]
 
 [[package]]
 name = "zksync_os_chaos"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16323,7 +16545,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_config_validation_macros"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -16332,7 +16554,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_core"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "anyhow",
  "commonware-actor",
@@ -16352,7 +16574,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_execution"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -16388,7 +16610,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_keygen"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "commonware-codec",
@@ -16398,7 +16620,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_registry"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "commonware-codec",
@@ -16410,7 +16632,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_sim"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16441,7 +16663,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_contract_interface"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16457,7 +16679,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_crypto"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "blake2",
@@ -16472,7 +16694,7 @@ checksum = "d9dfbba34ae7617db056b0e3a74a67c9cab1c93457f6b1cfbf7cee3ff34db01e"
 
 [[package]]
 name = "zksync_os_external_price_api"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16494,7 +16716,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_gas_adjuster"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16509,7 +16731,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_generate_deposit"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16521,7 +16743,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_genesis"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16542,7 +16764,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_integration_tests"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16597,7 +16819,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_integration_tests_macros"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -16617,7 +16839,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_internal_config"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16628,7 +16850,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_sender"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16652,7 +16874,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_watcher"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16677,7 +16899,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mempool"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16710,7 +16932,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16734,7 +16956,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree_api"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16747,14 +16969,14 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_metadata"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "semver 1.0.26",
 ]
 
 [[package]]
 name = "zksync_os_mini_merkle_tree"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "criterion",
@@ -16765,7 +16987,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_multivm"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16787,7 +17009,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_network"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -16822,7 +17044,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_observability"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "anyhow",
  "chrono",
@@ -16851,23 +17073,28 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_operator_signer"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "alloy-signer",
  "anyhow",
  "async-trait",
+ "azure_core",
+ "azure_identity",
+ "azure_security_keyvault_keys",
+ "base64 0.22.1",
  "crc32c",
  "google-cloud-gax",
  "google-cloud-kms-v1",
  "k256",
+ "serde_json",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "zksync_os_pipeline"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -16882,7 +17109,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_priority_tree"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16904,7 +17131,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_provider"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16919,24 +17146,34 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_replay_archive"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "age",
+ "age-core",
  "alloy",
  "anyhow",
  "async-trait",
  "aws-config",
  "aws-runtime",
  "aws-sdk-s3",
+ "bytes",
  "clap",
  "futures",
+ "google-cloud-auth",
+ "google-cloud-gax",
+ "google-cloud-kms-v1",
+ "google-cloud-storage",
+ "rand_core 0.6.4",
  "reth-tasks",
+ "rsa",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tracing",
+ "tracing-subscriber 0.3.22",
  "vise",
  "zksync_os_interface",
  "zksync_os_l1_sender",
@@ -16948,7 +17185,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_reth_compat"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "reth-chainspec",
@@ -16964,7 +17201,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_revm_consistency_checker"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17000,7 +17237,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rocksdb"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "num_cpus",
  "once_cell",
@@ -17013,7 +17250,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17066,7 +17303,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc_api"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -17137,7 +17374,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_sequencer"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17150,6 +17387,7 @@ dependencies = [
  "semver 1.0.26",
  "serde",
  "serde_json",
+ "serde_with",
  "smart-config",
  "tokio",
  "tracing",
@@ -17170,7 +17408,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_server"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -17269,7 +17507,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17288,7 +17526,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state_full_diffs"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17306,7 +17544,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_status_server"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "anyhow",
  "axum",
@@ -17320,7 +17558,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17343,7 +17581,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage_api"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -17355,6 +17593,7 @@ dependencies = [
  "roaring",
  "semver 1.0.26",
  "serde",
+ "serde_with",
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
@@ -17371,7 +17610,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_tx_validators"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17391,7 +17630,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_types"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -17403,6 +17642,7 @@ dependencies = [
  "semver 1.0.26",
  "serde",
  "serde_json",
+ "serde_with",
  "thiserror 2.0.17",
  "zksync_os_contract_interface",
  "zksync_os_interface",
@@ -17410,7 +17650,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_verify_storage_proof"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17424,7 +17664,7 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_wire"
-version = "0.20.11"
+version = "0.20.12"
 dependencies = [
  "alloy",
  "alloy-rlp",

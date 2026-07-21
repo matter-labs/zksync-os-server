@@ -1,6 +1,9 @@
 use crate::types::{BatchStorageProof, BlockMetadata, L2ToL1LogProof, LogProofTarget};
 use alloy::primitives::{Address, B256, TxHash};
 use alloy::rpc::types::Index;
+// In client-only mode the `rpc` macro replaces `RpcResult` return types with
+// `Result<_, ClientError>`, leaving this import unused.
+#[cfg(feature = "server")]
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 use zksync_os_genesis::GenesisInput;

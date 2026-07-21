@@ -13,6 +13,9 @@ use alloy::rpc::types::{
     EthCallResponse, FillTransaction, Index, StateContext, SyncStatus, TransactionRequest,
 };
 use alloy::serde::JsonStorageKey;
+// In client-only mode the `rpc` macro replaces `RpcResult` return types with
+// `Result<_, ClientError>`, leaving this import unused.
+#[cfg(feature = "server")]
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 use zksync_os_types::ZkEnvelope;

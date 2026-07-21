@@ -26,6 +26,11 @@ pub(crate) struct ReplayArchiveMetrics {
 
     #[metrics(unit = Unit::Seconds, buckets = SECONDS_PER_MEGABYTE)]
     pub encryption_time_per_megabyte: Histogram<f64>,
+
+    /// Time to archive one replay record, including encryption and the storage write.
+    /// Subtract `encryption_time` to isolate the storage write.
+    #[metrics(unit = Unit::Seconds, buckets = LATENCIES)]
+    pub archive_time: Histogram<Duration>,
 }
 
 #[vise::register]

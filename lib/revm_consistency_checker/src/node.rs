@@ -166,38 +166,37 @@ where
                 let block_basefee: u64 =
                     replay_record.block_context.eip1559_basefee.saturating_to();
 
-                // AtlasV1/V2 didn't honor `block_context.mix_hash` for prevrandao (ZKsync OS
-                // hardcoded `1`) and didn't surface blob fees. Both fields only became
-                // meaningful with AtlasV3 — gating them keeps the historical check accurate.
+                // ZKsync OS hardcodes PREVRANDAO to `1` in production builds: the VM's
+                // `prevrandao` cargo feature (which would honor block randomness) is only
+                // enabled for test runners. `block_context.mix_hash` — currently always
+                // zeroed by the sequencer — must therefore not reach REVM, or any contract
+                // reading `block.prevrandao` diverges.
+                let prevrandao = B256::from(U256::ONE);
+
+                // Blob fees only became meaningful with AtlasV3.
                 //
                 // The pre-AtlasV3 `blob_excess_gas_and_price` must still be `Some`: all Atlas
                 // specs map to Cancun and revm's header validation rejects a missing value.
                 // Use the same value `BlockEnv::default()` would have produced, since that's
                 // what the pre-PR checker effectively passed.
-                let (prevrandao, blob_excess_gas_and_price) =
-                    if ZkSpecId::AtlasV3.is_enabled_in(zk_spec) {
-                        let blob_fee: u64 = replay_record.block_context.blob_fee.saturating_to();
-                        let blob_excess_gas = calculate_excess_blob_gas_from_blob_base_fee(
-                            blob_fee,
-                            BLOB_BASE_FEE_UPDATE_FRACTION,
-                        );
-                        let blob_excess = BlobExcessGasAndPrice::new(
-                            blob_excess_gas,
-                            BLOB_BASE_FEE_UPDATE_FRACTION
-                                .try_into()
-                                .expect("Blob base fee update fraction should fit into u64"),
-                        );
-                        (
-                            replay_record.block_context.mix_hash.into(),
-                            Some(blob_excess),
-                        )
-                    } else {
-                        let pre_v3_blob_default = BlobExcessGasAndPrice::new(
-                            0,
-                            revm::primitives::eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
-                        );
-                        (B256::from(U256::ONE), Some(pre_v3_blob_default))
-                    };
+                let blob_excess_gas_and_price = if ZkSpecId::AtlasV3.is_enabled_in(zk_spec) {
+                    let blob_fee: u64 = replay_record.block_context.blob_fee.saturating_to();
+                    let blob_excess_gas = calculate_excess_blob_gas_from_blob_base_fee(
+                        blob_fee,
+                        BLOB_BASE_FEE_UPDATE_FRACTION,
+                    );
+                    Some(BlobExcessGasAndPrice::new(
+                        blob_excess_gas,
+                        BLOB_BASE_FEE_UPDATE_FRACTION
+                            .try_into()
+                            .expect("Blob base fee update fraction should fit into u64"),
+                    ))
+                } else {
+                    Some(BlobExcessGasAndPrice::new(
+                        0,
+                        revm::primitives::eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
+                    ))
+                };
 
                 // For each block, we create an in-memory cache database to accumulate transaction state changes separately
                 let state_provider =

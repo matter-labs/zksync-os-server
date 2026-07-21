@@ -26,6 +26,9 @@ jemalloc = [
 # inactive profiling costs nothing). Not a default: production images should
 # opt in deliberately.
 jemalloc-profiling = ["jemalloc", "tikv-jemallocator/profiling"]
+# GCP replay archive backends (GCS storage + GCP KMS encryption). Off by default so local builds
+# skip the Google Cloud SDK; production builds pass `--features gcp`.
+gcp = ["zksync_os_replay_archive/gcp"]
 
 [dependencies]
 zksync_os_provider.workspace = true

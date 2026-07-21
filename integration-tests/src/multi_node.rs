@@ -278,6 +278,11 @@ impl MultiNodeTester {
             use zksync_os_storage_api::ReadReplay as _;
             let wal = zksync_os_storage::db::BlockReplayStorage::new_without_genesis(
                 &source_rocks.join(zksync_os_server::BLOCK_REPLAY_WAL_DB_NAME),
+                source
+                    .config
+                    .genesis_config
+                    .chain_id
+                    .context("test node genesis config must set chain_id")?,
             );
             wal.latest_record()
         };

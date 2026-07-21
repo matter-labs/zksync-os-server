@@ -25,14 +25,15 @@ ARG CARGO_BUILD_JOBS=""
 
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies (this is the caching Docker layer)
+# Cargo features baked into the binary. Defaults to the production set (gcp:
+# GCS replay archive + GCP KMS); extend for investigations (e.g.
+# "gcp,jemalloc-profiling") or set to "" to build without GCP support.
+ARG FEATURES="gcp"
 RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
-    cargo chef cook --bin zksync-os-server --release --recipe-path recipe.json
+    cargo chef cook --bin zksync-os-server --release ${FEATURES:+--features "$FEATURES"} --recipe-path recipe.json
 
 # Build application
 COPY . .
-# Extra cargo features baked into the binary (e.g. jemalloc-profiling for
-# memory investigations).
-ARG FEATURES=""
 RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
     cargo build --release -p zksync_os_server --bin zksync-os-server ${FEATURES:+--features "$FEATURES"}
 

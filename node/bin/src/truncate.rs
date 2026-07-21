@@ -73,10 +73,17 @@ pub async fn run_truncate(
          never rebuild its derived state"
     );
     let rocks = config.general_config.rocks_db_path.clone();
+    let chain_id = config
+        .genesis_config
+        .chain_id
+        .context("`genesis.chain_id` is required to open the WAL and verify the L1-executed floor")?;
 
     // Opening the databases doubles as the running-node guard: RocksDB holds
     // an exclusive lock per database while the node lives.
-    let wal = BlockReplayStorage::new_without_genesis(&rocks.join(crate::BLOCK_REPLAY_WAL_DB_NAME));
+    let wal = BlockReplayStorage::new_without_genesis(
+        &rocks.join(crate::BLOCK_REPLAY_WAL_DB_NAME),
+        chain_id,
+    );
     let tip = wal.latest_record();
     anyhow::ensure!(
         to_block <= tip,
@@ -97,10 +104,6 @@ pub async fn run_truncate(
         .genesis_config
         .bridgehub_address
         .context("`genesis.bridgehub_address` is required to verify the L1-executed floor")?;
-    let chain_id = config
-        .genesis_config
-        .chain_id
-        .context("`genesis.chain_id` is required to verify the L1-executed floor")?;
     // The *latest* L1 view, deliberately: an execution that is not yet
     // L1-finalized may still become final, so it already binds the floor.
     let l1_state =
