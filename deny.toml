@@ -17,6 +17,13 @@ ignore = [
     # `cargo update` cannot resolve this. Revisit once upstream bumps land.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # Marvin timing sidechannel in `rsa` private-key operations. We use `rsa`
+    # directly in `replay_archive` for KMS envelope encryption, but production
+    # code only performs public-key RSA-OAEP encryption (wrapping the age file
+    # key to the KMS public key); private-key decryption happens inside GCP KMS,
+    # never locally. Local `RsaPrivateKey` usage is test-only. No patched
+    # version exists yet (tracked in RustCrypto/RSA#19).
+    "RUSTSEC-2023-0071",
 ]
 
 [bans]
