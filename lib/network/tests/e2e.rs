@@ -1,8 +1,10 @@
 use alloy::primitives::{Address, B256, BlockNumber, Bytes};
 use alloy::signers::local::PrivateKeySigner;
 use assert_matches::assert_matches;
+use futures::StreamExt;
+use reth_network::events::PeerEvent;
 use reth_network::test_utils::Peer;
-use reth_network::{Peers, test_utils::Testnet};
+use reth_network::{NetworkEvent, Peers, PeersInfo, test_utils::Testnet};
 use reth_network_peers::PeerId;
 use reth_provider::test_utils::MockEthProvider;
 use reth_provider::{BlockReader, HeaderProvider};
@@ -575,6 +577,57 @@ async fn send_replay_record_different_versions() {
         received_replay_record.block_context.block_number,
         record1.block_context.block_number
     );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn disconnects_peer_without_common_zks_version() {
+    // peer0 speaks only zks/5 and peer1 only zks/0, so capability negotiation yields no shared
+    // zks version. The zks handler must drop the whole session during the p2p handshake instead
+    // of letting a never-syncing peer occupy a connection slot.
+    let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
+
+    let (mut from_peer0, _) =
+        net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV5>(NodeRole::MainNode, 0, [], 100);
+    let peer1 = &mut net.peers_mut()[1];
+    let peer1_id = peer1.peer_id();
+    let peer1_addr = peer1.local_addr();
+    let (mut from_peer1, _) =
+        peer1.add_zks_sub_protocol::<ZksProtocolV0>(NodeRole::ExternalNode, 1, [], 100);
+
+    let handle = net.spawn();
+    // `connect_peers()` would hang here: it waits for sessions that never establish. Dial
+    // manually instead.
+    let mut peer0_events = handle.peers()[0].event_listener();
+    handle.peers()[0].network().add_peer(peer1_id, peer1_addr);
+
+    // Confirm the dial was registered so the negative assertions below cannot pass vacuously.
+    loop {
+        match peer0_events.next().await {
+            Some(NetworkEvent::Peer(PeerEvent::PeerAdded(added))) => {
+                assert_eq!(added, peer1_id);
+                break;
+            }
+            Some(_) => {}
+            None => panic!("network event stream closed before the peer was added"),
+        }
+    }
+
+    // A handshake-phase disconnect emits no session events at all, so assert that neither side
+    // ever observes an established zks connection and that no session is counted as active.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), from_peer0.recv())
+            .await
+            .is_err(),
+        "peer0 must not establish a zks connection with a version-disjoint peer"
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), from_peer1.recv())
+            .await
+            .is_err(),
+        "peer1 must not establish a zks connection with a version-disjoint peer"
+    );
+    assert_eq!(handle.peers()[0].network().num_connected_peers(), 0);
+    assert_eq!(handle.peers()[1].network().num_connected_peers(), 0);
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]

@@ -147,14 +147,20 @@ impl<P: ZksProtocolVersionSpec, Replay: ReadReplay + Clone> ConnectionHandler
     fn on_unsupported_by_peer(
         self,
         supported: &SharedCapabilities,
-        _direction: Direction,
-        _peer_id: PeerId,
+        direction: Direction,
+        peer_id: PeerId,
     ) -> OnNotSupported {
+        // `supported` is the negotiated intersection of both hello messages (exact name+version
+        // match on both sides), so a `zks` entry here means another locally-registered zks
+        // version owns this connection.
         if supported.iter_caps().any(|c| c.name() == ZKS_PROTOCOL) {
-            // Keep connection alive if there is at least one other common zks protocol version.
             OnNotSupported::KeepAlive
         } else {
-            // Disconnect otherwise.
+            tracing::debug!(
+                %peer_id,
+                ?direction,
+                "peer does not share any supported zks version; disconnecting"
+            );
             OnNotSupported::Disconnect
         }
     }

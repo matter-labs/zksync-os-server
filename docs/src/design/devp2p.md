@@ -41,6 +41,10 @@ connections.
   0x01, `VerifierAuth` 0x02) and batch verification (`VerifyBatch` 0x03, `VerifyBatchResult`
   0x04). Only verifier-configured ENs advertise it; the main node always does.
 
+The `zks` subprotocol is mandatory: a peer that does not share any registered `zks` version
+(e.g. a retired `zks/1`–`zks/4`-only peer, or a plain `eth` peer) is disconnected during the
+RLPx handshake. `zks_2fa` is optional and never causes a disconnect on its own.
+
 ## Module split
 
 - `service.rs`
