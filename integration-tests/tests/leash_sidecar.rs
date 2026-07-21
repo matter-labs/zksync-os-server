@@ -1,6 +1,6 @@
 //! End-to-end tests for the `leash` sidecar (see `src/bin/leash.rs` and `src/leash.rs`):
-//! the mechanism that guarantees anvil/prover children die with the test process even when
-//! it is SIGKILLed.
+//! the mechanism that makes anvil/prover children die with the test process even when it
+//! is SIGKILLed.
 #![cfg(unix)]
 
 use std::process::{Child, Command, Stdio};
@@ -80,8 +80,8 @@ fn spares_victim_on_name_mismatch() {
 
 /// The kill path triggers on pipe EOF itself, not on holder death specifically: dropping
 /// the write end without any process dying must have the same effect. (Production never
-/// drops the write end early — `attach` leaks it until process death — so this pins the
-/// mechanism, not a real deployment scenario.)
+/// drops the write end early — `attach` leaks it until process death — so this checks the
+/// mechanism itself rather than a scenario production hits.)
 #[test]
 fn kills_victim_on_plain_eof() {
     let mut victim = spawn_sleep();

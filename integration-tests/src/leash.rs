@@ -20,11 +20,12 @@ use std::process::{Command, Stdio};
 /// How long the sidecar waits after SIGTERM before escalating to SIGKILL.
 const GRACE_SECS: u64 = 5;
 
-/// Arranges for the process `pid` to be killed shortly after the current process dies —
-/// no matter how it dies — bounded by [`GRACE_SECS`] once the sidecar fires.
+/// Makes sure `pid` dies once the current process dies, no matter how the current process
+/// exits — including SIGKILL, where no `Drop` ever runs. The target first gets SIGTERM,
+/// then SIGKILL after [`GRACE_SECS`] if it did not shut down.
 ///
 /// `expected_name` is the target's executable name; the sidecar re-checks it before killing
-/// to avoid signalling an unrelated process if the PID has been reused by then.
+/// so that a PID reused by an unrelated process is left alone.
 pub(crate) fn attach(pid: u32, expected_name: &str) -> anyhow::Result<()> {
     let mut child = Command::new(leash_bin()?)
         .args([
