@@ -3,6 +3,7 @@ use crate::result::internal_rpc_err;
 use futures::{FutureExt as _, StreamExt as _};
 use jsonrpsee::core::middleware::{Batch, BatchEntry, Notification};
 use jsonrpsee::server::middleware::rpc::{RpcService, RpcServiceT};
+use jsonrpsee::types::error::reject_too_big_batch_response;
 use jsonrpsee::types::{Id, Request};
 use jsonrpsee::{BatchResponseBuilder, MethodResponse};
 use std::collections::{HashMap, HashSet};
@@ -305,13 +306,15 @@ where
                 // sequential path preserves order, so we keep that property.
                 //
                 // `AbortOnDropHandle` ties each spawned entry to the batch future: if the
-                // batch is cancelled (client disconnected), in-flight entries abort instead of
-                // running detached.
+                // batch is cancelled (client disconnected), cancellation is requested instead
+                // of letting entries run detached. Tokio cancellation is cooperative, so an
+                // entry currently doing CPU work stops when it next yields.
                 //
                 // The closure owns its own service handle (instead of borrowing the outer one)
                 // to keep the stream `Send` without requiring `S: Sync`.
                 let svc = service.clone();
-                let mut responses: Vec<(usize, MethodResponse)> = futures::stream::iter(
+                let response_capacity = prepared.len();
+                let mut response_stream = futures::stream::iter(
                     prepared.into_iter().enumerate().map(move |(index, entry)| {
                         let service = svc.clone();
                         async move {
@@ -336,9 +339,31 @@ where
                         }
                     }),
                 )
-                .buffer_unordered(MAX_CONCURRENT_BATCH_ENTRIES)
-                .collect()
-                .await;
+                .buffer_unordered(MAX_CONCURRENT_BATCH_ENTRIES);
+
+                // The aggregate size is independent of response order, so enforce the limit as
+                // unordered results arrive. This bounds retained completed responses and drops
+                // the stream immediately on overflow, aborting work whose output would be
+                // discarded anyway.
+                let mut responses = Vec::with_capacity(response_capacity);
+                let mut response_size = 1usize; // Opening `[` in the eventual response array.
+                while let Some((index, rp)) = response_stream.next().await {
+                    let next_size = response_size
+                        .checked_add(rp.as_json().get().len())
+                        .and_then(|size| size.checked_add(1)); // Comma, replaced by the closing `]`.
+                    match next_size {
+                        Some(next_size) if next_size <= service.max_response_size_bytes => {
+                            response_size = next_size;
+                            responses.push((index, rp));
+                        }
+                        _ => {
+                            return MethodResponse::error(
+                                Id::Null,
+                                reject_too_big_batch_response(service.max_response_size_bytes),
+                            );
+                        }
+                    }
+                }
 
                 responses.sort_unstable_by_key(|(index, _)| *index);
                 for (_, rp) in responses {
@@ -445,8 +470,8 @@ mod tests {
 
     /// Stands in for the rest of the middleware stack. Behavior is keyed off the method name:
     /// `sleep_<ms>` awaits a timer, `block_<ms>` blocks its OS thread, `wait_for_<n>` waits
-    /// until `n` entries have completed, `panic` panics, anything else responds immediately.
-    /// Every response payload is `"<method>:<has extensions marker>"`.
+    /// until `n` entries have completed, `payload_<bytes>` produces a result of that size,
+    /// `panic` panics, and anything else responds immediately.
     #[derive(Clone, Default)]
     struct MockService {
         in_flight: Arc<AtomicUsize>,
@@ -495,12 +520,13 @@ mod tests {
                     }
                 }
 
+                let result = if let Some(bytes) = method.strip_prefix("payload_") {
+                    "x".repeat(bytes.parse().unwrap())
+                } else {
+                    format!("{method}:{has_marker}")
+                };
                 this.completed.fetch_add(1, Ordering::SeqCst);
-                MethodResponse::response(
-                    id,
-                    ResponsePayload::success(format!("{method}:{has_marker}")),
-                    usize::MAX,
-                )
+                MethodResponse::response(id, ResponsePayload::success(result), usize::MAX)
             }
         }
 
@@ -523,15 +549,37 @@ mod tests {
         }
     }
 
-    fn monitoring(parallel_batches: bool) -> (Monitoring<MockService>, MockService) {
+    fn monitoring_with_max_response_size(
+        parallel_batches: bool,
+        max_response_size: u32,
+    ) -> (Monitoring<MockService>, MockService) {
         let mock = MockService::default();
         let monitoring = Monitoring::new(
             mock.clone(),
-            10 * 1024 * 1024,
+            max_response_size,
             Arc::new(HashSet::new()),
             parallel_batches,
         );
         (monitoring, mock)
+    }
+
+    fn monitoring(parallel_batches: bool) -> (Monitoring<MockService>, MockService) {
+        monitoring_with_max_response_size(parallel_batches, 10 * 1024 * 1024)
+    }
+
+    async fn assert_no_in_flight_entries(mock: &MockService) {
+        // Aborts propagate asynchronously; wait for the in-flight count to drain.
+        for _ in 0..100 {
+            if mock.in_flight.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            mock.in_flight.load(Ordering::SeqCst),
+            0,
+            "spawned entries kept running after cancellation was requested"
+        );
     }
 
     fn call_entry(id: u64, method: &str) -> Result<BatchEntry<'static>, BatchEntryErr<'static>> {
@@ -656,19 +704,34 @@ mod tests {
         assert!(cancelled.is_err(), "batch must still be sleeping at 100ms");
         assert!(mock.max_in_flight.load(Ordering::SeqCst) > 0);
 
-        // Aborts propagate asynchronously; wait for the in-flight count to drain.
-        for _ in 0..100 {
-            if mock.in_flight.load(Ordering::SeqCst) == 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert_eq!(
-            mock.in_flight.load(Ordering::SeqCst),
-            0,
-            "spawned entries kept running after the batch future was dropped"
-        );
+        assert_no_in_flight_entries(&mock).await;
         assert_eq!(mock.completed.load(Ordering::SeqCst), 0);
+    }
+
+    /// Aggregate response overflow must be detected while results arrive so a batch cannot
+    /// retain every individually valid response or keep executing work whose output is already
+    /// known to be unusable.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn oversized_parallel_batch_aborts_remaining_entries() {
+        let (monitoring, mock) = monitoring_with_max_response_size(true, 512);
+        let mut entries: Vec<_> = (0..30u64).map(|i| call_entry(i, "sleep_10000")).collect();
+        entries.push(call_entry(30, "payload_300"));
+        entries.push(call_entry(31, "payload_300"));
+
+        let rp = tokio::time::timeout(
+            Duration::from_secs(1),
+            monitoring.batch(Batch::from(entries)),
+        )
+        .await
+        .expect("aggregate response limit was not enforced before slow entries completed");
+
+        assert_eq!(
+            rp.as_error_code(),
+            Some(jsonrpsee::types::error::TOO_BIG_BATCH_RESPONSE_CODE)
+        );
+        assert!(mock.max_in_flight.load(Ordering::SeqCst) > 2);
+        assert_no_in_flight_entries(&mock).await;
+        assert_eq!(mock.completed.load(Ordering::SeqCst), 2);
     }
 
     /// The point of spawning entries (rather than just polling them concurrently on one task):
