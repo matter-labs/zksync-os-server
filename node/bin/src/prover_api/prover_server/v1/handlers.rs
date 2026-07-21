@@ -80,11 +80,16 @@ pub(super) async fn pick_fri_job(
         "Received FRI job pick request from prover with ID: {}",
         query.id
     );
+    let supported_proving_versions = query.supported_proving_versions();
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
     match state
         .fri_job_manager
-        .pick_next_job(std::time::Duration::from_secs(0), query.id)
+        .pick_next_job(
+            std::time::Duration::from_secs(0),
+            query.id,
+            supported_proving_versions.as_deref(),
+        )
         .await
     {
         Some((fri_job, input)) => {
@@ -179,7 +184,12 @@ pub(super) async fn pick_snark_job(
         "Received SNARK job pick request from prover with ID: {}",
         query.id
     );
-    match state.snark_job_manager.pick_real_job(query.id).await {
+    let supported_proving_versions = query.supported_proving_versions();
+    match state
+        .snark_job_manager
+        .pick_real_job(query.id, supported_proving_versions.as_deref())
+        .await
+    {
         Ok(Some(batches)) => {
             // Expect non-empty and all real FRI proofs
             let from = batches.first().unwrap().0.batch_number;
