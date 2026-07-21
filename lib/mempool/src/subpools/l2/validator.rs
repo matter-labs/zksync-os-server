@@ -124,6 +124,7 @@ where
         origin: TransactionOrigin,
         transaction: &Tx,
     ) -> Result<(), InvalidPoolTransactionError> {
+        self.inner.validate_stateless(origin, transaction)?;
         if self
             .protocol_version
             .read()
@@ -131,9 +132,10 @@ where
             .as_ref()
             .is_some_and(ProtocolSemanticVersion::is_post_v31)
         {
-            self.validate_intrinsic_native_resources(transaction)?;
+            self.validate_intrinsic_native_resources(transaction)
+        } else {
+            Ok(())
         }
-        self.inner.validate_stateless(origin, transaction)
     }
 
     /// Validates a single transaction using an optional cached state provider.
