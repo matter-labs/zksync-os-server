@@ -23,12 +23,14 @@ pub enum CallKind {
 /// sending requests for arbitrary nonexistent methods.
 const UNKNOWN_METHOD: &str = "<unknown>";
 
-/// Upper bound on how many entries of a single batch may execute concurrently when
-/// `parallel_batches` is enabled. Without it one huge batch would spawn a task per entry and
-/// could monopolize every runtime worker; parallelism across separate batches/connections is
-/// unaffected by this bound.
+/// Keeps one batch from flooding the runtime with spawned tasks. This limit applies per batch;
+/// separate batches and connections can still make progress independently.
 const MAX_CONCURRENT_BATCH_ENTRIES: usize = 32;
 
+/// Records RPC metrics and owns the custom batch-dispatch behavior.
+///
+/// Calls always pass through the inner service. When parallel batches are enabled, calls within a
+/// batch are spawned with bounded concurrency and their responses are put back in request order.
 #[derive(Clone)]
 pub struct Monitoring<S = RpcService> {
     inner: S,
@@ -251,13 +253,12 @@ where
 
             if service.parallel_batches {
                 enum Prepared {
-                    /// A call rebuilt as owned so it can be spawned; the id is kept separately
-                    /// to report a join error in the right slot.
+                    /// An owned call ready to spawn. Its id is used if the task cannot be joined.
                     Call {
                         id: Id<'static>,
                         req: Request<'static>,
                     },
-                    /// Response already known (malformed entry); keeps its slot in the array.
+                    /// A malformed entry whose error response is already known.
                     Ready(MethodResponse),
                 }
 
@@ -266,9 +267,8 @@ where
                     match batch_entry {
                         Ok(BatchEntry::Call(mut req)) => {
                             let id = req.id.clone().into_owned();
-                            // Spawning requires a `'static` request: rebuild it from owned
-                            // parts and carry the extensions over (the server clones the
-                            // per-connection context into every batch entry).
+                            // Spawned tasks require `'static` data. Rebuild the request from owned
+                            // parts, including the per-connection context in its extensions.
                             let mut owned = Request::owned(
                                 req.method_name().to_owned(),
                                 req.params.take().map(|params| params.into_owned()),
@@ -279,11 +279,9 @@ where
                         }
                         Ok(BatchEntry::Notification(n)) => {
                             got_notification = true;
-                            // Notifications are awaited inline instead of joining the
-                            // concurrent work queue: jsonrpsee's root service does not
-                            // dispatch them to handlers (only our metrics see them), so this
-                            // costs ~nothing and keeps `Prepared` free of borrowed data,
-                            // which spawning requires.
+                            // jsonrpsee's root service only propagates notification extensions;
+                            // awaiting it here records our metrics without making `Prepared`
+                            // borrow from the batch.
                             service.notification(n).await;
                         }
                         Err(err) => {
@@ -293,25 +291,14 @@ where
                     }
                 }
 
-                // Entries execute concurrently so CPU-heavy handlers (e.g.
-                // `eth_sendRawTransaction`'s inline ECDSA recovery) spread across worker
-                // threads instead of serializing on this connection's task.
+                // Spawning lets CPU-heavy handlers use multiple runtime workers. An unordered
+                // buffer keeps the window full when an early call is slow; sorting below restores
+                // request order before the response is built.
                 //
-                // `buffer_unordered` (not `buffered`) keeps MAX_CONCURRENT_BATCH_ENTRIES
-                // entries in flight regardless of completion order: ordered buffering counts
-                // completed-but-unyielded results against its window, so one slow entry at the
-                // front would drain the window to a single running task. Responses are
-                // reassembled in request order afterwards — the JSON-RPC 2.0 spec lets clients
-                // correlate by id instead, but naive clients index into the array, and the
-                // sequential path preserves order, so we keep that property.
+                // Abort-on-drop prevents calls from running detached after the batch is cancelled.
+                // Cancellation takes effect when a handler next yields.
                 //
-                // `AbortOnDropHandle` ties each spawned entry to the batch future: if the
-                // batch is cancelled (client disconnected), cancellation is requested instead
-                // of letting entries run detached. Tokio cancellation is cooperative, so an
-                // entry currently doing CPU work stops when it next yields.
-                //
-                // The closure owns its own service handle (instead of borrowing the outer one)
-                // to keep the stream `Send` without requiring `S: Sync`.
+                // Own a service handle in the closure so the stream stays `Send` without `S: Sync`.
                 let svc = service.clone();
                 let response_capacity = prepared.len();
                 let mut response_stream = futures::stream::iter(
@@ -324,9 +311,8 @@ where
                                         .await
                                     {
                                         Ok(rp) => rp,
-                                        // Panics are caught inside the spawned future by
-                                        // `CallGuard`; a join error only means the task was
-                                        // aborted (runtime shutdown).
+                                        // `CallGuard` converts handler panics. Treat any remaining
+                                        // task failure as an internal error for this call.
                                         Err(_) => MethodResponse::error(
                                             id,
                                             internal_rpc_err("Internal error"),
@@ -341,16 +327,16 @@ where
                 )
                 .buffer_unordered(MAX_CONCURRENT_BATCH_ENTRIES);
 
-                // The aggregate size is independent of response order, so enforce the limit as
-                // unordered results arrive. This bounds retained completed responses and drops
-                // the stream immediately on overflow, aborting work whose output would be
-                // discarded anyway.
+                // Enforce the limit as unordered results arrive. This caps retained responses and
+                // dropping the stream on overflow cancels work whose output would be discarded.
+                // The accounting mirrors `BatchResponseBuilder`: `[` plus every response and one
+                // delimiter, with the final comma replaced by `]`.
                 let mut responses = Vec::with_capacity(response_capacity);
-                let mut response_size = 1usize; // Opening `[` in the eventual response array.
+                let mut response_size = 1usize;
                 while let Some((index, rp)) = response_stream.next().await {
                     let next_size = response_size
                         .checked_add(rp.as_json().get().len())
-                        .and_then(|size| size.checked_add(1)); // Comma, replaced by the closing `]`.
+                        .and_then(|size| size.checked_add(1));
                     match next_size {
                         Some(next_size) if next_size <= service.max_response_size_bytes => {
                             response_size = next_size;
@@ -597,7 +583,6 @@ mod tests {
         )))
     }
 
-    /// Parses a batch response into `(id, Ok(result) | Err(error code))` tuples in array order.
     fn parse_batch(rp: &MethodResponse) -> Vec<(u64, Result<String, i64>)> {
         let json: serde_json::Value = serde_json::from_str(rp.as_json().get()).unwrap();
         json.as_array()
@@ -667,11 +652,8 @@ mod tests {
         assert!(max >= 2, "entries never overlapped: max in-flight {max}");
     }
 
-    /// Regression test for head-of-line blocking: ordered buffering (`buffered`) counts
-    /// completed-but-unyielded results against its window, so a slow entry at the front
-    /// starves the window and entries beyond it never start. The first entry here cannot
-    /// complete until 40 later entries have — that deadlocks (and trips the timeout) unless
-    /// the window replenishes behind the slow entry.
+    /// The first entry waits for 40 later entries. An ordered buffer stops refilling behind that
+    /// entry and deadlocks; unordered buffering lets later entries start and release it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn parallel_batch_replenishes_window_behind_slow_entry() {
         let (monitoring, _) = monitoring(true);
@@ -689,8 +671,8 @@ mod tests {
         assert_eq!(ids, (0..65).collect::<Vec<_>>());
     }
 
-    /// Entries of a cancelled batch (e.g. the client disconnected mid-flight) must abort
-    /// rather than keep running detached past the request's lifetime.
+    /// Dropping a batch must abort its spawned entries, so a disconnected client leaves no
+    /// detached work behind.
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn cancelling_parallel_batch_aborts_spawned_entries() {
         let (monitoring, mock) = monitoring(true);
@@ -859,11 +841,9 @@ mod tests {
         assert_eq!(mock.notifications.load(Ordering::SeqCst), 2);
     }
 
-    /// End-to-end test over real HTTP for behavior that lives below this middleware and can't
-    /// be reached with a mock inner service: jsonrpsee rejects subscription calls per-entry on
-    /// transports without a ws sink. (Wire-level response order is pinned by the mock tests
-    /// above, which assert on the exact JSON array this middleware emits; an HTTP client can't
-    /// observe it because jsonrpsee's client re-correlates batch responses by id.)
+    /// Real HTTP reaches jsonrpsee's rejection of subscription calls without a WebSocket sink.
+    /// Response order is covered by the mock tests because the HTTP client re-correlates entries
+    /// by id.
     mod http {
         use super::*;
         use jsonrpsee::RpcModule;
@@ -921,8 +901,6 @@ mod tests {
                 .into_iter()
                 .collect();
             assert_eq!(entries[0].as_ref().unwrap(), "first");
-            // Subscriptions need a ws sink; over HTTP jsonrpsee rejects the entry itself while
-            // the rest of the batch still executes.
             assert!(entries[1].is_err());
             assert_eq!(entries[2].as_ref().unwrap(), "last");
         }

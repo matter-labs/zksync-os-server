@@ -99,15 +99,15 @@ pub struct RpcConfig {
     /// Maximum RPC response payload size for both HTTP and WS in megabytes
     pub max_response_size: u32,
 
-    /// Maximum number of entries allowed in a single JSON-RPC batch request; larger batches are
-    /// rejected with a single error response
+    /// Limits the work admitted by one JSON-RPC batch. The server rejects larger batches before
+    /// dispatching any entry, so one request cannot create an unbounded work queue.
     pub max_batch_size: u32,
 
-    /// Execute entries of a JSON-RPC batch request concurrently (bounded per batch) instead of
-    /// sequentially. Responses are still returned in request order. Concurrent processing is
-    /// explicitly permitted by the JSON-RPC 2.0 spec, but clients that batch dependent calls
-    /// (e.g. a transaction submission followed by a read of the affected state) may observe
-    /// different results than under sequential execution.
+    /// Allows entries in one JSON-RPC batch to run concurrently, with a per-batch limit.
+    ///
+    /// Responses stay in request order, but execution does not. For example, a transaction and a
+    /// read that depends on it may race when sent in the same batch. Keep this disabled for clients
+    /// that rely on sequential batch execution.
     pub parallel_batches: bool,
 
     /// Maximum number of blocks that could be scanned per filter
