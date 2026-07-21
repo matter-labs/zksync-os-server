@@ -1506,9 +1506,10 @@ pub enum ReplayArchiveEncryptionConfig {
     /// GCP KMS encryption using Application Default Credentials. This supports GKE Workload
     /// Identity, external workload identity federation, and local ADC.
     GcpKms {
-        /// KMS key version (`projects/../cryptoKeyVersions/..`), purpose `ASYMMETRIC_DECRYPT`
-        /// with an `RSA_DECRYPT_OAEP_*_SHA256` algorithm. The node only reads the public key to
-        /// encrypt locally, so it needs no decrypt permission.
+        /// KMS key version, full resource name
+        /// `projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}`.
+        /// Purpose `ASYMMETRIC_DECRYPT` with an `RSA_DECRYPT_OAEP_*_SHA256` algorithm. The node only
+        /// reads the public key to encrypt locally, so it needs no decrypt permission.
         kms_key_version: String,
     },
 }

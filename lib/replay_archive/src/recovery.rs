@@ -5,6 +5,7 @@ use alloy::primitives::{BlockHash, BlockNumber, Sealed};
 use anyhow::Context as _;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
@@ -12,7 +13,10 @@ use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage_api::{ReplayRecord, WriteReplay};
 
 /// Default number of archive objects fetched concurrently during download.
-pub const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 32;
+pub const DEFAULT_DOWNLOAD_CONCURRENCY: NonZeroUsize = NonZeroUsize::new(32).unwrap();
+
+/// Default number of replay records decoded concurrently during recovery.
+pub const DEFAULT_DECRYPT_CONCURRENCY: NonZeroUsize = NonZeroUsize::new(32).unwrap();
 
 /// Downloads every archive object into a local layout grouped by block number and block hash.
 ///
@@ -29,7 +33,7 @@ pub const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 32;
 pub async fn download_all_replay_archive_objects<Reader>(
     reader: &Reader,
     output_root: &Path,
-    download_concurrency: usize,
+    download_concurrency: NonZeroUsize,
 ) -> anyhow::Result<usize>
 where
     Reader: ReplayArchiveStorageReader + Sync,
@@ -63,7 +67,7 @@ where
                     anyhow::Ok((key, bytes))
                 }),
         )
-        .buffer_unordered(download_concurrency.max(1));
+        .buffer_unordered(download_concurrency.get());
 
         while let Some(object) = objects.next().await {
             let (key, bytes) = object?;
@@ -106,9 +110,6 @@ pub async fn recover_replay_records_to_rocksdb(
     .await
 }
 
-/// Default number of replay records decoded concurrently during recovery.
-pub const DEFAULT_DECRYPT_CONCURRENCY: usize = 32;
-
 /// Rebuilds node replay RocksDB from downloaded replay records.
 ///
 /// If `identity` is provided, every downloaded object is decrypted in memory before replay record
@@ -124,9 +125,8 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
     anchor_block_number: BlockNumber,
     anchor_block_hash: BlockHash,
     identity: Option<ArchiveIdentity>,
-    decrypt_concurrency: usize,
+    decrypt_concurrency: NonZeroUsize,
 ) -> anyhow::Result<usize> {
-    anyhow::ensure!(decrypt_concurrency > 0, "decrypt concurrency must be > 0");
     tracing::info!(
         input_root = %input_root.display(),
         replay_db_path = %replay_db_path.display(),
@@ -149,7 +149,7 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
     let decoder = Arc::new(ReplayRecordDecoder { identity });
     // Keep the decode pipeline saturated while bounding how many decoded records are held in
     // memory at once.
-    let window_size = (decrypt_concurrency as u64) * 2;
+    let window_size = (decrypt_concurrency.get() as u64) * 2;
 
     // The chain id is shared by all blocks; take it from the anchor record.
     let chain_id =
@@ -189,7 +189,7 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
                         anyhow::Ok((block_number, candidates))
                     }
                 })
-                .buffer_unordered(decrypt_concurrency)
+                .buffer_unordered(decrypt_concurrency.get())
                 .try_collect()
                 .await?;
 
@@ -279,7 +279,7 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
                 anyhow::Ok((block_number, block_hash, replay_record))
             }
         })
-        .buffered(decrypt_concurrency);
+        .buffered(decrypt_concurrency.get());
     while let Some(record) = records.next().await {
         let (block_number, block_hash, replay_record) = record?;
         anyhow::ensure!(

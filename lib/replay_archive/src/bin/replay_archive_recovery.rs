@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use zksync_os_replay_archive::{
     ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity,
@@ -56,7 +57,7 @@ enum Command {
         output_root: PathBuf,
         /// Number of archive objects fetched concurrently.
         #[arg(long, default_value_t = zksync_os_replay_archive::DEFAULT_DOWNLOAD_CONCURRENCY)]
-        download_concurrency: usize,
+        download_concurrency: NonZeroUsize,
     },
     /// Rebuild node replay RocksDB from downloaded replay records.
     RecoverRocksdb {
@@ -83,14 +84,16 @@ enum Command {
             conflicts_with_all = ["identity_file", "kms_key_version"]
         )]
         age_secret_key: Option<String>,
-        /// KMS key version (`projects/../cryptoKeyVersions/..`). If set, records are decrypted in
-        /// memory, costing one KMS asymmetric-decrypt call per record decode.
+        /// KMS key version, full resource name
+        /// `projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}`.
+        /// If set, records are decrypted in memory, costing one KMS asymmetric-decrypt call per
+        /// record decode.
         #[arg(long, conflicts_with_all = ["identity_file", "age_secret_key"])]
         kms_key_version: Option<String>,
         /// Number of replay records decoded concurrently. With KMS decryption every record decode
         /// takes one KMS call, so this bounds in-flight KMS requests.
         #[arg(long, default_value_t = zksync_os_replay_archive::DEFAULT_DECRYPT_CONCURRENCY)]
-        decrypt_concurrency: usize,
+        decrypt_concurrency: NonZeroUsize,
     },
 }
 
