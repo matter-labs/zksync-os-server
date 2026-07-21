@@ -10,7 +10,7 @@
 //!
 //! History: on commonware 2026.4.0 this shape was **not startable** — engines came
 //! up assuming archived epoch-anchor blocks and marshal's `Inline` panicked on the
-//! missing starting-epoch block (registered EN-promotion gap, probe of 2026-07-05).
+//! missing starting-epoch block.
 //! On 2026.5.0 the rotation resolves each epoch's anchor from marshal *before*
 //! spawning the engine, and these tests pin the result: the shape converges, and
 //! the rebuilt validator votes again.
@@ -136,10 +136,10 @@ async fn wipe_and_return_across_boundaries(context: commonware_runtime::determin
 
 /// Semantic pin for the epoch-crossing promotion shape. Runs each seed once
 /// (`fingerprint` directly) instead of through `run_scenario`'s bit-exactness
-/// double-run: this choreography trips the registered teardown determinism gap —
+/// double-run: this choreography trips the known teardown determinism gap —
 /// same-seed runs converge to identical chains and identical logs but differ in
 /// auditor fingerprint (see `promotion_catch_up_determinism_gap` below, and
-/// `boundary_crash_determinism_gap` in reconfig.rs for the original register).
+/// `boundary_crash_determinism_gap` in reconfig.rs, the original write-up).
 /// Every consensus property is still asserted inside the body, every seed.
 #[test]
 fn fresh_consensus_over_retained_chain_across_epoch_boundaries() {
@@ -152,15 +152,15 @@ fn fresh_consensus_over_retained_chain_across_epoch_boundaries() {
     }
 }
 
-/// The registered determinism gap, sharpened: the wiped-restart catch-up diverges
+/// The determinism gap, sharpened: the wiped-restart catch-up diverges
 /// the auditor fingerprint without a crash landing mid-backfill — the catch-up
 /// window itself (retired-epoch certificates re-heard through the tip scout,
 /// racing marshal's processed-height floor drops) is enough. Kept ignored as the
-/// on-demand reproducer for the upstream issue
-/// (consensus_planning/upstream-issues.md #2); if this ever passes, the gap is
-/// fixed and the semantic test above can graduate back to `run_scenario`.
+/// on-demand reproducer for this upstream commonware determinism gap; if it
+/// ever passes, the gap is fixed and the semantic test above can graduate back
+/// to `run_scenario`.
 #[test]
-#[ignore = "registered determinism gap: wiped-restart catch-up across epochs; semantics unaffected"]
+#[ignore = "known determinism gap: wiped-restart catch-up across epochs; semantics unaffected"]
 fn promotion_catch_up_determinism_gap() {
     run_scenario(
         "promotion_catch_up_determinism_gap",
@@ -246,7 +246,7 @@ fn floor_started_rebuild_converges_and_votes() {
 ///
 /// Single-run per seed (like `fresh_consensus_over_retained_chain_across_epoch_
 /// boundaries` above, and for the same reason): the cross-epoch catch-up window
-/// trips the registered fingerprint determinism gap on some seeds — less often
+/// trips the known fingerprint determinism gap on some seeds — less often
 /// than the genesis-start variant (the floor bounds the window), but the
 /// double-run gate cannot be relied on. Semantics are asserted every seed.
 #[test]

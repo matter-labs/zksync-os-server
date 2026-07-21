@@ -109,11 +109,10 @@ fn a_quorum_fork_abandons_the_suffix_and_lives() {
 
 /// Semantic pin, run once per seed (`fingerprint` directly) instead of through
 /// `run_scenario`'s bit-exactness double-run: the crash → dead-era restart →
-/// second-crash → fork-adoption choreography sits on the registered catch-up
-/// determinism gap (see `promotion_catch_up_determinism_gap` in promotion.rs
-/// and upstream-issues.md #2) — same-seed runs converge to identical chains
-/// but can differ in auditor fingerprint. Every fork property is still
-/// asserted inside the body, every seed.
+/// second-crash → fork-adoption choreography sits on the catch-up determinism
+/// gap (see `promotion_catch_up_determinism_gap` in promotion.rs) — same-seed
+/// runs converge to identical chains but can differ in auditor fingerprint.
+/// Every fork property is still asserted inside the body, every seed.
 #[test]
 fn adoption_below_quorum_freezes_both_eras_until_a_quorum_forms() {
     for seed in 0..3 {

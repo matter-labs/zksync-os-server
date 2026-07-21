@@ -394,6 +394,17 @@ impl Tester {
         Ok(response.text().await?)
     }
 
+    /// Owned handles for driving a deposit off-task (see [`deposit_l1_to_l2`]):
+    /// the deposit helper blocks on the L2 receipt, and scenarios that park the
+    /// chain mid-deposit need the call running in the background.
+    pub fn deposit_handles(&self) -> (AnvilL1, NodeProvider, DynProvider<Zksync>) {
+        (
+            self.l1.clone(),
+            self.l2_provider.clone(),
+            self.l2_zk_provider.clone(),
+        )
+    }
+
     /// One L1→L2 deposit through this node (see [`deposit_l1_to_l2`]).
     pub async fn deposit(&self, beneficiary: Address, amount: U256) -> anyhow::Result<B256> {
         deposit_l1_to_l2(

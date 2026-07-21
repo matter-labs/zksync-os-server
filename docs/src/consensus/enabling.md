@@ -299,7 +299,7 @@ state of a rollout until governance deploys.
 A registry-only mode — no config mirror at all — is deliberately not offered
 yet: the p2p address book is built from config, so a mirror is what keeps
 every derived member dialable. Until the address book follows registry
-endpoints (a registered follow-up), the registry is not ready to be the only
+endpoints (a planned follow-up), the registry is not ready to be the only
 source of truth.
 
 The shadow rollout: pick the registry address before deploying the contract

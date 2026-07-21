@@ -40,8 +40,8 @@ entries — custody transitions, registry derivations, the floor cache, the
 observed-round floor — are scoped by the consensus era (epoch numbering restarts
 per era, so a fork or re-migration would otherwise collide with a dead era's
 records); digest-keyed certificates are global and permanent. Pre-launch, schema
-changes here follow the same policy as the journals below (the 2026-07-09
-era-scoping change was one: stores written before it read as empty trails under
+changes here follow the same policy as the journals below (the era-scoping
+change was one: stores written before it read as empty trails under
 the current era, and a pre-launch chain that cares re-syncs). Post-launch, a
 schema change needs an in-place migration, exactly because this store is never
 rebuilt.
@@ -77,9 +77,9 @@ pairing test prove this) needs no version bump; rolling restarts suffice.
 
 Between upgrades, we accumulate *registered findings* against the pinned version:
 upstream warts we document and work around instead of fixing — a panic on an
-teardown path, a missing API the tests want, a determinism gap. The register lives
-in the planning notes, and each entry is kept **executable**: an ignored reproducer
-test, a chaos-rig log allowance, or an L3 that exercises exactly the wart's path.
+teardown path, a missing API the tests want, a determinism gap. Each entry is kept
+**executable**: an ignored reproducer test, a chaos-rig log allowance, or an L3 that
+exercises exactly the wart's path.
 
 At upgrade time this register becomes the version's acceptance suite. For each
 finding, run its reproducer against the new version and record one of two verdicts:
@@ -102,7 +102,7 @@ Each step gates the next; a failure means stop and decide, not push through.
 1. **Survey before touching code.** Read the release notes and changelogs for every
    pinned crate between the current and target versions (all commonware crates move
    in lockstep — mixed versions are unsupported upstream, so the family upgrades as
-   one). Write a **migration map** into the planning notes: every API or semantic
+   one). Write a **migration map**: every API or semantic
    change that touches us, and for each one the intended mapping into our code. The
    map forces semantic decisions to be made deliberately and reviewed once, instead
    of emerging one compile error at a time. Pay special attention to anything
@@ -137,12 +137,12 @@ Each step gates the next; a failure means stop and decide, not push through.
    what upstream fixed and refreshing issue drafts for what remains.
 
 6. **Record the upgrade.** The migration map plus verdicts becomes the upgrade's
-   record in the planning notes, and this chapter absorbs any *durable* lesson —
+   record in the pull request, and this chapter absorbs any *durable* lesson —
    a new invariant worth listing above, a new rung worth adding to the ladder.
 
 ## A worked example: 2026.4.0 → 2026.5.0
 
-The first upgrade executed under this procedure, in July 2026. What its migration
+The first upgrade executed under this procedure. What its migration
 map contained, abbreviated to the shape of things a survey should catch:
 
 - **A height-zero requirement with wire implications.** Marshal began asserting

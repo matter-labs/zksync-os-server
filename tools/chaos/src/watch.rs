@@ -1026,7 +1026,7 @@ pub struct WatchOptions {
     /// Per-poll metrics sink (JSONL); `None` disables the stream.
     pub metrics: Option<std::fs::File>,
     /// See the drive flag of the same name: freezing on SettlementStall is
-    /// off while the known prover-job strand is with the team.
+    /// off while the known prover-job strand is unfixed on the node side.
     pub fail_on_settlement_stall: bool,
 }
 
@@ -1118,13 +1118,13 @@ pub async fn watch(
         }
 
         let batch = checker.observe(now, &current_expectations, &poll);
-        // SettlementStall is currently a *known* node bug (a leaked prover-job
-        // assignment freezes the execute train for the full snark_job_timeout —
-        // consensus_planning/soak-overnight2/INVESTIGATION.md §2, fix with the
-        // team). It is chain-safe, so by default a stall is recorded — stdout
-        // and the metrics stream — without freezing the experiment; the flag
-        // restores freezing once the node fix lands. Every other finding still
-        // freezes, including SettlementProbeInsanity (a rig self-check).
+        // SettlementStall is currently a known node bug (a leaked prover-job
+        // assignment freezes the execute train for the full snark_job_timeout,
+        // fix pending on the node side). It is chain-safe, so by default a
+        // stall is recorded — stdout and the metrics stream — without freezing
+        // the experiment; the flag restores freezing once the node fix lands.
+        // Every other finding still freezes, including SettlementProbeInsanity
+        // (a rig self-check).
         let (fatal, tolerated): (Vec<_>, Vec<_>) = batch.into_iter().partition(|finding| {
             fail_on_settlement_stall || !matches!(finding, Finding::SettlementStall { .. })
         });

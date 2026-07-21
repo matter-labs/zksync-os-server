@@ -41,7 +41,7 @@ fn short_epochs_with_retention() -> zksync_os_consensus_sim::StackTuner {
 #[test]
 fn retired_epochs_are_pruned_and_live_ones_kept() {
     // Single-run per seed: pruning scenarios combine crash-restarts with live
-    // storage removal, which trips the registered fingerprint determinism gap
+    // storage removal, which trips the known fingerprint determinism gap
     // (`promotion_catch_up_determinism_gap` is the reproducer). Every semantic
     // assertion still runs for every seed.
     for seed in 0..3 {
@@ -95,7 +95,7 @@ fn retired_epochs_are_pruned_and_live_ones_kept() {
             // replay, and the chain keeps moving with this validator's votes
             // (n=5, quorum 4: stopping another member makes them required). The
             // settle drains in-flight backfill before each crash — crashing a
-            // peer with resolver traffic in flight trips the registered
+            // peer with resolver traffic in flight trips the known
             // fingerprint determinism gap (`boundary_crash_determinism_gap`).
             cluster.settle(Duration::from_secs(5)).await;
             cluster.crash(4);
@@ -117,18 +117,22 @@ fn retired_epochs_are_pruned_and_live_ones_kept() {
     }
 }
 
-/// A consensus rebuild against peers that have pruned the early chain: it
-/// converges from live finality forward and never obtains the pruned history
-/// (nobody serves it) — those parts hold on every observed seed. When (and
-/// whether) voting resumes without an explicit floor is seed-dependent and not
-/// yet characterized: the engine for the epoch the rebuild lands in cannot
-/// start (its anchor block is below the adopted floor), and the conditions
-/// under which later epochs' engines start vary. Kept ignored as the
-/// reproducer while that is investigated; the operational rebuild path is
-/// unaffected (a node's own finality store supplies a floor, and the
-/// floor-started engine path is pinned by the promotion tests).
+/// A consensus rebuild against peers that have pruned the early chain. The
+/// rebuild converges to the tip it hears at restart and then freezes there,
+/// even while the rest of the cluster keeps finalizing: the rotation claims
+/// the landing epoch's certificate mux slot, but that epoch's engine cannot
+/// start because its anchor block sits below the adopted floor, so the
+/// epoch's certificates route to a slot with no engine behind it and the
+/// backup-lane tip scout never sees finality again. This is the same shape as
+/// the passive catch-up stall, where a validator that fell behind only learns
+/// the tip from finality it happens to hear. A node cannot reach this state
+/// from disk loss alone: the era-start guard refuses to start without
+/// consensus/finality state rather than rebuilding blindly. The
+/// operational rebuild path is unaffected — a node's own finality store
+/// supplies a floor, and the floor-started engine path is pinned by the
+/// promotion tests.
 #[test]
-#[ignore = "voting resumption after a floorless rebuild over pruned peers is under investigation"]
+#[ignore = "floorless rebuild over pruned peers freezes at the convergence tip; fixed together with the catch-up stall"]
 fn rebuild_over_pruned_peers_converges_with_bounded_history_and_votes() {
     // Single-run per seed, for the reason above.
     for seed in 0..3 {

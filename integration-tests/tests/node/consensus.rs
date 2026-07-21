@@ -887,3 +887,112 @@ async fn protocol_upgrade_executes_under_consensus() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// The `Withhold` verdict's semantics, end to end on a live committee: a
+/// validator whose L1 view lags the leader's must refuse to vote for a block
+/// carrying an L1 input it has not observed — without voting blind, without
+/// branding the leader invalid, and healing by itself once its watcher
+/// catches up.
+///
+/// n = 3 makes the *safety* half a proof: quorum is 3-of-3, so no block
+/// carrying the deposit can finalize while the laggard withholds — if the
+/// deposit lands during the sever, the laggard voted for an L1 input it
+/// never observed. The *liveness* half is the part that surprised us into
+/// this shape: the chain does NOT halt, because the laggard's own leader
+/// turns legitimately propose without the (to it, unknown) priority op —
+/// there is no forced-inclusion-when-due rule, deliberately, since that
+/// would invert the asymmetry and let fresher verifiers reject a lagging
+/// leader's every block. So the chain limps on laggard-led blocks while
+/// healthy leaders' proposals are withheld and re-proposed. (At production
+/// sizes, n ≥ 4, a healthy quorum finalizes the deposit without the
+/// laggard's vote — n = 3 is the degenerate full-quorum case that makes the
+/// withhold observable.)
+#[test_log::test(tokio::test)]
+async fn a_lagging_l1_view_withholds_without_halting_and_self_heals() -> anyhow::Result<()> {
+    const LAGGARD: usize = 2; // not the batcher (node 0) — settlement must keep running
+    let (cluster, mut proxy) = MultiNodeTester::start_with_lagging_l1(3, LAGGARD).await?;
+
+    // Healthy baseline: everyone converges on real traffic.
+    let included_at = send_transfer(&cluster, 1, Address::repeat_byte(0x71)).await?;
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+
+    // Freeze the laggard's L1 view, then let its in-flight polls drain so its
+    // watcher head is pinned strictly before the deposit lands on L1.
+    proxy.sever().await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // The deposit goes through a *healthy* node's direct L1 connection; the
+    // helper resolves only once the L2 receipt exists, which must not happen
+    // while the laggard withholds — its completion is the heal signal.
+    let (l1, l2_provider, l2_zk_provider) = cluster.node(0).deposit_handles();
+    let deposit = tokio::spawn(async move {
+        zksync_os_integration_tests::deposit_l1_to_l2(
+            &l1,
+            &l2_provider,
+            &l2_zk_provider,
+            Address::repeat_byte(0x72),
+            U256::from(1_000_000u64),
+        )
+        .await
+    });
+
+    // The divergence window. Safety: the deposit must stay un-finalized for
+    // the whole window (a completion means the laggard voted blind).
+    // Liveness: the chain must keep advancing anyway (laggard-led blocks) —
+    // a full halt would mean the withhold wedged consensus rather than
+    // nullifying one proposal per view.
+    let base_height = cluster.max_height().await?;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        anyhow::ensure!(
+            !deposit.is_finished(),
+            "the deposit finalized while the laggard's L1 view was severed — \
+             at 3-of-3 quorum this means a validator voted for an L1 input it \
+             never observed (withhold broken toward voting blind)"
+        );
+    }
+    let during = cluster.max_height().await?;
+    anyhow::ensure!(
+        during > base_height,
+        "the chain fully halted during the L1-view divergence: the withhold \
+         must nullify per proposal, not wedge consensus (heights {base_height} -> {during})"
+    );
+    for index in 0..cluster.len() {
+        let status = cluster.node(index).status().await?;
+        anyhow::ensure!(
+            status.healthy,
+            "validator {index} reports unhealthy during the withhold window"
+        );
+    }
+
+    // Restore the laggard's L1: its watcher re-scans from its cursor, observes
+    // the priority op, and the next healthy-leader re-proposal verifies clean —
+    // the deposit lands with no operator involvement.
+    proxy.restore().await?;
+    let receipt_hash = match tokio::time::timeout(CONVERGENCE_TIMEOUT, deposit).await {
+        Err(_) => {
+            anyhow::bail!("the deposit did not land after the laggard's L1 view was restored")
+        }
+        Ok(joined) => joined??,
+    };
+
+    let included_at = cluster.max_height().await?;
+    cluster
+        .wait_for_block_on_all(included_at, CONVERGENCE_TIMEOUT)
+        .await?;
+    cluster.assert_block_hashes_agree(included_at).await?;
+    for index in 0..cluster.len() {
+        let receipt = cluster
+            .node(index)
+            .l2_zk_provider
+            .get_transaction_receipt(receipt_hash)
+            .await?;
+        anyhow::ensure!(
+            receipt.is_some_and(|receipt| alloy::network::ReceiptResponse::status(&receipt)),
+            "validator {index} does not serve the healed deposit's receipt"
+        );
+    }
+    cluster.shutdown_all().await
+}

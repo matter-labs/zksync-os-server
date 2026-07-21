@@ -81,10 +81,10 @@ pub struct DriveArgs {
     #[arg(long)]
     pub metrics: Option<PathBuf>,
     /// Restore freezing on SettlementStall findings. Off by default while the
-    /// known prover-job strand (chain-safe; documented in
-    /// consensus_planning/soak-overnight2/INVESTIGATION.md §2) is with the
-    /// team: stalls are logged to stdout and the metrics stream instead of
-    /// freezing the run. Turn this on once the node fix lands.
+    /// known prover-job strand — a leaked prover-job assignment that freezes
+    /// the execute train until the job times out, chain-safe — is unfixed on
+    /// the node side: stalls are logged to stdout and the metrics stream
+    /// instead of freezing the run. Turn this on once the node fix lands.
     #[arg(long)]
     pub fail_on_settlement_stall: bool,
 }

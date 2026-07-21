@@ -221,6 +221,40 @@ impl MultiNodeTester {
         Ok((tester, proxy))
     }
 
+    /// Like [`Self::start`], but validator `laggard` reaches L1 through its own
+    /// [`SeverableL1Proxy`] while every other validator — and the testers' own
+    /// L1 helpers — stay directly connected. Severing it freezes one
+    /// validator's *view* of L1 while the chain's L1 keeps moving: the setup
+    /// for L1-view-divergence scenarios (a leader includes an L1 input the
+    /// laggard has not observed yet).
+    pub async fn start_with_lagging_l1(
+        num_validators: usize,
+        laggard: usize,
+    ) -> anyhow::Result<(Self, SeverableL1Proxy)> {
+        assert!(laggard < num_validators);
+        let chain_layout = ChainLayout::Default {
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let l1 = crate::AnvilL1::start(chain_layout).await?;
+        let proxy = SeverableL1Proxy::start(&l1.address).await?;
+        let mut lagged = l1.clone();
+        lagged.address = proxy.url();
+        let tester = Self::start_inner_indexed_l1(
+            num_validators,
+            chain_layout,
+            move |index| {
+                if index == laggard {
+                    lagged.clone()
+                } else {
+                    l1.clone()
+                }
+            },
+            |_, _| {},
+        )
+        .await?;
+        Ok((tester, proxy))
+    }
+
     /// The migration cutover: a committee takes over a chain that a single
     /// sequencer produced. `source` is the drained (stopped) sequencer node; every
     /// validator starts on a copy of its chain databases — the snapshot-distribution
@@ -738,6 +772,20 @@ impl MultiNodeTester {
         l1: crate::AnvilL1,
         overrides: impl Fn(usize, &mut Config) + Clone + Send + 'static,
     ) -> anyhow::Result<Self> {
+        Self::start_inner_indexed_l1(num_validators, chain_layout, move |_| l1.clone(), overrides)
+            .await
+    }
+
+    /// Like [`Self::start_inner_indexed`], with a per-validator L1 handle — the
+    /// seam for tests that route *individual* validators through their own
+    /// proxy (config overrides cannot do this: `bind_runtime_config`
+    /// re-derives the RPC URL from the handle's address after any hook runs).
+    async fn start_inner_indexed_l1(
+        num_validators: usize,
+        chain_layout: ChainLayout<'static>,
+        l1_for: impl Fn(usize) -> crate::AnvilL1 + Clone + Send + 'static,
+        overrides: impl Fn(usize, &mut Config) + Clone + Send + 'static,
+    ) -> anyhow::Result<Self> {
         assert!(
             num_validators >= 2,
             "a committee needs at least 2 validators"
@@ -766,7 +814,7 @@ impl MultiNodeTester {
                 .zip(&consensus_ports)
                 .enumerate()
                 .map(|(index, (keys, consensus_port))| {
-                    let l1 = l1.clone();
+                    let l1 = l1_for(index);
                     let committee = committee.clone();
                     let overrides = overrides.clone();
                     let network_key = alloy::hex::encode(keys.network.encode());

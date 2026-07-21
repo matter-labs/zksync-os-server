@@ -3,8 +3,8 @@ pragma solidity 0.8.28;
 
 /// The on-chain validator registry: the L2 home of consensus committee
 /// membership. Consensus nodes do not call this contract — they read its
-/// storage slots directly from finalized local state, so THE STORAGE LAYOUT
-/// BELOW IS THE INTERFACE. It is hand-assigned (every field lives at an
+/// storage slots directly from finalized local state, so the storage layout
+/// below is the interface. It is hand-assigned (every field lives at an
 /// explicitly chosen slot, written and read through assembly), immune to
 /// compiler layout changes, and mirrored constant-for-constant by the node's
 /// parser, which golden-tests it byte-for-byte.

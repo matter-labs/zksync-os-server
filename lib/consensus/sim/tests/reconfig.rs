@@ -175,7 +175,7 @@ fn catch_up_across_a_committee_change() {
             //
             // The crash lands a few heights past the boundary rather than exactly on
             // it: crashing *on* a boundary while a scheduled-out follower is
-            // mid-backfill trips a registered determinism gap in teardown event
+            // mid-backfill trips a known determinism gap in teardown event
             // ordering (see `boundary_crash_determinism_gap` below) — functionally
             // harmless, but it breaks the harness's bit-exact double-run.
             cluster
@@ -206,7 +206,7 @@ fn catch_up_across_a_committee_change() {
 /// the p2p ban table and journals replay safely (own votes bind regardless of the
 /// committee they were cast under). The simulated network has no way to clear
 /// bans (`Oracle` exposes `block` but no unblock), so a banned identity stays
-/// banned for the run and no post-ban recovery can be modeled — registered as an
+/// banned for the run and no post-ban recovery can be modeled — a known
 /// upstream gap to raise with the next commonware upgrade, and the recovery
 /// choreography belongs to the L3 suite where real p2p processes restart. The
 /// *catch-up machinery* the recovery relies on is covered ban-free below
@@ -292,7 +292,7 @@ fn missing_schedule_entry_stalls_safely() {
 #[test]
 fn deep_catch_up_across_retired_epochs_and_a_committee_change() {
     // Single-run per seed: deep backfill around crash points sits on the
-    // registered fingerprint determinism gap (`boundary_crash_determinism_gap`
+    // known fingerprint determinism gap (`boundary_crash_determinism_gap`
     // below is the reproducer), and which seeds diverge shifts with binary
     // layout. Every semantic assertion still runs for every seed.
     for seed in 0..1 {
@@ -325,7 +325,7 @@ fn deep_catch_up_across_retired_epochs_and_a_committee_change() {
             // Participation, not just observation: epoch-2+ committee is 5
             // (quorum 4) — with one other member stopped, progress requires the
             // late joiner's votes. Let the joiner's backfill traffic drain first:
-            // crashing a peer with resolver fetches in flight trips the registered
+            // crashing a peer with resolver fetches in flight trips the known
             // teardown determinism gap (`boundary_crash_determinism_gap`).
             cluster.settle(Duration::from_secs(5)).await;
             cluster.crash(0);
@@ -340,7 +340,7 @@ fn deep_catch_up_across_retired_epochs_and_a_committee_change() {
     }
 }
 
-/// REGISTERED DETERMINISM GAP (reproducer, deliberately ignored in CI).
+/// A known determinism gap (reproducer, deliberately ignored in CI).
 ///
 /// Crashing a committee member *exactly at an epoch boundary* (two engines alive,
 /// retirement in flight) while a scheduled-out validator is actively following via
@@ -359,7 +359,7 @@ fn deep_catch_up_across_retired_epochs_and_a_committee_change() {
 /// commonware upgrade. Run manually with:
 /// `cargo test -p zksync_os_consensus_sim --test reconfig -- --ignored`
 #[test]
-#[ignore = "registered determinism gap: boundary crash × follower backfill; semantics unaffected"]
+#[ignore = "known determinism gap: boundary crash × follower backfill; semantics unaffected"]
 fn boundary_crash_determinism_gap() {
     run_scenario(
         "boundary_crash_determinism_gap",

@@ -94,6 +94,13 @@ pub struct SetupArgs {
     /// window (e.g. 20s against the default 60s).
     #[arg(long, default_value = "0s")]
     pub idle_heartbeat: humantime::Duration,
+    /// Anvil's block interval in seconds. Anvil's memory grows with block
+    /// count (~3 GiB per 4h at the 0.25s default), so clusters meant to live
+    /// longer than a workday slow the L1 down — which is also closer to a real
+    /// L1 than the default. Mixed mining still mines on demand, so batcher
+    /// txs land promptly regardless.
+    #[arg(long, default_value_t = 0.25)]
+    pub l1_block_time: f64,
     /// Schedule a committee-rotation band: from epoch 2 up to this epoch, every
     /// second epoch alternates the committee between all validators and all but
     /// the last one — the last validator repeatedly leaves (and follows as a
@@ -281,7 +288,8 @@ pub fn run(args: SetupArgs) -> anyhow::Result<()> {
         shrunken = !shrunken;
     }
     // End restored: past the band the steady-state committee is everyone (and
-    // the last validator holds a seat again rather than idling out the soak).
+    // the last validator holds a seat again rather than staying idle for the
+    // rest of the run).
     if let Some(last) = schedule.last()
         && last.validators != args.validators
     {
@@ -474,6 +482,7 @@ fn compose_file(args: &SetupArgs, repo: &std::path::Path, manifest: &Manifest) -
     let chain_parent = parent_dir(chain);
     let image = &args.image;
     let host_l1_port = manifest.host_l1_port;
+    let l1_block_time = args.l1_block_time;
     let environment = if args.node_env.is_empty() {
         String::new()
     } else {
@@ -540,7 +549,7 @@ services:
     image: {FOUNDRY_IMAGE}
     container_name: chaos-anvil
     entrypoint: [\"sh\", \"-c\"]
-    command: [\"gunzip -c /l1-state.json.gz > /tmp/l1-state.json && anvil --host 0.0.0.0 --port 8545 --load-state /tmp/l1-state.json --block-time 0.25 --mixed-mining --slots-in-an-epoch 10\"]
+    command: [\"gunzip -c /l1-state.json.gz > /tmp/l1-state.json && anvil --host 0.0.0.0 --port 8545 --load-state /tmp/l1-state.json --block-time {l1_block_time} --mixed-mining --slots-in-an-epoch 10\"]
     volumes:
       - {repo}/{chain_parent}/l1-state.json.gz:/l1-state.json.gz:ro
     ports:

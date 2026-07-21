@@ -377,11 +377,11 @@ fn a_lagging_validator_derives_the_identical_history_late() {
 
 /// Semantic pin, run once per seed (`fingerprint` directly) instead of through
 /// `run_scenario`'s bit-exactness double-run: the crash → provider-rebuild →
-/// restart → second-crash choreography sits on the registered catch-up
-/// determinism gap (see `promotion_catch_up_determinism_gap` in promotion.rs and
-/// upstream-issues.md #2) — same-seed runs converge to identical chains and
-/// identical derivation trails but can differ in auditor fingerprint. Every
-/// registry property is still asserted inside the body, every seed.
+/// restart → second-crash choreography sits on the catch-up determinism gap
+/// (see `promotion_catch_up_determinism_gap` in promotion.rs) — same-seed runs
+/// converge to identical chains and identical derivation trails but can differ
+/// in auditor fingerprint. Every registry property is still asserted inside the
+/// body, every seed.
 #[test]
 fn a_restart_replays_the_recorded_trail_instead_of_rederiving() {
     for seed in 0..3 {
