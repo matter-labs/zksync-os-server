@@ -3,8 +3,10 @@
 //!
 //! `Drop`-based cleanup (`AnvilInstance::drop`, `kill_on_drop`) only runs while the process
 //! unwinds normally. It never runs when the test process is SIGKILLed (OOM killer, `kill -9`,
-//! IDE stop buttons) or aborts, and nextest only *detects* leaked grandchildren — it does not
-//! kill them. A leaked anvil mines a block every 250ms forever, growing without bound.
+//! IDE stop buttons) or aborts. nextest kills the test's process group on timeouts and
+//! Ctrl-C, but children that outlive any other kind of test death are only *detected* as
+//! leaky, never killed. A leaked anvil mines a block every 250ms forever, growing without
+//! bound.
 //!
 //! [`attach`] spawns a tiny sidecar (see `src/bin/leash.rs`) that holds the read end of a
 //! pipe whose write end stays open in this process for its entire lifetime. The kernel
@@ -18,7 +20,8 @@ use std::process::{Command, Stdio};
 /// How long the sidecar waits after SIGTERM before escalating to SIGKILL.
 const GRACE_SECS: u64 = 5;
 
-/// Guarantees that the process `pid` does not outlive the current process.
+/// Arranges for the process `pid` to be killed shortly after the current process dies —
+/// no matter how it dies — bounded by [`GRACE_SECS`] once the sidecar fires.
 ///
 /// `expected_name` is the target's executable name; the sidecar re-checks it before killing
 /// to avoid signalling an unrelated process if the PID has been reused by then.
@@ -39,8 +42,8 @@ pub(crate) fn attach(pid: u32, expected_name: &str) -> anyhow::Result<()> {
     // Keep the pipe's write end open until this process dies: its closure — performed by
     // the kernel even on SIGKILL — is what tells the sidecar to fire. The leash is thus a
     // pure backstop; regular shutdown paths stay in charge while the process is alive.
-    // (std spawns pipes with CLOEXEC, so no later child can inherit the write end and keep
-    // the sidecar armed past our death.)
+    // (std spawns pipes with CLOEXEC, so no later child can inherit the write end and hold
+    // the pipe open past our death, which would stop the sidecar from ever firing.)
     std::mem::forget(child.stdin.take());
     // The sidecar strictly outlives this process, so it can never become our zombie;
     // dropping the handle without waiting is fine.

@@ -9,7 +9,7 @@
 //! On EOF: verify the target is still the process we were asked to kill (guards against
 //! PID reuse), send SIGTERM, wait up to `grace_secs`, then SIGKILL.
 //!
-//! See `crate::leash` for the spawning side.
+//! See `src/leash.rs` for the spawning side.
 
 #[cfg(unix)]
 fn main() {
@@ -75,9 +75,9 @@ fn name_matches(pid: i32, expected: &str) -> bool {
         Some(observed) => {
             observed == expected || (observed.len() == 15 && expected.starts_with(&observed))
         }
-        // Can't tell (no /proc on this platform, or the process is already gone). Signal
-        // anyway: `kill` of a dead PID is a no-op, and the caller attached us to this PID
-        // moments after spawning it, so a mid-run reuse race is vanishingly unlikely.
+        // The name is unobservable (`/proc/<pid>/comm` gone, `ps` found nothing), which in
+        // practice means the process is already dead — a reused PID would be observable and
+        // hit the mismatch arm above. Signalling a dead PID is a harmless no-op.
         None => true,
     }
 }

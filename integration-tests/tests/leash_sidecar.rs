@@ -78,8 +78,10 @@ fn spares_victim_on_name_mismatch() {
     victim.wait().unwrap();
 }
 
-/// EOF is also delivered when the write end is dropped without any process dying — the
-/// normal-teardown analogue (nothing holds the pipe anymore, target already gone or not).
+/// The kill path triggers on pipe EOF itself, not on holder death specifically: dropping
+/// the write end without any process dying must have the same effect. (Production never
+/// drops the write end early — `attach` leaks it until process death — so this pins the
+/// mechanism, not a real deployment scenario.)
 #[test]
 fn kills_victim_on_plain_eof() {
     let mut victim = spawn_sleep();
