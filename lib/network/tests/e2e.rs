@@ -161,9 +161,10 @@ trait PeerExt {
         trusted_peers: HashSet<PeerId>,
     ) -> TestPeerProtocolHandles;
 
-    /// Registers a replay-only `zks/5` handler plus a `zks_2fa` handler on the same peer, sharing a
-    /// single `ProtocolEvent` stream — mirroring how a post-split verifier peer is wired. Pass
-    /// `verifier_signing_key` only for external nodes.
+    /// Registers `zks/5` replay and `zks_2fa` verification on the same peer.
+    ///
+    /// Both handlers publish into one `ProtocolEvent` stream, matching production. Only an
+    /// external-node peer needs `verifier_signing_key`.
     fn add_zks_2fa_sub_protocol(
         &mut self,
         node_role: NodeRole,
@@ -346,7 +347,6 @@ async fn send_replay_record_matching_version() {
             100,
         );
 
-    // Spawn and connect all the peers
     let handle = net.spawn();
     handle.connect_peers().await;
 
@@ -530,10 +530,8 @@ async fn batches_multiple_replay_records() {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn send_replay_record_different_versions() {
-    // Run two peers where peer0 can communicate on zks protocol v0 AND v5, while peer1 can only
-    // communicate on v0. Test expects that they agree to communicate using v0 and manage to transfer
-    // one replay record where all fields except block number are stripped (v0 only keeps block number
-    // in tact).
+    // Peer 0 advertises `zks/0` and `zks/5`, while peer 1 advertises only `zks/0`. They must select
+    // `zks/0`, whose replay record preserves only the block number.
     let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
     let record1 = dummy_record::<ZksProtocolV5>(1);
     let (_, _) = net.peers_mut()[0].add_zks_sub_protocol::<ZksProtocolV5>(
@@ -557,7 +555,6 @@ async fn send_replay_record_different_versions() {
             100,
         );
 
-    // Spawn and connect all the peers
     let handle = net.spawn();
     handle.connect_peers().await;
 
@@ -569,10 +566,8 @@ async fn send_replay_record_different_versions() {
     });
 
     let received_replay_record = replay_rx_peer1.recv().await.unwrap();
-    // Received record MUST NOT match what peer0 has in storage. This is expected because v0 loses
-    // all record information except block number.
+    // The negotiated v0 format deliberately discards every other field.
     assert_ne!(received_replay_record, record1);
-    // This is the only field that is expected to match for v0.
     assert_eq!(
         received_replay_record.block_context.block_number,
         record1.block_context.block_number
@@ -581,8 +576,8 @@ async fn send_replay_record_different_versions() {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn disconnects_peer_without_common_zks_version() {
-    // peer0 speaks only zks/5 and peer1 only zks/0, so capability negotiation yields no shared
-    // zks version. The zks handler must drop the whole session during the p2p handshake instead
+    // Peer 0 speaks only `zks/5` and peer 1 only `zks/0`, so capability negotiation yields no
+    // shared `zks` version. The handler must drop the whole session during capability negotiation
     // of letting a never-syncing peer occupy a connection slot.
     let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
 
@@ -612,8 +607,8 @@ async fn disconnects_peer_without_common_zks_version() {
         }
     }
 
-    // A handshake-phase disconnect emits no session events at all, so assert that neither side
-    // ever observes an established zks connection and that no session is counted as active.
+    // Rejection happens before either handler can emit `ProtocolEvent::Established` and before reth
+    // counts the peer as connected.
     assert!(
         tokio::time::timeout(std::time::Duration::from_secs(2), from_peer0.recv())
             .await
@@ -709,8 +704,8 @@ async fn trusted_peer_bypasses_max_active_connections() {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn zks_2fa_authorizes_verifier_and_replays() {
-    // A post-split pair: replay flows over `zks/5` while the verifier handshake flows over
-    // `zks_2fa`. The main node must authorize the verifier and the replay record must transfer.
+    // A verifier peer uses independent lanes: replay over `zks/5` and authentication over
+    // `zks_2fa`. Both must make progress on the same RLPx connection.
     let mut net = Testnet::create_with(2, MockEthProvider::default()).await;
     let record1 = dummy_record::<ZksProtocolV5>(1);
     let expected_signer = PrivateKeySigner::from_str(
@@ -869,7 +864,7 @@ async fn zks_2fa_forwards_verify_batch_result_to_main_node() {
     let main_peer_id = *handle.peers()[0].peer_id();
     let external_peer_id = *handle.peers()[1].peer_id();
 
-    // Wait until the verifier is authorized so the `zks_2fa` connection is fully established.
+    // Wait for authentication to complete before injecting a verification result.
     loop {
         match main.protocol_rx.recv().await {
             Some(ProtocolEvent::VerifierAuthorized { peer_id, .. }) => {

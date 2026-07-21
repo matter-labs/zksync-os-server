@@ -1,4 +1,8 @@
-//! An RLPX subprotocol for ZKsync OS functionality.
+//! Replay streaming over the `zks` RLPx subprotocol.
+//!
+//! Verifier authentication and batch verification live in [`crate::twofa`]. Both subprotocols
+//! publish [`ProtocolEvent`]s here so the network service can join replay progress with verifier
+//! state for the same peer.
 
 mod config;
 mod connection;

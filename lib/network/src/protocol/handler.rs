@@ -29,6 +29,11 @@ enum ProtocolRole<Replay> {
     ExternalNode(ExternalNodeProtocolConfig),
 }
 
+/// Registers one version of the `zks` replay protocol for either the main-node or external-node
+/// role.
+///
+/// Production registers `zks/5`. Tests may register more than one handler to exercise capability
+/// negotiation and the test-only `zks/0` replay format.
 #[derive(Debug, Clone)]
 pub struct ZksProtocolHandler<P: ZksProtocolVersionSpec, Replay: Clone> {
     role: ProtocolRole<Replay>,
@@ -37,6 +42,7 @@ pub struct ZksProtocolHandler<P: ZksProtocolVersionSpec, Replay: Clone> {
     _phantom: PhantomData<P>,
 }
 
+/// Turns a negotiated `zks` capability into the role-specific replay task for one peer.
 pub struct ZksProtocolConnectionHandler<P: ZksProtocolVersionSpec, Replay: Clone> {
     role: ProtocolRole<Replay>,
     /// Current state of the protocol.
@@ -150,9 +156,9 @@ impl<P: ZksProtocolVersionSpec, Replay: ReadReplay + Clone> ConnectionHandler
         direction: Direction,
         peer_id: PeerId,
     ) -> OnNotSupported {
-        // `supported` is the negotiated intersection of both hello messages (exact name+version
-        // match on both sides), so a `zks` entry here means another locally-registered zks
-        // version owns this connection.
+        // This handler is called because its exact `zks` version did not match. Another shared
+        // `zks` capability means a different locally registered version can run the replay lane.
+        // With no shared `zks` capability, the peer cannot replay and the whole session is rejected.
         if supported.iter_caps().any(|c| c.name() == ZKS_PROTOCOL) {
             OnNotSupported::KeepAlive
         } else {

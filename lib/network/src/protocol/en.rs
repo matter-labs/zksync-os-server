@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use zksync_os_storage_api::ReplayRecord;
 
-/// Background task that drives an external-node side of a connection.
+/// Background task that drives the external-node side of a `zks` connection.
 ///
 /// Sends a `GetBlockReplays` request immediately, then forwards each received `BlockReplays`
 /// record to the local sequencer via `replay_sender` and advances `starting_block`.
@@ -49,8 +49,8 @@ async fn send_replay_request<P: ZksProtocolVersionSpec>(
 ) -> Result<(), ()> {
     let next_block = *starting_block.read().unwrap();
     tracing::info!(next_block, "requesting block replays from main node");
-    // The field stays `Option` on the wire (`#[rlp(trailing)]`): the MN falls back to 1 for
-    // requests from older zks/5 builds that omitted it.
+    // The field remains optional to preserve the published `zks/5` request encoding. `None` is
+    // valid on the wire and makes the main node fall back to one record per response.
     let max_blocks_per_message = Some(max_blocks_per_message.clamp(1, MAX_BLOCKS_PER_MESSAGE));
     let msg =
         ZksMessage::<P>::get_block_replays(next_block, max_blocks_per_message, record_overrides);

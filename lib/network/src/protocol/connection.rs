@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
 
-/// The outbound side of a zks protocol connection.
+/// The outbound side of a `zks` protocol connection.
 ///
 /// Wraps an mpsc receiver fed by a background Tokio task (`run_mn_connection()` or
 /// `run_en_connection()`) that owns the actual protocol logic. Dropping this struct aborts the

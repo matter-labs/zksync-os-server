@@ -488,7 +488,6 @@ impl NetworkService {
         let twofa_state =
             HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS, trusted_peers);
         builder
-            // Replay-only protocol: verifier traffic is carried by `zks_2fa` instead.
             .add_rlpx_sub_protocol(ZksProtocolHandler::<ZksProtocolV5, _>::for_main_node(
                 replay, state,
             ))
@@ -521,7 +520,6 @@ impl NetworkService {
                 verify_batch_tx: verifier.verify_batch_tx,
                 outgoing_verify_results: verifier.outgoing_verify_results,
             });
-        // Replay-only protocol: verifier traffic is carried by `zks_2fa` instead.
         let builder = builder.add_rlpx_sub_protocol(
             ZksProtocolHandler::<ZksProtocolV5, _>::for_external_node(replay, protocol, state),
         );
@@ -660,8 +658,9 @@ impl NetworkService {
 
 /// Dispatches a verify request to all currently eligible verifier peers.
 ///
-/// Eligibility is derived from [`PeerSessionStore`], then cross-checked against the live
-/// [`Zks2faConnectionRegistry`] before sending requests over `zks_2fa`.
+/// [`PeerSessionStore`] selects peers that are authenticated and replayed through the requested
+/// batch. The live [`Zks2faConnectionRegistry`] then supplies a send handle; an otherwise eligible
+/// peer is skipped if its `zks_2fa` lane has already closed.
 async fn dispatch_verify_batch(
     peer_sessions: &Arc<RwLock<PeerSessionStore>>,
     zks_2fa_registry: &Zks2faConnectionRegistry,

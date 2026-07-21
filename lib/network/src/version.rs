@@ -12,7 +12,10 @@ pub trait ZksProtocolVersionSpec: Debug + Send + Sync + Unpin + Clone + 'static 
     const VERSION: ZksVersion;
 }
 
-/// Protocol version 0 is very bare-bones and used purely for testing.
+/// Test-only protocol version whose replay record preserves just the block number.
+///
+/// Keeping this deliberately lossy version makes capability-negotiation tests able to observe
+/// which version the peers selected.
 #[derive(Debug, Clone)]
 pub struct ZksProtocolV0;
 
@@ -33,7 +36,7 @@ impl ZksProtocolVersionSpec for ZksProtocolV5 {
     const VERSION: ZksVersion = ZksVersion::Zks5;
 }
 
-/// Error thrown when failed to parse a valid [`ZksVersion`].
+/// Error returned when a byte does not identify a registered [`ZksVersion`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("Unknown zks protocol version: {0}")]
 pub struct ParseVersionError(String);
@@ -52,11 +55,11 @@ pub enum ZksVersion {
 }
 
 impl ZksVersion {
-    /// The latest known zks version
+    /// The latest registered `zks` version.
     pub const LATEST: Self = Self::Zks5;
 }
 
-/// Allow for converting from a u8 to an `ZksVersion`.
+/// Converts a `u8` into a registered [`ZksVersion`].
 ///
 /// # Example
 /// ```

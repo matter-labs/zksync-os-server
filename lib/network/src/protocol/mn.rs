@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 use zksync_os_storage_api::{ReadReplay, ReadReplayExt};
 
-/// Background task that drives a main-node side of a connection.
+/// Background task that drives the main-node side of a `zks` connection.
 ///
 /// Waits for a `GetBlockReplays` request from the EN, then streams replay records from storage to
 /// the EN indefinitely.

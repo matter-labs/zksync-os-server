@@ -1,4 +1,4 @@
-# devp2p / `zks` Protocol
+# devp2p / `zks` Protocols
 
 The `lib/network` crate integrates ZKsync OS-specific peer-to-peer traffic into the node's
 devp2p / RLPx network stack.
@@ -23,20 +23,18 @@ That local role determines how the node behaves on each negotiated connection:
 - the external node requests replay data over `zks` and, if configured as a verifier, advertises
   `zks_2fa` and authenticates on it
 
-There is currently no explicit "remote role negotiation" on top of devp2p. The local node chooses
-its behavior from config and then expects the remote peer to behave compatibly on the negotiated
+There is no explicit "remote role negotiation" on top of devp2p. The local node chooses its
+behavior from config and then expects the remote peer to behave compatibly on the negotiated
 connections.
 
 ## Supported versions
 
-- `zks/5` — the current (and only) production version. Replay-only: `GetBlockReplays` (0x00) and
-  `BlockReplays` (0x01, batched via `max_blocks_per_message`), using the v3 replay record
-  encoding.
-- `zks/0` — a bare-bones version kept in-tree for tests only (records carry just the block
-  number); it is never registered in production.
-- `zks/1`–`zks/4` are retired. `zks/3` and `zks/4` carried the verifier messages inline at message
-  IDs 0x02–0x06; those IDs are reserved and must not be reused without bumping the protocol
-  version.
+- `zks/5` — the only production version registered by the network service. It carries
+  `GetBlockReplays` (0x00) and `BlockReplays` (0x01), using the v3 replay record encoding.
+- `zks/0` — a bare-bones version kept in-tree for tests only. Its replay records carry just the
+  block number, and the network service never registers it.
+- `zks/1`–`zks/4` are retired and no longer accepted. `zks/3` and `zks/4` carried the verifier
+  messages inline at message IDs 0x02–0x06; those IDs must not be reused in `zks/5`.
 - `zks_2fa/1` — hosts the verifier handshake (`VerifierRoleRequest` 0x00, `VerifierChallenge`
   0x01, `VerifierAuth` 0x02) and batch verification (`VerifyBatch` 0x03, `VerifyBatchResult`
   0x04). Only verifier-configured ENs advertise it; the main node always does.
@@ -73,7 +71,8 @@ Replay is the `zks` protocol's sole responsibility.
 
 1. The EN negotiates a `zks/<version>` capability over devp2p.
 2. The EN sends `GetBlockReplays`, including how many records the MN may batch per response.
-3. The MN streams `BlockReplays`, batching up to the requested number of records per message.
+3. The MN streams `BlockReplays`, batching up to the requested number of records per message (and
+   never more than the server-side limit of 64).
 4. The EN forwards received replay records into its local pipeline.
 
 Replay record encoding is versioned separately from the protocol version (`wire/replays/v*.rs`);

@@ -1,7 +1,6 @@
-//! Trait implementations for all versioned replay messages.
+//! Conversions between storage replay records and the supported versioned wire formats.
 //!
-//! Note that this file is allowed to change as traits can evolve over time and hence can the
-//! surrounding logic.
+//! Unlike the versioned wire structs, these implementations may evolve with the storage API.
 
 use crate::wire::replays::{WireReplayRecord, v0, v3};
 use crate::wire::{BlockHashes, ForcedPreimage};
@@ -13,9 +12,7 @@ use zksync_os_storage_api::BlockHashes as StorageBlockHashes;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
-// ==================================================
-// | Implementations for protocol version 0 (Dummy) |
-// ==================================================
+// Test-only v0 replay record conversions.
 
 impl WireReplayRecord for v0::ReplayRecord {
     fn block_number(&self) -> BlockNumber {
@@ -52,9 +49,7 @@ impl TryFrom<v0::ReplayRecord> for StorageReplayRecord {
     }
 }
 
-// ==========================================
-// | Implementations for protocol version 3 |
-// ==========================================
+// Production v3 replay record conversions (`zks/5` pins this format).
 
 impl WireReplayRecord for v3::ReplayRecord {
     fn block_number(&self) -> BlockNumber {
@@ -142,7 +137,7 @@ impl TryFrom<v3::ReplayRecord> for StorageReplayRecord {
                 .map(|tx| tx.try_into_recovered())
                 .collect::<Result<Vec<_>, _>>()?,
             previous_block_timestamp: value.previous_block_timestamp,
-            // Stamp replay record with this node's version
+            // Replay wire formats omit node semver, so the receiver stamps its own binary version.
             node_version: NODE_SEMVER_VERSION.clone(),
             protocol_version: value.protocol_version,
             block_output_hash: value.block_output_hash,
