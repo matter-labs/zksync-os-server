@@ -1,17 +1,17 @@
 ---
-name: rust-glancer-code-style-review
-description: Review rust-glancer project changes for uncontroversial code-style and structure smells, then propose a refactoring plan without applying changes. Use only when the user explicitly invokes $rust-glancer-code-style-review for the rust-glancer repository or one of its worktrees; do not infer this skill from ordinary review or Rust requests.
+name: zksync-os-server-code-style-review
+description: Review zksync-os-server changes for high-confidence code-style, structure, and repository-invariant problems, then propose a refactoring plan without applying changes. Use only when the user explicitly invokes $zksync-os-server-code-style-review inside zksync-os-server or one of its worktrees; do not infer this skill from ordinary review or Rust requests.
 ---
 
-# Rust Glancer Code Style Review
+# ZKsync OS Server Code Style Review
 
 ## Overview
 
-Use this skill as a focused reviewer for rust-glancer changes. Identify likely smells, explain why they matter in this codebase, and propose a concrete refactoring plan. Do not apply changes unless the user explicitly approves the plan.
+Use this skill as a focused reviewer for zksync-os-server changes. Identify likely smells, explain why they matter in this codebase, and propose a concrete refactoring plan. Do not apply changes unless the user explicitly approves the plan.
 
 ## Workflow
 
-1. Confirm that the current repository is `rust-glancer` or a rust-glancer worktree. If it is not, say the skill does not apply.
+1. Confirm that the checkout is `matter-labs/zksync-os-server` or one of its worktrees using workspace metadata or root files; do not rely on the directory name alone. If it is not, say the skill does not apply.
 2. Determine the review scope. Prefer the user-specified files or diff; otherwise inspect the working tree with `git status` and `git diff`.
 3. Read the surrounding modules before judging a smell. Use `rg` first for related types, helpers, existing APIs, and repeated functionality.
 4. Report only uncontroversial or high-confidence findings. If a heuristic is plausible but not clear, mark it as a question or omit it.
@@ -19,8 +19,6 @@ Use this skill as a focused reviewer for rust-glancer changes. Identify likely s
 
 ## Review Checks
 
-- Prefer `rg_std::UniqueVec` for ordered sets instead of manually maintaining unique `Vec` semantics.
-- Prefer `rg_std::ExpectedUnique` for values where any number may technically exist, but the normal and expected case is exactly one.
 - Avoid single-use helpers that do not improve readability. Keep a single-use method only when it encapsulates meaningful cognitive complexity or makes the call site much cleaner.
 - Treat a single-use helper calling another single-use helper as almost always suspicious. Prefer inlining the sequential logic with a short comment.
 - Place methods on the entity that owns the concept when possible. For example, prefer a path-oriented API such as `Path::single_name(&self)` over `single_name_from_path(&Path)`.

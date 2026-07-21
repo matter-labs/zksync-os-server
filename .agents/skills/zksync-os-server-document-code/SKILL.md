@@ -1,15 +1,15 @@
 ---
-name: rust-glancer-document-code
-description: Add or revise documentation comments for an explicit rust-glancer code scope, using example-driven Rust docs that explain why code exists and how to read it. Use only when the user explicitly invokes $rust-glancer-document-code inside rust-glancer or one of its worktrees and provides an explicit scope such as an unstaged diff, file, module, or symbol list; do not infer this skill from ordinary coding or review requests.
+name: zksync-os-server-document-code
+description: Add or revise documentation comments for an explicit zksync-os-server code scope, using example-driven Rust docs that explain why code exists and how to read it. Use only when the user explicitly invokes $zksync-os-server-document-code inside zksync-os-server or one of its worktrees and provides an explicit scope such as an unstaged diff, file, module, or symbol list; do not infer this skill from ordinary coding or review requests.
 ---
 
-# Rust Glancer Document Code
+# ZKsync OS Server Document Code
 
 ## Overview
 
 Use this skill to add or alter Rust documentation comments within the exact scope provided by the user. If the scope is not explicit, stop and call that out. Explicit scopes include `unstaged diff`, a particular file, a module, or a list of symbols. Do not assume the scope.
 
-Use only inside `rust-glancer` or one of its worktrees. If invoked outside such a checkout, stop and ask for clarification.
+Use only inside `matter-labs/zksync-os-server` or one of its worktrees. Confirm the repository from workspace metadata or root files rather than requiring an exact directory name, because worktree names may have a suffix. If invoked outside such a checkout, stop and ask for clarification.
 
 Documentation should onboard the reader to the context that is coming next in the code. Keep phrasing simple and example-driven where examples help. Do not change code behavior as part of this skill unless the documentation task exposes a clear typo or naming issue and the user explicitly approves the code change.
 
@@ -17,7 +17,7 @@ Comments are pre-reading notes, not reference docs. Optimize for the reader who 
 
 ## Workflow
 
-1. Confirm the rust-glancer checkout and the explicit documentation scope.
+1. Confirm the zksync-os-server checkout and the explicit documentation scope.
 2. Inspect the surrounding module and nearby naming/documentation style before writing comments. Do not infer architecture from one symbol alone.
 3. Decide what actually needs documentation. Avoid comments that only repeat names, signatures, or obvious getters/constructors.
 4. Add docs that explain why the code exists, what role it plays, or how to read a non-obvious flow. Keep phrasing simple and direct. Short is good, but clarity beats compression.
@@ -64,78 +64,61 @@ Module docs should explain the module's general scope: why it exists and what do
 Good crate-level `lib.rs` example:
 
 ```rust
-//! Lowered cfg predicates and target-specific cfg evaluation.
+//! Backpressure coordination for the block-processing pipeline.
 //!
-//! Syntax lowering, workspace metadata, macro expansion, and def-map collection all need to work
-//! with cfg resolution, and they need a centralized way to handle that. This crate owns that small
-//! domain so those phases can share predicates and options without relying on item-tree or
-//! def-map internals.
+//! Sequencing cannot outrun state, storage, or downstream batch processing indefinitely. This
+//! crate observes subsystem progress and exposes admission signals to both RPC and internal block
+//! sources, keeping that policy separate from the components that produce work.
 ```
 
 Good `mod.rs` example for a module with many children:
 
 ```rust
-//! Body-local inference facts used before writing resolved `Ty` values.
+//! L1 event ingestion for transactions, batches, and protocol upgrades.
 //!
-//! The persisted Body IR model stores ordinary `Ty` facts. This module only maps body expression
-//! and binding slots to the transient inference table owned by `rg_ty`.
+//! Watchers share polling and finality mechanics here, while processors own the interpretation of
+//! each event family. Keeping those roles separate lets startup recovery choose a cursor without
+//! duplicating the live polling loop.
 ```
 
 Good complex leaf-module example:
 
 ```rust
-//! Trait-obligation solving that is allowed to interact with body inference.
+//! Admission control for internal block sources.
 //!
-//! We intentionally put this layer between Body IR and `rg_ty::TraitSelectionQuery`: it understands
-//! where bounds were written and can commit inference-table changes, but the actual impl matching
-//! still lives in the shared type layer.
+//! This channel mirrors the monitor's RPC acceptance decision without making command producers
+//! depend on RPC-facing state. A closed gate pauses new work while already-produced blocks drain.
 ```
 
 Good simple module examples:
 
 ```rust
-//! Body IR snapshot storage and lazy package access.
+//! Ethereum-compatible JSON-RPC method implementations.
 ```
 
 ```rust
-//! Function and method call resolution.
-```
-
-```rust
-//! Inference-aware structural pattern projection.
-//!
-//! This layer links bindings inside tuple, reference, and slice patterns to the matching
-//! initializer slots, so later evidence on the binding can solve the initializer.
+//! Serialization types shared by replay archive readers and writers.
 ```
 
 When a module has a natural workflow shape, a walkthrough module comment can be useful:
 
 ```rust
-//! Pattern binding candidate materialization.
+//! Startup recovery for the sequencer pipeline.
 //!
-//! Lowering has to build scopes before value-name resolution is available, so ambiguous identifier
-//! patterns temporarily occupy binding slots. This pass decides which slots are real bindings and
-//! compacts the body back to the final binding arena used by all later resolver and analysis code.
+//! Recovery rebuilds the in-memory window without exposing partially restored state:
 //!
-//! The pass has three phases:
-//!
-//! 1. Decide which pending binding slots stay active.
-//! 2. Use known pattern input types to catch unit variants such as `None`.
-//! 3. Rewrite every binding reference from pending slot ids to final binding ids.
+//! 1. Load the compacted state boundary.
+//! 2. Replay newer WAL records in block order.
+//! 3. Start live command production after every downstream view catches up.
 ```
 
 Bad module doc example:
 
 ```rust
-//! Resolves impl headers after semantic item identities are available.
+//! Handles batches.
 ```
 
-This is weak because it does not explain what "resolves impl headers" means to a reader who just opened the module, "semantic item identities are available" is heavyweight, and the module itself does not resolve anything. A better short version would be:
-
-```rust
-//! Matches `impl` blocks, both trait and inherent, to their corresponding receiver types.
-//! This is a semantic IR build phase that runs after semantic items are lowered.
-```
+This does not identify whether the module builds batches, verifies them, stores proofs, or submits data to L1. Name the owned phase and the boundary with neighboring components instead.
 
 ## Struct And Enum Doc Comments
 
@@ -216,10 +199,10 @@ fn replace_written_ty(&mut self, written_ty: &TypeRef) -> Option<InferTy> {
 Good example with a small explicit example:
 
 ```rust
-/// Resolve a declared type ref shape while preserving substituted inference vars.
+/// Returns the oldest block that must remain in the replay WAL.
 ///
-/// Example: `Option<T>` with `T = ?T` and resolved `Option<unknown>` becomes `Option<?T>`.
-pub fn ty_from_type_ref(&mut self, pattern: &TypeRef, resolved_ty: &Ty) -> InferTy {
+/// For `latest = 120` and `blocks_to_retain = 20`, block 100 may be compacted into state while
+/// blocks 101 through 120 remain replayable from the WAL.
 ```
 
 Good rare complex function example:
@@ -267,12 +250,12 @@ Not everything needs documentation. Skip comments that would only restate obviou
 Usually too trivial:
 
 ```rust
-pub fn new(def_maps: D, items: I) -> Self
+pub fn new(config: Config) -> Self
 ```
 
 ```rust
-pub fn target(self) -> TargetRef {
-    self.0.target
+pub fn block_number(&self) -> BlockNumber {
+    self.block_number
 }
 ```
 

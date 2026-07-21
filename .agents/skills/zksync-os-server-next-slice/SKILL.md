@@ -1,17 +1,17 @@
 ---
-name: rust-glancer-next-slice
-description: Choose, propose, and implement the next approved slice from an existing rust-glancer plan in reference/plans, updating the plan only for factual progress afterward. Use only when the user explicitly invokes $rust-glancer-next-slice inside the rust-glancer repository or one of its worktrees and identifies the exact plan file; do not infer this skill from ordinary implementation or review requests.
+name: zksync-os-server-next-slice
+description: Choose, propose, and implement the next approved slice from an existing zksync-os-server plan in reference/plans, updating the plan only for factual progress afterward. Use only when the user explicitly invokes $zksync-os-server-next-slice inside zksync-os-server or one of its worktrees and identifies the exact plan file; do not infer this skill from ordinary implementation or review requests.
 ---
 
-# Rust Glancer Next Slice
+# ZKsync OS Server Next Slice
 
 ## Overview
 
-Use this skill to continue an already-approved rust-glancer plan one slice at a time. The plan must already exist under `reference/plans/`, and the user must identify the exact plan file. If the file is not known or the plan does not exist, stop and ask for clarification. Do not assume.
+Use this skill to continue an already-approved zksync-os-server plan one coherent slice at a time. The plan must already exist under `reference/plans/`, and the user must identify the exact plan file. If the file is not known or the plan does not exist, stop and ask for clarification. Do not assume.
 
 ## Applicability
 
-Use only inside `rust-glancer` or one of its worktrees. If invoked outside such a checkout, stop and ask for clarification.
+Use only inside `matter-labs/zksync-os-server` or one of its worktrees. Confirm the repository from workspace metadata or root files rather than requiring an exact directory name, because worktree names may have a suffix. If invoked outside such a checkout, stop and ask for clarification.
 
 Before choosing a slice, read the selected plan file and inspect enough of the current implementation to match planned progress to actual code. Treat the plan as guidance written before implementation, not as perfect current truth.
 

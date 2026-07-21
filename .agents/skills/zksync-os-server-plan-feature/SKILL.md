@@ -1,13 +1,13 @@
 ---
-name: rust-glancer-plan-feature
-description: Plan a rust-glancer feature as an explicitly agreed milestone, then write a phased plan under reference/plans only after two confirmation gates. Use only when the user explicitly invokes $rust-glancer-plan-feature for the rust-glancer repository or one of its worktrees; do not infer this skill from ordinary planning, Rust, or LSP requests.
+name: zksync-os-server-plan-feature
+description: Plan a zksync-os-server feature as an explicitly agreed milestone, then write a phased plan under reference/plans only after two confirmation gates. Use only when the user explicitly invokes $zksync-os-server-plan-feature inside zksync-os-server or one of its worktrees; do not infer this skill from ordinary planning, Rust, or LSP requests.
 ---
 
-# Rust Glancer Plan Feature
+# ZKsync OS Server Plan Feature
 
 ## Overview
 
-Use this skill to turn a rust-glancer feature request into an agreed milestone plan. Do not implement code during this workflow. Do not write a plan file until the user has approved both the milestone end shape and the phased plan plus filename.
+Use this skill to turn a zksync-os-server feature request into an agreed milestone plan. Do not implement code during this workflow. Do not write a plan file until the user has approved both the milestone end shape and the phased plan plus filename.
 
 ## Gates
 
@@ -27,13 +27,10 @@ A good milestone must enable real use cases and usually contains intermediate ph
 
 For large feature families, propose a foundation plus one useful demonstration case. For example, if the user asks for a type inference engine and none exists, a reasonable milestone could create the required abstractions, add the engine skeleton and basic integration, then support one concrete use case such as direct return generic argument instantiation.
 
-If the feature already exists and the user has not stated what is supported, clarify whether they want to increase breadth or depth. Prefer common, basic use cases first. For example, unsupported closure input/output inference usually matters more than const generics because it moves project readiness forward for more code.
+If related functionality already exists and support is unclear, determine whether the user wants breadth or depth:
 
-Examples:
-
-- If the user asks to implement a type inference engine and no type inference exists, do not propose a full engine with trait solving and broad Rust coverage. Propose a milestone that creates the type inference foundation, integrates it in the relevant query or semantic path, and proves it with one basic case such as instantiating direct return generic arguments.
-- If a type inference engine already exists and the user asks to "improve inference", clarify whether they want breadth, such as supporting more functional entrypoints or basic trait solving, or depth, such as supporting more cases inside already-covered scenarios.
-- If common closure input/output return type inference is missing, prefer that kind of basic use case over const generics unless the user explicitly wants a narrower advanced milestone. The plan should move project readiness forward, not optimize for novelty.
+- Breadth adds another RPC method, transaction class, provider, or component path using established semantics.
+- Depth strengthens recovery, persistence, finality, compatibility, observability, or failure handling for an existing path.
 
 ## Step 2: Validate Scope
 
@@ -47,9 +44,10 @@ If the requested visible result is only reachable through major tech debt, call 
 
 Examples:
 
-- If the codebase only has item tree lowering and lacks def maps, semantic analysis, and body IR, a request for IDE hover hints is not a reasonable immediate milestone. Explain that hover depends on several foundational pieces, each likely requiring its own milestone, and propose a smaller foundational goal.
-- If there is no type inference yet, do not require the first milestone to build type inference, trait solving, all missing model support, and all missing lowering support before any feature works. Prefer a bounded foundation that leaves room for later milestones.
-- If architecture or refactoring is the best milestone, make the payoff concrete: name the future milestones it will simplify, and avoid selling refactoring as an end in itself.
+- A new RPC field may look local to `rpc`, but if its source is not retained by state or repositories across replay, define the data ownership and recovery path before planning the endpoint.
+- Removing a gateway client may also move finality choice, retries, caching, and error semantics. Plan the new owner for those responsibilities rather than replacing calls one-for-one.
+- Persisting a new value may require schema compatibility, compaction behavior, and restart tests. Do not plan only the write path.
+- A wire payload change must add a new versioned replay file and compatibility coverage; never plan an edit to an existing `lib/network/src/wire/replays/v*.rs` file.
 
 ## Step 3: Propose End Shape
 
@@ -69,7 +67,7 @@ Ask the user to confirm or correct the end shape. If the user asks to add someth
 
 Example end-shape response:
 
-`I would scope this milestone as: create the initial type inference foundation, wire it into the semantic path where later LSP features can consume it, and support one visible proof case: direct generic return type instantiation. This does not include trait solving or broad expression inference yet. The value is that future milestones can add more inference cases without changing the core ownership model again. Please confirm this end shape before I split it into phases.`
+`I would scope this milestone as: introduce a provider-owned replacement for the gateway reads used by one complete L1 watcher path, preserve its confirmed/finalized and retry semantics, and prove main-node restart behavior with an integration test. This does not remove every gateway caller yet. The value is that later migrations reuse an established ownership boundary instead of duplicating provider logic. Please confirm this end shape before I split it into phases.`
 
 ## Step 4: Propose Phased Plan And Filename
 
@@ -79,14 +77,14 @@ The first phase may be refactoring or missing infrastructure and may have no dir
 
 Filename guidance:
 
-- Use a simple uppercase name such as `SUPPORT_LSP_RENAME` or `TYPE_INFERENCE_V3`.
+- Use a simple uppercase name such as `REMOVE_GATEWAY` or `EXTERNAL_NODE_FAILOVER_V3`.
 - Keep it memorable and not exhaustive.
 - Use the `.md` extension when writing the file.
 
 Filename examples:
 
-- Use `SUPPORT_LSP_RENAME.md` for a rename-support milestone, not `SUPPORT_LSP_RENAME_WITH_WORKSPACE_EDIT_AND_SYMBOL_GRAPH_AND_EDGE_CASES.md`.
-- Use `TYPE_INFERENCE_V3.md` when the user names the scope that way or when it is the next clear type-inference milestone.
+- Use `REMOVE_GATEWAY.md` for a remove gateway support milestone, not `REMOVE_GATEWAY_SUPPORT_IN_L1_SENDER.md`.
+- Use `EXTERNAL_NODE_FAILOVER_V3.md` when the user names the scope that way or when it is the next clear external node failover milestone.
 
 Present the phases and the filename, then ask for explicit confirmation. Do not write the file yet.
 
@@ -115,19 +113,21 @@ After writing the file, report the path and summarize the agreed milestone in on
 
 ## Project Context
 
-Plan for a robust, high-quality LSP. Code quality and architecture matter more than rushing visible output, but development should still move forward.
+Plan for a high-throughput ZKsync OS sequencer whose components must remain restartable and replayable. Code quality and architecture matter more than rushing visible output, but development should still move forward.
 
-Assume the user knows the current codebase but may not know missing domain foundations. Explain missing prerequisites plainly, especially around LSP, semantic analysis, type inference, trait solving, body IR, def maps, and IDE feature integration.
+Assume the user knows the current codebase but may not know missing domain foundations. Explain missing prerequisites plainly, especially around p2p networking, consensus, protocol, zksync-os VM and proving.
 
 The user may use imprecise terms or underestimate scope. Correct assumptions respectfully and make complexity visible. Prefer plans that help the user learn the domain while the feature is built.
 
 Examples of assumptions to correct:
 
-- The user may think trait solving is a fully separate procedure from trait inference, similar to a concrete indexing pass. Explain only as much as needed to shape the milestone correctly.
-- The user may ask for a visible LSP feature without realizing that semantic analysis, body IR, def maps, or type information are missing prerequisites.
+- adding persistence without planning recovery, compaction, and schema compatibility;
+- adding RPC output without identifying a durable source of truth;
+- changing a payload without accounting for replay and wire-version compatibility;
+- testing only main-node behavior when external nodes consume the same data differently.
 
 Do not be a code purist. Prefer high-quality architecture by default, but propose explicit, reversible shortcuts when they produce useful progress and can be unwound as the codebase matures.
 
 Shortcut example:
 
-- It can be acceptable in an early milestone to treat `&T` and `T` as equivalent to unlock basic autocomplete scenarios, as long as the shortcut is explicit, reversible, and the plan leaves room for later reference types, reference peeling, and autoderef.
+- It can be acceptable to adapt one subsystem to a new provider trait before migrating every caller, as long as the adapter preserves old semantics, the dependency direction is correct, and removal of the compatibility layer is tracked as future work.
