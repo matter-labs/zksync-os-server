@@ -35,3 +35,4 @@
 
 - [Guides](guides/index.md)
   - [Updating local chains: genesis and L1 state](guides/local_setup_update.md)
+  - [Replicate a live chain locally](guides/replicate_live_chain.md)
