@@ -227,7 +227,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
         if self.last_block.is_none() {
             // As this is the first block we are replaying, we need to initialize the mempool.
-            self.pool.init(&record).await;
+            // The replay drains the pool starting with this very record, so the watchers feed
+            // from its own starting cursors.
+            self.pool
+                .init(&record, record.starting_cursors.clone())
+                .await;
         }
 
         if record.block_context.block_number == 0 {
@@ -266,35 +270,11 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             );
         }
 
-        let expect_sl_chain_id_tx_after_upgrade = record
-            .transactions
-            .windows(2)
-            .find(|window| {
-                matches!(window[0].envelope(), ZkEnvelope::Upgrade(_))
-                    && matches!(
-                        window[1].as_system_tx_type(),
-                        Some(SystemTxType::SetSLChainId(_, _))
-                    )
-            })
-            .is_some();
-
-        Ok(Some(PreparedBlockCommand {
-            block_context: record.block_context,
-            seal_policy: SealPolicy::UntilExhausted {
-                allowed_to_finish_early: false,
-            },
-            invalid_tx_policy: InvalidTxPolicy::Abort,
-            tx_source: MarkingTxStream::unmarkable(futures::stream::iter(record.transactions)),
-            metrics_label: "replay",
-            protocol_version: record.protocol_version,
-            expected_block_output_hash: Some(record.block_output_hash),
-            previous_block_timestamp: record.previous_block_timestamp,
-            force_preimages: record.force_preimages,
-            expect_sl_chain_id_tx_after_upgrade,
-            starting_cursors: record.starting_cursors,
-            interop_roots_per_block: self.config.interop_roots_per_block,
-            strict_subpool_cleanup: false,
-        }))
+        Ok(Some(PreparedBlockCommand::for_replay(
+            *record,
+            "replay",
+            self.config.interop_roots_per_block,
+        )))
     }
 
     async fn rebuild(
@@ -303,7 +283,14 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     ) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
         if self.last_block.is_none() {
             // As this is the first block we are rebuilding, we need to initialize the mempool.
-            self.pool.init(&rebuild.replay_record).await;
+            // Like replay: the rebuild drains from this record on, so the watchers feed from
+            // its own starting cursors.
+            self.pool
+                .init(
+                    &rebuild.replay_record,
+                    rebuild.replay_record.starting_cursors.clone(),
+                )
+                .await;
         }
 
         let (previous_block_timestamp, next_cursors, block_hashes) =

@@ -1,5 +1,5 @@
 use futures::{Stream, StreamExt};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
@@ -22,6 +22,11 @@ struct Inner {
     current_protocol_version: Option<ProtocolSemanticVersion>,
     sender: Option<mpsc::Sender<UpgradeInfo>>,
     pending_upgrades: VecDeque<UpgradeInfo>,
+    /// Every upgrade seen from L1, keyed by target protocol version. Unlike
+    /// `pending_upgrades`, entries survive consumption: consensus verification
+    /// authenticates leader-proposed upgrades against this map, and proposals run
+    /// ahead of commits. Upgrades are rare, so this never needs pruning.
+    seen_upgrades: BTreeMap<ProtocolSemanticVersion, UpgradeInfo>,
 }
 
 impl Default for UpgradeSubpool {
@@ -32,6 +37,7 @@ impl Default for UpgradeSubpool {
                 current_protocol_version: None,
                 sender: None,
                 pending_upgrades: VecDeque::new(),
+                seen_upgrades: BTreeMap::new(),
             })),
         }
     }
@@ -68,8 +74,16 @@ impl UpgradeSubpool {
                 inner.sender.take();
             }
         }
+        inner
+            .seen_upgrades
+            .insert(upgrade.protocol_version().clone(), upgrade.clone());
         inner.pending_upgrades.push_front(upgrade);
         self.notify.notify_waiters();
+    }
+
+    /// The locally-watched upgrade targeting this protocol version, if any.
+    pub async fn seen_upgrade(&self, version: &ProtocolSemanticVersion) -> Option<UpgradeInfo> {
+        self.inner.read().await.seen_upgrades.get(version).cloned()
     }
 
     async fn pop_wait(&self) -> UpgradeInfo {
@@ -376,5 +390,31 @@ mod tests {
             subpool.inner.read().await.current_protocol_version,
             Some(target_version)
         );
+    }
+
+    #[tokio::test]
+    async fn seen_upgrades_survive_consumption() {
+        let subpool = UpgradeSubpool::default();
+        subpool
+            .init(ProtocolSemanticVersion::MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS)
+            .await;
+        let target_version = version(31, 0);
+        let tx = upgrade_tx(1);
+        subpool
+            .insert(upgrade_info(target_version.clone(), Some(tx.clone())))
+            .await;
+
+        // Consuming the upgrade (block inclusion + commit) must not forget it: consensus
+        // verification still authenticates proposals that carry it.
+        subpool
+            .on_canonical_state_change(&target_version, vec![&tx])
+            .await;
+
+        let seen = subpool
+            .seen_upgrade(&target_version)
+            .await
+            .expect("consumed upgrade should still be known");
+        assert_eq!(seen.tx.as_ref(), Some(&tx));
+        assert!(subpool.seen_upgrade(&version(32, 0)).await.is_none());
     }
 }

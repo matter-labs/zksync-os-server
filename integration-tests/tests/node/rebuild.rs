@@ -36,7 +36,12 @@ async fn fetch_committed_batch(
     batch_number: u64,
 ) -> anyhow::Result<(B256, u64, u64)> {
     let l1_state = fetch_l1_state(tester).await?;
-    let (batch, _) = fetch_live_committed_batch(&l1_state.diamond_proxy_l1, batch_number).await?;
+    let (batch, _) = fetch_live_committed_batch(
+        &l1_state.diamond_proxy_l1,
+        batch_number,
+        tester.config().l1_watcher_config.max_blocks_to_process,
+    )
+    .await?;
     Ok((
         batch.batch_info.hash(),
         batch.first_block_number(),
@@ -50,13 +55,17 @@ async fn fetch_on_chain_batch_hash(tester: &Tester, batch_number: u64) -> anyhow
 
 /// Fetches the hash of the L1 transaction that currently commits `batch_number`. Used to populate
 /// the `l1_revert` guard (`from_batch_commit_tx_hash`).
-async fn fetch_on_chain_batch_commit_tx_hash(
+pub(crate) async fn fetch_on_chain_batch_commit_tx_hash(
     tester: &Tester,
     batch_number: u64,
 ) -> anyhow::Result<B256> {
     let l1_state = fetch_l1_state(tester).await?;
-    let (_, commit_tx_hash) =
-        fetch_live_committed_batch(&l1_state.diamond_proxy_l1, batch_number).await?;
+    let (_, commit_tx_hash) = fetch_live_committed_batch(
+        &l1_state.diamond_proxy_l1,
+        batch_number,
+        tester.config().l1_watcher_config.max_blocks_to_process,
+    )
+    .await?;
     Ok(commit_tx_hash)
 }
 
@@ -131,7 +140,7 @@ async fn wait_for_rebuild_to_reach_tip(
     .await
 }
 
-fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
+pub(crate) fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig> {
     let chain_id = stopped
         .config()
         .genesis_config
@@ -355,24 +364,17 @@ async fn rebuild_panics_if_from_block_is_already_committed(
         },
     });
 
-    // The assert! fires synchronously during node startup (before any background tasks are
-    // spawned), so it panics through `start_with_config`. Isolate it in a spawned task so
-    // the JoinError captures the panic instead of unwinding the test thread.
+    // The assert! fires synchronously during node startup; the harness converts
+    // startup panics into launch errors carrying the panic message.
     let stopped = tester.stop().await?;
-    let join_result =
-        tokio::task::spawn(async move { stopped.start_with_config(restarted_config).await }).await;
-
-    let join_err = join_result.expect_err("expected node startup to panic");
-    assert!(join_err.is_panic(), "expected a panic, got a cancellation");
-    let payload = join_err.into_panic();
-    let panic_msg = payload
-        .downcast_ref::<String>()
-        .map(|s| s.as_str())
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .expect("panic payload should be a string");
+    let launch_error = stopped
+        .start_with_config(restarted_config)
+        .await
+        .expect_err("expected node startup to fail");
+    let message = format!("{launch_error:#}");
     assert!(
-        panic_msg.contains("rebuild_from_block_number must be > last_l1_committed_block"),
-        "unexpected panic message: {panic_msg}"
+        message.contains("rebuild_from_block_number must be > last_l1_committed_block"),
+        "unexpected launch error: {message}"
     );
 
     Ok(())
@@ -869,23 +871,16 @@ async fn l1_revert_rejects_already_executed_batch(env: TestEnvironment) -> anyho
         l1_reverter_sk: reverter_signer,
     });
 
-    // The guard fires synchronously during startup via `handle_startup_rebuild(...).expect(...)`,
-    // so it panics through `start_with_config`. Isolate it in a spawned task so the JoinError
-    // captures the panic instead of unwinding the test thread.
-    let join_result =
-        tokio::task::spawn(async move { stopped.start_with_config(revert_config).await }).await;
-
-    let join_err = join_result.expect_err("expected node startup to panic");
-    assert!(join_err.is_panic(), "expected a panic, got a cancellation");
-    let payload = join_err.into_panic();
-    let panic_msg = payload
-        .downcast_ref::<String>()
-        .map(|s| s.as_str())
-        .or_else(|| payload.downcast_ref::<&str>().copied())
-        .expect("panic payload should be a string");
+    // The guard fires synchronously during startup via `handle_startup_rebuild(...).expect(...)`;
+    // the harness converts startup panics into launch errors carrying the panic message.
+    let launch_error = stopped
+        .start_with_config(revert_config)
+        .await
+        .expect_err("expected node startup to fail");
+    let message = format!("{launch_error:#}");
     assert!(
-        panic_msg.contains("at or before the last executed batch"),
-        "unexpected panic message: {panic_msg}"
+        message.contains("at or before the last executed batch"),
+        "unexpected launch error: {message}"
     );
 
     Ok(())

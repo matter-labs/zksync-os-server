@@ -1,0 +1,53 @@
+[package]
+name = "zksync_os_consensus_sim"
+description = "Deterministic simulation harness for the BFT consensus stack"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_consensus_core.workspace = true
+# The registry-derivation fixtures run the production registry parser over
+# manufactured chain state.
+zksync_os_consensus_registry.workspace = true
+
+# Real-STF execution backend: the production VM entry, genesis derivation, and the
+# transaction/state types, so simulated blocks can carry actually-executed transactions.
+zksync_os_genesis.workspace = true
+zksync_os_interface.workspace = true
+zksync_os_multivm.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_types.workspace = true
+zk_ee.workspace = true
+zk_os_api.workspace = true
+zk_os_basic_system.workspace = true
+# kzg: zksync_os_batch_types (via zksync_os_storage_api) calls SidecarBuilder::build,
+# which alloy only provides with the kzg feature; the node graph gets it from l1_sender.
+alloy = { workspace = true, features = ["consensus", "signer-local", "k256", "rlp", "std", "kzg"] }
+anyhow.workspace = true
+
+# The `mocks` feature provides scheme fixtures (test keys/committees) and, later,
+# byzantine engine mocks. This crate is itself test infrastructure, so mocks belong
+# in its regular dependencies.
+commonware-actor.workspace = true
+commonware-codec.workspace = true
+commonware-consensus = { workspace = true, features = ["mocks"] }
+commonware-cryptography.workspace = true
+commonware-p2p.workspace = true
+rand08.workspace = true
+commonware-runtime.workspace = true
+commonware-utils.workspace = true
+
+bytes.workspace = true
+futures.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+proptest.workspace = true
+

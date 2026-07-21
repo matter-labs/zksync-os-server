@@ -9,6 +9,13 @@ pub struct L1WatcherConfig {
     /// Number of latest L1 blocks to leave unprocessed in order to reduce reorg risk.
     pub confirmations: u64,
 
+    /// Ingest block-content events (priority transactions, protocol upgrades) only once
+    /// their L1 block is finalized, instead of `confirmations` blocks behind the tip.
+    /// Consensus-enabled nodes require this: these events end up inside finalized L2
+    /// blocks, which cannot be rolled back if the L1 event reorgs away. Set by the node
+    /// wiring based on the consensus mode, not by operators.
+    pub finalized_ingestion: bool,
+
     /// How often to poll L1 for the latest block.
     pub poll_interval: Duration,
 

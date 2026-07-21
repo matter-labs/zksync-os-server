@@ -4,8 +4,9 @@ use crate::prover_tester::ProverTester;
 use crate::provider::ZksyncTestingProvider;
 use crate::rpc_recorder::{HttpRpcRecorder, RpcRecordConfig};
 use crate::test_config::{build_node_config, disable_prover_input_generation};
+use crate::utils::LockedPort;
 use alloy::network::EthereumWallet;
-use alloy::primitives::U256;
+use alloy::primitives::{Address, B256, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{
     DynProvider, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
@@ -46,13 +47,15 @@ pub mod assert_traits;
 pub mod config;
 pub mod contracts;
 pub mod l1_helpers;
+pub mod l1_proxy;
+pub mod multi_node;
 mod node_log;
 mod prover_tester;
 pub mod provider;
 pub mod rpc_recorder;
+pub mod settlement;
 pub mod test_config;
 pub mod upgrade;
-#[cfg(feature = "prover-tests")]
 mod utils;
 pub mod wallets;
 
@@ -230,13 +233,47 @@ pub struct Tester {
 /// started again.
 #[derive(Debug)]
 pub struct StoppedTester {
+    pub(crate) l1: AnvilL1,
+    pub(crate) config: Config,
+    previous_bound_ports: ServerPorts,
+    tempdir: Arc<tempfile::TempDir>,
+    log_state: NodeLogState,
+    pub(crate) chain_layout: ChainLayout<'static>,
+    owned_supporting_nodes: Vec<SupportingNode>,
+}
+
+/// The durable parts of a stopped node, cloned via [`StoppedTester::backup`]
+/// before a start attempt that a test *expects* the node to refuse: the node's
+/// startup guards panic, and the launch consumes the `StoppedTester` — but the
+/// database directory, the L1 handle and the config all survive the refusal,
+/// so [`Self::restore`] puts a working `StoppedTester` back together.
+///
+/// The previously bound server ports are carried through so a successful start
+/// after the refusal pins the same HTTP ports a plain restart would. Supporting
+/// nodes owned by the failed launch are shut down by its drop and are not
+/// restored — expected-refusal starts are for plain clusters, which own none.
+#[derive(Debug)]
+pub struct StoppedTesterBackup {
     l1: AnvilL1,
     config: Config,
     previous_bound_ports: ServerPorts,
     tempdir: Arc<tempfile::TempDir>,
     log_state: NodeLogState,
     chain_layout: ChainLayout<'static>,
-    owned_supporting_nodes: Vec<SupportingNode>,
+}
+
+impl StoppedTesterBackup {
+    pub async fn restore(self) -> anyhow::Result<StoppedTester> {
+        Ok(StoppedTester {
+            l1: self.l1,
+            config: self.config,
+            previous_bound_ports: self.previous_bound_ports,
+            tempdir: self.tempdir,
+            log_state: self.log_state,
+            chain_layout: self.chain_layout,
+            owned_supporting_nodes: Vec::new(),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -255,11 +292,18 @@ impl Tester {
 
     fn apply_external_node_defaults(&self, config: &mut Config) {
         config.general_config.node_role = NodeRole::ExternalNode;
+        // External nodes are never committee members: they follow the finalized chain
+        // over the replay protocol regardless of how the upstream node sequences it —
+        // so a validator's consensus settings (keys, committee, enablement) must not
+        // travel into an EN cloned from its config.
+        config.consensus_config = Default::default();
         config.network_config.boot_nodes = vec![self.node_record.into()];
-        // This config is cloned from the main node; ask startup to pick a fresh concrete TCP+UDP
-        // port and identity so the external node doesn't collide with it.
-        config.network_config.port = 0;
-        config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
+        // The clone carries the upstream node's network identity; an EN needs
+        // its own (a pre-set secret is preserved by `bind_runtime_config` as a
+        // deliberate identity — here it would collide with the upstream's port).
+        // Clearing the key makes `bind_runtime_config` assign a fresh identity
+        // and an ephemeral port.
+        config.network_config.secret_key = None;
         config.general_config.main_node_rpc_url = Some(self.l2_rpc_address.clone());
         config.prover_api_config.fake_fri_provers.enabled = true;
         config.prover_api_config.fake_snark_provers.enabled = true;
@@ -339,6 +383,40 @@ impl Tester {
         Ok(response.json::<StatusResponse>().await?)
     }
 
+    /// The consensus runtime's own prometheus registry, as served for scraping.
+    pub async fn consensus_metrics(&self) -> anyhow::Result<String> {
+        let response = reqwest::get(format!(
+            "{}/status/consensus-metrics",
+            self.status_server_url
+        ))
+        .await?
+        .error_for_status()?;
+        Ok(response.text().await?)
+    }
+
+    /// Owned handles for driving a deposit off-task (see [`deposit_l1_to_l2`]):
+    /// the deposit helper blocks on the L2 receipt, and scenarios that park the
+    /// chain mid-deposit need the call running in the background.
+    pub fn deposit_handles(&self) -> (AnvilL1, NodeProvider, DynProvider<Zksync>) {
+        (
+            self.l1.clone(),
+            self.l2_provider.clone(),
+            self.l2_zk_provider.clone(),
+        )
+    }
+
+    /// One L1→L2 deposit through this node (see [`deposit_l1_to_l2`]).
+    pub async fn deposit(&self, beneficiary: Address, amount: U256) -> anyhow::Result<B256> {
+        deposit_l1_to_l2(
+            &self.l1,
+            &self.l2_provider,
+            &self.l2_zk_provider,
+            beneficiary,
+            amount,
+        )
+        .await
+    }
+
     pub async fn wait_for_initial_deposit(&self) -> anyhow::Result<()> {
         tokio::time::timeout(
             Duration::from_secs(60),
@@ -404,6 +482,10 @@ impl Tester {
         // NOTE: supporting nodes are kept alive across stop/start; they are only torn down in
         // `StoppedTester::shutdown()` or when `StoppedTester` is dropped.
         shutdown_runtime(runtime).await?;
+        // The consensus stack outlives the node runtime by design; a stopped
+        // tester must mean the whole instance is gone (restarts reopen its
+        // storage, and a test ending here must not race live threads at exit).
+        wait_for_consensus_storage_released(&config).await?;
         Ok(StoppedTester {
             l1,
             tempdir,
@@ -441,20 +523,53 @@ impl Tester {
         let Self {
             runtime,
             owned_supporting_nodes,
+            config,
+            // Keep the storage directory alive until consensus has wound down:
+            // deleting it under a live instance turns its teardown into a crash.
+            tempdir,
             ..
         } = self;
         drop(owned_supporting_nodes);
         shutdown_runtime(runtime).await?;
+        // A test returning from shutdown may end the process; consensus threads
+        // still winding down at that point die mid-teardown (observed as
+        // SIGABRT at exit under load).
+        wait_for_consensus_storage_released(&config).await?;
+        // The storage lock covers every task the consensus runtime can track,
+        // but a task that never subscribed to the stop signal can hold the
+        // runtime itself alive a beat longer — and a process exit under its
+        // worker threads aborts in pthread teardown. A short grace absorbs
+        // that last gasp.
+        if config.consensus_config.enabled {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        drop(tempdir);
         Ok(())
     }
 
-    async fn launch_with_new_runtime(
+    pub(crate) async fn launch_with_new_runtime(
         l1: AnvilL1,
         chain_layout: ChainLayout<'static>,
         mut config: Config,
     ) -> anyhow::Result<Self> {
         let tempdir = Arc::new(tempfile::tempdir()?);
         Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config);
+        Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true).await
+    }
+
+    /// Like [`Self::launch_with_new_runtime`], but the node starts on a *copy* of
+    /// another node's chain databases — the snapshot-distribution step of a
+    /// migration, where every new validator receives the drained sequencer's chain
+    /// state. `seed_rocks_from` is the source node's RocksDB root.
+    pub(crate) async fn launch_with_seeded_state(
+        l1: AnvilL1,
+        chain_layout: ChainLayout<'static>,
+        mut config: Config,
+        seed_rocks_from: &std::path::Path,
+    ) -> anyhow::Result<Self> {
+        let tempdir = Arc::new(tempfile::tempdir()?);
+        Self::bind_runtime_config(&l1, tempdir.as_ref(), &mut config);
+        copy_dir_recursively(seed_rocks_from, &config.general_config.rocks_db_path)?;
         Self::launch_node_inner(l1, config, tempdir, chain_layout, None, true).await
     }
 
@@ -467,10 +582,27 @@ impl Tester {
         config.status_server_config.address = "0.0.0.0:0".to_string();
         config.network_config.address = Ipv4Addr::LOCALHOST;
         config.network_config.interface = None;
-        // The server turns port 0 into a concrete TCP+UDP p2p port immediately before building
-        // reth's network config, so the advertised ENR remains dialable without test-side probing.
-        config.network_config.port = 0;
-        config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
+        // A pre-set secret key marks a deliberate network identity: peers hold
+        // boot-node records derived from (key, port) — committee meshes,
+        // restarts — so both must survive rebinding. Everything else gets a
+        // throwaway key and asks the server for a fresh ephemeral port (the
+        // server turns port 0 into a concrete TCP+UDP p2p port immediately
+        // before building reth's network config, so the advertised ENR remains
+        // dialable without test-side probing). The port alone can't be the
+        // signal: its config default is non-zero.
+        if config.network_config.secret_key.is_none() {
+            config.network_config.port = 0;
+            config.network_config.secret_key = Some(zksync_os_network::rng_secret_key());
+        }
+        // local_dev.yaml arms the dev-mode revert-on-divergence, which config
+        // validation rejects under consensus (a finalized block cannot be locally
+        // rebuilt). In-process test nodes skip config validation, but their configs
+        // should stay ones the real binary would accept.
+        if config.consensus_config.enabled {
+            config
+                .sequencer_config
+                .revm_consistency_checker_revert_on_divergence = false;
+        }
     }
 
     async fn launch_node_inner(
@@ -511,9 +643,45 @@ impl Tester {
             role = %node_role,
         );
         tracing::info!(parent: &node_span, "Launching test node");
-        let bound_ports = zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
-            .instrument(node_span)
+        // Node startup runs inline on the test task, and the node's style for a
+        // fatal startup condition is a panic (e.g. the L1 mutual-exclusion guard
+        // refusing to start a second settler). In production that is a loud
+        // process exit; in-process it would unwind the *test*. Catch it and
+        // surface a launch error instead, so tests can assert on failed launches
+        // the same way they assert on any other `Err`.
+        //
+        // One panic class is transient and retried instead of surfaced: a
+        // restarted node can find its own databases still locked, because the
+        // previous incarnation's RocksDB handles drop on the process-shared
+        // blocking pool and can lag its runtime shutdown. The conflict clears
+        // as soon as the straggling drop lands.
+        let launch_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let bound_ports = loop {
+            let launch = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+                zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
+                    .instrument(node_span.clone()),
+            ))
             .await;
+            let panic = match launch {
+                Ok(bound_ports) => break bound_ports,
+                Err(panic) => panic,
+            };
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&'static str>().copied())
+                .unwrap_or("<non-string panic payload>");
+            let stale_db_lock = message.contains("lock hold by current process");
+            if stale_db_lock && tokio::time::Instant::now() < launch_deadline {
+                tracing::warn!(
+                    parent: &node_span,
+                    "previous incarnation's database handles are still closing; retrying launch"
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
+            anyhow::bail!("node startup panicked: {message}");
+        };
         let task_manager_handle = runtime
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
@@ -618,6 +786,19 @@ impl StoppedTester {
         &self.config
     }
 
+    /// Clones the parts a refused start leaves recoverable (see
+    /// [`StoppedTesterBackup`]).
+    pub fn backup(&self) -> StoppedTesterBackup {
+        StoppedTesterBackup {
+            l1: self.l1.clone(),
+            config: self.config.clone(),
+            previous_bound_ports: self.previous_bound_ports,
+            tempdir: self.tempdir.clone(),
+            log_state: self.log_state.clone(),
+            chain_layout: self.chain_layout,
+        }
+    }
+
     pub fn l1_provider(&self) -> &NodeProvider {
         &self.l1.provider
     }
@@ -649,6 +830,21 @@ impl StoppedTester {
         } = self;
         let mut config = config;
         preserve_http_ports_on_restart(&mut config, previous_bound_ports)?;
+        // A committee validator restarts on its configured concrete p2p port
+        // (its peers hold boot records derived from it); wait for the previous
+        // incarnation's listener to be fully released before rebinding.
+        // Ephemeral-port nodes (port 0) get a fresh port and skip this.
+        if config.network_config.port != 0 {
+            wait_for_port_to_be_unused(config.network_config.port).await?;
+        }
+        wait_for_rocksdb_locks_released(&config.general_config.rocks_db_path).await?;
+        // A batcher must not come back up while its previous incarnation's L1
+        // transactions are still in flight — a commit landing after the new
+        // session's startup snapshot reads as a foreign settler's and trips the
+        // unexpected-commit guard (whose designed remedy is another restart).
+        if config.batcher_config.enabled {
+            wait_for_operator_l1_quiescence(&l1, &config).await?;
+        }
         let mut tester = Tester::launch_node_inner(
             l1,
             config,
@@ -705,6 +901,194 @@ impl Drop for SupportingNode {
     }
 }
 
+const PORT_ACQUISITION_TIMEOUT: Duration = Duration::from_secs(30);
+const PORT_ACQUISITION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+async fn wait_for_port_to_be_unused(port: u16) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + PORT_ACQUISITION_TIMEOUT;
+    loop {
+        match LockedPort::check_port_is_unused(port).await {
+            Ok(_) => return Ok(()),
+            Err(err) if tokio::time::Instant::now() < deadline => {
+                tracing::info!(port, %err, "waiting for port to become unused");
+                tokio::time::sleep(PORT_ACQUISITION_POLL_INTERVAL).await;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("port {port} did not become unused within {PORT_ACQUISITION_TIMEOUT:?}")
+                });
+            }
+        }
+    }
+}
+
+/// Recursively copies a directory tree — the snapshot-distribution step of a
+/// migration, where a fresh validator starts on a copy of the drained sequencer's
+/// chain databases.
+fn copy_dir_recursively(from: &std::path::Path, to: &std::path::Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursively(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Waits until every RocksDB instance under `rocks_db_path` has released its `LOCK`
+/// file. `graceful_shutdown` returning does not guarantee storage handles are
+/// dropped — pipeline teardown can lag a moment — and an in-process relaunch that
+/// wins that race dies with "lock hold by current process: .../LOCK". The faster
+/// node startup gets, the more often the relaunch wins, so the gate belongs here
+/// rather than in sleeps sprinkled over tests. (The multi-node consensus harness
+/// gates the same way on the consensus instance lock.)
+pub async fn wait_for_rocksdb_locks_released(
+    rocks_db_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    use fs2::FileExt as _;
+    let deadline = tokio::time::Instant::now() + PORT_ACQUISITION_TIMEOUT;
+    loop {
+        let mut held_lock = None;
+        // Each database is a direct subdirectory holding its own `LOCK` file.
+        if let Ok(entries) = std::fs::read_dir(rocks_db_path) {
+            for entry in entries.flatten() {
+                let lock_path = entry.path().join("LOCK");
+                let Ok(file) = std::fs::File::open(&lock_path) else {
+                    continue;
+                };
+                if file.try_lock_exclusive().is_err() {
+                    held_lock = Some(lock_path);
+                    break;
+                }
+                let _ = fs2::FileExt::unlock(&file);
+            }
+        }
+        let Some(held_lock) = held_lock else {
+            return Ok(());
+        };
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "rocksdb lock at {} is still held {:?} after the node stopped",
+            held_lock.display(),
+            PORT_ACQUISITION_TIMEOUT,
+        );
+        tokio::time::sleep(PORT_ACQUISITION_POLL_INTERVAL).await;
+    }
+}
+
+/// Waits until no consensus instance holds the storage under `config`'s rocksdb
+/// path. The node's consensus stack winds down asynchronously after the node
+/// runtime stops, and its storage lock is released only once every consensus
+/// task is gone — so this returning means the instance is truly dead: safe to
+/// restart over the same storage, safe for the test process to exit without
+/// racing a live runtime's threads.
+pub async fn wait_for_consensus_storage_released(config: &Config) -> anyhow::Result<()> {
+    if !config.consensus_config.enabled {
+        return Ok(());
+    }
+    let instance_lock = zksync_os_server::consensus::instance_lock_path(
+        &config.general_config.rocks_db_path.join("consensus"),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        // The lock's parent directory may not exist (consensus never ran, or its
+        // storage was wiped) — trivially nobody holds it, but the probe needs
+        // the directory to create its file.
+        if let Some(parent) = instance_lock.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(probe) = std::fs::File::create(&instance_lock)
+            && fs2::FileExt::try_lock_exclusive(&probe).is_ok()
+        {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the consensus instance did not release its storage within 120s of the node stopping",
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Waits until the node's L1 operator addresses have no in-flight L1
+/// transactions. A settler restarted while its previous incarnation's commit is
+/// still being digested by the L1 node trips its own mutual-exclusion guard:
+/// the commit lands after the new session's startup snapshot and reads as a
+/// foreign settler's. Real deployments answer that with another restart
+/// (startup reconciles from L1); tests must simply not manufacture the
+/// situation.
+///
+/// Nonce parity (pending == latest) alone is not enough: a transaction the L1
+/// node has *received* but not yet admitted to its pool is invisible to both
+/// counts, and on a loaded host that window is real. So after parity, a probe
+/// transaction is pushed through and mined — anything received before the
+/// probe lands with or before it — and parity is required to survive the
+/// probe round-trip.
+async fn wait_for_operator_l1_quiescence(l1: &AnvilL1, config: &Config) -> anyhow::Result<()> {
+    use crate::assert_traits::ReceiptAssert as _;
+    use alloy::primitives::Address;
+    use alloy::providers::ext::AnvilApi as _;
+
+    let signers = [
+        &config.l1_sender_config.operator_commit_sk,
+        &config.l1_sender_config.operator_prove_sk,
+        &config.l1_sender_config.operator_execute_sk,
+    ];
+    let mut addresses = Vec::new();
+    for signer in signers.into_iter().flatten() {
+        addresses.push(signer.address().await?);
+    }
+
+    let in_flight = |addresses: Vec<Address>| async move {
+        for address in addresses {
+            let pending = l1.provider.get_transaction_count(address).pending().await?;
+            let latest = l1.provider.get_transaction_count(address).latest().await?;
+            if pending != latest {
+                return anyhow::Ok(Some((address, pending, latest)));
+            }
+        }
+        anyhow::Ok(None)
+    };
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some((address, pending, latest)) = in_flight(addresses.clone()).await? {
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "operator {address} still has L1 transactions in flight \
+                 (pending nonce {pending}, latest {latest}) 60s after the node stopped",
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+
+        // The flush barrier: a no-op self-transfer from a throwaway identity,
+        // mined before we look again.
+        let probe = Address::repeat_byte(0xF1);
+        l1.provider
+            .anvil_set_balance(probe, U256::from(1_000_000_000_000_000_000u128))
+            .await?;
+        l1.provider.anvil_impersonate_account(probe).await?;
+        let hash = l1
+            .provider
+            .anvil_send_impersonated_transaction(
+                TransactionRequest::default().from(probe).to(probe),
+            )
+            .await?;
+        PendingTransactionBuilder::new(l1.provider.root().clone(), hash)
+            .expect_successful_receipt()
+            .await?;
+
+        if in_flight(addresses.clone()).await?.is_none() {
+            return Ok(());
+        }
+    }
+}
+
 async fn shutdown_runtime(runtime: Runtime) -> anyhow::Result<()> {
     let shutdown_ok = tokio::task::spawn_blocking(move || {
         runtime.graceful_shutdown_with_timeout(NODE_SHUTDOWN_TIMEOUT)
@@ -723,19 +1107,56 @@ async fn ensure_test_wallet_funded(
     l2_zk_provider: &DynProvider<Zksync>,
     l2_wallet: &EthereumWallet,
 ) -> anyhow::Result<()> {
+    // One funding at a time per test process: concurrently starting testers (a
+    // multi-node cluster) share the L2 wallet *and* the L1 rich wallet, so
+    // parallel deposits race nonces and fee estimates — the loser's deposit
+    // reverts and startup dies. The first holder funds; the rest see the
+    // balance and return.
+    static FUNDING_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _funding = FUNDING_LOCK.lock().await;
+
     let beneficiary = l2_wallet.default_signer().address();
     let balance = l2_provider.get_balance(beneficiary).await?;
     if balance > U256::ZERO {
         return Ok(());
     }
 
+    let amount = U256::from(1_000_000_000_000_000_000u128) * U256::from(1_000u64);
+    deposit_l1_to_l2(l1, l2_provider, l2_zk_provider, beneficiary, amount).await?;
+
+    (|| async {
+        let balance = l2_provider.get_balance(beneficiary).await?;
+        if balance > U256::ZERO {
+            Ok(())
+        } else {
+            anyhow::bail!("L2 wallet is still unfunded")
+        }
+    })
+    .retry(
+        ConstantBuilder::default()
+            .with_delay(Duration::from_secs(1))
+            .with_max_times(10),
+    )
+    .await
+}
+
+/// One L1→L2 deposit — a priority transaction — of `amount` to `beneficiary`,
+/// waited through to its L2 receipt. Returns the L2 transaction hash the
+/// priority op is included under.
+pub async fn deposit_l1_to_l2(
+    l1: &AnvilL1,
+    l2_provider: &NodeProvider,
+    l2_zk_provider: &DynProvider<Zksync>,
+    beneficiary: Address,
+    amount: U256,
+) -> anyhow::Result<B256> {
+    use crate::assert_traits::ReceiptAssert as _;
     let chain_id = l2_provider.get_chain_id().await?;
     let bridgehub = Bridgehub::new(
         l2_zk_provider.get_bridgehub_contract().await?,
         l1.provider.clone(),
         chain_id,
     );
-    let amount = U256::from(1_000_000_000_000_000_000u128) * U256::from(1_000u64);
     let max_priority_fee_per_gas = l1.provider.get_max_priority_fee_per_gas().await?;
     let base_l1_fees = l1
         .provider
@@ -783,7 +1204,9 @@ async fn ensure_test_wallet_funded(
                 .into_transaction_request(),
         )
         .await?
-        .get_receipt()
+        // A reverted deposit must name itself — a bare `get_receipt` would
+        // surface as "no L1->L2 logs" below, hiding the actual failure.
+        .expect_successful_receipt()
         .await?;
     let l1_to_l2_tx_log = receipt
         .logs()
@@ -797,20 +1220,7 @@ async fn ensure_test_wallet_funded(
         .get_receipt()
         .await?;
 
-    (|| async {
-        let balance = l2_provider.get_balance(beneficiary).await?;
-        if balance > U256::ZERO {
-            Ok(())
-        } else {
-            anyhow::bail!("L2 wallet is still unfunded")
-        }
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_secs(1))
-            .with_max_times(10),
-    )
-    .await
+    Ok(l2_tx_hash)
 }
 
 fn prover_input_generation_enabled() -> bool {

@@ -135,6 +135,25 @@ impl RepositoryDb {
         }
     }
 
+    /// Opens an existing repository without genesis seeding — for offline
+    /// tooling (the disaster-fork truncation); an empty repository is an error.
+    pub fn open_existing(db_path: &Path) -> anyhow::Result<Self> {
+        let db = RocksDB::<RepositoryCF>::new(db_path)?;
+        let latest_block_number = db
+            .get_cf(RepositoryCF::Meta, RepositoryCF::block_number_key())?
+            .map(|v| u64::from_be_bytes(v.as_slice().try_into().unwrap()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "repository at {} is empty; nothing to operate on",
+                    db_path.display()
+                )
+            })?;
+        Ok(Self {
+            db,
+            latest_block_number: watch::channel(latest_block_number).0,
+        })
+    }
+
     /// Waits until the latest block number is at least `block_number`.
     /// Returns the latest block number once it is reached.
     pub async fn wait_for_block_number(&self, block_number: u64) -> u64 {

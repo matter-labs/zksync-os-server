@@ -54,6 +54,19 @@ pub trait L2Subpool:
         )
     }
 
+    /// Convenience method to add an L2 transaction another node gossiped to us. The
+    /// origin distinction is bookkeeping only — validation is identical to local
+    /// submissions.
+    fn add_gossiped_transaction(
+        &self,
+        transaction: L2Transaction,
+    ) -> impl Future<Output = PoolResult<AddedTransactionOutcome>> + Send {
+        self.add_transaction(
+            TransactionOrigin::External,
+            L2PooledTransaction::from_pooled(transaction),
+        )
+    }
+
     fn best_transactions_stream(&self) -> L2TransactionsStream {
         L2TransactionsStream {
             inner: Arc::new(Mutex::new(Inner {

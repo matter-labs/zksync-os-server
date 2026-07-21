@@ -153,6 +153,12 @@ impl BaseTokenPriceUpdater {
 
         let base_token_address = zk_chain_l1.get_base_token_address().await?;
 
+        // TODO(consensus): on a non-ETH-base-token committee the multiplier setter is
+        // a chain-wide singleton designated purely by which node carries this key —
+        // like the settler, but without a failover runbook. Losing the setter node
+        // leaves the L1 ratio stale (deposit mispricing on L1; consensus itself is
+        // unaffected). Fold setter failover into the settler-promotion runbook, or
+        // gate the sending half on a batcher-style flag.
         let token_multiplier_setter_address = if let Some(signer_config) =
             base_token_adjuster_config
                 .token_multiplier_setter_signer

@@ -8,6 +8,8 @@
 
 mod logs_cache;
 mod metrics;
+pub mod resilience;
+pub use resilience::{error_chain_is_transient, is_transient_l1_error, until_l1_available};
 
 use alloy::consensus::{BlockHeader, TrieAccount};
 use alloy::eips::eip1559::Eip1559Estimation;
@@ -100,6 +102,12 @@ impl ProviderCapabilities {
             }
         };
         // Probe the finalized tag with whichever block-fetch method we just confirmed works.
+        // TODO(consensus): a transient failure here (a rate limit, a proxy error) reads
+        // as "finalized unsupported" and silently downgrades every consumer to `latest`
+        // for the process lifetime — for consensus-mode L1 ingestion that means
+        // finalizing deposits read from reorgable L1 blocks. Distinguish
+        // unsupported-method responses from transient failures (retrying the latter),
+        // and refuse consensus-mode startup without a confirmed finalized read.
         let finalized_tag = if get_header {
             provider.get_header(BlockId::finalized()).await.is_ok()
         } else {
@@ -300,17 +308,29 @@ impl NodeProvider {
         block: BlockNumberOrTag,
         poll_interval: Duration,
     ) -> watch::Sender<<Ethereum as Network>::HeaderResponse> {
-        let initial_block: Option<<Ethereum as Network>::BlockResponse> = self
-            .client()
-            .request("eth_getBlockByNumber", (block, false))
-            .await
-            .unwrap_or_else(|err| panic!("failed to initialize {block:?} header watcher: {err}"));
-        let (tx, _) = watch::channel(
-            initial_block
-                .expect("header watcher RPC returned no block for a chain head")
-                .header()
-                .clone(),
-        );
+        // The first fetch seeds the watch channel, so it must succeed — but an L1
+        // outage at this moment must not kill the node (this initializes lazily, so
+        // "this moment" can be any time in the node's life). Keep trying.
+        let initial_header = loop {
+            let response: Result<Option<<Ethereum as Network>::BlockResponse>, _> = self
+                .client()
+                .request("eth_getBlockByNumber", (block, false))
+                .await;
+            match response {
+                Ok(Some(found)) => break found.header().clone(),
+                Ok(None) => {
+                    tracing::warn!(
+                        ?block,
+                        "header watcher RPC returned no block for a chain head; retrying"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(?block, %err, "failed to initialize header watcher; L1 unreachable? retrying");
+                }
+            }
+            tokio::time::sleep(poll_interval.max(Duration::from_secs(1))).await;
+        };
+        let (tx, _) = watch::channel(initial_header);
         let weak_client = self.weak_client();
         let tx_task = tx.clone();
 
@@ -322,16 +342,25 @@ impl NodeProvider {
                     return;
                 };
 
-                let block: Option<<Ethereum as Network>::BlockResponse> = client
-                    .request("eth_getBlockByNumber", (block, false))
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("failed to poll {block:?} header watcher: {err}");
-                    });
-                let header = block
-                    .expect("header watcher RPC returned no block for a chain head")
-                    .header()
-                    .clone();
+                // An L1 outage must degrade, not kill: on failure the watch simply
+                // keeps its last header (consumers see a stale head) until polling
+                // succeeds again.
+                let response: Result<Option<<Ethereum as Network>::BlockResponse>, _> =
+                    client.request("eth_getBlockByNumber", (block, false)).await;
+                let header = match response {
+                    Ok(Some(found)) => found.header().clone(),
+                    Ok(None) => {
+                        tracing::warn!(
+                            ?block,
+                            "header watcher RPC returned no block for a chain head; keeping the last one"
+                        );
+                        continue;
+                    }
+                    Err(err) => {
+                        tracing::warn!(?block, %err, "failed to poll header watcher; L1 unreachable? keeping the last header");
+                        continue;
+                    }
+                };
                 tx_task.send_if_modified(|current: &mut <Ethereum as Network>::HeaderResponse| {
                     if current.hash() == header.hash() {
                         false
@@ -369,6 +398,31 @@ impl NodeProvider {
         let block = cell
             .get_or_try_init(|| Self::discover_deployment_block(self, address))
             .await?;
+        Ok(*block)
+    }
+
+    /// Like [`Self::deployment_block`], but with a caller-supplied discovery routine —
+    /// for contracts whose deployment block can be found without historical *state*
+    /// queries (e.g. via an event emitted at deployment). Historical `eth_getCode`
+    /// fails on RPCs with bounded state retention (non-archive nodes, long-lived
+    /// anvil), so startup paths must prefer this. Shares the per-address cache, so
+    /// each address still resolves at most once.
+    pub async fn deployment_block_with<F>(
+        &self,
+        address: Address,
+        discover: impl FnOnce() -> F,
+    ) -> anyhow::Result<u64>
+    where
+        F: Future<Output = anyhow::Result<u64>>,
+    {
+        let cell = {
+            let mut guard = self
+                .deployment_blocks
+                .lock()
+                .expect("deployment block cache mutex poisoned");
+            guard.entry(address).or_default().clone()
+        };
+        let block = cell.get_or_try_init(discover).await?;
         Ok(*block)
     }
 

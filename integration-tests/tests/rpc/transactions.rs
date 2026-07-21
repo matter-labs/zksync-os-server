@@ -46,6 +46,42 @@ async fn basic_transfers(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A deployment whose constructor reverts is still a valid transaction: with
+/// the gas limit set explicitly (so client-side estimation cannot intercept
+/// it), the node must include it in a block with a failed receipt and consume
+/// the nonce — Ethereum semantics. This is the raw-submitter path SDK flows
+/// never exercise, because their pre-send estimation surfaces the revert
+/// before anything reaches the pool.
+#[test_multisetup([CURRENT_TO_L1])]
+async fn reverting_deployment_is_included_with_a_failed_receipt(
+    tester: Tester,
+) -> anyhow::Result<()> {
+    let sender = tester.l2_wallet.default_signer().address();
+    let nonce_before = tester.l2_provider.get_transaction_count(sender).await?;
+
+    // Init code that always reverts: PUSH1 0, PUSH1 0, REVERT.
+    let tx = TransactionRequest::default()
+        .from(sender)
+        .with_deploy_code([0x60, 0x00, 0x60, 0x00, 0xfd])
+        .with_gas_limit(1_000_000)
+        .with_gas_price(tester.l2_provider.get_gas_price().await? * 10);
+    let receipt = tester
+        .l2_provider
+        .send_transaction(tx)
+        .await?
+        .get_receipt()
+        .await?;
+
+    assert!(!receipt.status(), "the constructor revert must surface");
+    let nonce_after = tester.l2_provider.get_transaction_count(sender).await?;
+    assert_eq!(
+        nonce_after,
+        nonce_before + 1,
+        "an included-but-reverted deployment consumes the nonce"
+    );
+    Ok(())
+}
+
 #[test_multisetup([CURRENT_TO_L1])]
 async fn eip2930(tester: Tester) -> anyhow::Result<()> {
     // Test that the node can process EIP-2930 transactions

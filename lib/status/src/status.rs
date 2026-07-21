@@ -1,29 +1,24 @@
 use crate::AppState;
+use crate::consensus::ConsensusStatus;
 use axum::Json;
+use axum::extract::State;
 use serde::Serialize;
-use zksync_os_raft::RaftConsensusStatus;
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct StatusResponse {
     pub healthy: bool,
-    pub consensus: ConsensusStatus,
+    /// Present only on nodes running BFT consensus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consensus: Option<ConsensusStatus>,
 }
 
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
-pub struct ConsensusStatus {
-    pub raft: Option<RaftConsensusStatus>,
-}
-
-pub(crate) async fn status(state: axum::extract::State<AppState>) -> Json<StatusResponse> {
-    let consensus = ConsensusStatus {
-        raft: state
-            .consensus_raft_status_rx
-            .as_ref()
-            .and_then(|rx| rx.borrow().clone()),
-    };
-
+pub(crate) async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     Json(StatusResponse {
         healthy: true,
-        consensus,
+        consensus: state
+            .consensus
+            .as_ref()
+            .as_ref()
+            .map(|source| source.snapshot()),
     })
 }

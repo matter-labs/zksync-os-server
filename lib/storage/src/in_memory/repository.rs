@@ -385,7 +385,12 @@ impl TransactionReceiptRepository {
 
     pub fn remove_by_hashes(&self, tx_hashes: &[TxHash]) {
         for tx_hash in tx_hashes {
-            self.tx_data.remove(tx_hash);
+            // Both maps, or the (sender, nonce) index leaks one entry per
+            // transaction ever executed.
+            if let Some((_, data)) = self.tx_data.remove(tx_hash) {
+                self.sender_nonce_index
+                    .remove(&(data.tx.signer(), data.tx.nonce()));
+            }
         }
     }
 
@@ -446,4 +451,81 @@ fn transaction_to_api_data(
     };
 
     StoredTxData { tx, receipt, meta }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::consensus::{SignableTransaction as _, TxEip1559};
+    use alloy::primitives::{Signature, TxKind, U256, address};
+    use alloy::signers::SignerSync as _;
+    use alloy::signers::local::PrivateKeySigner;
+    use zksync_os_types::{L2Envelope, ZkReceipt};
+
+    fn stored_transfer(nonce: u64) -> (TxHash, Arc<StoredTxData>) {
+        let sender = PrivateKeySigner::from_bytes(&alloy::primitives::b256!(
+            "7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110"
+        ))
+        .expect("valid dev key");
+        let tx = TxEip1559 {
+            chain_id: 1,
+            nonce,
+            gas_limit: 1_000_000,
+            max_fee_per_gas: 1_000_000_000,
+            to: TxKind::Call(address!("5e6D086F5eC079ADFF4FB3774CDf3e8D6a34F7E9")),
+            value: U256::from(1u64),
+            ..Default::default()
+        };
+        let signature: Signature = sender
+            .sign_hash_sync(&tx.signature_hash())
+            .expect("signing cannot fail");
+        let envelope: L2Envelope = tx.into_signed(signature).into();
+        let tx: ZkTransaction =
+            alloy::consensus::transaction::Recovered::new_unchecked(envelope, sender.address())
+                .into();
+        let hash = *tx.hash();
+        let receipt = ZkReceiptEnvelope::from_typed(
+            tx.tx_type(),
+            ZkReceipt {
+                status: true.into(),
+                cumulative_gas_used: 21_000,
+                logs: Vec::new(),
+                l2_to_l1_logs: Vec::new(),
+            },
+        );
+        let meta = TxMeta {
+            block_hash: BlockHash::ZERO,
+            block_number: 1,
+            block_timestamp: 0,
+            tx_index_in_block: 0,
+            effective_gas_price: 0,
+            number_of_logs_before_this_tx: 0,
+            gas_used: 21_000,
+            contract_address: None,
+        };
+        (hash, Arc::new(StoredTxData { tx, receipt, meta }))
+    }
+
+    /// Eviction must clean *both* maps: `tx_data` and the (sender, nonce)
+    /// index. Leaving the index behind leaks one entry per transaction ever
+    /// executed — unbounded growth on a busy chain.
+    #[test]
+    fn eviction_cleans_the_sender_nonce_index_too() {
+        let repository = TransactionReceiptRepository::new();
+        let (hash, data) = stored_transfer(7);
+        let sender = data.tx.signer();
+        repository.insert([(&hash, &data)]);
+        assert_eq!(
+            repository.get_transaction_hash_by_sender_nonce(sender, 7),
+            Some(hash),
+        );
+
+        repository.remove_by_hashes(&[hash]);
+        assert_eq!(repository.len(), 0);
+        assert_eq!(
+            repository.get_transaction_hash_by_sender_nonce(sender, 7),
+            None,
+            "the (sender, nonce) index kept an entry for an evicted transaction",
+        );
+    }
 }

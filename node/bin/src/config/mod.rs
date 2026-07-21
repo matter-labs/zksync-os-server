@@ -33,7 +33,6 @@ use zksync_os_network::{NodeRecord, PeerId, SecretKey};
 use zksync_os_observability::LogFormat;
 use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_operator_signer::SignerConfig;
-use zksync_os_raft::RaftConsensusConfig;
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::{NodeRole, PubdataMode};
 
@@ -411,6 +410,14 @@ pub struct GeneralConfig {
     /// State backend to use. When changed, a replay of all blocks may be needed.
     #[config(default_t = StateBackendConfig::FullDiffs)]
     #[config(with = Serde![str])]
+    #[config_validate(custom(
+        |root: &Config, value: &StateBackendConfig| {
+            !root.consensus_config.enabled || matches!(value, StateBackendConfig::FullDiffs)
+        },
+        "consensus requires the FullDiffs state backend: the compacted backend cannot \
+         replay history below its compaction start (verification recovery, batcher \
+         rebuild, disaster truncation all depend on it)"
+    ))]
     pub state_backend: StateBackendConfig,
 
     /// Min number of blocks to retain in memory
@@ -443,6 +450,12 @@ pub struct GeneralConfig {
     /// The directory is removed once the process shuts down.
     /// Disables all HTTP APIs except JSON RPC.
     #[config(default_t = false, alias = "sandbox")]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| { !(*value && root.consensus_config.enabled) },
+        "cannot be enabled together with `consensus.enabled`: ephemeral mode discards \
+         the consensus vote journals (the double-sign protection) and the recorded \
+         consensus era on every run"
+    ))]
     pub ephemeral: bool,
 
     /// Path to ephemeral state to load at startup.
@@ -562,83 +575,372 @@ impl NetworkConfig {
     }
 }
 
+/// A consensus-enabled node's role: does it vote, or only follow?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsensusRole {
+    /// A committee member: runs consensus engines for epochs it is scheduled in,
+    /// proposes and votes. Needs a BLS signing key and a schedule entry.
+    #[serde(rename = "validator")]
+    Validator,
+    /// A non-voting follower on the consensus network: receives gossiped blocks,
+    /// verifies finality certificates against the committee schedule, and applies
+    /// finalized blocks — trust comes from the committee's quorum, not from any
+    /// single serving node. Holds no BLS key and must not appear in the schedule.
+    #[serde(rename = "observer")]
+    Observer,
+}
+
+impl ConsensusRole {
+    pub fn is_validator(&self) -> bool {
+        *self == ConsensusRole::Validator
+    }
+
+    pub fn is_observer(&self) -> bool {
+        *self == ConsensusRole::Observer
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConsensusRole::Validator => "validator",
+            ConsensusRole::Observer => "observer",
+        }
+    }
+}
+
+impl std::fmt::Display for ConsensusRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// BFT consensus over block sequencing. When enabled, this node is one validator of a
+/// committee: block production is driven by consensus leadership instead of a local
+/// loop, every block is verified by re-execution before this node votes for it, and
+/// only finalized blocks reach the write-ahead log.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct ConsensusConfig {
-    /// Whether OpenRaft-based consensus should be enabled.
-    /// WARNING: This is an experimental feature and will change in the future.
+    /// Whether BFT consensus is enabled. WARNING: experimental.
     #[config(default_t = false)]
     #[config_validate(custom(
         |root: &Config, value: &bool| !*value || root.general_config.node_role.is_main(),
         "requires `general.node_role=main`"
     ))]
-    #[config_validate(custom(
-        |root: &Config, value: &bool| !*value || root.network_config.enabled,
-        "requires `network.enabled=true`"
-    ))]
-    #[config_validate(custom(
-        |root: &Config, value: &bool| !*value || root.network_config.secret_key.is_some(),
-        "requires `network.secret_key`"
-    ))]
     pub enabled: bool,
-    /// Delete persisted OpenRaft state before startup.
+    /// Whether this node votes (`validator`) or only follows (`observer`) — see
+    /// [`ConsensusRole`]. Explicit on purpose: a validator missing its signing key
+    /// must be a loud error, never a silent downgrade to following.
+    #[config(default_t = ConsensusRole::Validator, with = Serde![str])]
+    pub role: ConsensusRole,
+    /// This node's ed25519 network identity key (hex of the 32-byte seed).
+    /// Also authenticates all connections on the consensus network.
+    #[config(secret)]
+    #[config(default)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<SecretString>| {
+            !root.consensus_config.enabled || value.is_some()
+        },
+        "is required when `consensus.enabled=true`"
+    ))]
+    pub network_key: Option<SecretString>,
+    /// This validator's BLS12-381 consensus signing key (hex). Signs votes and
+    /// certificates; distinct from the network identity. Validators only —
+    /// an observer holds no signing key, and configuring one for it is refused
+    /// (a key that exists but never signs invites the wrong conclusions).
+    #[config(secret)]
+    #[config(default)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<SecretString>| {
+            let consensus = &root.consensus_config;
+            !consensus.enabled || (consensus.role.is_validator() == value.is_some())
+        },
+        "is required for `consensus.role=validator` and must be absent for `consensus.role=observer`"
+    ))]
+    pub bls_key: Option<SecretString>,
+    /// Address the consensus p2p stack listens on.
+    #[config(default_t = "127.0.0.1:3054".into())]
+    pub listen_address: String,
+    /// The validator committee, one entry per validator (including this one), all
+    /// validators configured identically. Entry format:
+    /// `<ed25519_public_hex>:<bls_public_hex>@<host:port>`.
     ///
-    /// This is intended for intentionally switching a node away from previously persisted
-    /// consensus history. Without clearing this state, starting with consensus disabled is
-    /// rejected because later re-enabling consensus could result in an invalid state.
-    #[config(default_t = false)]
-    pub force_clear_raft_history: bool,
-    /// List of consensus participant peer IDs.
-    /// Must include the own ID (derived from `NetworkConfig#secret_key`).
+    /// Shorthand for a single-entry `committees` schedule activating at epoch 0 —
+    /// the static-set deployment. Configure exactly one of the two.
     #[config(default, with = Serde![*])]
     #[config_validate(custom(
-        |root: &Config, value: &Vec<PeerId>| !root.consensus_config.enabled || !value.is_empty(),
-        "must not be empty when `consensus.enabled=true`"
+        |root: &Config, value: &Vec<String>| {
+            !root.consensus_config.enabled
+                || !root.consensus_config.committees.is_empty()
+                || value.len() >= 2
+        },
+        "needs at least 2 validators when `consensus.enabled=true` (or a `committees` schedule)"
     ))]
-    pub peer_ids: Vec<PeerId>,
-    /// TEMPORARY WORKAROUND - forward txs via RPC until network-based propagation is added.
-    /// Entries use `<peer_id>@<host>:<rpc_port>`; every peer must have a record.
+    pub validators: Vec<String>,
+    /// The committee schedule: which validator set holds which epochs. Each entry
+    /// activates at its epoch and holds until a later entry supersedes it; the first
+    /// entry must activate at epoch 0 so every epoch in history resolves to a
+    /// committee. Reconfiguration is an append: every operator deploys a config with
+    /// the new entry *before* its activation epoch arrives. A committee-wide fact:
+    /// schedules must be identical across validators (a mismatch fails loudly —
+    /// certificates stop verifying). Validator entry format as in `validators`.
     #[config(default, with = Serde![*])]
-    pub tx_forwarding_rpc_urls: Vec<String>,
-    /// WARNING: Assumes all configured consensus nodes are already caught up to the same
-    /// canonical L2 state. Bootstrap does not catch up stale nodes before admitting them
-    /// to the cluster.
-    /// Attempt to initialize cluster membership on startup.
-    /// Safe to enable on every consensus node; only one initializer will win.
+    #[config_validate(custom(
+        |root: &Config, value: &Vec<CommitteeScheduleEntryConfig>| {
+            !root.consensus_config.enabled
+                || value.is_empty()
+                || root.consensus_config.validators.is_empty()
+        },
+        "configure either `consensus.validators` or `consensus.committees`, not both"
+    ))]
+    pub committees: Vec<CommitteeScheduleEntryConfig>,
+    /// Number of blocks per epoch. The validator set is fixed within an epoch, so
+    /// this bounds how fast a scheduled committee change can activate; it is also
+    /// the granularity of per-epoch consensus storage (journals and caches are
+    /// partitioned by epoch, which is what future retention/pruning works over).
+    /// The boundary itself costs one re-proposal view — negligible — so the
+    /// trade-off is activation latency and storage granularity vs. handoff churn.
+    /// Hours-scale is deliberate: a reconfiguration deployed in the morning
+    /// activates the same day, while handoffs stay rare events. At 250 ms blocks
+    /// the default (43,200 blocks) is one epoch every ~3 hours. A committee-wide
+    /// constant: every validator must run the same value.
+    #[config(default_t = 43_200)]
+    pub epoch_length: u64,
+    /// What an idle chain does. Non-zero: an idle leader passes its turn unless
+    /// the parent block is older than this interval (one empty "heartbeat" block
+    /// then bounds journal growth, fee staleness, and the settlement cadence, and
+    /// doubles as the liveness probe) — except while a scheduled committee change
+    /// awaits its epoch boundary, when idle leaders keep building at full cadence
+    /// so the change activates without traffic ("sprint"). Zero: the pre-policy
+    /// behavior — idle leaders always build, so a quiet chain seals empty blocks
+    /// around the clock. Leader-local policy: mixed values across validators are
+    /// safe (blocks and passed turns both verify); configure it uniformly anyway
+    /// so block cadence is predictable. See `idle_policy` in the consensus
+    /// execution crate.
+    #[config(default_t = Duration::from_secs(600))]
+    #[config_validate(custom(
+        |root: &Config, value: &Duration| {
+            // Zero is the explicit legacy mode; a non-zero heartbeat at or
+            // below the block cadence is a confused configuration (it would
+            // behave like legacy while claiming not to).
+            value.is_zero() || *value >= root.sequencer_config.block_time.saturating_mul(4)
+        },
+        "must be 0s (legacy: idle leaders always build) or well above `sequencer.block_time`"
+    ))]
+    pub idle_heartbeat: Duration,
+    /// How long a validator waits for the leader's proposal before voting to
+    /// skip the view. The leader's whole turn — waiting out an idle mempool
+    /// (up to one block time) plus building and executing the block (another
+    /// block time) — must fit comfortably inside this, which the validator
+    /// below enforces. Committee-uniform: configure the same value everywhere.
+    #[config(default_t = Duration::from_secs(1))]
+    #[config_validate(custom(
+        |root: &Config, value: &Duration| {
+            // A loaded leader turn costs ~2× block_time (idle wait + build);
+            // demand ≥ 30% headroom so normal jitter does not expire turns.
+            let turn = root.sequencer_config.block_time.saturating_mul(2);
+            turn.as_secs_f64() <= value.as_secs_f64() * 0.7
+        },
+        "must leave headroom over a leader turn: `2 × sequencer.block_time` may use at most \
+         70% of `consensus.leader_timeout` (raise the timeout or lower the block time)"
+    ))]
+    pub leader_timeout: Duration,
+    /// How long a validator waits for notarization progress before voting to
+    /// skip the view. Verification re-executes the proposal, whose cost scales
+    /// with `sequencer.block_time`. Committee-uniform.
+    #[config(default_t = Duration::from_secs(2))]
+    #[config_validate(custom(
+        |root: &Config, value: &Duration| {
+            root.sequencer_config.block_time.saturating_mul(2).as_secs_f64()
+                <= value.as_secs_f64() * 0.7
+        },
+        "must leave headroom over proposal re-execution: `2 × sequencer.block_time` may use \
+         at most 70% of `consensus.certification_timeout`"
+    ))]
+    pub certification_timeout: Duration,
+    /// A node whose network key appears in no `committees` entry refuses to start
+    /// with consensus enabled — a validator that cannot ever vote is usually a
+    /// misconfiguration. Setting this acknowledges the state as deliberate (e.g. a
+    /// machine freshly scheduled out of the committee, kept up while being
+    /// repointed as an external node).
     #[config(default_t = false)]
-    pub bootstrap: bool,
-    /// Raft election timeout lower bound.
-    #[config(default_t = Duration::from_millis(2000))]
-    pub election_timeout_min: Duration,
-    /// Raft election timeout upper bound.
-    #[config(default_t = Duration::from_millis(5000))]
-    pub election_timeout_max: Duration,
-    /// Raft heartbeat interval.
-    #[config(default_t = Duration::from_millis(1000))]
-    pub heartbeat_interval: Duration,
+    pub acknowledge_non_member: bool,
+    /// Non-voting observers admitted to the consensus network, one entry per
+    /// observer: `<ed25519_public_hex>@<host:port>`. The consensus network only
+    /// completes handshakes with explicitly listed identities, so this list is the
+    /// observers' admission perimeter. Configure it identically on every node —
+    /// validators authorize observer connections from it, and an observer finds
+    /// its own identity in it. Observers hold no committee power: worst case is
+    /// resource use, bounded by the network's rate quotas.
+    #[config(default, with = Serde![*])]
+    pub observers: Vec<String>,
+    /// Where an observer forwards transactions received over its RPC (round-robin
+    /// over the list): validator RPC urls. Observers hold no leader turns, so a
+    /// transaction submitted to one must travel to a validator to be included.
+    #[config(default, with = Serde![*])]
+    #[config_validate(custom(
+        |root: &Config, value: &Vec<String>| {
+            let consensus = &root.consensus_config;
+            !(consensus.enabled && consensus.role.is_observer() && value.is_empty())
+        },
+        "is required when `consensus.role=observer` (an observer cannot include transactions itself)"
+    ))]
+    pub tx_forward_rpc_urls: Vec<String>,
+    /// Allow validator connections to private IPs (local and containerized networks).
+    #[config(default_t = false)]
+    pub allow_private_ips: bool,
+    /// The block height consensus is anchored at: 0 for a chain that runs consensus
+    /// from its genesis, the agreed cutover height for a chain migrated from
+    /// single-sequencer operation. A committee-wide constant: every validator must
+    /// name the same height, and the first consensus start must happen with the
+    /// write-ahead log ending exactly there (the guard refuses otherwise). The first
+    /// consensus-decided block is `genesis_height + 1`.
+    #[config(default_t = 0)]
+    pub genesis_height: u64,
+    /// Single-sequencer operation refuses to start on a chain that has previously
+    /// run consensus — its consensus state would silently go stale, and a later
+    /// re-enable could mix eras. Setting this acknowledges a deliberate rollback:
+    /// the node runs single-sequencer from the same write-ahead log (which only ever
+    /// contains finalized blocks) and consensus state is left untouched on disk.
+    #[config(default_t = false)]
+    pub acknowledge_rollback: bool,
+    /// The committee protocol version, carried in the network's domain-separation
+    /// namespaces (p2p handshake and vote signing). A committee-wide fact:
+    /// validators on different protocol versions must fail to pair — loudly, at the
+    /// handshake — rather than exchange messages they interpret differently.
+    /// Deploying a binary that supports a newer version and activating that version
+    /// are separate steps; bumping this value is the coordinated activation.
+    #[config(default_t = 1)]
+    pub protocol_version: u32,
+    /// Upper bound on a consensus network message (must fit the largest block).
+    #[config(default_t = NonZeroU32::new(16 * 1024 * 1024).unwrap())]
+    pub max_message_size: NonZeroU32,
+    /// How many *retired* epochs of consensus storage this node keeps; older
+    /// epochs are pruned — vote-journal partitions removed, marshal's finalized
+    /// block/certificate archives pruned below the horizon. `0` disables pruning.
+    /// A per-node setting (pruning local storage needs no committee
+    /// coordination), but with every peer pruning, chain history below
+    /// everyone's horizon is no longer served on the consensus network — a
+    /// rebuild then starts from a finality floor rather than the era genesis.
+    /// The node's own finality store (the sovereign certificate trail) is never
+    /// pruned. Values 1 and below (other than 0) are refused: the retention
+    /// window must cover the epoch handoff and the finality-floor cache.
+    #[config(default_t = 2)]
+    #[config_validate(custom(
+        |_root: &Config, value: &u64| *value == 0 || *value >= 2,
+        "must be 0 (pruning disabled) or at least 2 (the handoff + floor-cache window)"
+    ))]
+    pub epoch_retention: u64,
+    /// A validator starting with empty consensus storage but a retained chain
+    /// (a rebuild, a promoted node) resumes from a cached finality floor instead
+    /// of backfilling from the consensus genesis — but only when that floor is
+    /// fresh (at or after the committee's last scheduled change). A stale floor
+    /// normally falls back to the full backfill; setting this accepts it anyway.
+    /// Escape hatch for chains whose peers no longer serve deep history — the
+    /// stale floor is then the best available starting point.
+    #[config(default_t = false)]
+    pub accept_stale_floor: bool,
+    /// How far ahead of this validator's clock a proposed block timestamp may be
+    /// before the proposal is rejected. Absorbs honest clock skew between validators;
+    /// bounds how far a leader can pre-date time-dependent logic.
+    #[config(default_t = Duration::from_secs(10))]
+    pub max_timestamp_skew: Duration,
+    /// Acknowledges starting this node into a *different* consensus era over a
+    /// chain that already ran one — a disaster fork or a re-migration, both of
+    /// which abandon finalized history. Format: `"<height>:<block hash at
+    /// height>"`, naming exactly the new anchor. Without it (or with a height
+    /// or hash that does not match this node's chain at the anchor), the era
+    /// guard refuses to start. The first consensus start of a chain needs no
+    /// acknowledgment; this exists so nobody forks by configuration accident,
+    /// and so a botched truncation is caught before the node forms a lonely
+    /// era of its own.
+    #[config(default)]
+    pub acknowledge_fork: Option<String>,
+    /// How the on-chain validator registry participates in committee scheduling.
+    /// `schedule` (default): the registry is ignored; `consensus.committees` /
+    /// `consensus.validators` alone decide committees. `shadow`: consensus still
+    /// follows the config schedule, but every epoch's committee is *also* derived
+    /// from the registry contract and compared — drift surfaces in `/status` and
+    /// alarms, changing nothing else. `config_shadow`: committees follow the
+    /// registry from the flip epoch — the `committees` entry with
+    /// `source: registry` — onward, and the config schedule is kept as a mirror
+    /// of the registry: entries at or after the flip never override, they are the
+    /// drift comparison's reference and the p2p address book's source, and the
+    /// same drift alarms now cross-check the governing source. Recovery from a
+    /// broken registry is switching this mode back to `schedule` or `shadow`
+    /// (config governs again) and restarting the committee. A committee-wide
+    /// fact, fingerprinted.
+    // TODO(consensus): a future `contract` mode — the registry as the sole
+    // source, with no config mirror expected — additionally needs the p2p
+    // address book to follow registry endpoints (see the TODO at the peer-set
+    // construction in consensus.rs) and a drift comparison that does not
+    // reference config. Add it once `shadow`/`config_shadow` have produced
+    // staging evidence; until then the registry is deliberately not offered as
+    // the only source of truth.
+    #[config(default_t = RegistryMode::Schedule, with = Serde![str])]
+    pub registry_mode: RegistryMode,
+    /// L2 address of the validator registry contract. Committee-uniform,
+    /// fingerprinted; required for `registry_mode` `shadow`/`config_shadow`,
+    /// refused for `schedule` (an address that silently does nothing invites the
+    /// wrong conclusions).
+    #[config(default, with = Serde![str])]
+    pub registry_address: Option<Address>,
 }
 
-impl ConsensusConfig {
-    pub fn into_raft_consensus_config(
-        self,
-        network_config: &NetworkConfig,
-        storage_path: PathBuf,
-    ) -> anyhow::Result<RaftConsensusConfig> {
-        let node_id = network_config.derived_peer_id()?;
-        anyhow::ensure!(
-            self.peer_ids.contains(&node_id),
-            "`consensus.peer_ids` must include local peer id derived from `network.secret_key`: {node_id}"
-        );
-        Ok(RaftConsensusConfig {
-            node_id,
-            peer_ids: self.peer_ids,
-            bootstrap: self.bootstrap,
-            election_timeout_min: self.election_timeout_min,
-            election_timeout_max: self.election_timeout_max,
-            heartbeat_interval: self.heartbeat_interval,
-            storage_path,
-        })
+/// How the committee schedule for an epoch range is decided — see
+/// [`ConsensusConfig::registry_mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistryMode {
+    Schedule,
+    Shadow,
+    ConfigShadow,
+}
+
+impl RegistryMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RegistryMode::Schedule => "schedule",
+            RegistryMode::Shadow => "shadow",
+            RegistryMode::ConfigShadow => "config_shadow",
+        }
     }
+}
+
+impl std::fmt::Display for RegistryMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One entry of the committee schedule (`consensus.committees`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommitteeScheduleEntryConfig {
+    /// The epoch this committee takes over at (its first epoch).
+    pub activation_epoch: u64,
+    /// The committee, in agreed order (certificate signer bitmaps index into it);
+    /// same entry format as `consensus.validators`. Empty for (and only for) a
+    /// `source: registry` entry.
+    #[serde(default)]
+    pub validators: Vec<String>,
+    /// Where this entry's committees come from: `validators` (default — the
+    /// listed set) or `registry` (the flip: from this entry's activation epoch
+    /// on, committees are derived from the on-chain registry). Exactly one
+    /// registry entry is required in `registry_mode: config_shadow` and refused
+    /// in every other mode. `validators` entries after the flip do not override
+    /// the registry — they are the config mirror of it (the drift comparison's
+    /// reference and the address book's source), appended alongside each
+    /// registry rotation.
+    #[serde(default)]
+    pub source: CommitteeEntrySource,
+}
+
+/// The authority behind one `consensus.committees` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommitteeEntrySource {
+    #[default]
+    Validators,
+    Registry,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -849,6 +1151,15 @@ pub struct SequencerConfig {
     #[config(default_t = 1000)]
     pub max_transactions_in_block: usize,
 
+    /// Max number of interop roots per block — an execution-relevant chain
+    /// constant: block building consumes it and consensus verification
+    /// re-executes with the verifier's own value, so a committee must run it
+    /// identically everywhere (like the gas and pubdata limits). Kept apart
+    /// from the batcher's per-batch limit, which is that node's local batching
+    /// concern.
+    #[config(default_t = 1000)]
+    pub interop_roots_per_block: u64,
+
     /// Max gas used per block.
     /// One of the block Seal Criteria. Only affects the Main Node.
     #[config(default_t = 100_000_000)]
@@ -875,6 +1186,15 @@ pub struct SequencerConfig {
     /// Only affects the Main Node.
     /// Useful for mitigation/operations.
     #[config(default_t = None)]
+    // TODO(consensus): the consensus-mode equivalent of this ops knob — a leader that
+    // passes its turns after producing N blocks — is straightforward if operations
+    // ever needs it; rejected rather than silently ignored until then.
+    #[config_validate(custom(
+        |root: &Config, value: &Option<u64>| {
+            !root.consensus_config.enabled || value.is_none()
+        },
+        "is not supported when `consensus.enabled=true`"
+    ))]
     pub max_blocks_to_produce: Option<u64>,
 
     /// Max number of interop roots to be included in a single transaction
@@ -896,13 +1216,28 @@ pub struct SequencerConfig {
     pub revm_consistency_checker_enabled: bool,
     /// If enabled, node will revert block with divergence detected by REVM consistency checker.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| { !(*value && root.consensus_config.enabled) },
+        "cannot be enabled together with `consensus.enabled`: reverting a finalized \
+         block is single-sequencer authority — under BFT consensus a divergence is \
+         recovered via the disaster-fork runbook, not a local rebuild"
+    ))]
     pub revm_consistency_checker_revert_on_divergence: bool,
 
     /// Block rebuild / L1 revert options. See [`RebuildConfig`] for the three modes.
     #[config(nest)]
     #[config_validate(custom(
-        |root: &Config, value: &Option<RebuildConfig>| !root.consensus_config.enabled || value.is_none(),
-        "requires `consensus.enabled=false`"
+        |root: &Config, value: &Option<RebuildConfig>| {
+            !root.consensus_config.enabled
+                || !matches!(
+                    value,
+                    Some(
+                        RebuildConfig::BlockRebuild { .. }
+                            | RebuildConfig::DangerBlockRebuildWithL1Revert { .. }
+                    )
+                )
+        },
+        "cannot rebuild local blocks when `consensus.enabled=true`; only `l1_revert` is supported"
     ))]
     pub rebuild: Option<RebuildConfig>,
 
@@ -1286,14 +1621,26 @@ pub struct MempoolTxValidatorConfig {
 }
 
 /// Only used on the Main Node.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct BatcherConfig {
     /// Whether to run the batcher subsystem and all downstream components (prover input
     /// generation, L1 settlement, priority tree, etc.). Defaults to `true`.
     /// Set to `false` to run the node without committing batches to L1 — useful for
     /// testing or operating a read-only / replay-only node.
+    ///
+    /// In a committee, exactly one node runs with this enabled — the settler; the
+    /// others keep a full batcher configuration staged with `enabled = false`, so
+    /// promoting a standby is flipping this flag and restarting (see the failover
+    /// runbook in the consensus operating guide).
     #[config(default_t = true)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| {
+            !(*value && root.consensus_config.enabled && root.consensus_config.role.is_observer())
+        },
+        "cannot be enabled on a consensus observer: only committee validators may settle \
+         (set `batcher.enabled=false`, or make this node a validator)"
+    ))]
     pub enabled: bool,
 
     /// Maximum time a batch stays open before being sealed.
@@ -1690,14 +2037,17 @@ pub struct OtlpConfig {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct BatchVerificationConfig {
-    /// [main node] If we are collecting batch verification signatures.
+    /// [settler] If we are collecting batch verification signatures before
+    /// committing to L1.
     #[config(default_t = false)]
     #[config_validate(custom(
         |root: &Config, value: &bool| !*value || root.network_config.enabled,
         "requires `network.enabled=true`"
     ))]
     pub server_enabled: bool,
-    /// [external node] If we are signing batches.
+    /// If we are signing batches — on an external node acting as a verifier, or
+    /// on a committee validator co-signing the settler's batches (a standby
+    /// verifies; the settler itself never co-signs its own batches).
     #[config(default_t = false)]
     #[config_validate(custom(
         |root: &Config, value: &bool| !*value || root.network_config.enabled,
@@ -2079,6 +2429,9 @@ impl From<L1WatcherConfig> for zksync_os_l1_watcher::L1WatcherConfig {
         Self {
             max_blocks_to_process: c.max_blocks_to_process,
             confirmations: c.confirmations,
+            // Not operator-facing: the node wiring flips this based on the
+            // consensus mode.
+            finalized_ingestion: false,
             poll_interval: c.poll_interval,
             finalized_poll_interval: c.finalized_poll_interval,
             logs_cache_capacity: c.logs_cache_capacity,
@@ -2239,6 +2592,22 @@ mod tests {
     const TEST_SECRET_KEY: &str =
         "0x1111111111111111111111111111111111111111111111111111111111111111";
 
+    #[test]
+    fn consensus_secret_keys_are_redacted_from_debug_output() {
+        const NETWORK_SENTINEL: &str = "network-secret-sentinel";
+        const BLS_SENTINEL: &str = "bls-secret-sentinel";
+        let config = ConsensusConfig {
+            network_key: Some(NETWORK_SENTINEL.into()),
+            bls_key: Some(BLS_SENTINEL.into()),
+            ..ConsensusConfig::default()
+        };
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains(NETWORK_SENTINEL));
+        assert!(!debug.contains(BLS_SENTINEL));
+        assert!(debug.contains("[REDACTED]"));
+    }
+
     fn loopback_interface() -> &'static str {
         ["lo", "lo0"]
             .into_iter()
@@ -2261,6 +2630,14 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap()
+    }
+
+    fn parse_consensus_config<const N: usize>(
+        env_vars: [(&str, &str); N],
+    ) -> Result<ConsensusConfig, ParseErrors> {
+        let schema = ConfigSchema::new(&ConsensusConfig::DESCRIPTION, "consensus");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<ConsensusConfig>().unwrap().parse()
     }
 
     #[test]
@@ -2544,6 +2921,79 @@ mod tests {
         config.external_price_api_client_config = None;
 
         config.validate().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn observers_cannot_settle() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.consensus_config.enabled = true;
+        config.consensus_config.role = ConsensusRole::Observer;
+        config.batcher_config.enabled = true;
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(err.contains("cannot be enabled on a consensus observer"));
+    }
+
+    #[test]
+    fn consensus_message_size_is_nonzero_u32_by_construction() {
+        let default = parse_consensus_config([]).unwrap();
+        assert_eq!(default.max_message_size.get(), 16 * 1024 * 1024);
+
+        assert!(parse_consensus_config([("CONSENSUS_MAX_MESSAGE_SIZE", "0")]).is_err());
+
+        assert!(
+            parse_consensus_config([(
+                "CONSENSUS_MAX_MESSAGE_SIZE",
+                &(u64::from(u32::MAX) + 1).to_string(),
+            )])
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn consensus_rejects_local_rebuild_and_local_production_limit() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.consensus_config.enabled = true;
+        config.consensus_config.network_key = Some("network-secret".into());
+        config.consensus_config.bls_key = Some("bls-secret".into());
+        config.consensus_config.validators = vec!["validator-a".into(), "validator-b".into()];
+        config.sequencer_config.max_blocks_to_produce = Some(1);
+        config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
+            bounds: RebuildBounds {
+                from_block_number: 1,
+                from_block_hash: B256::ZERO,
+                blocks_to_empty: vec![],
+                reset_timestamps: false,
+            },
+        });
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(err.contains(
+            "`sequencer.max_blocks_to_produce` is not supported when `consensus.enabled=true`"
+        ));
+        assert!(err.contains(
+            "`sequencer.rebuild` cannot rebuild local blocks when `consensus.enabled=true`"
+        ));
+    }
+
+    #[tokio::test]
+    async fn consensus_rejects_unsupported_modes() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.consensus_config.enabled = true;
+        config.consensus_config.network_key = Some("network-secret".into());
+        config.consensus_config.bls_key = Some("bls-secret".into());
+        config.consensus_config.validators = vec!["validator-a".into(), "validator-b".into()];
+        config.general_config.state_backend = StateBackendConfig::Compacted;
+        config.general_config.ephemeral = true;
+        config
+            .sequencer_config
+            .revm_consistency_checker_revert_on_divergence = true;
+
+        let err = config.validate().await.unwrap_err().to_string();
+        assert!(err.contains("consensus requires the FullDiffs state backend"));
+        assert!(err.contains("ephemeral mode discards the consensus vote journals"));
+        assert!(err.contains("reverting a finalized block is single-sequencer authority"));
     }
 
     #[tokio::test]

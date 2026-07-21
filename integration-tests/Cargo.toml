@@ -13,6 +13,8 @@ build = "build.rs"
 
 [dependencies]
 zksync_os_server.workspace = true
+zksync_os_consensus_execution.workspace = true
+zksync_os_consensus_registry.workspace = true
 zksync_os_operator_signer.workspace = true
 zksync_os_alloy_ext.workspace = true
 zksync_os_provider.workspace = true
@@ -28,6 +30,11 @@ zksync_os_network.workspace = true
 zksync_os_replay_archive.workspace = true
 zksync_os_rocksdb.workspace = true
 zksync_os_status_server.workspace = true
+zksync_os_storage.workspace = true
+zksync_os_storage_api.workspace = true
+commonware-codec.workspace = true
+commonware-cryptography.workspace = true
+rand08.workspace = true
 zksync_os_integration_tests_macros.workspace = true
 zksync_os_verify_storage_proof = { path = "../tools/verify-storage-proof" }
 
@@ -36,6 +43,7 @@ reth-tasks.workspace = true
 alloy = { workspace = true, default-features = false, features = ["provider-anvil-node", "rand", "json-rpc", "pubsub", "provider-ws"] }
 anyhow.workspace = true
 flate2.workspace = true
+fs2.workspace = true
 reqwest.workspace = true
 tar.workspace = true
 tokio.workspace = true

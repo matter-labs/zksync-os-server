@@ -1,0 +1,18 @@
+[package]
+name = "zksync_os_consensus_registry"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+alloy.workspace = true
+commonware-codec.workspace = true
+commonware-cryptography.workspace = true
+thiserror.workspace = true
+zk_ee.workspace = true
+zksync_os_interface.workspace = true

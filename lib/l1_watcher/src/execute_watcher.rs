@@ -50,12 +50,17 @@ impl<Finality: WriteFinality> L1ExecuteWatcher<Finality> {
 
         let provider = zk_chain.provider().clone();
         let address = (*zk_chain.address()).into();
+        let max_blocks_to_process = config.max_blocks_to_process;
 
         let resolve_start = move |()| async move {
             let current_l1_block = zk_chain.provider().get_block_number().await?;
             let last_executed_batch = finality.get_finality_status().last_executed_batch;
-            let last_l1_block =
-                util::find_l1_execute_block_by_batch_number(&zk_chain, last_executed_batch).await?;
+            let last_l1_block = util::find_l1_execute_block_by_batch_number(
+                &zk_chain,
+                last_executed_batch,
+                max_blocks_to_process,
+            )
+            .await?;
             tracing::info!(
                 current_l1_block,
                 last_executed_batch,
@@ -101,6 +106,7 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
 
         let provider = zk_chain.provider().clone();
         let address = (*zk_chain.address()).into();
+        let max_blocks_to_process = config.max_blocks_to_process;
 
         let resolve_start = move |()| async move {
             let current_l1_block = zk_chain.provider().get_block_number().await?;
@@ -109,6 +115,7 @@ impl<Finality: WriteFinality> L1FinalizedExecuteWatcher<Finality> {
             let last_l1_block = util::find_l1_execute_block_by_batch_number(
                 &zk_chain,
                 last_finalized_executed_batch,
+                max_blocks_to_process,
             )
             .await?;
             tracing::info!(

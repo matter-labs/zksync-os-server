@@ -279,6 +279,79 @@ impl BlockReplayStorage {
             .expect("Failed to write to block replay storage");
     }
 
+    /// Truncates the canonical chain to `new_tip`: every canonical record above
+    /// it is deleted and the latest pointer moves back. The write-ahead log
+    /// ordinarily only grows — this exists for the disaster-fork tooling, which
+    /// discards a finalized-but-poisoned suffix on a stopped node (the caller
+    /// exports the doomed records to a tombstone archive *before* calling).
+    ///
+    /// Crash-safe in one direction: the pointer moves first, in its own atomic
+    /// write — from that moment every startup and replay stream sees the
+    /// shortened chain — and the per-block entries above it are swept after.
+    /// A crash mid-sweep leaves unreferenced orphans and never a referenced
+    /// hole; the sweep discovers orphans by iterating keys above the pointer
+    /// rather than trusting a remembered range, so re-running the truncation
+    /// (even to the same tip) finishes any prior interrupted sweep.
+    pub fn truncate_to(&self, new_tip: BlockNumber) {
+        let latest = self
+            .latest_record_checked()
+            .expect("cannot truncate an empty block replay storage");
+        assert!(
+            new_tip <= latest,
+            "cannot truncate to {new_tip}: the chain ends at {latest}"
+        );
+
+        let mut pointer_batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
+        pointer_batch.put_cf(
+            BlockReplayColumnFamily::Latest,
+            Self::LATEST_KEY,
+            &new_tip.to_be_bytes(),
+        );
+        self.db
+            .write(pointer_batch)
+            .expect("Failed to write to block replay storage");
+
+        // Every column family `write_replay_unchecked` populates per block.
+        // Canonical records are keyed by the 8-byte block number; 32-byte keys
+        // in the same families are hash-keyed non-canonical records (rebuild
+        // archives) and stay untouched.
+        const PER_BLOCK_CFS: &[BlockReplayColumnFamily] = &[
+            BlockReplayColumnFamily::CanonicalHash,
+            BlockReplayColumnFamily::Context,
+            BlockReplayColumnFamily::StartingL1SerialId,
+            BlockReplayColumnFamily::Txs,
+            BlockReplayColumnFamily::NodeVersion,
+            BlockReplayColumnFamily::BlockOutputHash,
+            BlockReplayColumnFamily::ProtocolVersion,
+            BlockReplayColumnFamily::ForcePreimages,
+            BlockReplayColumnFamily::StartingInteropRootId,
+            BlockReplayColumnFamily::StartingMigrationNumber,
+            BlockReplayColumnFamily::StartingInteropFeeNumber,
+        ];
+        let orphans: Vec<BlockNumber> = self
+            .db
+            .from_iterator_cf(
+                BlockReplayColumnFamily::Context,
+                &(new_tip + 1).to_be_bytes()[..]..,
+            )
+            .filter_map(|(key, _)| {
+                let key: [u8; 8] = key.as_ref().try_into().ok()?;
+                Some(u64::from_be_bytes(key))
+            })
+            .filter(|&block| block > new_tip)
+            .collect();
+        for block in orphans {
+            let key = block.to_be_bytes();
+            let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
+            for cf in PER_BLOCK_CFS {
+                batch.delete_cf(*cf, &key);
+            }
+            self.db
+                .write(batch)
+                .expect("Failed to write to block replay storage");
+        }
+    }
+
     /// Returns the greatest block number that has been appended, or `None` if empty.
     /// This can only return `None` on the very first start before genesis got inserted.
     fn latest_record_checked(&self) -> Option<BlockNumber> {
@@ -290,6 +363,13 @@ impl BlockReplayStorage {
                 let arr: [u8; 8] = bytes.as_slice().try_into().unwrap();
                 u64::from_be_bytes(arr)
             })
+    }
+
+    /// The canonical hash at `block_number` — public for the disaster-fork
+    /// tooling, which records the hash at the truncation point (the fork
+    /// config's anchor names it, and the startup guard cross-checks it).
+    pub fn canonical_block_hash(&self, block_number: BlockNumber) -> BlockHash {
+        self.get_canonical_block_hash(block_number)
     }
 
     /// Given `block_number` retrieve block's hash.

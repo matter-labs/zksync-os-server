@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use zksync_os_contract_interface::ZkChain;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
-use zksync_os_provider::NodeProvider;
+use zksync_os_provider::{NodeProvider, until_l1_available};
 use zksync_os_types::ProtocolSemanticVersion;
 
 /// Receives Batches with proofs - potentially with incompatible protocol version.
@@ -41,7 +41,10 @@ impl UpgradeGatekeeper {
         &self,
         target_protocol_version: &ProtocolSemanticVersion,
     ) -> anyhow::Result<()> {
-        let mut current_protocol_version = self.current_protocol_version().await?;
+        // An unreachable L1 is waited out here (this component's whole job is to
+        // wait); the semantic checks on the fetched version below stay fail-fast.
+        let mut current_protocol_version =
+            until_l1_available("upgrade_gatekeeper", || self.current_protocol_version()).await?;
         tracing::info!(
             %current_protocol_version,
             %target_protocol_version,
@@ -72,7 +75,9 @@ impl UpgradeGatekeeper {
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 }
             }
-            current_protocol_version = self.current_protocol_version().await?;
+            current_protocol_version =
+                until_l1_available("upgrade_gatekeeper", || self.current_protocol_version())
+                    .await?;
         }
     }
 }

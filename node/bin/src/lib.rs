@@ -4,8 +4,10 @@
 mod acceptance;
 mod batch_sink;
 pub mod batcher;
+mod chain_fingerprint;
 mod command_source;
 pub mod config;
+pub mod consensus;
 pub mod default_protocol_version;
 mod en_remote_config;
 mod init_tx_forwarder;
@@ -20,19 +22,20 @@ mod prover_input_generator;
 mod provider;
 mod state_initializer;
 pub mod tree_manager;
+pub mod truncate;
 pub mod util;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
 use crate::command_source::{
-    ConsensusNodeCommandSource, ExternalNodeCommandSource, RebuildOptions,
+    ConsensusCommittedSource, ConsensusNodeCommandSource, ExternalNodeCommandSource, RebuildOptions,
 };
 use crate::config::{
     Config, ProverApiConfig, RebuildConfig, base_token_price_updater_config, gas_adjuster_config,
     report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
-use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
+use crate::init_tx_forwarder::{build_round_robin_tx_forwarder, build_static_tx_forwarder};
 use crate::l1_revert::revert_l1_on_startup;
 use crate::main_node_client::MainNodeClient;
 use crate::node_state_on_startup::NodeStateOnStartup;
@@ -96,10 +99,6 @@ use zksync_os_observability::GENERAL_METRICS;
 use zksync_os_pipeline::Pipeline;
 use zksync_os_priority_tree::PriorityTreeManager;
 use zksync_os_provider::NodeProvider;
-use zksync_os_raft::{
-    BlockCanonizationEngine, ConsensusRuntimeParts, LeadershipSignal, init_consensus,
-    loopback_consensus,
-};
 use zksync_os_replay_archive::{
     ReplayArchiveGateComponent, ReplayArchiver, ReplayArchivingWriteReplay, init_replay_archive,
 };
@@ -107,7 +106,11 @@ use zksync_os_reth_compat::provider::ZkProviderFactory;
 use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::RpcStorage;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
-use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
+use zksync_os_sequencer::execution::{
+    BlockApplier, BlockCanonization, BlockCanonizer, BlockExecutor, FeeProvider, LeadershipSignal,
+    NoopCanonization,
+};
+use zksync_os_sequencer::model::blocks::BlockPayload;
 use zksync_os_status_server::{StatusServerState, run_status_server};
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
@@ -121,8 +124,10 @@ use zksync_os_types::{ExecutionVersion, NodeRole, PubdataMode, TransactionAccept
 use ports::BoundListeners;
 pub use ports::ServerPorts;
 
-const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
-const RAFT_DB_NAME: &str = "raft";
+/// Directory name of the write-ahead log inside `general.rocks_db_path`. Public so
+/// tooling (and the test harness) can locate a *stopped* node's WAL — e.g. to read
+/// the drained tip during a migration.
+pub const BLOCK_REPLAY_WAL_DB_NAME: &str = "block_replay_wal";
 const STATE_TREE_DB_NAME: &str = "tree";
 const PRIORITY_TREE_DB_NAME: &str = "priority_txs_tree";
 const REPOSITORY_DB_NAME: &str = "repository";
@@ -295,7 +300,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         }
     }
 
-    prepare_raft_storage(&config).expect("failed to prepare raft storage");
+    warn_on_leftover_raft_storage(&config);
 
     tracing::info!("Initializing BlockReplayStorage");
 
@@ -367,6 +372,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
+    // The disaster-fork backstop: a settler whose L1 has committed batches past
+    // its local chain would faithfully recreate them from recovery — recreating
+    // exactly the poisoned batches a fork just discarded. This state cannot
+    // arise in normal operation (the batcher only commits blocks it has); it
+    // means a truncated node restarted before the L1 revert step of the fork
+    // runbook, so the guard names that step instead of letting the recovery
+    // machinery work against the fork. Main nodes only: an external node never
+    // commits batches and legitimately starts empty with L1 ahead, syncing the
+    // gap from its peers.
+    if node_role.is_main() && config.batcher_config.enabled {
+        assert!(
+            node_startup_state.last_l1_committed_block
+                <= node_startup_state.block_replay_storage_last_block,
+            "L1 has committed batches past this node's chain (last committed block on L1: \
+             {}, local tip: {}). If this follows a disaster-fork truncation, the \
+             committed-but-unexecuted batches above the fork point must be reverted on L1 \
+             before the settler restarts — refusing to start rather than recreate and \
+             re-commit discarded blocks",
+            node_startup_state.last_l1_committed_block,
+            node_startup_state.block_replay_storage_last_block,
+        );
+    }
+
     if let Some(from_block_number) = rebuild_options.as_ref().map(|o| o.from_block_number)
         && node_role.is_main()
     {
@@ -380,6 +408,32 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             from_block_number,
             node_startup_state.last_l1_committed_block
         );
+    }
+
+    // A truncated chain must not run consensus over engine state that recorded
+    // progress past the cut — marshal would resume delivery above the new tip
+    // and die on the delivery-order assert. The truncate tool flags exactly the
+    // state it invalidated; the flag goes away with the runbook's clear step.
+    // Checked before any service binds or spawns: the refusal must leave
+    // nothing behind.
+    if config.consensus_config.enabled {
+        let engine_dir = config.general_config.rocks_db_path.join("consensus");
+        if let Some(truncated_to) =
+            consensus::read_truncation_flag(&engine_dir).unwrap_or_else(|err| {
+                panic!(
+                    "failed to read the truncation flag at {}: {err}",
+                    engine_dir.display()
+                )
+            })
+        {
+            panic!(
+                "this chain was truncated to block {truncated_to}, but the consensus \
+                 engine state at {} predates the truncation and cannot be reused; \
+                 clear the directory and restart (the fork runbook's \"clear the \
+                 consensus engine state\" step)",
+                engine_dir.display()
+            );
+        }
     }
 
     let finality_storage = Finality::new(FinalityStatus {
@@ -440,37 +494,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (outgoing_verify_results, _) =
         tokio::sync::broadcast::channel::<PeerVerifyBatchResult>(128);
 
-    let ConsensusRuntimeParts {
-        canonization_engine,
-        leadership,
-        raft,
-    } = if config.consensus_config.enabled {
-        init_consensus(
-            runtime,
-            config
-                .consensus_config
-                .clone()
-                .into_raft_consensus_config(
-                    &config.network_config,
-                    config.general_config.rocks_db_path.join(RAFT_DB_NAME),
-                )
-                .expect("failed to build raft consensus config"),
-            Box::new(block_replay_storage.clone()),
-        )
-        .await
-        .expect("failed to initialize consensus engine")
-    } else {
-        tracing::info!("openraft consensus is disabled - assuming perpetual leader role");
-        loopback_consensus()
-    };
-    let (raft_protocol_handler, raft_bootstrapper, raft_status_rx) = match raft {
-        Some(raft) => (
-            Some(raft.protocol_handler),
-            raft.bootstrapper,
-            Some(raft.status_rx),
-        ),
-        None => (None, None, None),
-    };
+    // Single-sequencer mode: this node is always the leader and every block it produces
+    // is immediately canonical. When BFT consensus is enabled, the pipeline is fed by
+    // the consensus committed stream instead and these two seams are bypassed.
+    let canonization_engine = NoopCanonization::new();
+    let leadership = LeadershipSignal::AlwaysLeader;
     let network = if config.network_config.enabled {
         tracing::info!("initializing p2p networking");
         let batch_verification_policy_config: BatchVerificationPolicyConfig =
@@ -484,10 +512,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
                     accepted_verifier_signers,
                     verify_result_tx: verify_result_tx.clone(),
+                    // A committee validator also verifies its peers' batches:
+                    // the same session that would serve an EN carries the
+                    // verifier handshake and request/response traffic.
+                    verification: config.batch_verification_config.client_enabled.then(|| {
+                        ExternalNodeVerifierConfig {
+                            signing_key: config.batch_verification_config.signing_key.clone(),
+                            verify_batch_tx: verify_batch_tx.clone(),
+                            outgoing_verify_results: outgoing_verify_results.clone(),
+                        }
+                    }),
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
-                raft_protocol_handler,
             )
             .await
         } else {
@@ -520,18 +557,11 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
-                raft_protocol_handler,
             )
             .await
         }
         .expect("failed to create network service");
         network_service.spawn(runtime, node_role.is_main().then_some(verify_request_rx));
-        if let Some(bootstrapper) = raft_bootstrapper {
-            bootstrapper
-                .bootstrap_if_needed()
-                .await
-                .expect("failed to run raft bootstrap process");
-        }
         Some(bound_network_ports)
     } else if node_role.is_main() {
         tracing::info!(
@@ -564,8 +594,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             finality_storage.clone(),
             l1_state.l1_block_number,
             // Only nodes that actually submit commit txs locally should arm the
-            // `UnexpectedCommit` guard — otherwise consensus followers configured with
-            // `batcher_config.enabled = false` panic the moment the leader's commit lands on L1.
+            // `UnexpectedCommit` guard — a main node running with
+            // `batcher_config.enabled = false` must not panic when a commit submitted
+            // by another node lands on L1.
             (node_role.is_main() && config.batcher_config.enabled).then_some(commit_submitted_rx),
         )
         .await
@@ -670,11 +701,10 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     let tx_forwarder = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
         Some(build_static_tx_forwarder(url).await)
-    } else if config.consensus_config.enabled {
-        let status_rx = raft_status_rx
-            .clone()
-            .expect("consensus status receiver must be present when consensus is enabled");
-        Some(build_consensus_tx_forwarder(&config, status_rx).await)
+    } else if config.consensus_config.enabled && config.consensus_config.role.is_observer() {
+        // A consensus observer includes nothing itself: its RPC keeps a local
+        // mirror (pending views stay coherent) and forwards to the validators.
+        Some(build_round_robin_tx_forwarder(&config.consensus_config.tx_forward_rpc_urls).await)
     } else {
         None
     };
@@ -764,7 +794,21 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
             bytecode_supplier_address,
-            l1_watcher_config: config.l1_watcher_config.clone().into(),
+            l1_watcher_config: {
+                let mut watcher_config: zksync_os_l1_watcher::L1WatcherConfig =
+                    config.l1_watcher_config.clone().into();
+                // Under consensus, deposits and protocol upgrades are ingested at
+                // the *finalized* L1 boundary rather than `confirmations` blocks
+                // behind the tip: they become block content that every validator
+                // verifies against its own L1 view before voting, and a finalized
+                // block is irrevocable — the deep-reorg remedy a single sequencer
+                // had (roll the chain back and re-sequence) does not exist here.
+                // The cost is deposit latency (L1 finality, ~13 min on Ethereum);
+                // the alternative is a finalized L2 block referencing an L1 event
+                // that no longer exists.
+                watcher_config.finalized_ingestion = config.consensus_config.enabled;
+                watcher_config
+            },
             interop_fee_updater_config: config.interop_fee_updater_config.clone().into(),
         },
         // todo: eventually this should be initialized inside `Pool::new`
@@ -772,23 +816,373 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     )
     .await
     .expect("failed to create mempool");
-    let block_context_provider = BlockContextProvider::new(
-        fee_provider,
-        pool,
-        zksync_os_sequencer::execution::block_context_provider::Config {
-            l2_chain_id: chain_id,
-            l1_chain_id: node_startup_state.l1_state.l1_chain_id,
-            gas_limit: config.sequencer_config.block_gas_limit,
-            pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
-            fee_collector_address: config.sequencer_config.fee_collector_address,
-            block_time: config.sequencer_config.block_time,
-            service_block_delay: config.sequencer_config.service_block_delay,
-            max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
-            // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
-            interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
-        },
-        last_constructed_block_ctx_sender,
-    );
+    // Durability watermark: the applier reports persisted block numbers; consumed by the
+    // block executor (pacing workaround) or by the consensus environment (commit acks).
+    let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
+
+    // Rollback guard (decision unit-tested in the consensus module): running
+    // single-sequencer on a chain that has consensus state requires an explicit
+    // acknowledgment. Nothing is ever deleted.
+    if !config.consensus_config.enabled {
+        let engine_dir = config.general_config.rocks_db_path.join("consensus");
+        let has_consensus_state =
+            !consensus_engine_state_is_fresh(&engine_dir).unwrap_or_else(|err| {
+                panic!(
+                    "failed to inspect consensus engine state at {}: {err}",
+                    engine_dir.display()
+                )
+            });
+        consensus::check_rollback_acknowledged(
+            has_consensus_state,
+            config.consensus_config.acknowledge_rollback,
+        )
+        .unwrap_or_else(|err| panic!("{err} (consensus engine state: {})", engine_dir.display()));
+    }
+
+    // In consensus mode the mempool and fee sourcing drive the consensus block builder;
+    // otherwise they drive the local block production loop.
+    // TODO(consensus): with no local production loop there is no "block under
+    // construction", so RPC surfaces that peek at it (pending-block context for eth_call
+    // and gas estimation) fall back to the latest committed block in consensus mode.
+    let (block_context_provider, consensus_committed_receiver, consensus_status_source) = if config
+        .consensus_config
+        .enabled
+    {
+        // The mempool expects to be initialized with the last replayed block exactly
+        // once; the local production pipeline does this on its first replay, consensus
+        // mode does it here.
+        let mut pool = pool;
+        let wal_tip_record = block_replay_storage
+            .get_replay_record(block_replay_storage.latest_record())
+            .expect("write-ahead log must contain its latest record");
+        // Feed the watchers as-of-*after* the tip: canonical draining resumes at
+        // tip+1 (redeliveries at or below the tip are absorbed without touching
+        // the pool), so seeding at the tip's *starting* cursors would re-queue
+        // the tip block's already-committed L1 inputs — stale entries at the
+        // queue front that the l1 subpool's drain-order assert then trips over
+        // at the first post-restart priority op.
+        pool.init(
+            &wal_tip_record,
+            zksync_os_consensus_execution::builder::derive_next_cursors(&wal_tip_record),
+        )
+        .await;
+        // The verification-side view of locally-watched L1 inputs, taken before the
+        // pool moves into the builder.
+        let l1_inputs_view = pool.l1_inputs_view();
+
+        // The operational timing this configuration implies, in one line an
+        // operator can sanity-check (the derivations are documented in the
+        // "Operating a committee" chapter).
+        {
+            let block_time = config.sequencer_config.block_time.as_secs_f64();
+            let epoch = std::time::Duration::from_secs_f64(
+                block_time * config.consensus_config.epoch_length as f64,
+            );
+            let retention = config.consensus_config.epoch_retention.max(1);
+            let catch_up =
+                std::time::Duration::from_secs_f64(epoch.as_secs_f64() * retention as f64);
+            tracing::info!(
+                epoch_under_load = ?epoch,
+                emergency_rotation_sprint_bound = ?epoch,
+                catch_up_window_under_load = ?catch_up,
+                idle_heartbeat = ?config.consensus_config.idle_heartbeat,
+                "consensus timing characteristics"
+            );
+        }
+        // The idle policy is the deliberate strategy for quiet chains — see the
+        // `idle_policy` module for the full story. Sprint targets come from the
+        // schedule: an entry still waiting for its boundary keeps idle leaders
+        // producing so it activates without traffic.
+        let idle_policy = if config.consensus_config.idle_heartbeat.is_zero() {
+            zksync_os_consensus_execution::idle_policy::IdlePolicy::legacy()
+        } else {
+            zksync_os_consensus_execution::idle_policy::IdlePolicy::heartbeat(
+                config.consensus_config.idle_heartbeat,
+                std::num::NonZeroU64::new(config.consensus_config.epoch_length)
+                    .expect("validated: epoch_length is nonzero"),
+                config
+                    .consensus_config
+                    .committees
+                    .iter()
+                    .map(|entry| entry.activation_epoch)
+                    .collect(),
+            )
+        };
+        let builder = zksync_os_consensus_execution::ConsensusBlockBuilder::new(
+            pool,
+            fee_provider,
+            zksync_os_consensus_execution::BuilderConfig {
+                l2_chain_id: chain_id,
+                // With Gateway settlement removed, the settlement layer is always L1
+                // (mirrors the sequencer's `set_sl_chain_id(l1_chain_id)`).
+                sl_chain_id: node_startup_state.l1_state.l1_chain_id,
+                gas_limit: config.sequencer_config.block_gas_limit,
+                pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
+                fee_collector_address: config.sequencer_config.fee_collector_address,
+                block_time: config.sequencer_config.block_time,
+                // Idle chains keep producing (empty) blocks at the same cadence for now;
+                // whether to slow the idle cadence is a tuning decision for later.
+                idle_block_deadline: config.sequencer_config.block_time,
+                max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
+                interop_roots_per_block: config.sequencer_config.interop_roots_per_block,
+                // Same anchor the ChainAnchor below is resolved from: epochs count
+                // from the consensus genesis, not from chain height 0.
+                era_anchor: config.consensus_config.genesis_height,
+            },
+            idle_policy,
+        );
+
+        // The consensus anchor: the block the consensus genesis stands for — the
+        // chain's real genesis on a fresh chain (height 0), the agreed cutover block
+        // on a chain migrated from single-sequencer operation. Everything the first
+        // consensus block is verified against comes from the anchored block's own
+        // record.
+        let anchor_height = config.consensus_config.genesis_height;
+        let anchor_record = block_replay_storage
+            .get_replay_record(anchor_height)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the write-ahead log has no record at the consensus genesis height                      {anchor_height} — this node is missing history up to the agreed anchor"
+                )
+            });
+        let genesis_state = genesis.state().await;
+        let anchor_el_hash = if anchor_height == 0 {
+            genesis_state.header.hash()
+        } else {
+            repositories
+                .get_block_by_number(anchor_height)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "repositories have no block at the consensus genesis height                          {anchor_height} — this node is missing history up to the agreed anchor"
+                    )
+                })
+                .hash()
+        };
+        let anchor =
+            zksync_os_consensus_execution::ChainAnchor::from_record(&anchor_record, anchor_el_hash);
+        // Resolve the actual consensus era once from this node's local anchor.
+        // The startup guard, durable marker, and diagnostic fingerprint must all
+        // refer to this exact digest rather than independently re-deriving it.
+        let consensus_era = {
+            use commonware_cryptography::Digestible as _;
+            let digest = zksync_os_wire::ConsensusBlock::genesis_at(
+                anchor.genesis_height,
+                anchor.genesis_block_hash,
+            )
+            .digest();
+            <[u8; 32]>::try_from(digest.as_ref()).expect("32-byte digest")
+        };
+        let committed_height = block_replay_storage.latest_record();
+        // The tip's hash comes from the write-ahead log — the same store the
+        // committed height comes from, written synchronously ahead of the
+        // repositories. Reading the (asynchronously persisted) repositories
+        // here can yield nothing right after an unclean restart, and a leader
+        // without its committed hash passes every turn: proposing needs the
+        // parent hash, and it refreshes only on the next commit — which after
+        // a committee-wide restart in that state would never come.
+        let committed_el_hash = Some(block_replay_storage.canonical_block_hash(committed_height));
+
+        let validation = zksync_os_consensus_execution::ProposalValidation {
+            config: std::sync::Arc::new(zksync_os_consensus_execution::ValidityConfig {
+                max_timestamp_skew: config.consensus_config.max_timestamp_skew,
+                chain_id,
+                // Same source as the builder's `sl_chain_id` above.
+                sl_chain_id: node_startup_state.l1_state.l1_chain_id,
+                fee_collector_address: config.sequencer_config.fee_collector_address,
+                gas_limit: config.sequencer_config.block_gas_limit,
+                pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
+                max_transactions: config.sequencer_config.max_transactions_in_block,
+                max_encoded_record_size: config.consensus_config.max_message_size.get() as usize,
+                fee: config.fee_config.clone().into(),
+            }),
+            inputs: std::sync::Arc::new(l1_inputs_view),
+        };
+
+        // The node's own certificate store: the consensus engine's archives are a
+        // rebuildable cache, this is the durable record (fed by the activity
+        // observer and the commit path; surfaced in /status as the certified
+        // watermark).
+        let finality_store = std::sync::Arc::new(
+            zksync_os_consensus_execution::FinalityStore::open(
+                &config.general_config.rocks_db_path.join("finality"),
+            )
+            .expect("failed to open the finality store"),
+        );
+
+        // The consensus-era guards (the decision matrix is pure and unit-tested in
+        // the consensus module; this block only gathers its inputs and applies the
+        // outcome).
+        {
+            let engine_dir = config.general_config.rocks_db_path.join("consensus");
+            let engine_state_is_fresh = consensus_engine_state_is_fresh(&engine_dir)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to inspect consensus engine state at {}: {err}",
+                        engine_dir.display()
+                    )
+                });
+            let recorded = finality_store
+                .consensus_era()
+                .expect("failed to read the consensus era");
+            let acknowledged_fork =
+                consensus::parse_acknowledge_fork(&config.consensus_config.acknowledge_fork)
+                    .expect("invalid `consensus.acknowledge_fork`");
+            let decision = consensus::decide_consensus_era(
+                recorded,
+                consensus_era,
+                engine_state_is_fresh,
+                committed_height,
+                anchor.genesis_height,
+                acknowledged_fork,
+                anchor.genesis_block_hash,
+            )
+            .unwrap_or_else(|err| {
+                panic!("{err} (consensus engine state: {})", engine_dir.display())
+            });
+            match decision {
+                consensus::EraDecision::Proceed => {}
+                consensus::EraDecision::Adopt => {
+                    if recorded.is_some() {
+                        tracing::warn!(
+                            anchor_height = anchor.genesis_height,
+                            "consensus era changed over cleared engine state — starting a new \
+                             consensus era at the configured anchor"
+                        );
+                    }
+                    finality_store
+                        .record_consensus_era(consensus_era, anchor.genesis_height)
+                        .expect("failed to record the consensus era");
+                }
+            }
+        }
+
+        let (committed_payload_sender, committed_payload_receiver) = tokio::sync::mpsc::channel(1);
+        let env = zksync_os_consensus_execution::NodeExecutionEnv::new(
+            state.clone(),
+            anchor,
+            committed_height,
+            committed_el_hash,
+            committed_payload_sender,
+            applied_block_number_receiver.clone(),
+            config.sequencer_config.interop_roots_per_block,
+        )
+        .with_builder(std::sync::Arc::new(tokio::sync::Mutex::new(builder)))
+        .with_validity(validation)
+        .with_finality_store(finality_store.clone());
+
+        let setup = consensus::ConsensusSetup::from_config(
+            &config.consensus_config,
+            config.general_config.rocks_db_path.join("consensus"),
+            chain_id,
+        )
+        .expect("invalid consensus configuration");
+
+        // Progress and metrics surfaces for `/status`, fed from inside the consensus
+        // world.
+        let (finalized_sender, finalized_receiver) = tokio::sync::watch::channel(None);
+        let (metrics_encoder_sender, metrics_encoder_receiver) = tokio::sync::watch::channel(None);
+        let (registry_status_sender, registry_status_receiver) = tokio::sync::watch::channel(None);
+        let chain_fingerprint =
+            chain_fingerprint::chain_fingerprint(&config, consensus_era, &setup.observers);
+        tracing::info!(
+            chain_fingerprint,
+            "committee-uniform configuration and consensus-era fingerprint"
+        );
+        match &setup.registry {
+            Some(registry) => tracing::info!(
+                mode = %registry.mode,
+                address = ?registry.address,
+                flip_epoch = registry.flip_epoch,
+                "on-chain validator registry"
+            ),
+            // A derivation trail with the registry disabled means this chain ran
+            // a registry mode before — a deliberate recovery/rollback, or a mode
+            // misconfiguration. Either way the operator should know config is
+            // governing while registry records exist.
+            None => {
+                let recorded_derivations = match finality_store.registry_derivations() {
+                    Ok(derivations) => derivations.len(),
+                    Err(err) => {
+                        tracing::warn!(
+                            ?err,
+                            "registry derivation records are unreadable, but \
+                             `consensus.registry_mode` is `schedule`: ignoring the \
+                             non-governing trail"
+                        );
+                        0
+                    }
+                };
+                if recorded_derivations > 0 {
+                    tracing::warn!(
+                        recorded_derivations,
+                        "registry derivation records exist but \
+                         `consensus.registry_mode` is `schedule`: the config \
+                         schedule governs (rollback/recovery state) — switch back \
+                         to a registry mode once the registry is usable again"
+                    );
+                }
+            }
+        }
+        let status_source = zksync_os_status_server::ConsensusStatusSource {
+            role: setup.role.as_str(),
+            committee_size: setup.committee.len(),
+            validator: {
+                use commonware_codec::Encode as _;
+                use commonware_cryptography::Signer as _;
+                alloy::hex::encode(setup.network_key.public_key().encode())
+            },
+            finalized: finalized_receiver,
+            applied_height: applied_block_number_receiver.clone(),
+            finality_certified: finality_store.watermark_subscription(),
+            chain_fingerprint,
+            registry: registry_status_receiver,
+            metrics_encoder: metrics_encoder_receiver,
+        };
+
+        let (consensus_shutdown_sender, consensus_shutdown) = tokio::sync::oneshot::channel();
+        let (_thread, consensus_dead) = consensus::spawn(
+            setup,
+            env,
+            l2_subpool.clone(),
+            consensus::ConsensusObservability {
+                finalized: finalized_sender,
+                metrics_encoder: metrics_encoder_sender,
+                finality: finality_store,
+                registry: registry_status_sender,
+            },
+            consensus_shutdown,
+        );
+        runtime.spawn_critical_task("consensus watchdog", async move {
+            // Held for the watchdog's lifetime: when the node runtime tears this task
+            // down (shutdown), the dropped sender tells consensus to stop gracefully.
+            let _shutdown_consensus_when_dropped = consensus_shutdown_sender;
+            let _ = consensus_dead.await;
+            panic!("consensus stack died; the node cannot continue without it");
+        });
+
+        (None, Some(committed_payload_receiver), Some(status_source))
+    } else {
+        let provider = BlockContextProvider::new(
+            fee_provider,
+            pool,
+            zksync_os_sequencer::execution::block_context_provider::Config {
+                l2_chain_id: chain_id,
+                l1_chain_id: node_startup_state.l1_state.l1_chain_id,
+                gas_limit: config.sequencer_config.block_gas_limit,
+                pubdata_limit: config.sequencer_config.block_pubdata_limit_bytes,
+                fee_collector_address: config.sequencer_config.fee_collector_address,
+                block_time: config.sequencer_config.block_time,
+                service_block_delay: config.sequencer_config.service_block_delay,
+                max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
+                // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
+                interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+            },
+            last_constructed_block_ctx_sender,
+        );
+        (Some(provider), None, None)
+    };
 
     // ========== Start L1 Persist Batch Watcher ===========
 
@@ -850,6 +1244,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             rebuild_options,
             repositories.clone(),
             block_context_provider,
+            consensus_committed_receiver,
+            (applied_block_number_sender, applied_block_number_receiver),
             tree_db,
             finality_storage.clone(),
             chain_id,
@@ -862,6 +1258,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             commit_submitted_tx,
             verify_request_tx,
             verify_result_rx,
+            verify_batch_rx,
+            outgoing_verify_results.clone(),
             effective_pubdata_mode.expect("effective_pubdata_mode is always Some on the Main Node"),
             replay_archiver,
             prebound_prover_api_listener,
@@ -875,7 +1273,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             node_startup_state,
             archiving_block_replay_storage,
             runtime,
-            block_context_provider,
+            block_context_provider
+                .expect("external nodes always run the local block context provider"),
             state.clone(),
             tree_db,
             repositories.clone(),
@@ -911,7 +1310,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             .port();
         let status_state = StatusServerState {
             pipeline_snapshot: pipeline_snapshot_rx,
-            consensus_raft_status_rx: raft_status_rx,
+            consensus: Arc::new(consensus_status_source),
             ready: rpc_ready.clone(),
         };
         runtime.spawn_critical_with_graceful_shutdown_signal(
@@ -1027,7 +1426,7 @@ async fn fetch_l1_state_with_startup_revert(
 ) -> anyhow::Result<L1State> {
     // The batcher node must wait for any pending L1 commit/prove/execute transactions (from a
     // prior run) to be mined before starting, so it doesn't conflict with itself. Non-batcher
-    // consensus nodes never submit L1 transactions, so they don't need this wait: calling
+    // nodes never submit L1 transactions, so they don't need this wait: calling
     // fetch_finalized on them would spuriously fail when a concurrently running batcher node keeps
     // submitting new batch transactions.
     let use_finalized = node_role.is_main() && config.batcher_config.enabled;
@@ -1085,19 +1484,23 @@ async fn run_main_node_pipeline(
     starting_block: u64,
     rebuild_options: Option<RebuildOptions>,
     repositories: impl WriteRepository + Clone,
-    block_context_provider: BlockContextProvider<impl L2Subpool>,
+    block_context_provider: Option<BlockContextProvider<impl L2Subpool>>,
+    consensus_committed: Option<tokio::sync::mpsc::Receiver<BlockPayload>>,
+    applied_block_number: (watch::Sender<Option<u64>>, watch::Receiver<Option<u64>>),
     tree: MerkleTree<RocksDBWrapper>,
     finality: impl ReadFinality + Clone,
     chain_id: u64,
     tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
     sidecar_sender: tokio::sync::mpsc::Sender<BlobTransactionSidecar>,
     committed_batch_provider: CommittedBatchProvider,
-    canonization_engine: BlockCanonizationEngine,
+    canonization_engine: impl BlockCanonization,
     leadership: LeadershipSignal,
     stop_receiver: watch::Receiver<bool>,
     commit_submitted_tx: watch::Sender<u64>,
     verify_request_tx: tokio::sync::mpsc::Sender<VerifyBatch>,
     verify_result_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatchResult>,
+    verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
+    outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
     pubdata_mode: PubdataMode,
     replay_archiver: Option<impl ReplayArchiver>,
     prebound_prover_api_listener: Option<TcpListener>,
@@ -1116,29 +1519,52 @@ async fn run_main_node_pipeline(
     let monitor = BackpressureMonitor::new(config.build_backpressure_config(), stop_receiver);
     let pipeline_gate = monitor.subscribe_gate();
 
-    let (replays_to_execute_sender, replays_to_execute) = tokio::sync::mpsc::unbounded_channel();
-    let (applied_block_number_sender, applied_block_number_receiver) = watch::channel(None);
+    let (applied_block_number_sender, applied_block_number_receiver) = applied_block_number;
 
-    let pipeline = Pipeline::new(runtime.clone())
-        .pipe(ConsensusNodeCommandSource {
+    // Two front-ends produce the exact same stream of executed-and-canonical payloads:
+    // consensus mode receives finalized blocks from the consensus environment; the
+    // single-sequencer mode produces blocks locally behind a canonization fence.
+    // Everything downstream of this point is identical.
+    let pipeline = Pipeline::new(runtime.clone());
+    let pipeline = if let Some(committed) = consensus_committed {
+        pipeline.pipe(ConsensusCommittedSource {
+            committed,
             block_replay_storage: block_replay_storage.clone(),
             starting_block,
-            rebuild_options,
-            replays_to_execute,
-            pipeline_gate,
-            leadership,
-        })
-        .pipe(BlockExecutor {
-            block_context_provider,
+            // The WAL tip has not moved since startup: nothing writes the WAL until
+            // the pipeline's applier runs. This is the same height the consensus
+            // environment resumed from, so live commits continue at exactly
+            // `replay_until + 1`.
+            replay_until: block_replay_storage.latest_record(),
             state: state.clone(),
-            config: config.into(),
-            tx_acceptance_state_sender,
-            applied_block_number_receiver,
+            interop_roots_per_block: config.sequencer_config.interop_roots_per_block,
         })
-        .pipe(BlockCanonizer {
-            consensus: canonization_engine,
-            canonized_blocks_for_execution: replays_to_execute_sender,
-        })
+    } else {
+        let (replays_to_execute_sender, replays_to_execute) =
+            tokio::sync::mpsc::unbounded_channel();
+        pipeline
+            .pipe(ConsensusNodeCommandSource {
+                block_replay_storage: block_replay_storage.clone(),
+                starting_block,
+                rebuild_options,
+                replays_to_execute,
+                pipeline_gate,
+                leadership,
+            })
+            .pipe(BlockExecutor {
+                block_context_provider: block_context_provider
+                    .expect("block context provider must exist without consensus"),
+                state: state.clone(),
+                config: config.into(),
+                tx_acceptance_state_sender,
+                applied_block_number_receiver,
+            })
+            .pipe(BlockCanonizer {
+                consensus: canonization_engine,
+                canonized_blocks_for_execution: replays_to_execute_sender,
+            })
+    };
+    let pipeline = pipeline
         .pipe(BlockApplier {
             state: state.clone(),
             replay: block_replay_storage.clone(),
@@ -1169,7 +1595,23 @@ async fn run_main_node_pipeline(
         tracing::warn!(
             "Batcher subsystem disabled — skipping prover input generation, L1 settlement, and downstream components"
         );
-        let pipeline = pipeline.pipe(NoOpSink::new());
+        // A standby validator is a batch verifier: it co-signs the settler's
+        // batch commitments against its own finalized chain (the committee is
+        // the 2FA verifier set — no separate verifier fleet).
+        let pipeline = pipeline.pipe_if(
+            config.batch_verification_config.client_enabled,
+            BatchVerificationResponder::new(
+                chain_id,
+                node_state_on_startup.l1_state.diamond_proxy_address(),
+                config.batch_verification_config.signing_key.clone(),
+                finality.clone(),
+                node_state_on_startup.l1_state.clone(),
+                state.clone(),
+                verify_batch_rx,
+                outgoing_verify_results,
+            ),
+            NoOpSink::new(),
+        );
         let components = pipeline.components();
         pipeline.spawn();
         runtime.spawn_critical_task(
@@ -1183,6 +1625,19 @@ async fn run_main_node_pipeline(
             prover_api_port: None,
         };
     }
+
+    // The settler never verifies its own batches (a self-signature adds
+    // nothing to 2FA), but peers may still probe: drain requests politely so
+    // their sessions don't read a closed channel as a dead peer.
+    runtime.spawn_critical_task("verify request drain", async move {
+        let mut verify_batch_rx = verify_batch_rx;
+        while let Some(request) = verify_batch_rx.recv().await {
+            tracing::debug!(
+                batch_number = request.message.batch_number,
+                "ignoring verify request: this node settles, it does not co-sign",
+            );
+        }
+    });
 
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
@@ -1248,6 +1703,33 @@ async fn run_main_node_pipeline(
         config.l1_sender_config.clone().into();
     let execute_sender_config: zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> =
         config.l1_sender_config.clone().into();
+
+    // The settler's on-chain identity. A committee runs exactly one settler at a
+    // time, and a promoted standby settles with *its own* pre-authorized operator
+    // addresses — so "who signs settlement right now" is the first question of
+    // any settlement incident, answered here and by this node being the one with
+    // the batcher running.
+    let commit_operator = commit_sender_config
+        .operator_signer
+        .address()
+        .await
+        .expect("commit operator signer must resolve");
+    let prove_operator = prove_sender_config
+        .operator_signer
+        .address()
+        .await
+        .expect("prove operator signer must resolve");
+    let execute_operator = execute_sender_config
+        .operator_signer
+        .address()
+        .await
+        .expect("execute operator signer must resolve");
+    tracing::info!(
+        %commit_operator,
+        %prove_operator,
+        %execute_operator,
+        "this node is the settler; settlement operator identities"
+    );
 
     let pipeline = pipeline
         .pipe(ProverInputGenerator {
@@ -1771,61 +2253,78 @@ async fn find_last_matching_main_node_block(
     Ok(left)
 }
 
-fn prepare_raft_storage(config: &Config) -> anyhow::Result<()> {
-    let raft_storage_path = config.general_config.rocks_db_path.join(RAFT_DB_NAME);
-    if config.consensus_config.force_clear_raft_history
-        && raft_storage_path_exists(&raft_storage_path)?
-    {
-        tracing::warn!(
-            path = %raft_storage_path.display(),
-            "force-clearing persisted raft history before startup"
-        );
-        // Use DB::destroy rather than remove_dir_all so that only files RocksDB
-        // tracks are removed; an arbitrary path misconfiguration cannot wipe more.
-        zksync_os_rocksdb::rocksdb::DB::destroy(
-            &zksync_os_rocksdb::rocksdb::Options::default(),
-            &raft_storage_path,
-        )
-        .with_context(|| {
-            format!(
-                "failed to destroy raft storage at {}",
-                raft_storage_path.display()
-            )
-        })?;
-        // DB::destroy leaves behind an empty directory; remove it so the next
-        // open starts completely clean (RocksDB recreates the dir on open).
-        let _ = std::fs::remove_dir(&raft_storage_path);
+/// Returns whether the consensus engine's storage directory holds any engine
+/// state. The `.instance-lock` file does not count: it is the mutual-exclusion
+/// marker created before the journals ever exist (by the node's own startup,
+/// and by the test harness's relaunch gate), so after an operator clears the
+/// directory for a fork its reappearance must not read as a previous era's
+/// leftovers. Absence is the only I/O error that means "fresh"; permission and
+/// storage failures must stop startup instead of silently bypassing the
+/// consensus-era guards.
+fn consensus_engine_state_is_fresh(engine_dir: &Path) -> std::io::Result<bool> {
+    let instance_lock = consensus::instance_lock_path(engine_dir);
+    match std::fs::read_dir(engine_dir) {
+        Ok(entries) => {
+            for entry in entries {
+                if entry?.path() != instance_lock {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(err),
     }
-
-    if !config.consensus_config.enabled && raft_storage_path_exists(&raft_storage_path)? {
-        anyhow::bail!(
-            "consensus is disabled but persisted raft history exists at {}; \
-             either re-enable consensus or set `consensus.force_clear_raft_history=true` \
-             to delete stale raft state before startup",
-            raft_storage_path.display()
-        );
-    }
-
-    Ok(())
 }
 
-fn raft_storage_path_exists(path: &Path) -> anyhow::Result<bool> {
-    path.try_exists().with_context(|| {
-        format!(
-            "failed to check whether raft storage exists at {}",
-            path.display()
-        )
-    })
+/// The raft-based consensus prototype was removed in favor of the upcoming BFT consensus.
+/// Nodes that ran it may still have its RocksDB directory on disk; it is no longer read or
+/// written. We deliberately do not delete data on startup — this warning tells the operator
+/// it is safe to remove by hand.
+fn warn_on_leftover_raft_storage(config: &Config) {
+    let raft_storage_path = config.general_config.rocks_db_path.join("raft");
+    match raft_storage_path.try_exists() {
+        Ok(true) => tracing::warn!(
+            path = %raft_storage_path.display(),
+            "found leftover storage of the removed raft consensus prototype; \
+             it is unused and can be deleted"
+        ),
+        Ok(false) => {}
+        Err(err) => tracing::warn!(
+            path = %raft_storage_path.display(),
+            %err,
+            "failed to check for leftover raft consensus storage"
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::check_batch_verification_mismatch;
+    use super::{check_batch_verification_mismatch, consensus_engine_state_is_fresh};
     use crate::config::BatchVerificationConfig;
     use alloy::primitives::address;
     use zksync_os_contract_interface::l1_discovery::{
         BatchVerificationSL, BatchVerificationSLConfig,
     };
+
+    #[test]
+    fn consensus_state_probe_ignores_the_instance_lock() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let consensus = root.path().join("consensus");
+        assert!(consensus_engine_state_is_fresh(&consensus).expect("absent"));
+
+        std::fs::create_dir(&consensus).expect("create directory");
+        assert!(consensus_engine_state_is_fresh(&consensus).expect("empty"));
+
+        // The mutual-exclusion marker alone is not engine state: the node (and
+        // the test harness's relaunch gate) create it before the guards run.
+        std::fs::write(crate::consensus::instance_lock_path(&consensus), b"")
+            .expect("write lock marker");
+        assert!(consensus_engine_state_is_fresh(&consensus).expect("lock only"));
+
+        std::fs::write(consensus.join("state"), b"present").expect("write state");
+        assert!(!consensus_engine_state_is_fresh(&consensus).expect("nonempty"));
+    }
 
     #[test]
     fn test_batch_verification_is_disabled_on_server() {

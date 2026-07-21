@@ -3,7 +3,6 @@ use crate::protocol::{
     ConnectionRegistry, ExternalNodeProtocolConfig, HandlerSharedState, MainNodeProtocolConfig,
     ProtocolEvent, ZksProtocolConfig, ZksProtocolHandler,
 };
-use crate::raft::protocol::RaftProtocolHandler;
 use crate::session::PeerSessionStore;
 use crate::twofa::wire::Zks2faMessage;
 use crate::twofa::{
@@ -251,22 +250,13 @@ impl NetworkService {
         protocol_config: ZksProtocolConfig,
         replay: Replay,
         client: Client,
-        raft_handler: Option<RaftProtocolHandler>,
     ) -> Result<(Self, NetworkPorts), NetworkError>
     where
         Replay: ReadReplay + Clone,
         Client: ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + Clone + 'static,
     {
         if config.port != 0 {
-            return Self::build(
-                config,
-                runtime,
-                protocol_config,
-                replay,
-                client,
-                raft_handler,
-            )
-            .await;
+            return Self::build(config, runtime, protocol_config, replay, client).await;
         }
 
         // Retries the reserve -> drop -> reth-bind sequence, unlike the inner reservation retry.
@@ -284,7 +274,6 @@ impl NetworkService {
                 protocol_config.clone(),
                 replay.clone(),
                 client.clone(),
-                raft_handler.clone(),
             )
             .await
             {
@@ -322,7 +311,6 @@ impl NetworkService {
         protocol_config: ZksProtocolConfig,
         replay: impl ReadReplay + Clone,
         client: impl ChainSpecProvider<ChainSpec: Hardforks> + BlockNumReader + 'static,
-        raft_handler: Option<RaftProtocolHandler>,
     ) -> Result<(Self, NetworkPorts), NetworkError> {
         // Install ViseRecorder before creating the NetworkManager so that reth-network metrics
         // are captured. This must happen before `NetworkManager::builder()` because that is where
@@ -389,9 +377,9 @@ impl NetworkService {
                 PeersConfig::default()
                     // Sets peer ban duration to 1 second, effectively disabling it
                     .with_ban_duration(Duration::from_secs(1))
-                    // Keep backoff durations short so that consensus nodes reconnect quickly
-                    // after a peer restart or a transient network glitch. Long backoffs would
-                    // stall raft leader election and block transaction processing.
+                    // Keep backoff durations short so that peers reconnect quickly after a
+                    // restart or a transient network glitch. Long backoffs would stall EN
+                    // replay syncing and transaction forwarding.
                     // (low = transient failure, medium = persistent failure, high = bad peer,
                     // max = cumulative cap)
                     .with_backoff_durations(PeerBackoffDurations {
@@ -403,8 +391,11 @@ impl NetworkService {
                     // Peers' fork id must match, otherwise we could discover peers from other
                     // chains.
                     .with_enforce_enr_fork_id(true)
-                    // Treat boot nodes as trusted peers: always keep and redial them (e.g. an EN
-                    // pinning the main node) so replay sync never gets stranded on non-serving peers.
+                    // Boot nodes are *trusted*: a plain discovered peer is dropped after
+                    // `max_backoff_count` failed dials, so a boot peer whose listener comes up
+                    // moments after ours (nodes of one committee, or an EN and its main node
+                    // starting together) would be abandoned permanently. Trusted peers are
+                    // redialed forever, so replay sync never gets stranded on non-serving peers.
                     .with_trusted_nodes(config.boot_nodes.clone())
                     .with_trusted_nodes_only(trusted_nodes_only),
             )
@@ -422,7 +413,7 @@ impl NetworkService {
         let trusted_peer_ids: HashSet<PeerId> =
             config.boot_nodes.iter().map(|peer| peer.id).collect();
         let zks_2fa_registry: Zks2faConnectionRegistry = Arc::new(RwLock::new(HashMap::new()));
-        let mut cfg_builder = match protocol_config {
+        let cfg_builder = match protocol_config {
             ZksProtocolConfig::MainNode(protocol) => Self::register_main_node_rlpx_sub_protocols(
                 cfg_builder,
                 protocol,
@@ -444,9 +435,6 @@ impl NetworkService {
                 )
             }
         };
-        if let Some(raft_handler) = raft_handler {
-            cfg_builder = cfg_builder.add_rlpx_sub_protocol(raft_handler);
-        }
         let net_cfg = cfg_builder.build(client);
         tracing::debug!(?net_cfg, "starting p2p network service");
         // Create network manager. We are not interested in `txpool` because transaction gossip is
@@ -494,6 +482,16 @@ impl NetworkService {
         let twofa_config = MainNode2faConfig {
             accepted_verifier_signers: protocol.accepted_verifier_signers.clone(),
             verify_result_tx: protocol.verify_result_tx.clone(),
+            // A committee validator's own verifier half rides the same `zks_2fa`
+            // session it collects signatures on (see `MainNode2faConfig`).
+            verification: protocol
+                .verification
+                .as_ref()
+                .map(|verifier| ExternalNode2faConfig {
+                    signing_key: verifier.signing_key.clone(),
+                    verify_batch_tx: verifier.verify_batch_tx.clone(),
+                    outgoing_verify_results: verifier.outgoing_verify_results.clone(),
+                }),
         };
         let twofa_state =
             HandlerSharedState::new(protocol_tx, MAX_ACTIVE_CONNECTIONS, trusted_peers);

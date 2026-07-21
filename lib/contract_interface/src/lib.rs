@@ -1,3 +1,8 @@
+// `Error` is deliberately large — see its doc comment: an unboxed `#[source]`
+// keeps transport failures classifiable by the L1-outage policy. The lint fires
+// on every function returning `Result`, hence the crate-level allow.
+#![allow(clippy::result_large_err)]
+
 pub mod calldata;
 pub mod l1_discovery;
 mod metrics;
@@ -721,12 +726,59 @@ pub struct ZkChain<P: Provider> {
     instance: IZKChainInstance<P, Ethereum>,
 }
 
+/// Blocks per `eth_getLogs` request when scanning for the deployment event; public
+/// RPCs commonly cap log queries at around this range.
+const DEPLOYMENT_EVENT_SCAN_CHUNK: u64 = 10_000;
+
 impl ZkChain<NodeProvider> {
-    /// L1 block at which this diamond proxy was deployed, used as the lower bound for binary
-    /// searches over L1 history. Convenience over [`NodeProvider::deployment_block`] that the
-    /// provider caches per address.
+    /// L1 block at which this diamond proxy was deployed: the block carrying the
+    /// chain's one `GenesisUpgrade` event, found by scanning logs backward from the
+    /// head. Used as the lower bound for scans over this chain's L1 history.
+    ///
+    /// Deliberately avoids historical `get_code_at` probes — those fail once the
+    /// chain outgrows an RPC's state retention (~128–256 blocks on non-archive
+    /// nodes, similarly on long-lived anvil), which would make every node start
+    /// require an archive-grade RPC. Log queries are served over full history.
+    /// Cached per address by the provider.
     pub async fn deployment_block(&self) -> anyhow::Result<u64> {
-        self.provider().deployment_block(*self.address()).await
+        let provider = self.provider().clone();
+        let address = *self.address();
+        self.provider()
+            .deployment_block_with(address, move || async move {
+                let latest = provider.get_block_number().await?;
+                let mut high = Some(latest);
+                while let Some(hi) = high {
+                    let lo = (hi + 1).saturating_sub(DEPLOYMENT_EVENT_SCAN_CHUNK);
+                    let logs = provider
+                        .get_logs(
+                            &alloy::rpc::types::Filter::new()
+                                .address(address)
+                                .event_signature(
+                                    <IL1GenesisUpgrade::GenesisUpgrade as alloy::sol_types::SolEvent>::SIGNATURE_HASH,
+                                )
+                                .from_block(lo)
+                                .to_block(hi),
+                        )
+                        .await?;
+                    if let Some(log) = logs.last() {
+                        let block = log
+                            .block_number
+                            .ok_or_else(|| anyhow::anyhow!("indexed log without block number"))?;
+                        tracing::debug!(
+                            %address,
+                            deployment_block = block,
+                            "resolved diamond proxy deployment block from the GenesisUpgrade event"
+                        );
+                        return Ok(block);
+                    }
+                    high = lo.checked_sub(1);
+                }
+                // No event anywhere: the proxy is not deployed on this chain (e.g. bare
+                // local setups). `0` keeps the value usable as a scan floor, matching
+                // `NodeProvider::deployment_block` semantics.
+                Ok(0)
+            })
+            .await
     }
 }
 
@@ -902,12 +954,20 @@ pub fn is_method_missing(err: &alloy::contract::Error) -> bool {
 }
 
 /// Enriched error when interacting with contracts.
+///
+/// Deliberately large (`result_large_err` allowed): the alloy error is a direct
+/// `#[source]` — not boxed — so the typed `contract::Error` stays visible in
+/// error chains. The L1-outage policy (`zksync_os_provider::resilience`)
+/// classifies transport failures by downcasting chain links; a boxed source
+/// surfaces as `Box<...>` and defeats the downcast, and everything below this
+/// level is type-erased by `#[error(transparent)]` wrappers. These are pure
+/// error paths, so the size is irrelevant.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("failed to call `{1}`: {0}")]
-    Call(Box<alloy::contract::Error>, String),
+    Call(#[source] alloy::contract::Error, String),
     #[error("failed to call `{1}` at block id `{2}`: {0}")]
-    CallAtBlock(Box<alloy::contract::Error>, String, BlockId),
+    CallAtBlock(#[source] alloy::contract::Error, String, BlockId),
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
@@ -921,8 +981,29 @@ impl<T> Enrich for alloy::contract::Result<T> {
     type Output = T;
     fn enrich(self, function_name: &str, block_id: Option<BlockId>) -> Result<Self::Output> {
         self.map_err(|e| match block_id {
-            None => Error::Call(Box::new(e), function_name.to_string()),
-            Some(block_id) => Error::CallAtBlock(Box::new(e), function_name.to_string(), block_id),
+            None => Error::Call(e, function_name.to_string()),
+            Some(block_id) => Error::CallAtBlock(e, function_name.to_string(), block_id),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The L1-outage policy classifies by walking error sources down to the
+    /// transport error; `Error`'s `#[source]` wiring is what makes a wrapped
+    /// contract-call failure recognizable as "L1 unreachable" instead of fatal.
+    #[test]
+    fn call_errors_expose_the_transport_source() {
+        let transport: alloy::transports::TransportError =
+            alloy::transports::TransportErrorKind::custom_str("connection refused");
+        let err = Error::Call(
+            alloy::contract::Error::TransportError(transport),
+            "getProtocolVersion".to_string(),
+        );
+        let wrapped =
+            anyhow::Error::from(err).context("Failed to fetch current protocol version from L1");
+        assert!(zksync_os_provider::is_transient_l1_error(&wrapped));
     }
 }

@@ -246,7 +246,10 @@ pub fn genesis_header() -> Sealed<Header> {
     header.seal_slow()
 }
 
-async fn build_genesis(
+/// Derives the full genesis state (storage logs, preimages, header, block context) from
+/// a genesis input. Public so that consensus simulation and tooling can construct the
+/// exact production genesis state in memory without a node or an L1 connection.
+pub async fn build_genesis(
     genesis_input_source: &dyn GenesisInputSource,
     chain_id: u64,
     protocol_version: &ProtocolSemanticVersion,

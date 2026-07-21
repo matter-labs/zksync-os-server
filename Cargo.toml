@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "lib/contract_interface",
-    "lib/consensus_types",
     "lib/crypto",
     "lib/genesis",
     "lib/l1_sender",
@@ -25,6 +24,8 @@ members = [
     "integration-tests",
     "integration-tests-macros",
     "tools/generate-deposit",
+    "tools/chaos",
+    "tools/consensus-keygen",
     "tools/verify-storage-proof",
     "lib/observability",
     "lib/state_full_diffs",
@@ -37,16 +38,20 @@ members = [
     "lib/batcher_metrics",
     "lib/internal_config",
     "lib/network",
+    "lib/wire",
     "lib/metadata",
     "lib/external_price_api",
     "lib/base_token_adjuster",
     "lib/reth_compat",
     "lib/operator_signer",
-    "lib/raft",
     "lib/tx_validators",
     "lib/backpressure",
     "lib/alloy_ext",
     "lib/provider",
+    "lib/consensus/core",
+    "lib/consensus/execution",
+    "lib/consensus/registry",
+    "lib/consensus/sim",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -230,13 +235,27 @@ num_cpus = "1.17.0"
 rocksdb = "0.24.0"
 thread_local = "1.1.9"
 pin-project = "1.1.10"
-openraft = { version = "0.9.24", features = [
-    "serde",
-    "generic-snapshot-data",
-    "storage-v2",
-] }
+# Commonware — the BFT consensus stack (simplex, deterministic runtime, simulated p2p).
+# Pin EXACTLY: commonware ships monthly CalVer releases with breaking changes; upgrades
+# are a deliberate chore, never accidental.
+commonware-actor = "=2026.5.0"
+commonware-broadcast = "=2026.5.0"
+commonware-codec = "=2026.5.0"
+commonware-consensus = "=2026.5.0"
+commonware-cryptography = "=2026.5.0"
+commonware-macros = "=2026.5.0"
+commonware-p2p = "=2026.5.0"
+commonware-parallel = "=2026.5.0"
+commonware-resolver = "=2026.5.0"
+commonware-runtime = "=2026.5.0"
+commonware-storage = "=2026.5.0"
+commonware-utils = "=2026.5.0"
+# Commonware's trait bounds use rand 0.8 (the workspace `rand` is 0.9) — alias the old
+# major so consensus code can name the traits commonware expects.
+rand08 = { package = "rand", version = "0.8" }
 assert_matches = "1.5"
 serde_yaml = "0.9"
+toml = "0.8"
 secrecy = "0.10.3"
 cargo_metadata = { version = "0.20.0", default-features = false }
 tracing-logfmt = { version = "0.3.5" }
@@ -305,7 +324,6 @@ revm = { version = "=38.0.0", features = ["optional_balance_check"] }
 # "Local" dependencies
 zksync_os_provider = { version = "=0.20.12", path = "lib/provider" }
 zksync_os_contract_interface = { version = "=0.20.12", path = "lib/contract_interface" }
-zksync_os_consensus_types = { version = "=0.20.12", path = "lib/consensus_types" }
 zksync_os_crypto = { version = "=0.20.12", path = "lib/crypto" }
 zksync_os_l1_sender = { version = "=0.20.12", path = "lib/l1_sender" }
 zksync_os_l1_watcher = { version = "=0.20.12", path = "lib/l1_watcher" }
@@ -338,12 +356,16 @@ zksync_os_batch_types = { version = "=0.20.12", path = "lib/batch_types" }
 zksync_os_batcher_metrics = { version = "=0.20.12", path = "lib/batcher_metrics" }
 zksync_os_internal_config = { version = "=0.20.12", path = "lib/internal_config" }
 zksync_os_network = { version = "=0.20.12", path = "lib/network" }
-zksync_os_raft = { version = "=0.20.12", path = "lib/raft" }
+zksync_os_wire = { version = "=0.20.12", path = "lib/wire", default-features = false }
 zksync_os_metadata = { version = "=0.20.12", path = "lib/metadata" }
 zksync_os_external_price_api = { version = "=0.20.12", path = "lib/external_price_api" }
 zksync_os_base_token_adjuster = { version = "=0.20.12", path = "lib/base_token_adjuster" }
 zksync_os_reth_compat = { version = "=0.20.12", path = "lib/reth_compat" }
 zksync_os_operator_signer = { version = "=0.20.12", path = "lib/operator_signer" }
+zksync_os_consensus_core = { version = "=0.20.12", path = "lib/consensus/core" }
+zksync_os_consensus_execution = { version = "=0.20.12", path = "lib/consensus/execution" }
+zksync_os_consensus_registry = { version = "=0.20.12", path = "lib/consensus/registry" }
+zksync_os_consensus_sim = { version = "=0.20.12", path = "lib/consensus/sim" }
 zksync_os_integration_tests_macros = { version = "=0.20.12", path = "integration-tests-macros" }
 zksync_os_tx_validators = { version = "=0.20.12", path = "lib/tx_validators" }
 zksync_os_alloy_ext = { version = "=0.20.12", path = "lib/alloy_ext" }
@@ -353,6 +375,81 @@ zksync_os_server = { version = "=0.20.12", path = "node/bin" }
 #[patch.crates-io]
 #zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
+
+[patch.crates-io]
+# TODO: temporary commonware fork whose only delta from the released v2026.5.0
+# is a one-line fix to the segmented journal's prune, which otherwise panics
+# the consensus voter ("unable to prune journal: BlobMissing(...)") when a
+# straggling file operation from a previous in-process node incarnation removes
+# an already-obsolete journal section — integration tests that restart
+# validators hit this as a rare flake.
+# Upstream PR: https://github.com/commonwarexyz/monorepo/pull/4196
+# Drop this whole patch section once the PR is merged and commonware is
+# upgraded past it.
+#
+# We are also tracking a second upstream fix that this fork does *not* carry, so
+# it does not gate dropping this patch: a torn blob-header create (a crash midway
+# through creating a blob can leave a zeroed header that then fails the node on
+# its next open). It only fired under the chaos rig's fuzzing and a real-world
+# reproduction is highly unlikely, so it is not worth forking for — we just want
+# it landed upstream.
+# Upstream PR: https://github.com/commonwarexyz/monorepo/pull/4256
+#
+# The entire family is patched, not just commonware-storage: the fork is a
+# monorepo, so its storage crate resolves sibling dependencies from its own
+# tree, and mixing those with the same crates from crates.io splits the
+# dependency graph into two incompatible copies of every shared type.
+commonware-actor = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-broadcast = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-codec = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-coding = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-consensus = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-cryptography = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-formatting = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-macros = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-math = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-p2p = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-parallel = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-resolver = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-runtime = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-storage = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-stream = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+commonware-utils = { git = "https://github.com/popzxc/commonware-monorepo", tag = "tag-tolerate-externally-removed-blob-v2026.5.0" }
+
+# The deterministic-simulation tests drive the consensus library hard (the
+# simulated runtime, network and storage process millions of virtual-time
+# events per scenario, plus real BLS math per finalized view); at opt-level 0
+# that library dominates the suite's wall clock. Optimizing the vendored
+# consensus/crypto crates keeps our own code fully debuggable while the
+# machinery under it runs at production speed.
+[profile.dev.package.commonware-actor]
+opt-level = 3
+[profile.dev.package.commonware-broadcast]
+opt-level = 3
+[profile.dev.package.commonware-codec]
+opt-level = 3
+[profile.dev.package.commonware-consensus]
+opt-level = 3
+[profile.dev.package.commonware-cryptography]
+opt-level = 3
+[profile.dev.package.commonware-macros]
+opt-level = 3
+[profile.dev.package.commonware-math]
+opt-level = 3
+[profile.dev.package.commonware-p2p]
+opt-level = 3
+[profile.dev.package.commonware-parallel]
+opt-level = 3
+[profile.dev.package.commonware-resolver]
+opt-level = 3
+[profile.dev.package.commonware-runtime]
+opt-level = 3
+[profile.dev.package.commonware-storage]
+opt-level = 3
+[profile.dev.package.commonware-utils]
+opt-level = 3
+[profile.dev.package.blst]
+opt-level = 3
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu

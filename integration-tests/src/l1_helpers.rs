@@ -20,7 +20,19 @@ pub async fn wait_for_l1_state(
     description: &str,
     predicate: impl Fn(&L1State) -> bool,
 ) -> anyhow::Result<L1State> {
-    let max_times = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as usize;
+    wait_for_l1_state_with_timeout(tester, description, DEFAULT_TIMEOUT, predicate).await
+}
+
+/// [`wait_for_l1_state`] with an explicit budget — for ladders that are
+/// legitimately slower than the default (e.g. multisig batch verification adds
+/// a collection round-trip per batch on top of proving).
+pub async fn wait_for_l1_state_with_timeout(
+    tester: &Tester,
+    description: &str,
+    timeout: std::time::Duration,
+    predicate: impl Fn(&L1State) -> bool,
+) -> anyhow::Result<L1State> {
+    let max_times = timeout.div_duration_f64(POLL_INTERVAL).floor() as usize;
     (|| async {
         let state = fetch_l1_state(tester).await?;
         if predicate(&state) {

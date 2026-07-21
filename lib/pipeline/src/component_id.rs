@@ -18,6 +18,7 @@ use vise::{EncodeLabelSet, EncodeLabelValue};
 #[serde(rename_all = "snake_case")]
 pub enum ComponentId {
     ConsensusNodeCommandSource,
+    ConsensusCommittedSource,
     ExternalNodeCommandSource,
     BlockExecutor,
     BlockApplier,
@@ -48,6 +49,7 @@ impl ComponentId {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ConsensusNodeCommandSource => "consensus_node_command_source",
+            Self::ConsensusCommittedSource => "consensus_committed_source",
             Self::ExternalNodeCommandSource => "external_node_command_source",
             Self::BlockExecutor => "block_executor",
             Self::BlockApplier => "block_applier",

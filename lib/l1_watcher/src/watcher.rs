@@ -4,6 +4,7 @@ use alloy::primitives::{Address, BlockNumber};
 use alloy::providers::Provider;
 use alloy::rpc::types::{Filter, Log, ValueOrArray};
 use futures::future::BoxFuture;
+use std::time::Duration;
 use zksync_os_provider::NodeProvider;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +170,7 @@ impl<P: ProcessRawEvents> L1Watcher<P> {
             BlockBoundary::Finalized => self.provider.finalized_header_watcher().await,
         };
 
+        let mut backoff = Duration::from_secs(1);
         loop {
             let cap = match self.end_block {
                 // Closed segment: `end_block` was already resolved against a finalized/executed
@@ -186,9 +188,26 @@ impl<P: ProcessRawEvents> L1Watcher<P> {
                 }
             };
 
-            if let Err(e) = self.poll(cap).await {
-                tracing::error!("l1 watcher fatal error: {e}");
-                panic!("watcher failed: {e}");
+            match self.poll(cap).await {
+                Ok(()) => backoff = Duration::from_secs(1),
+                // An unreachable L1 must degrade, not kill: `next_block` only
+                // advances after a fully processed range, so retrying the poll is
+                // safe. Semantic failures (decode errors, unexpected on-chain
+                // state) still die loudly below.
+                Err(e) if e.is_transient() => {
+                    tracing::warn!(
+                        watcher = self.processor.name(),
+                        retry_in = ?backoff,
+                        "L1 unreachable ({e:#}); waiting for it to come back"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!("l1 watcher fatal error: {e}");
+                    panic!("watcher failed: {e}");
+                }
             }
 
             if let Some(end_block) = self.end_block
@@ -287,7 +306,9 @@ pub enum L1WatcherError {
     #[error(transparent)]
     Other(anyhow::Error),
     #[error(
-        "batch {0} was committed on L1 but not submitted by this session; likely a pending tx from a prior crash"
+        "batch {0} was committed on L1 but not submitted by this session — either another \
+         settler is active (exactly one node may run with `batcher.enabled`; fix the configs, \
+         then restart this node to reconcile from L1) or a pending tx from a prior crash landed"
     )]
     UnexpectedCommit(u64),
     #[error(
@@ -296,4 +317,23 @@ pub enum L1WatcherError {
     L1Reverted(u64),
     #[error("output has been closed")]
     OutputClosed,
+}
+
+impl L1WatcherError {
+    /// Whether this is the "L1 is unreachable" class that watcher loops wait out
+    /// (see `zksync_os_provider::resilience`). Anyhow-carrying variants are walked
+    /// for a buried transport error — processor callbacks make their own RPC calls
+    /// whose failures arrive wrapped.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            L1WatcherError::Transport(transport) => {
+                matches!(transport, alloy::transports::RpcError::Transport(_))
+            }
+            L1WatcherError::Batch(err)
+            | L1WatcherError::Convert(err)
+            | L1WatcherError::Other(err) => zksync_os_provider::is_transient_l1_error(err),
+            L1WatcherError::Contract(err) => zksync_os_provider::error_chain_is_transient(err),
+            _ => false,
+        }
+    }
 }

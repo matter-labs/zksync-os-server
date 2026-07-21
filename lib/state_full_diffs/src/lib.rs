@@ -58,6 +58,28 @@ impl FullDiffsState {
 
         Ok(this)
     }
+
+    /// Opens an existing state without genesis seeding — for offline tooling
+    /// (the disaster-fork truncation) that must never invent a chain: an empty
+    /// state directory here is an error, not a fresh start.
+    pub fn open_existing(base_path: PathBuf) -> anyhow::Result<Self> {
+        let storage = FullDiffsStorage::new(&base_path.join(STATE_STORAGE_DB_NAME))?;
+        let preimages = FullDiffsPreimages::new(&base_path.join(PREIMAGES_STORAGE_DB_NAME))?;
+        anyhow::ensure!(
+            storage.latest_block() > 0,
+            "state at {} is empty; nothing to operate on",
+            base_path.display()
+        );
+        Ok(Self { storage, preimages })
+    }
+
+    /// Truncates the state to `new_latest` — the disaster-fork tool's
+    /// primitive, run on a stopped node (see `FullDiffsStorage::truncate_to`).
+    /// Preimages are content-addressed and deliberately untouched: orphans are
+    /// harmless, and a later replay re-adds identical bytes.
+    pub fn truncate_to(&self, new_latest: u64) -> anyhow::Result<()> {
+        self.storage.truncate_to(new_latest)
+    }
 }
 
 #[derive(Debug, Clone)]

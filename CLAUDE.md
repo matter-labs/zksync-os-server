@@ -33,7 +33,7 @@ If the PR title uses the breaking-change marker (`feat!: ...`, `fix!: ...`), you
 
 ### Wire format immutability
 
-Do **not** modify existing versioned wire format files under `lib/network/src/wire/replays/v*.rs`. Add a new versioned file instead.
+Released encodings in `lib/wire` (replay record versions, the consensus block envelope, finality certificates) are immutable: do **not** modify them — add a new version instead. The golden tests under `lib/wire/tests/` enforce this byte-for-byte; `lib/wire/goldens/` fixtures are never regenerated for existing formats.
 
 ### Comments
 Comment **why**, not **what**. The code shows what it does; comments explain intent, invariants, and non-obvious decisions. No comments on self-evident code.

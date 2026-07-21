@@ -9,6 +9,11 @@ pub struct MainNode2faConfig {
     pub accepted_verifier_signers: Vec<Address>,
     /// Channel used to forward batch verification results back into the node.
     pub verify_result_tx: mpsc::Sender<PeerVerifyBatchResult>,
+    /// This node's own verifier half, when it also verifies batches for its
+    /// peers — a committee validator co-signing the settler's batches. Absent
+    /// on a plain main node. With it attached, both peers of one `zks_2fa`
+    /// session can verify for each other regardless of who dialed whom.
+    pub verification: Option<ExternalNode2faConfig>,
 }
 
 /// Verifier identity and transport used by an external node participating in `zks_2fa`.

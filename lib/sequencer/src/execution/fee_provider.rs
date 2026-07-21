@@ -32,6 +32,12 @@ pub struct FeeConfig {
     pub native_price_override: Option<BigUint>,
 }
 
+/// Per-block change clamps, EIP-1559-style. Shared by fee production (the clamp) and
+/// consensus verification (the mirror bound on leader-proposed fees) — one source of
+/// truth so the two cannot drift.
+const NATIVE_PRICE_MAX_CHANGE_DENOMINATOR: u32 = 8;
+const PUBDATA_PRICE_MAX_CHANGE_DENOMINATOR: u32 = 2;
+
 /// Provider of fee parameters for block execution.
 #[derive(Debug)]
 pub struct FeeProvider {
@@ -59,6 +65,18 @@ impl FeeProvider {
             base_token_price,
             pubdata_mode,
         }
+    }
+
+    /// Like [`Self::produce_fee_params`], but with the change clamps applied relative
+    /// to an explicit previous block. Consensus leaders build on a speculative parent
+    /// that may run ahead of finality, so "previous" is the parent being built on, not
+    /// the last finalized block this provider observed.
+    pub async fn produce_fee_params_on(
+        &mut self,
+        previous: FeeParams,
+    ) -> anyhow::Result<FeeParams> {
+        self.previous_block_fee_params = Some(previous);
+        self.produce_fee_params().await
     }
 
     pub async fn produce_fee_params(&mut self) -> anyhow::Result<FeeParams> {
@@ -111,29 +129,18 @@ impl FeeProvider {
         };
 
         // Limit native price change akin to EIP-1559 rule (up to 12.5%).
-        let (min_native_price, max_native_price) = match self
-            .previous_block_fee_params
-            .map(|p| p.native_price)
-        {
-            Some(previous_native_price) => {
-                const NATIVE_PRICE_MAX_CHANGE_DENOMINATOR: u32 = 8;
-
-                let previous_native_price =
-                    BigUint::from_bytes_le(previous_native_price.as_le_slice());
-
-                let min_native_price = &previous_native_price
-                    - (&previous_native_price / BigUint::from(NATIVE_PRICE_MAX_CHANGE_DENOMINATOR));
-                let max_native_price = &previous_native_price
-                    + (&previous_native_price / BigUint::from(NATIVE_PRICE_MAX_CHANGE_DENOMINATOR))
-                        .max(BigUint::from(1u32));
-
-                (min_native_price, max_native_price)
-            }
-            None => {
-                // No previous price, allow any price.
-                (desired_native_price.clone(), desired_native_price.clone())
-            }
-        };
+        let (min_native_price, max_native_price) =
+            match self.previous_block_fee_params.map(|p| p.native_price) {
+                Some(previous_native_price) => {
+                    let previous_native_price =
+                        BigUint::from_bytes_le(previous_native_price.as_le_slice());
+                    native_price_bounds(&previous_native_price)
+                }
+                None => {
+                    // No previous price, allow any price.
+                    (desired_native_price.clone(), desired_native_price.clone())
+                }
+            };
         let native_price = desired_native_price
             .clone()
             .clamp(min_native_price.clone(), max_native_price.clone());
@@ -236,14 +243,8 @@ impl FeeProvider {
         let mut pubdata_price = if let Some(prev_pubdata_price) =
             self.previous_block_fee_params.map(|p| p.pubdata_price)
         {
-            let capped_price = {
-                const PUBDATA_PRICE_MAX_CHANGE_DENOMINATOR: u32 = 2;
-
-                let mut r = BigUint::from_bytes_le(prev_pubdata_price.as_le_slice());
-                r += (&r / BigUint::from(PUBDATA_PRICE_MAX_CHANGE_DENOMINATOR))
-                    .max(BigUint::from(1u32));
-                r
-            };
+            let capped_price =
+                pubdata_price_max(&BigUint::from_bytes_le(prev_pubdata_price.as_le_slice()));
 
             if capped_price < desired_pubdata_price {
                 tracing::debug!(
@@ -291,6 +292,90 @@ impl FeeProvider {
             EXECUTION_METRICS.pubdata_price.set(p);
         }
     }
+}
+
+/// The [min, max] a native price may move to in one block, given the previous block's.
+fn native_price_bounds(previous: &BigUint) -> (BigUint, BigUint) {
+    let step = previous / BigUint::from(NATIVE_PRICE_MAX_CHANGE_DENOMINATOR);
+    (previous - &step, previous + step.max(BigUint::from(1u32)))
+}
+
+/// The highest pubdata price one block may move to, given the previous block's
+/// (increases are clamped; decreases are free).
+fn pubdata_price_max(previous: &BigUint) -> BigUint {
+    previous
+        + (previous / BigUint::from(PUBDATA_PRICE_MAX_CHANGE_DENOMINATOR)).max(BigUint::from(1u32))
+}
+
+/// Checks that leader-proposed fee inputs are values an honest fee provider could have
+/// produced on top of `previous` under `config` — the verification mirror of the
+/// production clamps above. Exact by construction: overrides pin values, clamps bound
+/// per-block movement, and the basefee is a pure function of the native price.
+pub fn fee_params_within_protocol_bounds(
+    previous: &FeeParams,
+    proposed: &FeeParams,
+    config: &FeeConfig,
+) -> Result<(), String> {
+    let previous_native = BigUint::from_bytes_le(previous.native_price.as_le_slice());
+    let proposed_native = BigUint::from_bytes_le(proposed.native_price.as_le_slice());
+
+    match &config.native_price_override {
+        Some(pinned) => {
+            if &proposed_native != pinned {
+                return Err(format!(
+                    "native price {proposed_native} does not match the configured override {pinned}"
+                ));
+            }
+        }
+        None => {
+            let (min, max) = native_price_bounds(&previous_native);
+            if proposed_native < min || proposed_native > max {
+                return Err(format!(
+                    "native price {proposed_native} moved outside [{min}, {max}] allowed after {previous_native}"
+                ));
+            }
+        }
+    }
+
+    let proposed_basefee = BigUint::from_bytes_le(proposed.eip1559_basefee.as_le_slice());
+    let expected_basefee = match &config.base_fee_override {
+        Some(pinned) => pinned.clone(),
+        None => &proposed_native * config.native_per_gas,
+    };
+    if proposed_basefee != expected_basefee {
+        return Err(format!(
+            "base fee {proposed_basefee} is not the {expected_basefee} implied by the native price"
+        ));
+    }
+
+    let proposed_pubdata = BigUint::from_bytes_le(proposed.pubdata_price.as_le_slice());
+    match &config.pubdata_price_override {
+        Some(pinned) => {
+            if &proposed_pubdata != pinned {
+                return Err(format!(
+                    "pubdata price {proposed_pubdata} does not match the configured override {pinned}"
+                ));
+            }
+        }
+        None => {
+            let previous_pubdata = BigUint::from_bytes_le(previous.pubdata_price.as_le_slice());
+            let max = pubdata_price_max(&previous_pubdata);
+            if proposed_pubdata > max {
+                return Err(format!(
+                    "pubdata price {proposed_pubdata} exceeds the {max} allowed after {previous_pubdata}"
+                ));
+            }
+            if let Some(cap) = &config.pubdata_price_cap
+                && &proposed_pubdata > cap
+            {
+                return Err(format!(
+                    "pubdata price {proposed_pubdata} exceeds the configured cap {cap}"
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn biguint_to_u256_checked(value: &BigUint) -> Option<U256> {

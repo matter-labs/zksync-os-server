@@ -19,13 +19,23 @@ RUN apt-get update && \
 ENV LIBCLANG_PATH=/usr/lib/llvm-19/lib
 ENV LD_LIBRARY_PATH=${LIBCLANG_PATH}:${LD_LIBRARY_PATH}
 
+# Parallel rustc jobs; defaults to all cores. Set lower (e.g. 4) on builders whose
+# memory cannot feed one release-mode rustc per core.
+ARG CARGO_BUILD_JOBS=""
+
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies (this is the caching Docker layer)
-RUN cargo chef cook --bin zksync-os-server --release --features gcp --recipe-path recipe.json
+# Cargo features baked into the binary. Defaults to the production set (gcp:
+# GCS replay archive + GCP KMS); extend for investigations (e.g.
+# "gcp,jemalloc-profiling") or set to "" to build without GCP support.
+ARG FEATURES="gcp"
+RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
+    cargo chef cook --bin zksync-os-server --release ${FEATURES:+--features "$FEATURES"} --recipe-path recipe.json
 
 # Build application
 COPY . .
-RUN cargo build --release --bin zksync-os-server --features gcp
+RUN CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-$(nproc)} \
+    cargo build --release -p zksync_os_server --bin zksync-os-server ${FEATURES:+--features "$FEATURES"}
 
 #################################
 # -------- Runtime -------------#
@@ -33,9 +43,11 @@ RUN cargo build --release --bin zksync-os-server --features gcp
 FROM debian:stable-slim
 
 # ---- minimal runtime deps + tini ----
+# iproute2 provides `tc`, which the chaos rig uses to inject network degradation
+# (packet loss/delay) into running validators; harmless baggage elsewhere.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        libssl3 ca-certificates tini && \
+        libssl3 ca-certificates tini iproute2 && \
     rm -rf /var/lib/apt/lists/*
 
 ARG UID=10001
@@ -50,7 +62,7 @@ COPY --from=builder /app/local-chains/v30.2/default/genesis.json /app/local-chai
 USER app
 WORKDIR /app
 
-EXPOSE 3050 3124 3312 3060
+EXPOSE 3050 3124 3312 3060 3054
 VOLUME ["/db"]
 
 ENTRYPOINT ["/usr/bin/tini", "--", "zksync-os-server"]

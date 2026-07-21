@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState, StateLabel};
 use zksync_os_pipeline::{PeekableReceiver, SendAndRecordExt};
-use zksync_os_provider::EthWalletProvider;
+use zksync_os_provider::{EthWalletProvider, until_l1_available};
 
 /// Component-specific state for the L1 sender.
 pub enum L1SenderState {
@@ -235,27 +235,36 @@ where
             tracing::info!(command_name, range, "sending L1 transactions");
             L1_SENDER_METRICS.parallel_transactions[&command_name].set(commands.len() as u64);
 
-            let operator_address = self.operator_address().await?;
+            // Read-only preparation: an unreachable L1 is waited out (nothing has
+            // been sent yet, so retrying is free). The send itself below still
+            // fails fast — a transport error there leaves an ambiguous in-flight
+            // transaction that only full restart recovery reconciles today.
+            let operator_address =
+                until_l1_available(command_name, || self.operator_address()).await?;
             // One pending-count read per cycle. The account is quiescent here (prior cycle's txs
             // are confirmed), so this baseline is race-free; used for both simulation and sends.
-            let base_nonce = self
-                .provider
-                .get_transaction_count(operator_address)
-                .pending()
-                .await
-                .context("get pending nonce for L1 sender cycle")?;
+            let base_nonce = until_l1_available(command_name, || async {
+                self.provider
+                    .get_transaction_count(operator_address)
+                    .pending()
+                    .await
+                    .context("get pending nonce for L1 sender cycle")
+            })
+            .await?;
             // The only fee read per send cycle (one drain of up to `command_limit`
             // commands); the send loop below reuses these params for every command instead
             // of resolving again per tx. That's safe because fee caps are config-bound and
             // whether a fee is high enough is decided when the tx is mined, not now — so
             // per-command reads would only add an RPC round-trip per tx without changing
             // what we submit.
-            let fee_params = self
-                .resolve_fee_params(fee_config, force_transaction_resubmission)
-                .await?;
-            let gas_limits = self
-                .estimate_gas_limits(&commands, operator_address, fee_params, base_nonce)
-                .await?;
+            let fee_params = until_l1_available(command_name, || {
+                self.resolve_fee_params(fee_config, force_transaction_resubmission)
+            })
+            .await?;
+            let gas_limits = until_l1_available(command_name, || {
+                self.estimate_gas_limits(&commands, operator_address, fee_params, base_nonce)
+            })
+            .await?;
             tracing::info!(
                 command_name,
                 range,
@@ -266,12 +275,33 @@ where
             // Only blob-carrying commands (commit path) need the blob base fee, so fetch
             // it once per cycle instead of paying an RPC round-trip per command.
             let blob_base_fee = if commands.iter().any(|cmd| cmd.blob_sidecar().is_some()) {
-                let fee = self.provider.get_blob_base_fee().await?;
+                let fee = until_l1_available(command_name, || async {
+                    self.provider
+                        .get_blob_base_fee()
+                        .await
+                        .map_err(anyhow::Error::from)
+                })
+                .await?;
                 L1_SENDER_METRICS.report_blob_base_fee(fee)?;
                 Some(fee)
             } else {
                 None
             };
+
+            // Reachability gate: hold new submissions while L1 is away. The reads
+            // above don't prove reachability (the signer address is local and gas
+            // estimation degrades to a fallback), and a transport failure on the
+            // send itself is ambiguous — the transaction may already be in the
+            // mempool — so the send stays fail-fast and full restart recovery
+            // reconciles it. This gate confines that residual to outages beginning
+            // mid-send.
+            until_l1_available(command_name, || async {
+                self.provider
+                    .get_block_number()
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+            .await?;
 
             // It's important to preserve the order of commands -
             // so that we send them downstream also in order.
@@ -425,12 +455,23 @@ where
         .await?;
 
         let range = Input::display_range(&completed_commands);
-        let operator_address = self.operator_address().await?;
-        let balance = format_ether(self.provider.get_balance(operator_address).await?);
-        let nonce = self
-            .provider
-            .get_transaction_count(operator_address)
-            .await?;
+        let operator_address = until_l1_available(command_name, || self.operator_address()).await?;
+        let balance = format_ether(
+            until_l1_available(command_name, || async {
+                self.provider
+                    .get_balance(operator_address)
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+            .await?,
+        );
+        let nonce = until_l1_available(command_name, || async {
+            self.provider
+                .get_transaction_count(operator_address)
+                .await
+                .map_err(anyhow::Error::from)
+        })
+        .await?;
         tracing::info!(
             command_name,
             range,
@@ -464,21 +505,28 @@ where
             };
 
             loop {
-                let latest_block = provider.get_block_number().await.map_err(|err| {
-                tracing::warn!(
-                    "Failed to fetch latest L1 block while waiting for transaction confirmation \
-                 for tx {tx_hash}: {err}",
-                );
-                anyhow::Error::from(err)
-            })?;
+                // The transaction is already on its way: an L1 outage while polling
+                // for its confirmation is waited out, never fatal.
+                let latest_block = match provider.get_block_number().await {
+                    Ok(number) => number,
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to fetch latest L1 block while waiting for transaction \
+                             confirmation for tx {tx_hash}: {err}; retrying",
+                        );
+                        tokio::time::sleep(poll_interval).await;
+                        continue;
+                    }
+                };
                 let receipt = match provider.get_transaction_receipt(tx_hash).await {
                     Ok(receipt) => receipt,
                     Err(err) => {
                         tracing::warn!(
                             "Failed to fetch transaction receipt while waiting for confirmation \
-                     for tx {tx_hash}: {err}",
+                     for tx {tx_hash}: {err}; retrying",
                         );
-                        return Err(err.into());
+                        tokio::time::sleep(poll_interval).await;
+                        continue;
                     }
                 };
                 if let Some(receipt) = receipt.as_ref() {
@@ -843,14 +891,11 @@ where
         let mut timer = tokio::time::interval(OPERATOR_METRICS_POLL_INTERVAL);
         loop {
             timer.tick().await;
-            let operator_address = self.operator_address().await?;
-            let balance = format_ether(self.provider.get_balance(operator_address).await?);
-            let nonce = self
-                .provider
-                .get_transaction_count(operator_address)
-                .await?;
-            L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
-            L1_SENDER_METRICS.nonce[&command_name].set(nonce);
+            // Purely informational: a failed poll (most often an unreachable L1)
+            // skips the tick and must never take the sender down with it.
+            if let Err(err) = self.report_operator_metrics_once(command_name).await {
+                tracing::warn!(command_name, "skipping operator metrics tick: {err:#}");
+            }
             // Dashboard-only estimates; a failed poll must not take the sender down.
             if let Err(err) = self.report_custom_priority_fee_metrics().await {
                 tracing::warn!(
@@ -860,6 +905,18 @@ where
                 );
             }
         }
+    }
+
+    async fn report_operator_metrics_once(&self, command_name: &'static str) -> anyhow::Result<()> {
+        let operator_address = self.operator_address().await?;
+        let balance = format_ether(self.provider.get_balance(operator_address).await?);
+        let nonce = self
+            .provider
+            .get_transaction_count(operator_address)
+            .await?;
+        L1_SENDER_METRICS.balance[&command_name].set(balance.parse()?);
+        L1_SENDER_METRICS.nonce[&command_name].set(nonce);
+        Ok(())
     }
 
     /// Estimates EIP-1559 fees using the provided percentile of priority fees over the specified
@@ -960,8 +1017,15 @@ where
                     "Failed transaction's top-level call frame"
                 );
             }
+            // Reverts on this path have one overwhelmingly likely cause in a
+            // committee: another settler already landed this batch's command —
+            // L1 is the mutual-exclusion arbiter, the loser of a settler
+            // collision dies here, and its restart reconciles against L1 state.
             anyhow::bail!(
-                "{} L1 command transaction failed, see L1 transaction's trace for more details (tx_hash='{:?}')",
+                "{} L1 command transaction failed, see L1 transaction's trace for more details \
+                 (tx_hash='{:?}'). If the trace shows the batch already processed, another \
+                 settler is (or was) active: exactly one node may run with `batcher.enabled` — \
+                 fix the configs, then restart this node; it will reconcile from L1",
                 command,
                 receipt.transaction_hash
             );

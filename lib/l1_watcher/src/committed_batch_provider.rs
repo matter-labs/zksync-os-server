@@ -113,10 +113,14 @@ impl CommittedBatchProvider {
 
         let provider_for_init = provider.clone();
         runtime.spawn_critical_task("committed batch provider init", async move {
-            provider_for_init
-                .load_swept_batches(&swept, remaining_batch_numbers)
-                .await
-                .expect("failed to initialize CommittedBatchProvider");
+            // Historical catch-up is idempotent (repeated inserts of the same
+            // batches), so an L1 outage mid-catch-up is waited out and the whole
+            // pass retried; consumers keep blocking in `wait_for_batch` meanwhile.
+            zksync_os_provider::until_l1_available("committed_batch_provider_init", || {
+                provider_for_init.load_swept_batches(&swept, remaining_batch_numbers.clone())
+            })
+            .await
+            .expect("failed to initialize CommittedBatchProvider");
         });
 
         Ok(provider)
@@ -263,9 +267,13 @@ async fn sweep_startup_commits(
         "batch {max_batch} is not committed on L1 \
          (batches committed as of block {latest}: {total_committed})",
     );
-    let (from_block, _) = util::find_l1_commit_block_by_batch_number(diamond_proxy_l1, min_batch)
-        .await
-        .with_context(|| format!("failed to find live L1 commit block for batch {min_batch}"))?;
+    let (from_block, _) = util::find_l1_commit_block_by_batch_number(
+        diamond_proxy_l1,
+        min_batch,
+        max_blocks_per_query,
+    )
+    .await
+    .with_context(|| format!("failed to find live L1 commit block for batch {min_batch}"))?;
     // No live commit of a batch above `min_batch` can precede `min_batch`'s live commit block:
     // it would require a later revert below `min_batch`, which would have reverted that batch as
     // well. So the swept window covers every requested batch.
@@ -402,13 +410,15 @@ fn startup_batch_numbers(
 pub async fn fetch_live_committed_batch(
     diamond_proxy: &ZkChain<NodeProvider>,
     batch_number: u64,
+    max_blocks_per_query: u64,
 ) -> anyhow::Result<(DiscoveredCommittedBatch, TxHash)> {
-    let (l1_block_with_commit, live_hash) =
-        util::find_l1_commit_block_by_batch_number(diamond_proxy, batch_number)
-            .await
-            .with_context(|| {
-                format!("failed to find live L1 commit block for batch {batch_number}")
-            })?;
+    let (l1_block_with_commit, live_hash) = util::find_l1_commit_block_by_batch_number(
+        diamond_proxy,
+        batch_number,
+        max_blocks_per_query,
+    )
+    .await
+    .with_context(|| format!("failed to find live L1 commit block for batch {batch_number}"))?;
 
     let (batch, commit_tx_hash) =
         util::fetch_stored_batch_data(diamond_proxy, l1_block_with_commit, batch_number)

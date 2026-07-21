@@ -1,7 +1,14 @@
 mod batcher;
+mod committee_verification;
+mod consensus;
 mod external_node;
+mod fork;
 mod mempool;
+mod migration;
 mod rebuild;
+mod reconfig;
+mod registry;
 mod replay_archive;
 mod restart;
 mod revm_checker;
+mod settlement_ha;

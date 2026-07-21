@@ -240,6 +240,15 @@ where
                 match revm_txs {
                     Ok(txs) => {
                         // Commit after each tx
+                        //
+                        // TODO(consensus): a hard revm error here (unlike a diff
+                        // divergence, which only warns) fails the pipeline component
+                        // and kills the node — and it re-fires during startup WAL
+                        // replay, so it cannot be restarted away. On a committee a
+                        // deterministic checker-side error therefore downs every
+                        // checker-enabled validator at once for an advisory check.
+                        // Consider skip-with-metric, matching how unsupported
+                        // execution versions and tx-conversion failures are handled.
                         for tx in txs {
                             evm.transact_commit(tx)?;
                         }
