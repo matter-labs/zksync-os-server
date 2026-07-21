@@ -1,3 +1,4 @@
+#[cfg(feature = "gcp")]
 use crate::kms::GcpKmsIdentity;
 use crate::{ReplayArchiveKey, ReplayArchiveStorageReader, format_block_hash};
 use age_core::format::{FileKey, Stanza};
@@ -139,6 +140,7 @@ pub async fn recover_replay_records_to_rocksdb_with_optional_decryption(
             "Replay archive RocksDB recovery will decrypt objects in memory, public key: {}",
             identity.to_public(),
         ),
+        #[cfg(feature = "gcp")]
         Some(ArchiveIdentity::GcpKms(identity)) => tracing::info!(
             "Replay archive RocksDB recovery will decrypt objects in memory \
              via GCP KMS key version {}",
@@ -502,6 +504,7 @@ async fn read_verified_replay_record(
 /// age identity used for replay archive record decryption.
 pub enum ArchiveIdentity {
     X25519(age::x25519::Identity),
+    #[cfg(feature = "gcp")]
     GcpKms(GcpKmsIdentity),
 }
 
@@ -509,6 +512,7 @@ impl age::Identity for ArchiveIdentity {
     fn unwrap_stanza(&self, stanza: &Stanza) -> Option<Result<FileKey, age::DecryptError>> {
         match self {
             Self::X25519(identity) => identity.unwrap_stanza(stanza),
+            #[cfg(feature = "gcp")]
             Self::GcpKms(identity) => identity.unwrap_stanza(stanza),
         }
     }

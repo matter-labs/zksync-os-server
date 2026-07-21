@@ -1543,6 +1543,7 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                 },
                 encryption: encryption.into(),
             },
+            #[cfg(feature = "gcp")]
             ReplayArchiveConfig::Gcs {
                 bucket_base_url,
                 encryption,
@@ -1553,6 +1554,11 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                 },
                 encryption: encryption.into(),
             },
+            #[cfg(not(feature = "gcp"))]
+            ReplayArchiveConfig::Gcs { .. } => panic!(
+                "this build was compiled without the `gcp` feature; rebuild with \
+                 `--features gcp` to use the GCS replay archive backend"
+            ),
         }
     }
 }
@@ -1568,6 +1574,7 @@ impl From<ReplayArchiveEncryptionConfig>
             ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
             }
+            #[cfg(feature = "gcp")]
             ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
                     config: zksync_os_replay_archive::GcpKmsConfig {
@@ -1575,6 +1582,11 @@ impl From<ReplayArchiveEncryptionConfig>
                     },
                 }
             }
+            #[cfg(not(feature = "gcp"))]
+            ReplayArchiveEncryptionConfig::GcpKms { .. } => panic!(
+                "this build was compiled without the `gcp` feature; rebuild with \
+                 `--features gcp` to use the GCP KMS replay archive encryption"
+            ),
         }
     }
 }

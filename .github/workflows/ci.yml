@@ -42,7 +42,7 @@ jobs:
         uses: ./.github/actions/runner-setup
 
       - name: Build server
-        run: cargo build --release --bin zksync-os-server
+        run: cargo build --release --bin zksync-os-server --features gcp
 
       - name: Upload server binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

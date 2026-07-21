@@ -81,7 +81,7 @@ jobs:
           RUSTFLAGS: '--cfg tokio_unstable'
         run: |
           cargo build --profile "${RELEASE_PROFILE}" \
-            --target "${{ matrix.target }}" --bin "${ZKSYNC_OS_SERVER_BIN}"
+            --target "${{ matrix.target }}" --bin "${ZKSYNC_OS_SERVER_BIN}" --features gcp
 
       - name: Prepare tarballs
         run: |

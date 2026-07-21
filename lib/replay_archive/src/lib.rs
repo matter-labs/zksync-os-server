@@ -8,8 +8,10 @@ mod age_encrypted;
 mod component;
 mod filesystem;
 mod gate_component;
+#[cfg(feature = "gcp")]
 mod gcs;
 mod init;
+#[cfg(feature = "gcp")]
 mod kms;
 mod metrics;
 mod reader;
@@ -24,6 +26,7 @@ pub use filesystem::{
     FileSystemReplayArchiveReader, FileSystemReplayArchiveStorage, FileSystemReplayArchiver,
 };
 pub use gate_component::ReplayArchiveGateComponent;
+#[cfg(feature = "gcp")]
 pub use gcs::{
     GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
     GcsReplayArchiveStorage,
@@ -32,6 +35,7 @@ pub use init::{
     InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
     init_replay_archive,
 };
+#[cfg(feature = "gcp")]
 pub use kms::{GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
 pub use reader::{ReplayArchiveKeyPage, ReplayArchiveStorageReader};
 pub use recovery::{

@@ -1,3 +1,4 @@
+#[cfg(feature = "gcp")]
 use crate::kms::GcpKmsRecipient;
 use crate::metrics::REPLAY_ARCHIVE_METRICS;
 use crate::replay_record::encode_replay_record;
@@ -16,6 +17,7 @@ const BYTES_PER_MEGABYTE: f64 = 1024.0 * 1024.0;
 #[derive(Debug, Clone)]
 pub enum ArchiveRecipient {
     X25519(age::x25519::Recipient),
+    #[cfg(feature = "gcp")]
     GcpKms(GcpKmsRecipient),
 }
 
@@ -26,6 +28,7 @@ impl age::Recipient for ArchiveRecipient {
     ) -> Result<(Vec<Stanza>, HashSet<String>), age::EncryptError> {
         match self {
             Self::X25519(recipient) => recipient.wrap_file_key(file_key),
+            #[cfg(feature = "gcp")]
             Self::GcpKms(recipient) => recipient.wrap_file_key(file_key),
         }
     }

@@ -5,10 +5,14 @@ use anyhow::Context as _;
 use reth_tasks::Runtime;
 
 use crate::{
-    AgeEncryptedReplayArchiver, ArchiveRecipient, FileSystemReplayArchiveStorage, GcpKmsClient,
-    GcpKmsConfig, GcpKmsRecipient, GcsReplayArchiveConfig, GcsReplayArchiveStorage,
-    ReplayArchiveComponent, ReplayArchiveSender, ReplayArchiveStorage, ReplayArchiver,
-    ReplayRecordArchiver, S3ReplayArchiveConfig, S3ReplayArchiveStorage,
+    AgeEncryptedReplayArchiver, FileSystemReplayArchiveStorage, ReplayArchiveComponent,
+    ReplayArchiveSender, ReplayArchiveStorage, ReplayArchiver, ReplayRecordArchiver,
+    S3ReplayArchiveConfig, S3ReplayArchiveStorage,
+};
+#[cfg(feature = "gcp")]
+use crate::{
+    ArchiveRecipient, GcpKmsClient, GcpKmsConfig, GcpKmsRecipient, GcsReplayArchiveConfig,
+    GcsReplayArchiveStorage,
 };
 
 #[derive(Debug, Clone)]
@@ -22,6 +26,7 @@ pub enum ReplayArchiveConfig {
         config: S3ReplayArchiveConfig,
         encryption: ReplayArchiveEncryptionConfig,
     },
+    #[cfg(feature = "gcp")]
     Gcs {
         config: GcsReplayArchiveConfig,
         encryption: ReplayArchiveEncryptionConfig,
@@ -31,8 +36,13 @@ pub enum ReplayArchiveConfig {
 #[derive(Debug, Clone)]
 pub enum ReplayArchiveEncryptionConfig {
     Noop,
-    AgeX25519 { recipient: String },
-    GcpKms { config: GcpKmsConfig },
+    AgeX25519 {
+        recipient: String,
+    },
+    #[cfg(feature = "gcp")]
+    GcpKms {
+        config: GcpKmsConfig,
+    },
 }
 
 pub type InitializedReplayArchive = (ReplayArchiveSender, Arc<dyn ReplayArchiver>);
@@ -68,6 +78,7 @@ pub async fn init_replay_archive(
                 .expect("failed to initialize S3 replay archive");
             archive_for_storage(storage, encryption).await
         }
+        #[cfg(feature = "gcp")]
         ReplayArchiveConfig::Gcs { config, encryption } => {
             let storage = GcsReplayArchiveStorage::init(config.clone(), writer_node_id.clone())
                 .await
@@ -99,6 +110,7 @@ where
             AgeEncryptedReplayArchiver::from_recipient_str(storage, recipient)
                 .expect("failed to initialize age X25519 replay archive encryption"),
         ),
+        #[cfg(feature = "gcp")]
         ReplayArchiveEncryptionConfig::GcpKms { config } => {
             let client = GcpKmsClient::new(config)
                 .await

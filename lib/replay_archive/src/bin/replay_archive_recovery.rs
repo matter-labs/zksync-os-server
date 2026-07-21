@@ -2,11 +2,14 @@ use clap::{Parser, Subcommand};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use zksync_os_replay_archive::{
-    ArchiveIdentity, FileSystemReplayArchiveReader, GcpKmsClient, GcpKmsConfig, GcpKmsIdentity,
-    GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
-    S3ReplayArchiveAuthMode, S3ReplayArchiveConfig, S3ReplayArchiveReader,
-    download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
-    recover_replay_records_to_rocksdb_with_optional_decryption,
+    ArchiveIdentity, FileSystemReplayArchiveReader, S3ReplayArchiveAuthMode, S3ReplayArchiveConfig,
+    S3ReplayArchiveReader, download_all_replay_archive_objects, parse_age_x25519_identity,
+    read_age_x25519_identity, recover_replay_records_to_rocksdb_with_optional_decryption,
+};
+#[cfg(feature = "gcp")]
+use zksync_os_replay_archive::{
+    GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcsReplayArchiveAuthMode, GcsReplayArchiveConfig,
+    GcsReplayArchiveReader,
 };
 
 #[derive(Debug, Parser)]
@@ -21,14 +24,20 @@ enum Command {
     /// Download all archived replay record objects to local disk.
     Download {
         /// Root folder of the replay archive storage.
-        #[arg(
+        #[cfg_attr(feature = "gcp", arg(
             long,
             conflicts_with_all = ["s3_bucket_base_url", "gcs_bucket_base_url"],
             required_unless_present_any = ["s3_bucket_base_url", "gcs_bucket_base_url"]
-        )]
+        ))]
+        #[cfg_attr(not(feature = "gcp"), arg(
+            long,
+            conflicts_with_all = ["s3_bucket_base_url"],
+            required_unless_present_any = ["s3_bucket_base_url"]
+        ))]
         archive_root: Option<PathBuf>,
         /// S3 bucket of the replay archive storage.
-        #[arg(long, conflicts_with_all = ["archive_root", "gcs_bucket_base_url"])]
+        #[cfg_attr(feature = "gcp", arg(long, conflicts_with_all = ["archive_root", "gcs_bucket_base_url"]))]
+        #[cfg_attr(not(feature = "gcp"), arg(long, conflicts_with_all = ["archive_root"]))]
         s3_bucket_base_url: Option<String>,
         /// Path to the S3 credentials file.
         #[arg(long, requires = "s3_bucket_base_url")]
@@ -47,9 +56,11 @@ enum Command {
         #[arg(long, requires = "s3_bucket_base_url")]
         s3_region: Option<String>,
         /// GCS bucket of the replay archive storage.
+        #[cfg(feature = "gcp")]
         #[arg(long, conflicts_with_all = ["archive_root", "s3_bucket_base_url"])]
         gcs_bucket_base_url: Option<String>,
         /// Use anonymous GCS access. This is only useful for public buckets.
+        #[cfg(feature = "gcp")]
         #[arg(long, requires = "gcs_bucket_base_url")]
         gcs_anonymous: bool,
         /// Local folder where downloaded objects should be written.
@@ -74,20 +85,28 @@ enum Command {
         #[arg(long)]
         anchor_block_hash: alloy::primitives::BlockHash,
         /// age identity file containing AGE-SECRET-KEY. If provided, records are decrypted in memory.
-        #[arg(long, conflicts_with_all = ["age_secret_key", "kms_key_version"])]
+        #[cfg_attr(feature = "gcp", arg(long, conflicts_with_all = ["age_secret_key", "kms_key_version"]))]
+        #[cfg_attr(not(feature = "gcp"), arg(long, conflicts_with_all = ["age_secret_key"]))]
         identity_file: Option<PathBuf>,
         /// age AGE-SECRET-KEY value. If provided, records are decrypted in memory.
-        #[arg(
+        #[cfg_attr(feature = "gcp", arg(
             long,
             env = "REPLAY_ARCHIVE_AGE_SECRET_KEY",
             hide_env_values = true,
             conflicts_with_all = ["identity_file", "kms_key_version"]
-        )]
+        ))]
+        #[cfg_attr(not(feature = "gcp"), arg(
+            long,
+            env = "REPLAY_ARCHIVE_AGE_SECRET_KEY",
+            hide_env_values = true,
+            conflicts_with_all = ["identity_file"]
+        ))]
         age_secret_key: Option<String>,
         /// KMS key version, full resource name
         /// `projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}`.
         /// If set, records are decrypted in memory, costing one KMS asymmetric-decrypt call per
         /// record decode.
+        #[cfg(feature = "gcp")]
         #[arg(long, conflicts_with_all = ["identity_file", "age_secret_key"])]
         kms_key_version: Option<String>,
         /// Number of replay records decoded concurrently. With KMS decryption every record decode
@@ -116,16 +135,17 @@ async fn main() -> anyhow::Result<()> {
             s3_anonymous,
             s3_endpoint,
             s3_region,
+            #[cfg(feature = "gcp")]
             gcs_bucket_base_url,
+            #[cfg(feature = "gcp")]
             gcs_anonymous,
             output_root,
             download_concurrency,
         } => {
-            let downloaded = if let Some(archive_root) = archive_root {
-                let reader = FileSystemReplayArchiveReader::new(archive_root);
-                download_all_replay_archive_objects(&reader, &output_root, download_concurrency)
-                    .await?
-            } else if let Some(gcs_bucket_base_url) = gcs_bucket_base_url {
+            // clap guarantees exactly one backend is selected; GCS is only reachable when the
+            // `gcp` feature is compiled in.
+            #[cfg(feature = "gcp")]
+            let gcs_downloaded = if let Some(gcs_bucket_base_url) = gcs_bucket_base_url {
                 let reader = GcsReplayArchiveReader::new(GcsReplayArchiveConfig {
                     bucket_base_url: gcs_bucket_base_url,
                     auth_mode: if gcs_anonymous {
@@ -135,6 +155,24 @@ async fn main() -> anyhow::Result<()> {
                     },
                 })
                 .await?;
+                Some(
+                    download_all_replay_archive_objects(
+                        &reader,
+                        &output_root,
+                        download_concurrency,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
+            #[cfg(not(feature = "gcp"))]
+            let gcs_downloaded: Option<usize> = None;
+
+            let downloaded = if let Some(gcs_downloaded) = gcs_downloaded {
+                gcs_downloaded
+            } else if let Some(archive_root) = archive_root {
+                let reader = FileSystemReplayArchiveReader::new(archive_root);
                 download_all_replay_archive_objects(&reader, &output_root, download_concurrency)
                     .await?
             } else {
@@ -167,12 +205,24 @@ async fn main() -> anyhow::Result<()> {
             anchor_block_hash,
             identity_file,
             age_secret_key,
+            #[cfg(feature = "gcp")]
             kms_key_version,
             decrypt_concurrency,
         } => {
-            let identity = if let Some(key_version) = kms_key_version {
+            // A KMS identity is only reachable when the `gcp` feature is compiled in; clap
+            // guarantees at most one decryption source is selected.
+            #[cfg(feature = "gcp")]
+            let kms_identity = if let Some(key_version) = kms_key_version {
                 let client = GcpKmsClient::new(&GcpKmsConfig { key_version }).await?;
                 Some(ArchiveIdentity::GcpKms(GcpKmsIdentity::new(client)))
+            } else {
+                None
+            };
+            #[cfg(not(feature = "gcp"))]
+            let kms_identity: Option<ArchiveIdentity> = None;
+
+            let identity = if let Some(kms_identity) = kms_identity {
+                Some(kms_identity)
             } else if let Some(age_secret_key) = age_secret_key {
                 Some(ArchiveIdentity::X25519(parse_age_x25519_identity(
                     &age_secret_key,
