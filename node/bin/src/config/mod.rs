@@ -1122,7 +1122,7 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
 }
 
 /// Rate limiter for incoming L2 transactions, gating admission based on the sequencer's
-/// *total* recent execution throughput — L1 priority / upgrade / interop txs all count 
+/// *total* recent execution throughput — L1 priority / upgrade / interop txs all count
 /// toward it too, even though only L2 admission is ever actually gated. Only effective on
 /// the main node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
