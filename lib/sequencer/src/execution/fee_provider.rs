@@ -6,7 +6,7 @@ use num::{BigUint, ToPrimitive};
 use tokio::sync::watch;
 use zksync_os_base_token_adjuster::BaseTokenPriceHandle;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::{PubdataMode, TokenPricesForFees};
+use zksync_os_types::{FeeParams, PubdataMode, TokenPricesForFees};
 
 /// Fee-related configuration.
 #[derive(Debug, Clone)]
@@ -299,11 +299,4 @@ fn biguint_to_u256_checked(value: &BigUint) -> Option<U256> {
     }
     let bytes = value.to_bytes_le();
     Some(U256::from_le_slice(&bytes))
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct FeeParams {
-    pub eip1559_basefee: U256,
-    pub native_price: U256,
-    pub pubdata_price: U256,
 }
