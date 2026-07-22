@@ -2,19 +2,17 @@ use crate::eth_call_handler::build_pending_block_context;
 use crate::eth_impl::build_api_receipt;
 use crate::metrics::{TX_SUBMISSION, TxRejectionReason};
 use crate::tx_forwarder::{TxForwardError, TxForwarder};
-use crate::tx_gas_limiter::TxGasRateLimiter;
 use crate::{ReadRpcStorage, RpcConfig};
 use alloy::consensus::transaction::SignerRecoverable;
 use alloy::eips::Decodable2718;
 use alloy::primitives::{B256, Bytes, U256};
 use alloy::transports::RpcError;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_mempool::PoolError;
 use zksync_os_mempool::subpools::l2::L2Subpool;
-use zksync_os_mempool::{InvalidPoolTransactionError, PoolErrorKind};
+use zksync_os_mempool::{InvalidPoolTransactionError, PoolErrorKind, gas_rate_limit_retry_after};
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient};
@@ -46,7 +44,6 @@ pub struct TxHandler<RpcStorage, Mempool> {
     /// the sequencer has built at least one block; in that startup
     /// window we synthesize a pending block context from current state.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
-    gas_rate_limiter: Option<Arc<TxGasRateLimiter>>,
 }
 
 impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempool> {
@@ -60,7 +57,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         tx_forwarder: Option<TxForwarder>,
         policy_client: Option<PolicyClient>,
         last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
-        gas_rate_limiter: Option<Arc<TxGasRateLimiter>>,
     ) -> Self {
         Self {
             config,
@@ -71,7 +67,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             tx_forwarder,
             policy_client,
             last_constructed_block_context,
-            gas_rate_limiter,
         }
     }
 
@@ -95,14 +90,6 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         let hash = *l2_tx.hash();
         if self.config.l2_signer_blacklist.contains(&l2_tx.signer()) {
             return Err(EthSendRawTransactionError::BlacklistedSigner);
-        }
-
-        // Before the policy simulation so a flood rejection costs only decode + ecrecover.
-        if let Some(gas_rate_limiter) = &self.gas_rate_limiter
-            && !gas_rate_limiter.is_exempt(&l2_tx.signer())
-            && let Err(retry_after) = gas_rate_limiter.try_admit()
-        {
-            return Err(EthSendRawTransactionError::GasRateLimited { retry_after });
         }
 
         if let Some(policy_client) = &self.policy_client {
@@ -151,7 +138,17 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         }
         {
             let _guard = MempoolLatencyGuard::new();
-            self.mempool.add_l2_transaction(l2_tx).await?;
+            // The gas rate limiter (when enabled) gates admission inside the mempool itself, so
+            // every insertion path — this one and, once consensus lands, gossip — is covered by
+            // the same gate. Its rejection is carried through `PoolError` and unpacked here into
+            // the dedicated variant so `retryAfterMs` still reaches the caller.
+            self.mempool
+                .add_l2_transaction(l2_tx)
+                .await
+                .map_err(|err| match gas_rate_limit_retry_after(&err) {
+                    Some(retry_after) => EthSendRawTransactionError::GasRateLimited { retry_after },
+                    None => EthSendRawTransactionError::PoolError(err),
+                })?;
         }
         Ok(hash)
     }

@@ -70,22 +70,6 @@ impl RateLimits {
     }
 }
 
-/// Configuration for the executed-gas transaction rate limiter.
-/// See [`crate::tx_gas_limiter::TxGasRateLimiter`] for the mechanics.
-#[derive(Clone, Debug)]
-pub struct TxGasRateLimitConfig {
-    /// Target sustained executed-gas throughput, gas per second.
-    pub gas_per_second: u64,
-    /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`.
-    pub max_credit_seconds: f64,
-    /// Credit required to reopen the gate, in seconds' worth of `gas_per_second`.
-    pub reopen_credit_seconds: f64,
-    /// Max remembered deficit, in seconds' worth of `gas_per_second`. `0` clamps the bank at zero.
-    pub deficit_floor_seconds: f64,
-    /// Senders whose transactions are never rate-limited.
-    pub exempt_senders: HashSet<Address>,
-}
-
 #[derive(Clone, Debug)]
 pub struct RpcConfig {
     /// JSON-RPC address to listen on. Only http is currently supported.
@@ -141,9 +125,6 @@ pub struct RpcConfig {
 
     /// Rate limits for incoming requests.
     pub rate_limits: RateLimits,
-
-    /// Executed-gas rate limiter for incoming transactions. `None` disables it.
-    pub tx_gas_rate_limit: Option<TxGasRateLimitConfig>,
 
     /// List of disabled methods.
     /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.

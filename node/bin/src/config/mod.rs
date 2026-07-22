@@ -1121,8 +1121,10 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
     }
 }
 
-/// Rate limiter for incoming L2 transactions based on executed gas throughput.
-/// Only effective on the main node.
+/// Rate limiter for incoming L2 transactions, gating admission based on the sequencer's
+/// *total* recent execution throughput — L1 priority / upgrade / interop txs all count 
+/// toward it too, even though only L2 admission is ever actually gated. Only effective on
+/// the main node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(validate(
     Self::check_credit_windows,
@@ -1132,8 +1134,10 @@ pub struct TxGasRateLimitConfig {
     /// Target sustained executed-gas throughput, in gas per second.
     pub gas_per_second: NonZeroU64,
 
-    /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`.
-    #[config(default_t = 2.0)]
+    /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`. Sized to
+    /// absorb realistic bursty traffic without tripping, while staying under the
+    /// backpressure mechanism's own block-diff horizon.
+    #[config(default_t = 30.0)]
     pub max_credit_seconds: f64,
 
     /// Credit required to resume acceptance after the bank was exhausted, in seconds'
@@ -1180,8 +1184,8 @@ impl TxGasRateLimitConfig {
         Ok(())
     }
 
-    fn into_lib(self) -> zksync_os_rpc::TxGasRateLimitConfig {
-        zksync_os_rpc::TxGasRateLimitConfig {
+    pub(crate) fn into_lib(self) -> zksync_os_mempool::TxGasRateLimitConfig {
+        zksync_os_mempool::TxGasRateLimitConfig {
             gas_per_second: self.gas_per_second.get(),
             max_credit_seconds: self.max_credit_seconds,
             reopen_credit_seconds: self.reopen_credit_seconds,
@@ -1954,7 +1958,6 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
             rate_limits: c.rate_limits.into(),
-            tx_gas_rate_limit: c.tx_gas_rate_limit.map(TxGasRateLimitConfig::into_lib),
             method_filter: c.method_filter,
         }
     }

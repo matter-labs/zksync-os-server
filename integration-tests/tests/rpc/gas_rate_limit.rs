@@ -103,6 +103,9 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
 
     let env = CURRENT_TO_L1.environment().await?;
     let mut config = env.default_config().await?;
+    // Admission alone never drains the bank — only a sealed block's executed gas does. A generous
+    // block time keeps the whole burst in the mempool, unsealed, until every send has been admitted.
+    config.sequencer_config.block_time = Duration::from_secs(2);
     config.rpc_config.tx_gas_rate_limit = Some(TxGasRateLimitConfig {
         gas_per_second: NonZeroU64::new(GAS_PER_SECOND).unwrap(),
         max_credit_seconds: MAX_CREDIT_SECONDS,
@@ -129,8 +132,8 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
     // Burst: executed gas (10 × 21k = 210k) far exceeds the bank's max credit (100k),
     // so the gate must close once these blocks seal.
     let first_nonce = provider.get_transaction_count(limited).pending().await?;
-    for i in 0..BURST_TRANSFERS {
-        let _pending = send_transfer_with_nonce(
+    futures::future::try_join_all((0..BURST_TRANSFERS).map(|i| {
+        send_transfer_with_nonce(
             &provider,
             &params,
             limited,
@@ -138,9 +141,9 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
             U256::from(1),
             first_nonce + i,
         )
-        .await
-        .expect("burst txs are admitted while the gate is open");
-    }
+    }))
+    .await
+    .expect("burst txs are admitted while the gate is open");
 
     // The drain is block-granular: poll until a submission is rejected with -32005.
     let deadline = Instant::now() + Duration::from_secs(15);

@@ -132,21 +132,6 @@ pub struct TxSubmission {
 #[vise::register]
 pub static TX_SUBMISSION: Global<TxSubmission> = Global::new();
 
-/// Metrics for the executed-gas transaction rate limiter.
-#[derive(Debug, Metrics)]
-#[metrics(prefix = "tx_gas_rate_limiter")]
-pub struct TxGasRateLimiterMetrics {
-    /// Current gas bank level. Negative values are a deficit being repaid before reopening.
-    pub bank_level_gas: Gauge<i64>,
-    /// Whether non-exempt transactions are currently accepted (1 = open, 0 = closed).
-    pub gate_open: Gauge<u64>,
-    /// Number of times the gate closed.
-    pub gate_closes: Counter,
-}
-
-#[vise::register]
-pub static TX_GAS_RATE_LIMITER: Global<TxGasRateLimiterMetrics> = Global::new();
-
 /// Reason why an `eth_sendRawTransaction` was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue, EncodeLabelSet)]
 #[metrics(label = "reason", rename_all = "snake_case")]
