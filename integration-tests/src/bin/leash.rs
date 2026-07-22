@@ -9,6 +9,10 @@
 //! On EOF: verify the target is still the process we were asked to kill (guards against
 //! PID reuse), send SIGTERM, wait up to `grace_secs`, then SIGKILL.
 //!
+//! This is intentionally a Rust binary rather than a shell script. Prover test artifacts are
+//! built on a non-GPU machine and transferred to a GPU runner, so keeping the watchdog in the
+//! Cargo build makes the transferred test archive self-contained.
+//!
 //! See `src/leash.rs` for the spawning side.
 
 fn main() {
