@@ -10,12 +10,12 @@ use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::{L1AssetRouter, L2BaseToken};
-use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_GATEWAY, Tester, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_L1, Tester, test_multisetup};
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType,
 };
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 async fn l1_deposit(tester: Tester) -> anyhow::Result<()> {
     // Test that we can deposit L2 funds from a rich L1 account
     let alice = tester.l1_wallet().default_signer().address();
@@ -129,7 +129,7 @@ async fn l1_deposit(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_GATEWAY])]
+#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 async fn l1_withdraw(tester: Tester) -> anyhow::Result<()> {
     // Test that we can withdraw L2 funds to L1
     let alice = tester.l2_wallet.default_signer().address();
@@ -160,8 +160,10 @@ async fn l1_withdraw(tester: Tester) -> anyhow::Result<()> {
 
     let alice_l1_final_balance = tester.l1_provider().get_balance(alice).await?;
     let alice_l2_final_balance = tester.l2_provider.get_balance(alice).await?;
-    assert!(alice_l1_final_balance >= alice_l1_initial_balance - l1_fee + amount);
-    assert!(alice_l2_final_balance <= alice_l2_initial_balance - l2_fee - amount);
+    // Rearranged to avoid U256 underflow: the test wallet may hold no L1 ETH at all before the
+    // withdrawal arrives (e.g. on freshly generated chain states).
+    assert!(alice_l1_final_balance + l1_fee >= alice_l1_initial_balance + amount);
+    assert!(alice_l2_final_balance + l2_fee + amount <= alice_l2_initial_balance);
 
     Ok(())
 }

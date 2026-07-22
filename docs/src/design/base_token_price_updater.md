@@ -17,20 +17,18 @@ external_price_api_client:
 
 For forced config it's essential to provide prices for all required tokens:
 - chain base token
-- base token of the settlement layer (ETH for L1, ZK for Gateway)
 - ETH
 
-So for the chain that uses USDC as base token and settles on gateway forced configuration can look like this:
+So for the chain that uses USDC as base token forced configuration can look like this:
 ```yaml
 external_price_api_client:
   source: "Forced"
   forced_prices:
     "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": 1.0    # USDC
     "0x0000000000000000000000000000000000000001": 3000.0 # ETH
-    "0x66a5cfb2e9c529f14fe6364ad1075df3a649c0a5": 0.035  # ZK
 ```
 
-In simple case, when chain base token is ETH and settlement layer is L1, only ETH price is required:
+In simple case, when chain base token is ETH, only ETH price is required:
 ```yaml
 external_price_api_client:
   source: "Forced"
@@ -45,7 +43,7 @@ then the component will also periodically update "ETH:token" price ratio on L1. 
 still work without it but there will be a warning in logs and ratio on L1 won't change meaning that price
 for L1->L2 txs can eventually get outdated.
 
-You can use either a local private key or a GCP KMS key via the `token_multiplier_setter_sk` field:
+You can use a local private key, a GCP KMS key, or an Azure Key Vault key via the `token_multiplier_setter_sk` field:
 
 ```yaml
 # Option 1: Local private key (plain hex string)
@@ -57,6 +55,12 @@ base_token_price_updater:
   token_multiplier_setter_sk:
     type: gcp_kms
     resource: "projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}"
+
+# Option 3: Azure Key Vault / Managed HSM key (structured object; the key version is required)
+base_token_price_updater:
+  token_multiplier_setter_sk:
+    type: azure_kms
+    key_id: "https://{vault}.vault.azure.net/keys/{name}/{version}"
 ```
 
 ## Mainnet recommendation
@@ -82,12 +86,10 @@ In case you want fees to behave as on mainnet, you can still use 3rd party sourc
 - `base_token_addr_override` - mainnet token address that source can provide price for; in case base token is ETH it can be omitted.
 - `base_token_decimals_override` - token decimals (since token is on mainnet but node connects to testnet it cannot get the decimals from L1);
     in case base token is ETH or ZK it can be omitted.
-Similarly, you can set `gateway_base_token_addr_override` to ZK mainnet address in case settlement layer is Gateway.
 
-Example configuration for a chain that settles to Gateway, and chain's base token is USDC:
+Example configuration for a chain whose base token is USDC:
 ```yaml
 base_token_price_updater:
   base_token_addr_override: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" # USDC
   base_token_decimals_override: 6 # USDC decimals
-  gateway_base_token_addr_override: "0x66a5cfb2e9c529f14fe6364ad1075df3a649c0a5" # ZK
 ```

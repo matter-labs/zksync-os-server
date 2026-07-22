@@ -34,3 +34,18 @@ If the PR title uses the breaking-change marker (`feat!: ...`, `fix!: ...`), you
 ### Wire format immutability
 
 Do **not** modify existing versioned wire format files under `lib/network/src/wire/replays/v*.rs`. Add a new versioned file instead.
+
+### Comments
+Comment **why**, not **what**. The code shows what it does; comments explain intent, invariants, and non-obvious decisions. No comments on self-evident code.
+
+✅ **Comment when:**
+- Non-obvious behavior or edge cases
+- Performance trade-offs
+- Safety requirements (unsafe blocks must always be documented)
+- Limitations, constraints, assumptions or gotchas
+- Why simpler alternatives don't work
+
+❌ **Don't comment when:**
+- Code is self-explanatory
+- Just restating the code in English
+- Describing what changed in this PR

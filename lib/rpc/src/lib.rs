@@ -22,7 +22,6 @@ pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
 pub mod js_tracer;
 mod limits;
-mod log_proof_utils;
 mod method_filter_middleware;
 mod monitoring_middleware;
 mod net_impl;
@@ -53,7 +52,6 @@ use crate::unstable_impl::UnstableNamespace;
 use crate::web3_impl::Web3Namespace;
 use crate::zks_impl::ZksNamespace;
 use alloy::primitives::Address;
-use alloy::providers::DynProvider;
 use anyhow::Context;
 use hyper::Method;
 use jsonrpsee::RpcModule;
@@ -81,6 +79,7 @@ use zksync_os_types::TransactionAcceptanceState;
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     config: RpcConfig,
+    listener: tokio::net::TcpListener,
     chain_id: u64,
     bridgehub_address: Address,
     bytecode_supplier_address: Address,
@@ -90,12 +89,10 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<TxForwarder>,
-    gateway_provider: Option<DynProvider>,
     policy_client: Option<PolicyClient>,
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    tracing::info!("Starting JSON-RPC server at {}", config.address);
     metrics::register_task_monitor();
 
     let mut rpc = RpcModule::new(());
@@ -131,8 +128,6 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             bytecode_supplier_address,
             storage.clone(),
             genesis_input_source,
-            chain_id,
-            gateway_provider,
         )
         .into_rpc(),
     )?;
@@ -182,9 +177,19 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         .set_http_middleware(middleware)
         .set_rpc_middleware(rpc_middleware);
 
+    let local_addr = listener
+        .local_addr()
+        .context("failed to get RPC listener local address")?;
+    tracing::info!(
+        "Starting JSON-RPC server at {local_addr} (configured: {})",
+        config.address
+    );
     let server = server_builder
-        .build(config.address)
-        .await
+        .build_from_tcp(
+            listener
+                .into_std()
+                .context("failed to convert RPC listener to std")?,
+        )
         .context("Failed building HTTP JSON-RPC server")?;
 
     runtime.spawn_critical_with_graceful_shutdown_signal("rpc server", |shutdown| async move {

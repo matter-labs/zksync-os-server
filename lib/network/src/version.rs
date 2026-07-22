@@ -68,6 +68,18 @@ impl ZksProtocolVersionSpec for ZksProtocolV4 {
     const VERSION: ZksVersion = ZksVersion::Zks4;
 }
 
+/// Protocol version 5 keeps the v3 replay record encoding from v4 but drops all verifier-related
+/// messages. The verifier handshake and batch verification now live in the standalone `zks_2fa`
+/// subprotocol, leaving `zks` purely responsible for replay streaming.
+#[derive(Debug, Clone)]
+pub struct ZksProtocolV5;
+
+impl ZksProtocolVersionSpec for ZksProtocolV5 {
+    type Record = v3::ReplayRecord;
+
+    const VERSION: ZksVersion = ZksVersion::Zks5;
+}
+
 /// Error thrown when failed to parse a valid [`ZksVersion`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("Unknown zks protocol version: {0}")]
@@ -87,15 +99,23 @@ pub enum ZksVersion {
     Zks3 = 3,
     /// The `zks` protocol version 4.
     Zks4 = 4,
+    /// The `zks` protocol version 5. Replay-only; verifier messages moved to `zks_2fa`.
+    Zks5 = 5,
 }
 
 impl ZksVersion {
     /// The latest known zks version
-    pub const LATEST: Self = Self::Zks4;
+    pub const LATEST: Self = Self::Zks5;
 
     /// All known zks versions
-    pub const ALL_VERSIONS: &'static [Self] =
-        &[Self::Zks0, Self::Zks1, Self::Zks2, Self::Zks3, Self::Zks4];
+    pub const ALL_VERSIONS: &'static [Self] = &[
+        Self::Zks0,
+        Self::Zks1,
+        Self::Zks2,
+        Self::Zks3,
+        Self::Zks4,
+        Self::Zks5,
+    ];
 
     /// Returns the max message id for the given version.
     const fn max_message_id(&self) -> u8 {
@@ -105,6 +125,8 @@ impl ZksVersion {
             ZksVersion::Zks2 => ZksMessageId::BlockReplays as u8,
             ZksVersion::Zks3 => ZksMessageId::VerifyBatchResult as u8,
             ZksVersion::Zks4 => ZksMessageId::VerifyBatchResult as u8,
+            // Replay-only: verifier messages live in the `zks_2fa` subprotocol.
+            ZksVersion::Zks5 => ZksMessageId::BlockReplays as u8,
         }
     }
 
@@ -158,6 +180,8 @@ impl TryFrom<u8> for ZksVersion {
             1 => Ok(Self::Zks1),
             2 => Ok(Self::Zks2),
             3 => Ok(Self::Zks3),
+            4 => Ok(Self::Zks4),
+            5 => Ok(Self::Zks5),
             _ => Err(ParseVersionError(u.to_string())),
         }
     }
@@ -179,6 +203,7 @@ impl From<ZksVersion> for &'static str {
             ZksVersion::Zks2 => "2",
             ZksVersion::Zks3 => "3",
             ZksVersion::Zks4 => "4",
+            ZksVersion::Zks5 => "5",
         }
     }
 }
@@ -211,7 +236,9 @@ mod tests {
             (1_u8, Ok(ZksVersion::Zks1)),
             (2_u8, Ok(ZksVersion::Zks2)),
             (3_u8, Ok(ZksVersion::Zks3)),
-            (4_u8, Err(RlpError::Custom("invalid zks version"))),
+            (4_u8, Ok(ZksVersion::Zks4)),
+            (5_u8, Ok(ZksVersion::Zks5)),
+            (6_u8, Err(RlpError::Custom("invalid zks version"))),
         ];
 
         for (input, expected) in test_cases {
@@ -231,6 +258,8 @@ mod tests {
             (ZksVersion::Zks1, 2),
             (ZksVersion::Zks2, 2),
             (ZksVersion::Zks3, 7),
+            (ZksVersion::Zks4, 7),
+            (ZksVersion::Zks5, 2),
         ];
 
         for (version, expected_count) in test_cases {
@@ -249,7 +278,12 @@ mod tests {
             ZksMessageId::VerifyBatchResult,
         ];
 
-        for version in [ZksVersion::Zks0, ZksVersion::Zks1, ZksVersion::Zks2] {
+        for version in [
+            ZksVersion::Zks0,
+            ZksVersion::Zks1,
+            ZksVersion::Zks2,
+            ZksVersion::Zks5,
+        ] {
             for message in old_messages {
                 assert!(version.supports_message(message));
             }
@@ -260,6 +294,7 @@ mod tests {
 
         for message in old_messages.into_iter().chain(new_messages) {
             assert!(ZksVersion::Zks3.supports_message(message));
+            assert!(ZksVersion::Zks4.supports_message(message));
         }
     }
 }

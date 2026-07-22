@@ -102,20 +102,28 @@ impl<T: Clone> ProverJobMap<T> {
         );
     }
 
-    /// Picks the first job (lowest batch number) that is either:
+    /// Picks the first job (lowest batch number) that passes `predicate` and is either:
     /// - Pending and older than min_age (fake provers use non-empty min_age)
     /// - Assigned and timed out
     ///
     /// Returns None if no eligible job is found.
     ///
     /// Used for FRI jobs (one batch == one job)
-    pub async fn pick_job(&self, min_age: Duration, prover_id: &str) -> Option<(FriJob, T)> {
+    pub async fn pick_job<F>(
+        &self,
+        min_age: Duration,
+        prover_id: &str,
+        mut predicate: F,
+    ) -> Option<(FriJob, T)>
+    where
+        F: FnMut(&JobEntry<T>) -> bool,
+    {
         let now = Instant::now();
         let mut result = self
             .pick_jobs_while_with_limit(1, prover_id, |entry| {
                 // min_age is non-zero only for fake provers
                 // for real provers this is no-op - that is, we always take the oldest eligible job
-                now.duration_since(entry.metadata.added_at) >= min_age
+                now.duration_since(entry.metadata.added_at) >= min_age && predicate(entry)
             })
             .await;
 
@@ -471,9 +479,19 @@ mod tests {
     use zksync_os_contract_interface::models::{
         CommitBatchInfo, DACommitmentScheme, StoredBatchInfo,
     };
-    use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
+    use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataMode};
 
     fn create_test_batch_envelope(batch_number: u64) -> SignedBatchEnvelope<Vec<u8>> {
+        create_test_batch_envelope_with_protocol_version(
+            batch_number,
+            ProtocolSemanticVersion::legacy_genesis_version(),
+        )
+    }
+
+    fn create_test_batch_envelope_with_protocol_version(
+        batch_number: u64,
+        protocol_version: ProtocolSemanticVersion,
+    ) -> SignedBatchEnvelope<Vec<u8>> {
         let batch = BatchMetadata {
             previous_stored_batch_info: StoredBatchInfo {
                 batch_number: batch_number.saturating_sub(1),
@@ -505,7 +523,7 @@ mod tests {
                     operator_da_input: vec![],
                     sl_chain_id: 2,
                 },
-                protocol_version: ProtocolSemanticVersion::legacy_genesis_version(),
+                protocol_version,
                 upgrade_tx_hash: None,
             },
             chain_address: Address::ZERO,
@@ -554,20 +572,52 @@ mod tests {
         map.add_job(create_test_batch_envelope(1)).await;
         map.add_job(create_test_batch_envelope(2)).await;
 
-        let job = map.pick_job(Duration::ZERO, "prover-1").await;
+        let job = map.pick_job(Duration::ZERO, "prover-1", |_| true).await;
         assert!(job.is_some());
         let (fri_job, _data) = job.unwrap();
         assert_eq!(fri_job.batch_number, 1);
 
         // Job 1 is now assigned, should pick job 2
-        let job = map.pick_job(Duration::ZERO, "prover-2").await;
+        let job = map.pick_job(Duration::ZERO, "prover-2", |_| true).await;
         assert!(job.is_some());
         let (fri_job, _data) = job.unwrap();
         assert_eq!(fri_job.batch_number, 2);
 
         // All jobs assigned, should return None
-        let job = map.pick_job(Duration::ZERO, "prover-3").await;
+        let job = map.pick_job(Duration::ZERO, "prover-3", |_| true).await;
         assert!(job.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_pick_job_with_proving_version_filter() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            2,
+            ProtocolSemanticVersion::new(0, 31, 0),
+        ))
+        .await;
+
+        let job = map
+            .pick_job(Duration::ZERO, "prover-v7", |job| {
+                job.metadata.proving_version == ProvingVersion::V7
+            })
+            .await;
+
+        assert!(job.is_some());
+        let (fri_job, _data) = job.unwrap();
+        assert_eq!(fri_job.batch_number, 2);
+        assert_eq!(fri_job.vk_hash, ProvingVersion::V7.vk_hash());
+
+        let status = map.status().await;
+        assert_eq!(status[0].fri_job.batch_number, 1);
+        assert_eq!(status[0].assigned_to_prover_id, None);
+        assert_eq!(status[1].fri_job.batch_number, 2);
+        assert_eq!(
+            status[1].assigned_to_prover_id,
+            Some("prover-v7".to_string())
+        );
     }
 
     #[tokio::test]
@@ -576,18 +626,18 @@ mod tests {
 
         map.add_job(create_test_batch_envelope(1)).await;
 
-        let job = map.pick_job(Duration::ZERO, "prover-1").await;
+        let job = map.pick_job(Duration::ZERO, "prover-1", |_| true).await;
         assert!(job.is_some());
 
         // Try to pick again immediately - should return None (still assigned)
-        let job = map.pick_job(Duration::ZERO, "prover-2").await;
+        let job = map.pick_job(Duration::ZERO, "prover-2", |_| true).await;
         assert!(job.is_none());
 
         // Wait for timeout
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         // Should be able to pick again after timeout
-        let job = map.pick_job(Duration::ZERO, "prover-2").await;
+        let job = map.pick_job(Duration::ZERO, "prover-2", |_| true).await;
         assert!(job.is_some());
         let (fri_job, _data) = job.unwrap();
         assert_eq!(fri_job.batch_number, 1);
@@ -622,6 +672,49 @@ mod tests {
             .await;
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].0.batch_number, 1);
+    }
+
+    #[tokio::test]
+    async fn test_pick_multiple_jobs_with_proving_version_filter() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            2,
+            ProtocolSemanticVersion::new(0, 31, 0),
+        ))
+        .await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            3,
+            ProtocolSemanticVersion::new(0, 31, 0),
+        ))
+        .await;
+
+        let jobs = map
+            .pick_jobs_while_with_limit(5, "prover-v7", |job| {
+                job.metadata.proving_version == ProvingVersion::V7
+            })
+            .await;
+
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].0.batch_number, 2);
+        assert_eq!(jobs[1].0.batch_number, 3);
+        assert!(
+            jobs.iter()
+                .all(|(fri_job, _)| fri_job.vk_hash == ProvingVersion::V7.vk_hash())
+        );
+
+        let status = map.status().await;
+        assert_eq!(status[0].fri_job.batch_number, 1);
+        assert_eq!(status[0].assigned_to_prover_id, None);
+        assert_eq!(
+            status[1].assigned_to_prover_id,
+            Some("prover-v7".to_string())
+        );
+        assert_eq!(
+            status[2].assigned_to_prover_id,
+            Some("prover-v7".to_string())
+        );
     }
 
     #[tokio::test]
@@ -717,7 +810,7 @@ mod tests {
         map.add_job(create_test_batch_envelope(1)).await;
         map.add_job(create_test_batch_envelope(2)).await;
 
-        let _ = map.pick_job(Duration::ZERO, "prover-1").await;
+        let _ = map.pick_job(Duration::ZERO, "prover-1", |_| true).await;
 
         let status = map.status().await;
         assert_eq!(status.len(), 2);

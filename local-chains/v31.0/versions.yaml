@@ -3,18 +3,10 @@ general:
   verification_key: "TBD"
 
 era-contracts:
-  # TODO: remove branch and put tag and sha when the release is done
-  #branch: "draft-v31-with-zksync-os"
-  # tag: "TBD"
-  sha: "fdb60be1a49f5f0a371fc24b747cf5bdea1b1f74"
+  sha: "e091691063c99a1d0281d6fe42fb0ec4430f3673"
 
-zkstack-cli:
-  # TODO: remove branch and put tag and sha when the release is done
-  #branch: "draft-v31"
-  # tag: "TBD"
-  sha: "d1f681c395a5b40fd4cfa591dea8ac3d3f80ebdc"
+zksync-os-integration-tests:
+  sha: "a54ca34d4cf8d0320649a9fa4322874a03ce805e"
 
-zksync-os-scripts:
-  # TODO: remove branch and put tag and sha when the release is done
-#  tag: "TBD"
-  sha: "544c8c31a6e5e76ffb307f6c921596ca920b7fc6"
+zksync-os-server:
+  sha: "61c5a3f5a2797009418b96f93086681902000855"

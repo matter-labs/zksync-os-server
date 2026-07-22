@@ -1,7 +1,7 @@
 //! The node's canonical Ethereum-network provider.
 //!
 //! [`NodeProvider`] is an object-safe, wallet-capable wrapper over
-//! [`alloy::providers::Provider<Ethereum>`] used everywhere the node talks to an L1, Gateway, or L2
+//! [`alloy::providers::Provider<Ethereum>`] used everywhere the node talks to an L1 or L2
 //! RPC. On top of the plain provider it caches per-address contract deployment blocks (see
 //! [`NodeProvider::deployment_block`]), so the many startup binary searches over L1 history can use
 //! a tight lower bound without each rediscovering it.
@@ -82,7 +82,9 @@ pub struct ProviderCapabilities {
     /// Whether the RPC implements `eth_getHeaderBy*`. When false, header lookups use
     /// `eth_getBlockBy*` instead.
     pub get_header: bool,
-    /// Whether the underlying node supports the EIP-7594 (Fusaka/PeerDAS) blob format.
+    /// Whether the chain accepts the EIP-7594 (Fusaka/PeerDAS) blob sidecar format. Determined
+    /// from the active fork reported by `eth_config` (EIP-7910) when available, otherwise by
+    /// assuming every chain except the Anvil dev default (chain id 31337) is post-Fusaka.
     pub supports_eip7594: bool,
 }
 
@@ -106,19 +108,81 @@ impl ProviderCapabilities {
         if !finalized_tag {
             tracing::info!("provider lacks the `finalized` block tag; degrading to latest");
         }
-        // A local Anvil dev node (detected by chain id) does not support EIP-7594 blobs yet. On any
-        // probe failure we assume a real node that does support them.
-        let supports_eip7594 = provider
-            .get_chain_id()
-            .await
-            .map(|id| id != ANVIL_L1_CHAIN_ID)
-            .unwrap_or(true);
+        // Prefer asking the node which fork is active via `eth_config` (EIP-7910, mandatory on
+        // Fusaka-ready clients): the EIP-7594 sidecar format is accepted if the chain's current
+        // fork is Osaka or later, regardless of what the client software could support. When the
+        // method is missing or unrecognized, fall back to the chain-id heuristic: a local Anvil
+        // dev node does not support EIP-7594 blobs, and on any probe failure we assume a real
+        // node that does support them.
+        let supports_eip7594 = match Self::probe_eth_config_eip7594(provider).await {
+            Some(supported) => {
+                tracing::info!(
+                    supported,
+                    "determined EIP-7594 blob support from the eth_config fork report"
+                );
+                supported
+            }
+            None => provider
+                .get_chain_id()
+                .await
+                .map(|id| id != ANVIL_L1_CHAIN_ID)
+                .unwrap_or(true),
+        };
         Self {
             get_header,
             finalized_tag,
             supports_eip7594,
         }
     }
+
+    /// Probes EIP-7910 `eth_config` for whether the chain's *currently active* fork accepts the
+    /// EIP-7594 (Fusaka/PeerDAS) blob sidecar format. Returns `None` when the method is missing
+    /// or the response shape is not understood, letting the caller fall back to a heuristic.
+    async fn probe_eth_config_eip7594(provider: &impl Provider<Ethereum>) -> Option<bool> {
+        let config: serde_json::Value = match provider
+            .client()
+            .request("eth_config", NoParams::default())
+            .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::info!(
+                    %err,
+                    "eth_config unavailable; using chain-id heuristic for EIP-7594 support"
+                );
+                return None;
+            }
+        };
+        let supported = eth_config_reports_eip7594(&config);
+        if supported.is_none() {
+            tracing::info!(
+                "unrecognized eth_config response; using chain-id heuristic for EIP-7594 support"
+            );
+        }
+        supported
+    }
+}
+
+/// The P256VERIFY (secp256r1) precompile of EIP-7951, which activates in the Osaka fork together
+/// with EIP-7594. `eth_config` does not name forks, so this precompile appearing in the active
+/// fork's precompile map is the signal that the chain accepts cell-proof blob sidecars.
+const P256VERIFY_PRECOMPILE: &str = "0x0000000000000000000000000000000000000100";
+
+/// Interprets an EIP-7910 `eth_config` response: `Some(true)` when the currently active fork
+/// includes EIP-7594, `Some(false)` when it provably does not, `None` when the response carries
+/// no recognizable precompile map. Tolerates both name→address (the EIP-7910 shape) and
+/// address→name precompile-map orientations.
+fn eth_config_reports_eip7594(config: &serde_json::Value) -> Option<bool> {
+    let is_p256verify = |entry: &str| {
+        entry.eq_ignore_ascii_case("P256VERIFY")
+            || entry.eq_ignore_ascii_case(P256VERIFY_PRECOMPILE)
+    };
+    let precompiles = config.get("current")?.get("precompiles")?.as_object()?;
+    Some(
+        precompiles
+            .iter()
+            .any(|(key, value)| is_p256verify(key) || value.as_str().is_some_and(is_p256verify)),
+    )
 }
 
 /// Per-address cache of contract deployment blocks. Cloning a [`NodeProvider`] shares this cache
@@ -820,9 +884,11 @@ mod tests {
     async fn uses_get_header_when_supported() {
         let asserter = Asserter::new();
         // Probe: get_header(latest) ok -> get_header supported; get_header(finalized) ok ->
-        // finalized supported; get_chain_id -> non-anvil.
+        // finalized supported; eth_config unavailable -> chain-id heuristic; get_chain_id ->
+        // non-anvil.
         asserter.push_success(&header_with_number(1));
         asserter.push_success(&header_with_number(1));
+        asserter.push_failure(unsupported_method());
         asserter.push_success(&U64::from(1));
         let provider = NodeProvider::new(mocked_provider(&asserter))
             .await
@@ -845,9 +911,11 @@ mod tests {
     async fn falls_back_to_get_block_when_get_header_unsupported() {
         let asserter = Asserter::new();
         // Probe: get_header(latest) fails -> get_header unsupported; get_block(finalized) ok ->
-        // finalized supported; get_chain_id -> non-anvil.
+        // finalized supported; eth_config unavailable -> chain-id heuristic; get_chain_id ->
+        // non-anvil.
         asserter.push_failure(unsupported_method());
         asserter.push_success(&block_with_number(1));
+        asserter.push_failure(unsupported_method());
         asserter.push_success(&U64::from(1));
         let provider = NodeProvider::new(mocked_provider(&asserter))
             .await
@@ -870,8 +938,10 @@ mod tests {
     async fn degrades_to_latest_when_finalized_unsupported() {
         let asserter = Asserter::new();
         // Probe: get_header(latest) ok -> get_header supported; get_header(finalized) fails ->
-        // finalized unsupported; get_chain_id -> non-anvil.
+        // finalized unsupported; eth_config unavailable -> chain-id heuristic; get_chain_id ->
+        // non-anvil.
         asserter.push_success(&header_with_number(1));
+        asserter.push_failure(unsupported_method());
         asserter.push_failure(unsupported_method());
         asserter.push_success(&U64::from(1));
         let provider = NodeProvider::new(mocked_provider(&asserter))
@@ -891,12 +961,104 @@ mod tests {
         assert!(asserter.read_q().is_empty(), "all responses consumed");
     }
 
+    /// EIP-7910 `eth_config` response with the given active-fork precompile map, mirroring the
+    /// shape Besu/geth return.
+    fn eth_config_with_precompiles(precompiles: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "current": {
+                "activationTime": 0,
+                "blobSchedule": { "baseFeeUpdateFraction": 5007716, "max": 9, "target": 6 },
+                "chainId": "0x9",
+                "forkId": "0x3d641a85",
+                "precompiles": precompiles,
+            },
+            "next": null,
+            "last": null,
+        })
+    }
+
+    #[tokio::test]
+    async fn eth_config_osaka_enables_eip7594() {
+        let asserter = Asserter::new();
+        // Probe: headers ok; eth_config reports P256VERIFY (Osaka active) -> EIP-7594 supported.
+        // No chain-id response is queued: the heuristic must not run when eth_config answers.
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&eth_config_with_precompiles(serde_json::json!({
+            "ECREC": "0x0000000000000000000000000000000000000001",
+            "KZG_POINT_EVALUATION": "0x000000000000000000000000000000000000000a",
+            "P256VERIFY": "0x0000000000000000000000000000000000000100",
+        })));
+        let provider = NodeProvider::new(mocked_provider(&asserter))
+            .await
+            .expect("mocked provider construction should succeed");
+        assert!(provider.capabilities().supports_eip7594);
+        assert!(asserter.read_q().is_empty(), "all responses consumed");
+    }
+
+    #[tokio::test]
+    async fn eth_config_pre_osaka_disables_eip7594_regardless_of_chain_id() {
+        let asserter = Asserter::new();
+        // A Cancun-level fork report (what Besu returns on a cancun-only chain): the KZG point
+        // evaluation precompile is present but P256VERIFY is not -> classic EIP-4844 sidecars,
+        // even though the chain id would heuristically be treated as post-Fusaka.
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&eth_config_with_precompiles(serde_json::json!({
+            "ECREC": "0x0000000000000000000000000000000000000001",
+            "SHA256": "0x0000000000000000000000000000000000000002",
+            "KZG_POINT_EVALUATION": "0x000000000000000000000000000000000000000a",
+        })));
+        let provider = NodeProvider::new(mocked_provider(&asserter))
+            .await
+            .expect("mocked provider construction should succeed");
+        assert!(!provider.capabilities().supports_eip7594);
+        assert!(asserter.read_q().is_empty(), "all responses consumed");
+    }
+
+    #[tokio::test]
+    async fn unrecognized_eth_config_falls_back_to_chain_id_heuristic() {
+        let asserter = Asserter::new();
+        // eth_config responds with an unexpected shape -> fall back to get_chain_id (non-anvil).
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&serde_json::json!({ "unexpected": "shape" }));
+        asserter.push_success(&U64::from(1));
+        let provider = NodeProvider::new(mocked_provider(&asserter))
+            .await
+            .expect("mocked provider construction should succeed");
+        assert!(provider.capabilities().supports_eip7594);
+        assert!(asserter.read_q().is_empty(), "all responses consumed");
+    }
+
+    #[test]
+    fn eth_config_parser_handles_both_map_orientations() {
+        let by_name = serde_json::json!({
+            "current": { "precompiles": { "P256VERIFY": "0x0000000000000000000000000000000000000100" } }
+        });
+        assert_eq!(eth_config_reports_eip7594(&by_name), Some(true));
+
+        let by_address = serde_json::json!({
+            "current": { "precompiles": { "0x0000000000000000000000000000000000000100": "P256VERIFY" } }
+        });
+        assert_eq!(eth_config_reports_eip7594(&by_address), Some(true));
+
+        let cancun = serde_json::json!({
+            "current": { "precompiles": { "ECREC": "0x0000000000000000000000000000000000000001" } }
+        });
+        assert_eq!(eth_config_reports_eip7594(&cancun), Some(false));
+
+        assert_eq!(eth_config_reports_eip7594(&serde_json::json!({})), None);
+    }
+
     #[tokio::test]
     async fn anvil_chain_id_disables_eip7594() {
         let asserter = Asserter::new();
-        // Probe: get_header(latest) ok; get_header(finalized) ok; get_chain_id -> anvil.
+        // Probe: get_header(latest) ok; get_header(finalized) ok; eth_config unavailable ->
+        // chain-id heuristic; get_chain_id -> anvil.
         asserter.push_success(&header_with_number(1));
         asserter.push_success(&header_with_number(1));
+        asserter.push_failure(unsupported_method());
         asserter.push_success(&U64::from(ANVIL_L1_CHAIN_ID));
         let provider = NodeProvider::new(mocked_provider(&asserter))
             .await
