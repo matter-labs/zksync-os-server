@@ -141,6 +141,28 @@ The batcher moves to exactly one validator (conventionally the ex-sequencer's
 machine); settlement pauses during the gap and reconciles on startup through the
 same recovery machinery every restart uses.
 
+Converting an external node in place is a configuration change on top of the
+committee example above:
+
+```yaml
+general:
+  node_role: main    # was `external`; `main_node_rpc_url` can be removed
+genesis:
+  # an external node fetches these from the main node at runtime; a validator
+  # carries them itself — copy the values from the drained sequencer's config
+  chain_id: <chain id>
+  bridgehub_address: <bridgehub address>
+  bytecode_supplier_address: <bytecode supplier address>
+  genesis_input_path: <path to genesis.json>
+batcher:
+  enabled: false     # the settler stays on exactly one validator
+consensus:
+  enabled: true
+  genesis_height: <H>    # the drained tip, from `chain-tip`
+  # ...plus this validator's keys, listen address, and the committee list,
+  # exactly as in the new-chain example above
+```
+
 ## Observers
 
 An observer is a node on the consensus network that never votes: it holds no BLS

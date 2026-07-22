@@ -50,6 +50,14 @@ use zksync_os_consensus_execution::NodeExecutionEnv;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_storage_api::{ReadStateHistory, WriteState};
 
+/// Stack size for the consensus thread and the consensus runtime's worker
+/// threads. Proposal building and verification re-execute blocks on these
+/// threads, and execution's call stacks run deep — past the 2 MiB default of a
+/// spawned thread, which overflows on a bare production binary. (Processes run
+/// through cargo are covered by the `RUST_MIN_STACK` in `.cargo/config.toml`;
+/// this constant matches its value.)
+const CONSENSUS_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 /// Domain-separation namespace for everything this network signs and speaks,
 /// carrying the committee protocol version. Consensus messages cannot be
 /// per-connection negotiated (a certificate aggregates signatures over one message
@@ -92,6 +100,7 @@ where
     let (dead_sender, dead_receiver) = tokio::sync::oneshot::channel();
     let handle = std::thread::Builder::new()
         .name("consensus".to_string())
+        .stack_size(CONSENSUS_STACK_SIZE)
         .spawn(move || {
             let result = run(setup, env, l2_pool, observability, shutdown);
             // The reason must hit the logs *here*: the JoinHandle's return value
@@ -143,6 +152,7 @@ where
     let runtime_config = commonware_runtime::tokio::Config::default()
         .with_tcp_nodelay(Some(true))
         .with_worker_threads(3)
+        .with_thread_stack_size(CONSENSUS_STACK_SIZE)
         .with_storage_directory(setup.storage_directory.clone())
         .with_catch_panics(false);
     let runner = commonware_runtime::tokio::Runner::new(runtime_config);

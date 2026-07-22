@@ -15,17 +15,19 @@
 
 use crate::config::Config;
 use alloy::primitives::{BlockHash, BlockNumber};
-use anyhow::Context as _;
 use zksync_os_storage::db::BlockReplayStorage;
 use zksync_os_storage_api::ReadReplay as _;
 
 /// Reads the chain tip — the height the write-ahead log ends at and the
 /// canonical block hash at that height — from a stopped node's database.
 pub fn read_chain_tip(config: &Config) -> anyhow::Result<(BlockNumber, BlockHash)> {
-    let chain_id = config
-        .genesis_config
-        .chain_id
-        .context("`genesis.chain_id` is required to open the write-ahead log")?;
+    // The write-ahead log stores block contexts with the chain id stripped and
+    // re-supplies it from this value only when replay records are assembled.
+    // The two reads below never assemble a record, so any value works — and
+    // requiring `genesis.chain_id` would break the tool on an external node's
+    // configuration, which carries none (external nodes fetch it from the main
+    // node at runtime).
+    let chain_id = config.genesis_config.chain_id.unwrap_or(0);
     let wal_path = config
         .general_config
         .rocks_db_path
