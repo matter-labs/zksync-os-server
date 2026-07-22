@@ -21,6 +21,9 @@ jemalloc = [
     "zksync_os_rpc/jemalloc",
     "tikv-jemallocator/stats",
 ]
+# GCP replay archive backends (GCS storage + GCP KMS encryption). Off by default so local builds
+# skip the Google Cloud SDK; production builds pass `--features gcp`.
+gcp = ["zksync_os_replay_archive/gcp"]
 
 [dependencies]
 zksync_os_provider.workspace = true

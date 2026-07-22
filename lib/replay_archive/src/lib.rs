@@ -1,7 +1,6 @@
 use alloy::primitives::{BlockHash, BlockNumber};
 use async_trait::async_trait;
 use std::fmt;
-use std::str::FromStr;
 use std::sync::Arc;
 use zksync_os_storage_api::ReplayRecord;
 
@@ -9,7 +8,11 @@ mod age_encrypted;
 mod component;
 mod filesystem;
 mod gate_component;
+#[cfg(feature = "gcp")]
+mod gcs;
 mod init;
+#[cfg(feature = "gcp")]
+mod kms;
 mod metrics;
 mod reader;
 mod recovery;
@@ -17,18 +20,26 @@ mod replay_record;
 mod s3;
 mod write_replay;
 
-pub use age_encrypted::AgeEncryptedReplayArchiver;
+pub use age_encrypted::{AgeEncryptedReplayArchiver, ArchiveRecipient};
 pub use component::{ReplayArchiveComponent, ReplayArchiveRecord, ReplayArchiveSender};
 pub use filesystem::{
     FileSystemReplayArchiveReader, FileSystemReplayArchiveStorage, FileSystemReplayArchiver,
 };
 pub use gate_component::ReplayArchiveGateComponent;
+#[cfg(feature = "gcp")]
+pub use gcs::{
+    GcsReplayArchiveAuthMode, GcsReplayArchiveConfig, GcsReplayArchiveReader,
+    GcsReplayArchiveStorage,
+};
 pub use init::{
     InitializedReplayArchive, ReplayArchiveConfig, ReplayArchiveEncryptionConfig,
     init_replay_archive,
 };
-pub use reader::{ReplayArchiveObject, ReplayArchiveObjectStream, ReplayArchiveStorageReader};
+#[cfg(feature = "gcp")]
+pub use kms::{GcpKmsClient, GcpKmsConfig, GcpKmsIdentity, GcpKmsRecipient};
+pub use reader::{ReplayArchiveKeyPage, ReplayArchiveStorageReader};
 pub use recovery::{
+    ArchiveIdentity, DEFAULT_DECRYPT_CONCURRENCY, DEFAULT_DOWNLOAD_CONCURRENCY,
     download_all_replay_archive_objects, parse_age_x25519_identity, read_age_x25519_identity,
     recover_replay_records_to_rocksdb, recover_replay_records_to_rocksdb_with_optional_decryption,
 };
@@ -43,79 +54,21 @@ pub const REPLAY_ARCHIVE_QUEUE_SIZE: usize = 128;
 /// Replay archive layout:
 ///
 /// ```text
-/// <timestamp_millis>-<node_id>/<block_number>/<block_hash>
+/// <block_number>/<block_hash>
 /// ```
 ///
-/// The stored object value is the replay record bytes chosen by a concrete backend. No batch
-/// metadata or extra envelope is part of the value; all lookup metadata is encoded in the key.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ReplayArchiveSession {
-    timestamp_millis: u64,
-    node_id: String,
-}
-
-impl ReplayArchiveSession {
-    pub fn new(
-        timestamp_millis: u64,
-        node_id: impl Into<String>,
-    ) -> Result<Self, InvalidReplayArchiveSession> {
-        let node_id = node_id.into();
-        validate_node_id(&node_id)?;
-        Ok(Self {
-            timestamp_millis,
-            node_id,
-        })
-    }
-
-    pub fn node_id(&self) -> &str {
-        &self.node_id
-    }
-
-    pub fn timestamp_millis(&self) -> u64 {
-        self.timestamp_millis
-    }
-
-    pub fn folder_name(&self) -> String {
-        format!("{}-{}", self.timestamp_millis, self.node_id)
-    }
-}
-
-impl fmt::Display for ReplayArchiveSession {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.folder_name())
-    }
-}
-
-impl FromStr for ReplayArchiveSession {
-    type Err = InvalidReplayArchiveSession;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (timestamp_millis, node_id) = value
-            .split_once('-')
-            .ok_or(InvalidReplayArchiveSession::MissingTimestamp)?;
-        let timestamp_millis = timestamp_millis
-            .parse()
-            .map_err(|_| InvalidReplayArchiveSession::InvalidTimestamp)?;
-        Self::new(timestamp_millis, node_id)
-    }
-}
-
+/// Every node writes into the same flat namespace; conditional create-if-absent (GCS
+/// `if_generation_match(0)`, S3 `If-None-Match: *`) guarantees exactly one stored copy per block.
 /// Full storage key for a single replay record object.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ReplayArchiveKey {
-    pub session: ReplayArchiveSession,
     pub block_number: BlockNumber,
     pub block_hash: BlockHash,
 }
 
 impl ReplayArchiveKey {
-    pub fn new(
-        session: ReplayArchiveSession,
-        block_number: BlockNumber,
-        block_hash: BlockHash,
-    ) -> Self {
+    pub fn new(block_number: BlockNumber, block_hash: BlockHash) -> Self {
         Self {
-            session,
             block_number,
             block_hash,
         }
@@ -123,8 +76,7 @@ impl ReplayArchiveKey {
 
     pub fn object_path(&self) -> String {
         format!(
-            "{}/{}/{}",
-            self.session,
+            "{}/{}",
             self.block_number,
             format_block_hash(self.block_hash)
         )
@@ -137,62 +89,64 @@ impl fmt::Display for ReplayArchiveKey {
     }
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum InvalidReplayArchiveSession {
-    #[error("replay archive node id cannot be empty")]
-    EmptyNodeId,
-    #[error("replay archive node id cannot contain path separators")]
-    NodeIdContainsPathSeparator,
-    #[error("replay archive session name must start with <timestamp_millis>-")]
-    MissingTimestamp,
-    #[error("replay archive session timestamp must be an unsigned integer")]
-    InvalidTimestamp,
-}
-
-fn validate_node_id(node_id: &str) -> Result<(), InvalidReplayArchiveSession> {
-    if node_id.is_empty() {
-        return Err(InvalidReplayArchiveSession::EmptyNodeId);
-    }
-    if node_id.contains('/') || node_id.contains('\\') {
-        return Err(InvalidReplayArchiveSession::NodeIdContainsPathSeparator);
-    }
-    Ok(())
-}
-
 fn format_block_hash(block_hash: BlockHash) -> String {
     alloy::hex::encode_prefixed(block_hash.0)
 }
 
-/// Session-bound byte storage using the session/block/hash layout.
+/// Parses a flat object-store key back into a [`ReplayArchiveKey`].
 ///
-/// Implementations must be append-only. Creating storage must create or mark exactly one session
-/// and must fail if that session already exists. Appending an object must fail if data already
-/// exists at `<session>/<block_number>/<block_hash>`, even if the stored value is byte-for-byte
-/// identical. This is intentionally stricter than idempotent object-store writes so that bugs do
-/// not silently replace archived replay data.
+/// Keys that do not match `<block_number>/<block_hash>` are logged and skipped instead of
+/// failing the listing because a shared bucket may hold foreign objects.
+pub(crate) fn parse_archive_object_key(object_key: &str) -> Option<ReplayArchiveKey> {
+    let parts = object_key.split('/').collect::<Vec<_>>();
+    let key = match parts.as_slice() {
+        [block_number, block_hash] => match (
+            block_number.parse::<BlockNumber>(),
+            block_hash.parse::<BlockHash>(),
+        ) {
+            (Ok(block_number), Ok(block_hash)) => {
+                Some(ReplayArchiveKey::new(block_number, block_hash))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    if key.is_none() {
+        tracing::warn!(
+            object_key,
+            "Skipping object key that is not a replay archive record"
+        );
+    }
+    key
+}
+
+/// Shared byte storage using the flat `<block_number>/<block_hash>` layout.
+///
+/// Multiple nodes write into the same namespace concurrently. Implementations must guarantee
+/// that [`ReplayArchiveStorage::put_object_if_absent`] creates the object only if no object exists
+/// at the key yet. An existing object is a successful no-op and must never be overwritten.
 #[async_trait]
 pub trait ReplayArchiveStorage: Sized + Send + Sync + 'static {
-    /// Backend-specific configuration needed to create session-bound storage.
+    /// Backend-specific configuration needed to create the storage.
     type Config: Send;
 
-    /// Initializes or marks `<session>/` and returns storage bound to that session.
+    /// Initializes storage access.
     ///
-    /// Object stores that do not have real directories should write a marker object or use another
-    /// backend-specific existence check. Returning success for an already existing session violates
-    /// the append-only contract.
-    async fn init(config: Self::Config, session: ReplayArchiveSession) -> anyhow::Result<Self>;
+    /// `writer_node_id` identifies this node in forensic object metadata; it plays no role in
+    /// the object layout.
+    async fn init(config: Self::Config, writer_node_id: String) -> anyhow::Result<Self>;
 
-    /// Appends `object` at `<session>/<block_number>/<block_hash>`.
+    /// Creates `object` at `<block_number>/<block_hash>` if the key is still free.
     ///
-    /// Implementations must not overwrite any existing object at this key.
-    async fn append_object(
+    /// Returns success without overwriting when another writer already created the key.
+    async fn put_object_if_absent(
         &self,
         block_number: BlockNumber,
         block_hash: BlockHash,
         object: Vec<u8>,
     ) -> anyhow::Result<()>;
 
-    /// Checks whether an object exists at `<session>/<block_number>/<block_hash>`.
+    /// Checks whether an object exists at `<block_number>/<block_hash>`.
     async fn contains_object(
         &self,
         block_number: BlockNumber,
@@ -200,18 +154,40 @@ pub trait ReplayArchiveStorage: Sized + Send + Sync + 'static {
     ) -> anyhow::Result<bool>;
 }
 
-/// Session-bound archive for replay records.
+/// Ensures an object is archived at `<block_number>/<block_hash>`, encoding the payload lazily
+/// only if the key is not already present.
+pub(crate) async fn ensure_object_archived<Storage, Encode>(
+    storage: &Storage,
+    block_number: BlockNumber,
+    block_hash: BlockHash,
+    encode: Encode,
+) -> anyhow::Result<()>
+where
+    Storage: ReplayArchiveStorage,
+    Encode: FnOnce() -> anyhow::Result<Vec<u8>> + Send,
+{
+    if storage.contains_object(block_number, block_hash).await? {
+        return Ok(());
+    }
+
+    let object = encode()?;
+    storage
+        .put_object_if_absent(block_number, block_hash, object)
+        .await
+}
+
+/// Archive for replay records over the shared flat layout.
 #[async_trait]
 pub trait ReplayArchiver: Send + Sync + 'static {
-    /// Appends `replay_record` at
-    /// `<session>/<replay_record.block_context.block_number>/<block_hash>`.
-    async fn append_replay_record(
+    /// Ensures `replay_record` is archived at
+    /// `<replay_record.block_context.block_number>/<block_hash>`.
+    async fn ensure_replay_record(
         &self,
         block_hash: BlockHash,
         replay_record: ReplayRecord,
     ) -> anyhow::Result<()>;
 
-    /// Checks whether an archived object exists at `<session>/<block_number>/<block_hash>`.
+    /// Checks whether an archived object exists at `<block_number>/<block_hash>`.
     ///
     /// This intentionally verifies presence only. Encrypted archive objects are randomized, so
     /// implementations must not depend on re-encrypting and comparing bytes.
@@ -227,13 +203,13 @@ impl<T> ReplayArchiver for Arc<T>
 where
     T: ReplayArchiver + ?Sized,
 {
-    async fn append_replay_record(
+    async fn ensure_replay_record(
         &self,
         block_hash: BlockHash,
         replay_record: ReplayRecord,
     ) -> anyhow::Result<()> {
         self.as_ref()
-            .append_replay_record(block_hash, replay_record)
+            .ensure_replay_record(block_hash, replay_record)
             .await
     }
 
@@ -256,73 +232,112 @@ mod tests {
     use zksync_os_storage_api::ReplayRecord;
 
     #[test]
-    fn session_roundtrips_with_hyphenated_node_id() {
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-
-        assert_eq!(session.folder_name(), "42-node-a");
-        assert_eq!(
-            "42-node-a".parse::<ReplayArchiveSession>().unwrap(),
-            session
-        );
-    }
-
-    #[test]
-    fn key_uses_expected_layout() {
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-        let key = ReplayArchiveKey::new(session, 7, B256::ZERO);
+    fn archive_key_roundtrips_flat_layout() {
+        let key = ReplayArchiveKey::new(7, B256::ZERO);
 
         assert_eq!(
             key.object_path(),
-            "42-node-a/7/0x0000000000000000000000000000000000000000000000000000000000000000"
+            "7/0x0000000000000000000000000000000000000000000000000000000000000000"
         );
+        assert_eq!(parse_archive_object_key(&key.object_path()), Some(key));
+    }
+
+    #[test]
+    fn archive_object_key_parser_skips_foreign_keys() {
+        // A shared bucket may hold unrelated objects; they must be skipped, not abort listing.
+        assert!(parse_archive_object_key("logs/2026/app.txt").is_none());
+        assert!(
+            parse_archive_object_key(
+                "prefix/7/0x0000000000000000000000000000000000000000000000000000000000000001"
+            )
+            .is_none()
+        );
+        assert!(parse_archive_object_key("42-node-a/7/not-a-hash").is_none());
+        assert!(parse_archive_object_key("42-node-a/not-a-number/0x00").is_none());
+        assert!(parse_archive_object_key("7/not-a-hash").is_none());
+        assert!(parse_archive_object_key("single-segment").is_none());
     }
 
     #[tokio::test]
-    async fn filesystem_archive_creates_session_once() {
+    async fn concurrent_filesystem_writers_keep_one_complete_object() {
         let tempdir = tempfile::tempdir().unwrap();
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
+        let storage =
+            FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
+                .await
+                .unwrap();
+        let block_hash = B256::with_last_byte(1);
 
-        FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), session.clone())
+        let first = storage.put_object_if_absent(7, block_hash, b"first payload".to_vec());
+        let second = storage.put_object_if_absent(7, block_hash, b"second payload".to_vec());
+        let (first, second) = tokio::join!(first, second);
+        first.unwrap();
+        second.unwrap();
+
+        let reader = FileSystemReplayArchiveReader::new(tempdir.path().to_path_buf());
+        let stored = reader
+            .fetch_object(&ReplayArchiveKey::new(7, block_hash))
             .await
             .unwrap();
-
-        let err = FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), session)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("failed to create append-only"));
+        assert!(stored == b"first payload" || stored == b"second payload");
     }
 
     #[tokio::test]
-    async fn filesystem_archive_appends_and_checks_presence() {
+    async fn existing_object_skips_payload_encoding() {
         let tempdir = tempfile::tempdir().unwrap();
-        let session = ReplayArchiveSession::new(42, "node-a").unwrap();
-        let storage = FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), session)
+        let storage =
+            FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
+                .await
+                .unwrap();
+        let block_hash = B256::with_last_byte(1);
+        storage
+            .put_object_if_absent(7, block_hash, b"stored".to_vec())
             .await
             .unwrap();
+
+        ensure_object_archived(&storage, 7, block_hash, || {
+            panic!("payload should not be encoded when the archive object exists")
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn filesystem_archive_keeps_first_record_for_same_block_key() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage =
+            FileSystemReplayArchiveStorage::init(tempdir.path().to_path_buf(), "node-a".to_owned())
+                .await
+                .unwrap();
         let archive = FileSystemReplayArchiver::new(storage);
         let block_hash = B256::with_last_byte(1);
         let replay_record = test_replay_record(7);
 
-        assert!(!archive.contains_replay_record(7, block_hash).await.unwrap());
-
         archive
-            .append_replay_record(block_hash, replay_record.clone())
+            .ensure_replay_record(block_hash, replay_record.clone())
             .await
             .unwrap();
 
-        assert!(archive.contains_replay_record(7, block_hash).await.unwrap());
-
+        let mut other_record = replay_record.clone();
+        other_record.block_output_hash = B256::with_last_byte(2);
         archive
-            .append_replay_record(block_hash, replay_record)
+            .ensure_replay_record(block_hash, other_record)
             .await
-            .unwrap_err();
+            .unwrap();
+
+        let reader = FileSystemReplayArchiveReader::new(tempdir.path().to_path_buf());
+        let stored = reader
+            .fetch_object(&ReplayArchiveKey::new(7, block_hash))
+            .await
+            .unwrap();
+        let stored: ReplayRecord = serde_json::from_slice(&stored).unwrap();
+        assert_eq!(stored, replay_record);
     }
 
     #[test]
     fn age_encrypted_archive_encrypts_replay_record_for_recipient() {
         let identity = age::x25519::Identity::generate();
         let recipient = identity.to_public();
-        let archive = AgeEncryptedReplayArchiver::new((), recipient);
+        let archive = AgeEncryptedReplayArchiver::new((), ArchiveRecipient::X25519(recipient));
         let replay_record = test_replay_record(7);
 
         let encrypted = archive.encrypt_replay_record(&replay_record).unwrap();

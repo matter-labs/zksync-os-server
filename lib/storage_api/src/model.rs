@@ -1,12 +1,13 @@
 use alloy::primitives::{Address, B256, U256};
 use alloy::rlp::{RlpDecodable, RlpEncodable};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_interface::traits::AnyBlockContext;
 use zksync_os_pipeline::HasBlockRangeEnd;
 use zksync_os_types::{
-    BlockOutput, BlockStartCursors, ProtocolSemanticVersion, ZkEnvelope, ZkReceiptEnvelope,
-    ZkTransaction,
+    BlockOutput, BlockStartCursors, Eip2718, ProtocolSemanticVersion, ZkEnvelope,
+    ZkReceiptEnvelope, ZkTransaction,
 };
 
 #[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
@@ -30,9 +31,11 @@ pub struct StoredTxData {
 }
 
 /// Full data needed to replay a block - assuming storage is already in the correct state.
+#[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReplayRecord {
     pub block_context: BlockContext,
+    #[serde_as(as = "Vec<Eip2718>")]
     pub transactions: Vec<ZkTransaction>,
     /// The field is used to generate the prover input for the block in ProverInputGenerator.
     /// Will be moved to the BlockContext at some point

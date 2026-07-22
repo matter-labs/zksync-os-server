@@ -21,11 +21,11 @@ ENV LD_LIBRARY_PATH=${LIBCLANG_PATH}:${LD_LIBRARY_PATH}
 
 COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies (this is the caching Docker layer)
-RUN cargo chef cook --bin zksync-os-server --release --recipe-path recipe.json
+RUN cargo chef cook --bin zksync-os-server --release --features gcp --recipe-path recipe.json
 
 # Build application
 COPY . .
-RUN cargo build --release --bin zksync-os-server
+RUN cargo build --release --bin zksync-os-server --features gcp
 
 #################################
 # -------- Runtime -------------#

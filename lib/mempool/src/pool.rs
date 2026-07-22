@@ -22,8 +22,8 @@ use zksync_os_interface::types::AccountDiff;
 use zksync_os_l1_watcher::{L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig, StartResolver};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo, UpgradeMetadata,
-    ZkEnvelope, ZkTransaction,
+    FeeParams, L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo,
+    UpgradeMetadata, ZkEnvelope, ZkTransaction,
 };
 
 /// General pool that provides unified access to all transaction sources in the system.
@@ -263,13 +263,14 @@ impl<T: L2Subpool> Pool<T> {
 
     pub fn update_pending_block_fees(
         &self,
-        pending_block_base_fee: u64,
+        fee_params: FeeParams,
         pending_block_blob_fee: Option<u128>,
     ) {
         let mut block_info = self.l2_subpool.block_info();
-        block_info.pending_basefee = pending_block_base_fee;
+        block_info.pending_basefee = fee_params.eip1559_basefee.saturating_to();
         block_info.pending_blob_fee = pending_block_blob_fee;
         self.l2_subpool.set_block_info(block_info);
+        self.l2_subpool.update_pending_fee_params(fee_params);
     }
 
     pub async fn on_canonical_state_change(
@@ -347,6 +348,21 @@ impl<T: L2Subpool> Pool<T> {
                 mined_transactions: l2_transactions,
                 update_kind: PoolUpdateKind::Commit,
             });
+
+        // Propagate the just-finalized protocol version to the L2 validator so that
+        // version-gated stateless checks (e.g. intrinsic native resources, v31+) use the
+        // correct version for incoming txs.
+        self.l2_subpool
+            .update_pending_protocol_version(replay_record.protocol_version.clone());
+        // Refresh the validator's fee params from the executed block's context. This is the only
+        // fee source on nodes that don't produce blocks (external nodes never call
+        // `update_pending_block_fees`); on the main node these values are overwritten with the
+        // pending block's params at the start of each `produce()`.
+        self.l2_subpool.update_pending_fee_params(FeeParams {
+            eip1559_basefee: replay_record.block_context.eip1559_basefee,
+            native_price: replay_record.block_context.native_price,
+            pubdata_price: replay_record.block_context.pubdata_price,
+        });
 
         StateChangeOutcome {
             last_interop_log_id,

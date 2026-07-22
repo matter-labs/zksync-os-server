@@ -1562,6 +1562,14 @@ pub enum ReplayArchiveConfig {
         #[config(nest, default)]
         encryption: ReplayArchiveEncryptionConfig,
     },
+    /// GCS backend using Application Default Credentials. This supports GKE Workload Identity,
+    /// external workload identity federation, and local ADC.
+    Gcs {
+        /// Name of the GCS bucket.
+        bucket_base_url: String,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
 }
 
 /// Replay archive encryption applied before data is written to cold storage.
@@ -1573,6 +1581,15 @@ pub enum ReplayArchiveEncryptionConfig {
     AgeX25519 {
         /// age X25519 recipient public key. The node only needs this public key.
         recipient: String,
+    },
+    /// GCP KMS encryption using Application Default Credentials. This supports GKE Workload
+    /// Identity, external workload identity federation, and local ADC.
+    GcpKms {
+        /// KMS key version, full resource name
+        /// `projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}`.
+        /// Purpose `ASYMMETRIC_DECRYPT` with an `RSA_DECRYPT_OAEP_*_SHA256` algorithm. The node only
+        /// reads the public key to encrypt locally, so it needs no decrypt permission.
+        kms_key_version: String,
     },
 }
 
@@ -1605,6 +1622,22 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                 },
                 encryption: encryption.into(),
             },
+            #[cfg(feature = "gcp")]
+            ReplayArchiveConfig::Gcs {
+                bucket_base_url,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::Gcs {
+                config: zksync_os_replay_archive::GcsReplayArchiveConfig {
+                    bucket_base_url,
+                    auth_mode: zksync_os_replay_archive::GcsReplayArchiveAuthMode::Authenticated,
+                },
+                encryption: encryption.into(),
+            },
+            #[cfg(not(feature = "gcp"))]
+            ReplayArchiveConfig::Gcs { .. } => panic!(
+                "this build was compiled without the `gcp` feature; rebuild with \
+                 `--features gcp` to use the GCS replay archive backend"
+            ),
         }
     }
 }
@@ -1620,6 +1653,19 @@ impl From<ReplayArchiveEncryptionConfig>
             ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
             }
+            #[cfg(feature = "gcp")]
+            ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
+                    config: zksync_os_replay_archive::GcpKmsConfig {
+                        key_version: kms_key_version,
+                    },
+                }
+            }
+            #[cfg(not(feature = "gcp"))]
+            ReplayArchiveEncryptionConfig::GcpKms { .. } => panic!(
+                "this build was compiled without the `gcp` feature; rebuild with \
+                 `--features gcp` to use the GCP KMS replay archive encryption"
+            ),
         }
     }
 }
@@ -2318,10 +2364,7 @@ mod tests {
                 assert_eq!(root_path, PathBuf::from("/tmp/replay-archive"));
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
-            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
-                panic!("expected file system replay archive config")
-            }
+            _ => panic!("expected file system replay archive config"),
         }
     }
 
@@ -2355,9 +2398,26 @@ mod tests {
                 assert_eq!(region.as_deref(), Some("us-east-2"));
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop | ReplayArchiveConfig::FileSystem { .. } => {
-                panic!("expected S3 replay archive config")
+            _ => panic!("expected S3 replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcs_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "Gcs"),
+            ("REPLAY_ARCHIVE_BUCKET_BASE_URL", "replay-archive"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::Gcs {
+                bucket_base_url,
+                encryption,
+            } => {
+                assert_eq!(bucket_base_url, "replay-archive");
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
+            _ => panic!("expected GCS replay archive config"),
         }
     }
 
@@ -2375,14 +2435,35 @@ mod tests {
                 ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                     assert_eq!(recipient, "age1recipient");
                 }
-                ReplayArchiveEncryptionConfig::Noop => {
-                    panic!("expected age X25519 replay archive encryption")
-                }
+                _ => panic!("expected age X25519 replay archive encryption"),
             },
-            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
-            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
-                panic!("expected file system replay archive config")
-            }
+            _ => panic!("expected file system replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcp_kms_encryption() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
+            ("REPLAY_ARCHIVE_ROOT_PATH", "/tmp/replay-archive"),
+            ("REPLAY_ARCHIVE_ENCRYPTION_TYPE", "GcpKms"),
+            (
+                "REPLAY_ARCHIVE_ENCRYPTION_KMS_KEY_VERSION",
+                "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+            ),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::FileSystem { encryption, .. } => match encryption {
+                ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                    assert_eq!(
+                        kms_key_version,
+                        "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"
+                    );
+                }
+                _ => panic!("expected GCP KMS replay archive encryption"),
+            },
+            _ => panic!("expected file system replay archive config"),
         }
     }
 

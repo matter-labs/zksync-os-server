@@ -50,7 +50,10 @@ impl FakeFriProversPool {
             runtime.spawn_critical_task("fake fri prover", async move {
                 loop {
                     // Only take inbound items whose age >= min_age.
-                    match jm.pick_next_job(min_age, "fake_prover".to_string()).await {
+                    match jm
+                        .pick_next_job(min_age, "fake_prover".to_string(), None)
+                        .await
+                    {
                         Some((fri_job, _prover_input)) => {
                             // Emulate proving work.
                             let start = Instant::now();
