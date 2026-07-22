@@ -28,8 +28,8 @@ jobs:
     secrets:
       slack_webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}  # Slack webhook for release notifications
       gh_token: ${{ secrets.RELEASE_TOKEN }}                # GitHub token for creating PRs and releases
-      gpg_private_key: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }} # GPG key of the bot account, for signing release commits
-      gpg_passphrase: ${{ secrets.RELEASE_GPG_PASSPHRASE }} # Passphrase for the GPG key
+      gh_app_id: ${{ secrets.RELEASE_GH_APP_ID }}           # GitHub App for release-please: its API commits are auto-signed
+      gh_app_private_key: ${{ secrets.RELEASE_GH_APP_PRIVATE_KEY }} # Private key of the GitHub App
     with:
       config: '.github/release-please/config.json'          # Path to the configuration file
       manifest: '.github/release-please/manifest.json'      # Path to the manifest file
