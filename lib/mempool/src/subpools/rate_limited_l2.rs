@@ -87,6 +87,10 @@ impl TxGasRateLimiter {
         let mut bank = self.bank.lock().unwrap();
         self.refill(&mut bank, now);
         self.update_gate(&mut bank);
+        // Every admission attempt already recomputes the refilled level; publish it here
+        // too (not just from `on_block_at`) so the gauge stays live between blocks instead
+        // of only jumping on drain.
+        TX_GAS_RATE_LIMITER.bank_level_gas.set(bank.level as i64);
         if bank.gate_open {
             Ok(())
         } else {
