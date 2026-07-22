@@ -76,15 +76,15 @@ export function resolveAtomicLayout(env: NodeJS.ProcessEnv = process.env): Atomi
 export const AtomicInteropCenterAbi = [
   'function sendBundle(bytes calldata _destinationChainId, tuple(bytes to, bytes data, bytes[] callAttributes)[] calldata _callStarters, bytes[] calldata _bundleAttributes) external payable returns (bytes32)',
   'function interopProtocolFee() view returns (uint256)',
-  'event InteropBundleSent(bytes32 l2l1MsgHash, bytes32 interopBundleHash, tuple(bytes1 version, uint256 sourceChainId, uint256 destinationChainId, bytes32 destinationBaseTokenAssetId, bytes32 interopBundleSalt, tuple(bytes1 version, bool shadowAccount, address to, address from, uint256 value, bytes data)[] calls, tuple(bytes executionAddress, bytes unbundlerAddress, bool useFixedFee) bundleAttributes) interopBundle)',
+  'event InteropBundleSent(bytes32 l2l1MsgHash, bytes32 interopBundleHash, tuple(bytes1 version, uint256 sourceChainId, uint256 destinationChainId, bytes32 destinationBaseTokenAssetId, bytes32 interopBundleSalt, tuple(bytes1 version, bool shadowAccount, address to, address from, uint256 value, bytes data)[] calls, tuple(bytes executionAddress, bytes unbundlerAddress, bool useFixedFee, bytes32 salt) bundleAttributes) interopBundle)',
 ];
 
 /** ABI tuple type for the on-wire `InteropBundle` (matches Messaging.sol). */
 export const INTEROP_BUNDLE_TUPLE =
-  'tuple(bytes1 version, uint256 sourceChainId, uint256 destinationChainId, bytes32 destinationBaseTokenAssetId, bytes32 interopBundleSalt, tuple(bytes1 version, bool shadowAccount, address to, address from, uint256 value, bytes data)[] calls, tuple(bytes executionAddress, bytes unbundlerAddress, bool useFixedFee) bundleAttributes)';
+  'tuple(bytes1 version, uint256 sourceChainId, uint256 destinationChainId, bytes32 destinationBaseTokenAssetId, bytes32 interopBundleSalt, tuple(bytes1 version, bool shadowAccount, address to, address from, uint256 value, bytes data)[] calls, tuple(bytes executionAddress, bytes unbundlerAddress, bool useFixedFee, bytes32 salt) bundleAttributes)';
 
 const IMT_PROOF_TUPLE =
-  'tuple(uint256 sourceChainId, uint256 batchNumber, bytes32 chainImtRoot, bytes32[] settlementProof, tuple(uint256 value, uint256 nextIndex, uint256 nextValue) leaf, uint256 imtLeafIndex, bytes32[] imtProof)';
+  'tuple(uint256 sourceChainId, uint256 batchNumber, bytes32 chainImtRoot, bool provesAgainstBeginRoot, bytes32[] settlementProof, tuple(uint256 value, uint256 nextIndex, uint256 nextValue) leaf, uint256 imtLeafIndex, bytes32[] imtProof)';
 
 const ATOMIC_FLOW_TUPLE =
   'tuple(bytes32 flowId, uint64 deadline, uint256 settlementLayerChainId, bytes32[] legBundleHashes, uint256[] legSourceChainIds)';
@@ -157,6 +157,9 @@ export interface ImtProof {
   sourceChainId: string;
   batchNumber: string;
   chainImtRoot: string;
+  // Timeout-branch selector (begin vs end IMT root); the finality path this driver
+  // exercises always proves against the batch-end root, so this is false.
+  provesAgainstBeginRoot: boolean;
   settlementProof: string[];
   leaf: IMTLeaf;
   imtLeafIndex: number;
@@ -266,6 +269,7 @@ export function proofTuple(p: ImtProof): unknown[] {
     p.sourceChainId,
     p.batchNumber,
     p.chainImtRoot,
+    p.provesAgainstBeginRoot,
     p.settlementProof,
     leafTuple(p.leaf),
     p.imtLeafIndex,

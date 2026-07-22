@@ -42,7 +42,7 @@ The private key above is the standard ZKsync rich L2 account
 | `L2_RPC_URL`        | chain A (source) RPC                     | — (required)             |
 | `L2_RPC_URL_SECOND` | chain B (destination) RPC                | — (required)             |
 | `L1_RPC_URL`        | L1 (anvil) RPC, for interop-root waits   | `http://127.0.0.1:8545`  |
-| `ATOMIC_DEADLINE_BLOCK` | flow deadline (SL block number)      | `10000000`               |
+| `ATOMIC_DEADLINE_TS`    | flow deadline (SL L1 timestamp)      | `l1Now + 24h`            |
 
 Expected success line: `Atomic swap complete: both legs executed atomically.`
 (both bundles reach `bundleStatus = 2` / FullyExecuted, both wrapped tokens mint).

@@ -1,7 +1,8 @@
 # Multiple Chains — Atomic Interop (v31.0, IMT bundle model)
 
 Two **L1-settling** ZKsync OS chains sharing one in-memory L1, deployed against the
-**atomic-interop** era-contracts (`atomic-imt-interop`). Unlike the non-atomic
+**atomic-interop** era-contracts (see [versions.yaml](../versions.yaml) for the exact
+pin). Unlike the non-atomic
 `../../v31.0/multi_chain` preset (which routes 6565/6566 through a gateway chain 506),
 both chains here settle directly on L1 — matching the green `atomic_swap_l1_settled`
 integration test — so the all-or-nothing atomic-bundle flow can be exercised end to end.
@@ -15,7 +16,7 @@ The atomic genesis predeploys the atomic built-ins the demo needs:
 | `0x1000d`  | `InteropCenter`            |
 | `0x1000e`  | `InteropHandler`           |
 
-`genesis_root = 0x1a1bcd12720224a96cac4b34c9ee0942bf3afe48fcf8932c28476bd47ec84959`.
+`genesis_root = 0x38643169753309ba1959843595e64188f871d11808e55b2759a73db1ac86afb0`.
 
 ## Chains
 
