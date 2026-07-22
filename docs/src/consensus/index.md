@@ -17,10 +17,10 @@ module documentation there is written to be read.
 | --- | --- |
 | [What and why](intro.md) | What BFT consensus buys, how the Simplex protocol works, and what the commonware library provides |
 | [How it is wired in](integration.md) | Where consensus meets the node: the one-trait seam, speculative state, validity rules, and a block's life |
-| [What happens, in order](lifecycle.md) | The chronological walkthrough: genesis and migration, a view's happy and unhappy paths, life after finality, epoch turnover |
+| [The lifecycle](lifecycle.md) | The chronological walkthrough: genesis and migration, a view's happy and unhappy paths, life after finality, epoch turnover |
 | [How it is tested](testing.md) | Why deterministic simulation is the primary test surface, what each layer proves, and how to work with the harness |
 | [Running it](enabling.md) | Enabling consensus on a new chain, migrating an existing chain into a committee, changing the validator set, and rolling back |
-| [Operating a committee](operating.md) | What to watch and what it means: the alarm table, timing characteristics worth memorizing, settlement failover, and flag days |
+| [Operating a committee](operating.md) | What to watch and what it means: the alarm table, timing characteristics, settlement failover, and flag days |
 | [Disaster recovery](disaster.md) | What to do when finalized blocks will not settle: the failure taxonomy, the remedies ranked by cost, and the hardfork of last resort |
 | [Upgrading commonware](upgrading.md) | The procedure for moving to a new commonware release: what must survive, the regression ladder, and the findings register |
 

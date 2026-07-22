@@ -15,7 +15,7 @@ meanings. The procedure is organized around the things that must provably surviv
 
 ## What must survive an upgrade
 
-**Wire sovereignty.** Every released encoding — the consensus block envelope,
+**Wire-format ownership.** Every released encoding — the consensus block envelope,
 finality certificates, replay records — is defined in `lib/wire` under our own
 version tags, precisely so that no upstream change can move released bytes. The
 golden tests under `lib/wire/tests/` enforce this byte-for-byte. The rule during an
@@ -64,7 +64,7 @@ deliberate, reviewed fixture regeneration — the policy is at the top of that t
 file). Once real value depends on the network, the rebuild-is-acceptable stance
 gets revisited — that is a launch checklist item, not a footnote here.
 
-**The committee's version discipline.** A commonware upgrade rides inside a node
+**The committee's version discipline.** A commonware upgrade ships inside a node
 release, and inside a committee it is governed by the protocol-version rule from
 [Running it](enabling.md): deploying a binary is safe and gradual; anything that
 changes what consensus messages *mean* must ship as a new
@@ -73,7 +73,7 @@ validators on different versions refuse to pair. An upgrade that leaves all mess
 encodings and signing namespaces untouched (the goldens and the cross-version
 pairing test prove this) needs no version bump; rolling restarts suffice.
 
-## Registered findings are the acceptance tests
+## The findings register
 
 Between upgrades, we accumulate *registered findings* against the pinned version:
 upstream warts we document and work around instead of fixing — a panic on an
@@ -91,7 +91,7 @@ finding, run its reproducer against the new version and record one of two verdic
   gets refreshed with "reproduced on <new version>". If we care enough, this is the
   moment to file or bump the issue upstream, while the reproduction is fresh.
 
-This is the part that makes upgrades cumulative rather than Sisyphean: every soak
+This is the part that makes upgrades cumulative: every soak
 finding from the previous cycle either gets closed by upstream or gets a sharper
 reproduction, and nothing is re-discovered from scratch.
 

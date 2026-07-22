@@ -1,16 +1,16 @@
-# The lifecycle: what happens, in order
+# The lifecycle
 
 [What and why](intro.md) introduces the vocabulary and
 [the integration chapter](integration.md) maps the machinery; both are about
 *what* the pieces are. This page is about **sequence**: what happens first, what
 must finish before what, and which orderings the protocol actually guarantees.
-It walks the chain's life chronologically — birth, one block's journey, the
-views that fail, life after finality, epoch turnover — telling each phase as a
-story rather than a specification. The precise rules live in the protocol docs
+It walks the chain's life chronologically — the chain's start, one block's
+journey, the views that fail, life after finality, epoch turnover. The precise
+rules live in the protocol docs
 of the `commonware-consensus` crate and in our module documentation; nothing
 here overrides them.
 
-## The clock, briefly
+## The clock
 
 Three nested notions of time, from smallest to largest:
 
@@ -26,7 +26,7 @@ Three nested notions of time, from smallest to largest:
   bare view number — anything that compares consensus progress must compare
   rounds, not views.
 
-One non-obvious consequence, worth fixing in your head early because every
+One non-obvious consequence, worth internalizing early because every
 "where does the chain start" question below reduces to it: *consensus genesis
 is not a block that gets voted on*. The starting block is **implicitly final**
 — there is no certificate for it — and voting begins at view 1 with a proposal
@@ -56,15 +56,15 @@ empty history — [the runbook lives in the enabling chapter](enabling.md)):
    quorum of validators is up and connected, the first view's leader proposes
    block `anchor + 1`, and the chain is growing again.
 
-Rolling *back* to single-sequencer operation reverses the dance with one
+Rolling *back* to single-sequencer operation reverses the sequence with one
 asymmetry worth knowing: finality can be slightly ahead of any single
-validator's durable disk state (see [after finality](#after-finality-the-ordered-part)
+validator's durable disk state (see [after finality](#after-finality)
 below), so the rollback procedure picks the validator with the longest durable
 history as the survivor. The guards force the operator to acknowledge a
 rollback explicitly before the node will run as a lone sequencer on
 consensus-era data.
 
-## One view, told slowly
+## One view, step by step
 
 The happy path: view `v` opens, its leader proposes, everyone votes twice, a
 block is final. In sequence-diagram form, for a leader L and (representative)
@@ -88,7 +88,7 @@ sequenceDiagram
     Note over L,F: block final — view v+1 already underway
 ```
 
-The same story in prose, with the orderings that matter:
+The same sequence in prose, with the orderings that matter:
 
 1. **The view opens** for a validator when it sees the previous view resolve —
    a notarization or a nullification for `v−1`. Committee members do not tick
@@ -129,13 +129,13 @@ The same story in prose, with the orderings that matter:
 
 ## When a view goes wrong
 
-Nullify is the protocol's "let's not wait around" vote, and the scenarios that
+Nullify is the protocol's "stop waiting" vote, and the scenarios that
 trigger it are worth knowing individually — they are the ones you will see in
 logs and tests:
 
 - **The leader is silent**: `leader_timeout` fires with no proposal →
   broadcast `nullify(v)`.
-- **The leader proposed garbage**: verification fails — structural linkage
+- **The leader proposed an invalid block**: verification fails — structural linkage
   broken, a [validity rule](integration.md#validity-rules-bounding-the-inputs)
   refused it (whether *Invalid* or *Withhold* — the distinction is for
   operators, not the protocol), or re-execution disagreed with the declared
@@ -150,7 +150,7 @@ logs and tests:
   never assembles before `certification_timeout` → broadcast `nullify(v)`.
   Note this can happen *after* the validator already notarized — notarize-
   then-nullify in the same view is legal and routine.
-- **The leader has been dark for a while**: if a leader was inactive for the
+- **The leader has been inactive for a while**: if a leader was inactive for the
   last `skip_timeout` views, its turn is skipped without waiting at all.
 
 While stuck in a view, a validator rebroadcasts its nullify every
@@ -161,7 +161,7 @@ entitled to be* in view `v` at all.
 A quorum of nullifies assembles a **nullification** certificate: the view is
 skipped, view `v+1` opens with the next leader, and that leader builds on the
 latest *notarized* block (which may be from several views back, with
-nullifications papering over the gap). The two exclusion rules that hold all of
+nullifications covering the gap). The two exclusion rules that hold all of
 this together — the ones a validator's vote journal enforces across even a
 crash and restart:
 
@@ -173,28 +173,27 @@ Every vote is written to the **journal before it is broadcast** — fsync first,
 network second. A validator that crashes mid-view replays its journal on
 restart and simply cannot contradict what the network may already have seen.
 This single ordering (disk before wire) is what makes crash-and-restart a
-non-event for safety, and it is deliberately the most boring sentence in this
-document.
+non-event for safety.
 
-What of a block that was notarized but whose view got nullified? It survives
+What about a block that was notarized but whose view got nullified? It survives
 as a *candidate*: the next leader is expected to build on the latest notarized
 block, so the usual outcome is that the block gets a descendant and is
 finalized retroactively (recursion, above). It can also be abandoned if a
 competing branch finalizes first —
-[notarized is not finalized](intro.md#simplex-in-five-minutes), and the
+[notarized is not finalized](intro.md#the-simplex-protocol), and the
 speculative overlay for the abandoned branch is dropped without ever touching
 disk.
 
-## After finality: the ordered part
+## After finality
 
-Everything up to the finalization certificate is a *concurrent* dance — votes
-and bodies crossing the wire in any order, views overlapping. Everything after
+Everything up to the finalization certificate is *concurrent* — votes and
+bodies crossing the wire in any order, views overlapping. Everything after
 it is deliberately **serial**:
 
 1. The marshal archives the finalized block and its certificate, then delivers
    finalized blocks to the node **strictly in height order, one ack at a
    time**. A recursively-finalized backlog (a catching-up validator) drains
-   through the same single-file door.
+   through the same path.
 2. `commit` hands each block's already-computed outputs to the persistence
    pipeline — write-ahead log first, then state, repositories, tree — and the
    ack releases the next block. Consensus keeps voting far ahead of this
@@ -207,7 +206,7 @@ it is deliberately **serial**:
    replay records, the batcher folds finalized blocks into batches for
    settlement. None of them know consensus exists.
 
-The ordering guarantee worth naming: **finality is the synchronization point.**
+The ordering guarantee: **finality is the synchronization point.**
 Before it, per-validator experiences legitimately differ (different arrival
 orders, different speculative branches). After it, every validator's durable
 history is byte-identical by construction — the only differences are *how far*
@@ -217,10 +216,10 @@ runs slightly ahead of any single disk: a validator can crash having voted for
 re-derives, and the [rollback procedure](enabling.md#rolling-back) accounts
 for the gap.
 
-## Epochs: consensus time turns over
+## Epoch turnover
 
-An epoch's end is scheduled, not evented: it is crossed when the *chain height*
-crosses a multiple of the epoch length. Two facts make epochs more than
+An epoch ends on a schedule, not on an event: the boundary is crossed when the
+*chain height* crosses a multiple of the epoch length. Two facts make epochs more than
 bookkeeping — the validator set is fixed **within** an epoch (committee changes
 happen only at boundaries), and each epoch's engine journals under its **own
 storage partition** (which is what makes old consensus scratch state prunable
@@ -247,14 +246,14 @@ epoch does not take the old one's word for where the chain ended: its **first
 proposal re-proposes the boundary block**, so the new epoch's own quorum
 re-certifies, under its own round numbers, exactly where the previous epoch
 stopped. Once the committed tip has moved past the old epoch, the old engine is
-retired — its journal stays on disk, so even a bizarre restart into that epoch
-cannot double-sign.
+retired — its journal stays on disk, so even an unexpected restart into that
+epoch cannot double-sign.
 
-The pathological case is the instructive one: a validator that slept through
-one or more *entire* epochs. Its old engine hears silence (peers have retired
+The extreme case is instructive: a validator that was down for one or more
+*entire* epochs. Its old engine hears silence (peers have retired
 that epoch's traffic), and its muxer discards current-epoch messages no local
-engine has registered for — a validator could, naively, wait forever. What
-breaks the symmetry is that finalization certificates are **self-proving**:
+engine has registered for — a validator could, naively, wait forever. The
+way out is that finalization certificates are **self-proving**:
 the stack watches for certificates from epochs it is not running, verifies the
 quorum signature against the committee, and hands them to the marshal as
 evidence of the real tip. The marshal backfills the missing blocks, committed
@@ -262,7 +261,7 @@ height climbs, and the rotation logic starts the engines the validator should
 be running — catch-up ends in participation, with no operator action and no
 special protocol.
 
-## Who talks to whom
+## Network channels
 
 The traffic, by channel, with its place in the sequence:
 
@@ -279,7 +278,7 @@ The three consensus channels (votes, certificates, certificate backfill) are
 the epoch-multiplexed ones; the block channels and transaction gossip are
 epoch-agnostic — blocks are blocks, whichever epoch finalized them.
 
-## The whole map
+## The complete flow
 
 ```mermaid
 flowchart TD
@@ -300,6 +299,6 @@ flowchart TD
     E --> V
 ```
 
-If this page did its job, the other chapters now read as depth on demand:
-[the protocol's why](intro.md), [the machinery's where](integration.md),
-[the proof it holds](testing.md), and [the levers to run it](enabling.md).
+The other chapters add depth on each part:
+[what the protocol guarantees](intro.md), [where the machinery lives](integration.md),
+[how it is tested](testing.md), and [how to run it](enabling.md).

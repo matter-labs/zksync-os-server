@@ -5,6 +5,7 @@ mod acceptance;
 mod batch_sink;
 pub mod batcher;
 mod chain_fingerprint;
+pub mod chain_tip;
 mod command_source;
 pub mod config;
 pub mod consensus;

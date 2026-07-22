@@ -38,6 +38,11 @@ const PROMETHEUS_PUSH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 enum CliCommand {
     /// Configuration-related tools.
     Config(ConfigArgs),
+    /// Prints the height at which the local chain ends on a stopped node, and
+    /// the block hash at that height, as `<height>:<block hash>` (the last
+    /// line of output). Consensus migrations, rollbacks, and disaster forks
+    /// need this pair; the procedures are in `docs/src/consensus/`. Read-only.
+    ChainTip,
     /// Disaster-fork tooling: truncates the local chain to a height on a
     /// stopped node, exporting the discarded suffix to a tombstone archive
     /// first. See `docs/src/consensus/` for the fork runbook this belongs to.
@@ -173,15 +178,18 @@ pub async fn main() {
     let config_repo = ConfigRepository::new(&config_schema).with_all(config_sources);
 
     // =========== handle the CLI subcommand if any ===========
-    // `truncate-to` needs the fully-loaded config (storage paths, L1), so it
-    // defers past config loading; `config` runs on the raw repository.
+    // `chain-tip` and `truncate-to` need the fully-loaded config (storage
+    // paths, L1), so they defer past config loading; `config` runs on the raw
+    // repository.
     let mut deferred_truncate = None;
+    let mut deferred_chain_tip = false;
     if let Some(cmd) = opt.cmd {
         match cmd {
             CliCommand::Config(args) => {
                 args.run(config_repo, "").unwrap();
                 return;
             }
+            CliCommand::ChainTip => deferred_chain_tip = true,
             CliCommand::TruncateTo(args) => deferred_truncate = Some(args),
         }
     }
@@ -190,6 +198,14 @@ pub async fn main() {
     tracing::info!(?config, "Loaded config");
     load_internal_config(&mut config);
     config.validate().await.expect("invalid config");
+
+    if deferred_chain_tip {
+        let (height, hash) = zksync_os_server::chain_tip::read_chain_tip(&config)
+            .expect("failed to read the chain tip");
+        // `<height>:<hash>` — the format `consensus.acknowledge_fork` takes.
+        println!("{height}:{hash:?}");
+        return;
+    }
 
     if let Some(args) = deferred_truncate {
         zksync_os_server::truncate::run_truncate(config, args.to_block, args.tombstone_dir)

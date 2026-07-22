@@ -1,16 +1,16 @@
 # How consensus is tested
 
-## Why determinism is the whole strategy
+## Why determinism is the strategy
 
 Consensus bugs live in *interleavings*: a crash between a vote and its broadcast, a
 partition healing one message too late, two candidates racing at the same height.
-Wall-clock integration tests sample interleavings at random — which makes them
-flaky when they can fail and silent when they can't reach the interesting case.
+Wall-clock integration tests sample interleavings at random — so they are
+flaky when a bad interleaving is sometimes hit, and silent when it is never hit.
 This codebase inverts the usual pyramid: the primary test surface is
 **deterministic simulation** (DST), and real-process integration tests are a thin
 layer for what simulation physically cannot see.
 
-Five principles, each mechanically enforced rather than aspirational:
+Five principles, each mechanically enforced:
 
 1. **Determinism is itself asserted.** Every simulated scenario runs *twice per
    seed*, and the runtime's audit fingerprint — a rolling hash over every
@@ -47,7 +47,7 @@ it must be.** An integration test that could have been a simulation scenario is 
 review finding. The chaos rig inverts the flow — it *finds* rather than *pins*;
 it gets [its own section below](#the-chaos-rig).
 
-One honest limitation to keep in mind: the layers above test consensus *given a
+One limitation to keep in mind: the layers above test consensus *given a
 healthy node* — but consensus participation also leans on node subsystems that
 simulation does not model (the mempool contract, fee sourcing, the L1 watcher, the
 persistence pipeline's durability watermark). Those seams are precisely where
@@ -80,7 +80,7 @@ the harness instantiates both with commonware's test implementations.
   hands one validator's real keys to a real attack implementation instead of a
   hand-rolled approximation of one.
 
-Worth stating as the punchline: nothing in the consensus stack knows which runtime
+The key point: nothing in the consensus stack knows which runtime
 it is on. The deterministic swap is not a mock of consensus — it is the production
 consensus stack on different hardware.
 
@@ -97,7 +97,7 @@ guarantees for free:
   that seed replays the failure exactly, down to every message on the simulated
   wire. There is no "flaky, retried, green" lane — a red seed is a real bug with a
   deterministic reproducer.
-- **Free time.** Timeouts are virtual: a minute of consensus costs milliseconds,
+- **Virtual time.** Timeouts are virtual: a minute of consensus costs milliseconds,
   and generous scenario timeouts cost nothing.
 
 Scenarios drive a `SimCluster` — N validators with control over links (partitions,
@@ -109,7 +109,7 @@ scenarios come in two flavors matching two attacker models: *wire-level* (the
 library's attack mocks — equivocation, double-voting — asserting that evidence
 names exactly the culprit and honest safety holds) and *application-level* (an
 honest consensus stack whose **proposals** are corrupted — asserting the committee
-refuses, the chain rides through, and noting that this attacker produces **no**
+refuses and the chain continues, and noting that this attacker produces **no**
 fault evidence: "no evidence" never means "no attack").
 
 A pattern worth copying when writing assertions: **match assertion sharpness to
@@ -149,7 +149,7 @@ evidence, no unexpected process deaths, and a log oracle for novel errors. The
 expectation journal is what makes "the driver took quorum away" distinguishable
 from "the chain stalled unexplained". A separate `chaos load` runs concurrently,
 funding senders through real L1 deposits and streaming transfers through the
-committee — so cross-validator state agreement is checked *under fire*, the
+committee — so cross-validator state agreement is checked under load, the
 strongest divergence probe the rig has.
 
 Two rules define its place in the pyramid:

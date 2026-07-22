@@ -32,10 +32,10 @@ decline their turns and consensus does what it does with a silent leader —
 views time out, nullifications assemble, leaders rotate, about once per
 leader timeout, forever. Dashboards will show steady view/nullification
 counters ticking on a chain producing no blocks; that is the designed idle
-behavior, not distress. The signal that matters stays block staleness
+behavior, not a fault. The signal that matters stays block staleness
 against the heartbeat, not view churn.
 
-## Timing characteristics worth knowing by heart
+## Timing characteristics
 
 Logged once at consensus startup, and derivable from config:
 
@@ -97,7 +97,7 @@ The drill, when the settler is lost (host down, process dead, region gone):
    resumes the commit/prove/execute ladder with its own keys. In-flight
    batches the dead settler had proven are re-proven — bounded compute,
    never a liveness question.
-3. **Point provers at nothing.** The prover fleet talks to one stable
+3. **Provers need no repointing.** The prover fleet talks to one stable
    LB/DNS name with a TCP health check; only the active settler serves the
    prover API, so routing follows the promotion on its own. A prover holding
    work assigned by the dead settler gets a graceful `UnknownJob` rejection
@@ -154,8 +154,8 @@ day**: a coordinated, briefly chain-halting activation. The choreography:
    after that, roll forward only — stragglers join by upgrading, never by
    the committee returning to the old version.
 
-An idle chain flag-days the same way — the halt window is invisible between
-heartbeats, and the idle policy needs no special handling.
+The flag day works the same on an idle chain — the halt window is invisible
+between heartbeats, and the idle policy needs no special handling.
 
 ## Incident playbook pointers
 

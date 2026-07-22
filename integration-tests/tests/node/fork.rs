@@ -212,6 +212,18 @@ async fn the_fork_drill_truncates_reconfigures_and_resumes() -> anyhow::Result<(
         "the tombstone names the discarded blocks"
     );
 
+    // The anchor, read the way the runbook reads it from a stopped node:
+    // `chain-tip` must name exactly the truncation point and the manifest's
+    // anchor hash — including on the settler, whose no-op truncation wrote no
+    // tombstone to cross-check against.
+    let (tip_height, tip_hash) = zksync_os_server::chain_tip::read_chain_tip(&node1_config)?;
+    assert_eq!(tip_height, fork_point);
+    assert_eq!(format!("{tip_hash:?}"), anchor_hash);
+    let (settler_tip, settler_hash) =
+        zksync_os_server::chain_tip::read_chain_tip(cluster.stopped(0).config())?;
+    assert_eq!(settler_tip, fork_point);
+    assert_eq!(format!("{settler_hash:?}"), anchor_hash);
+
     // Restarting over pre-truncation consensus engine state must refuse by
     // name: the tool flags the state it invalidated, and running consensus
     // over it would die mid-run on the delivery-order assert instead.

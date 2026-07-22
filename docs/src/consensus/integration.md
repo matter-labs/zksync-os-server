@@ -104,13 +104,13 @@ recovery, discovered at settlement after users were already told "final".
 The cost is that execution sits on the vote path twice per view — once building,
 once verifying. At current block sizes that is noise compared to networking;
 overlapping execution with consensus (pipelining) is the known lever if a
-latency-critical deployment ever needs it, and nothing in the design forecloses it.
+latency-critical deployment ever needs it, and nothing in the design prevents it.
 
 ## Speculative state
 
 Verification means executing block H+1 before H+1 is final — sometimes before its
 parent H is final either, and sometimes for two *competing* candidates at the same
-height (see [notarized is not finalized](intro.md#simplex-in-five-minutes)). None
+height (see [notarized is not finalized](intro.md#the-simplex-protocol)). None
 of that may touch the node's durable stores, which are strictly linear and hold
 only finalized history.
 
@@ -129,7 +129,7 @@ Two invariants carry the design:
 - **Speculation is bounded.** If the persistence pipeline stalls, consensus keeps
   voting (a slow disk must not silence a validator) and overlays accumulate — up to
   a cap, past which the validator withholds votes until commits drain. Memory
-  stays bounded; the committee rides through one member's pause.
+  stays bounded; the committee tolerates one member's pause.
 
 ## Validity rules: bounding the inputs
 
@@ -164,7 +164,7 @@ chain. The rules file is the authoritative, tested list.
 
 ## The life of a block
 
-The component-level version, start to finish. (The same journey told
+The component-level version, start to finish. (The same flow told
 chronologically — with the vote orderings, the failure scenarios, and epoch
 turnover — is [the lifecycle chapter](lifecycle.md).)
 
@@ -219,7 +219,7 @@ The recovery story is a composition of guarantees, each pinned by tests:
   blocks and certificates from peers; commits re-execute from the validator's own
   base. Catching up ends in *participation*, not just observation.
 
-## Two worlds, four touchpoints
+## Runtime isolation
 
 Consensus runs on its own OS thread with its own async runtime and its own
 networking stack, deliberately isolated from the node's main runtime: consensus
@@ -230,7 +230,7 @@ transaction gossip), and a death signal — if consensus dies, the node goes dow
 with it rather than serving a chain that stopped. The module documentation in
 `node/bin/src/consensus.rs` is the wiring's source of truth.
 
-## Durable bytes live in one place
+## Durable wire encodings
 
 Every encoding that outlives a process or crosses a trust boundary — the versioned
 replay-record formats (shared with external-node sync), the consensus block
@@ -243,7 +243,7 @@ belong to their protocols and may evolve with them; what they need is version
 
 ## What consensus does not change
 
-The reassurance list, load-bearing enough to state explicitly: the write-ahead-log
+Consensus leaves all of these unchanged: the write-ahead-log
 format; external-node sync (any validator serves the same replay stream a single
 sequencer would); the batcher and settlement pipeline (one batcher-enabled node,
 reading finalized blocks); the RPC surface (plus a `consensus` section in

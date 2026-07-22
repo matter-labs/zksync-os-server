@@ -1,4 +1,4 @@
-# Consensus: what and why
+# Consensus fundamentals
 
 ## The problem
 
@@ -40,8 +40,8 @@ chain. Four is the smallest committee that survives losing a member. Second, the
 reason quorums work is *overlap*: any two quorums of size `n − f` share at least
 `f + 1` members, so at least one **honest** validator sits in every overlap — and an
 honest validator never votes for two conflicting blocks. That intersection argument
-is the entire safety proof in miniature, and it is why the quorum size cannot be
-bargained down.
+is the core of the safety proof, and it is why the quorum size cannot be
+reduced.
 
 ## Views and leaders
 
@@ -57,15 +57,15 @@ working as designed, and the cost is one view's worth of latency. Everything in 
 integration is built to treat proposal abandonment as a normal path — exercised
 constantly in tests — rather than an error to panic on.
 
-## Simplex in five minutes
+## The Simplex protocol
 
 The committee runs [Simplex](https://eprint.iacr.org/2023/463), a deliberately
-minimal BFT protocol (the name is the thesis). Validators exchange three kinds of
+minimal BFT protocol. Validators exchange three kinds of
 votes; the names below are the ones you will meet in the code and metrics:
 
 - **notarize** — "this proposal is well-formed and I vouch for it." A quorum of
   notarize votes forms a *notarization*: the block is a serious candidate.
-- **nullify** — "this view is going nowhere; let's move on." Sent when the view
+- **nullify** — "this view will not produce a block; move on." Sent when the view
   times out (or the proposal is unacceptable). A quorum forms a *nullification*:
   the view is skipped and the next leader builds on the latest notarized block.
 - **finalize** — "I notarized this block and saw no reason to skip the view."
@@ -75,8 +75,8 @@ votes; the names below are the ones you will meet in the code and metrics:
 On the happy path a block goes propose → notarization → finalization: two vote
 rounds. On a bad view, nullify votes let the committee skip forward without
 waiting out cascading timeouts — a dead leader costs one view, not an escalation.
-(The blow-by-blow ordering — who waits for what, and every scenario that ends in
-a nullify — is walked through in [the lifecycle chapter](lifecycle.md).)
+(The precise ordering — who waits for what, and every scenario that ends in
+a nullify — is in [the lifecycle chapter](lifecycle.md).)
 
 Simplex belongs to the same family as Tendermint and HotStuff — rotating leaders,
 quorum votes, a couple of phases to finality — and a fair protocol comparison is a
@@ -147,7 +147,7 @@ properties were chosen deliberately:
   committee is just a list of public keys, which keeps validator on-boarding and
   (eventually) rotation operationally simple. Threshold signatures — one fixed
   group public key, verifiable by light clients without knowing the member list —
-  are the designed-for evolution; certificate formats already carry the scheme and
+  are a planned evolution; certificate formats already carry the scheme and
   committee identifiers that transition needs.
 - **Attributable votes.** Every signature in a certificate names its signer. If a
   validator signs two conflicting votes, the pair of signatures is transferable

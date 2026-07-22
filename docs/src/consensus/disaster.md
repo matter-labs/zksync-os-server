@@ -3,7 +3,7 @@
 BFT finality and settled finality are two different promises. The committee
 promises that a finalized block will never be contradicted; the proving system
 promises that only correct state transitions settle to L1. They are kept by
-different machinery, and there is exactly one crack between them: every
+different machinery, and there is exactly one gap between them: every
 validator verifies proposals by re-executing the **same** state-transition
 implementation, so committee agreement is replication, not diversity — it
 catches a dishonest proposer, never a shared defect. The proving stack is the
@@ -45,12 +45,12 @@ consensus-fixed — uncommitted batches can be re-cut freely, and
 committed-but-unexecuted batches can be reverted on L1 and re-committed in a
 different shape (commit discovery tolerates superseded commitments as a matter
 of course). Fix or re-shape, re-prove, move on. No governance, no finality
-impact, no operator ceremony beyond the batcher's own tooling.
+impact, no operator procedure beyond the batcher's own tooling.
 
 **A verifier that rejects a correct outcome**: the chain's state stands;
 settlement waits for a verifier fix, shipped as an ordinary (if urgent)
 protocol upgrade. Sequencing continues throughout — the chain does not stop
-because settlement paused — and deposits keep flowing (they ride finalized L1,
+because settlement paused — and deposits keep flowing (they follow finalized L1,
 not our batches). Withdrawals wait with settlement. The cost is a pause,
 paced by governance.
 
@@ -64,8 +64,8 @@ receipts against — stands; the spec is amended to acknowledge what the chain
 actually did, and the state-transition fix ships alongside so the deviation
 stays bounded to its range. This spends trust, deliberately and visibly, which
 is exactly why it sits behind governance rather than behind a knob. (A
-pre-armed, faster authorization path is a designed-for evolution; what exists
-today is the deliberate one.)
+faster, pre-authorized path may be added later; what exists today is the
+deliberate, governance-paced one.)
 
 The permanent record matters as much as the remedy: a ratified deviation
 becomes part of the chain's definition — "the spec, plus the ratified
@@ -77,8 +77,7 @@ such.
 When the deviation cannot be ratified, the remaining honest exit is to discard
 the affected suffix and re-execute: an **operator-coordinated era change**
 that abandons finalized blocks above an agreed height N. Three properties are
-constitutional, in the sense that the machinery enforces them rather than
-trusting anyone to remember:
+enforced by the machinery rather than left to anyone's memory:
 
 - **Operators fork; keys cannot.** There is no in-protocol path by which
   validator keys can revert finality — a fork is configuration, deployed out
@@ -88,7 +87,7 @@ trusting anyone to remember:
   quorum produces no live chain on either side. A mandatory
   `consensus.protocol_version` bump partitions the network at the handshake,
   so forked and un-forked nodes cannot exchange a single interpretable byte.
-- **The fork is loud, forever.** The finality store is never touched: the
+- **The fork leaves a permanent record.** The finality store is never touched: the
   abandoned era's certificates remain on every node as the permanent,
   auditable record that finalized blocks were overridden, by whom, and from
   where. The truncation tool additionally exports every discarded block to a
@@ -104,7 +103,7 @@ trusting anyone to remember:
   **L1-executed** (irreversible for everyone; reversing it would be an L1
   emergency upgrade, a different document).
 
-Jurisdiction follows from the tiers: **L1 first, consensus second.** Reverting
+The order of work follows from the tiers: **L1 first, consensus second.** Reverting
 committed batches and guaranteeing nothing is re-committed meanwhile is the
 settler side of the runbook, done and verified before anyone touches an era.
 A backstop guard enforces the ordering mechanically — a settler restarted
@@ -116,9 +115,10 @@ not to perform the revert.
 
 1. **Decide.** Governance declares the suffix above N abandoned. N must sit at
    or above the L1-executed floor and at or below every participating node's
-   chain tip (compare tips while halted; a node whose chain ends below N
-   needs no truncation — it catches up to exactly N after the fork, since
-   pre-fork blocks are identical in both eras).
+   chain tip (compare tips while halted, with the `chain-tip` subcommand; a
+   node whose chain ends below N needs no truncation — it catches up to
+   exactly N after the fork, since pre-fork blocks are identical in both
+   eras).
 2. **Stop the settler first, and hold it down.** Its recovery machinery would
    faithfully recreate and re-commit the discarded batches — by design.
 3. **Halt the rest of the committee**, observers included.
@@ -135,7 +135,10 @@ not to perform the revert.
 6. **Cross-check the anchor.** Every node's tombstone manifest reports
    `hash_at_truncation_point`; they must all agree (they will, if every
    truncation landed on the same chain — a disagreeing node skipped a step
-   and must not proceed).
+   and must not proceed). `chain-tip` reads the same pair from any stopped
+   node, including one that already ended at N and has no tombstone; it
+   prints `<height>:<hash>`, the exact value `consensus.acknowledge_fork`
+   takes in step 8.
 7. **Clear the consensus engine state** directory on every validator and
    observer — the era guard requires a deliberate clear, exactly as in a
    re-migration.
@@ -151,9 +154,9 @@ not to perform the revert.
 9. **Roll the patched state-transition binary** to every node *before* you
    restart it. Re-execution from N replays the discarded window's transactions
    against the STF again — under the *unpatched* binary that can re-include the
-   very deviation the fork exists to expel. The fix that motivated the fork is
+   very deviation the fork exists to remove. The fix that motivated the fork is
    a precondition of the restart, not a follow-up. (The tombstoned suffix
-   itself is never replayed into the new era; it is only mined for the
+   itself is never replayed into the new era; it is only used for the
    postmortem.)
 10. **Restart the validators** and verify: uniform chain fingerprints, blocks
     finalizing from N+1, hash agreement across nodes. **Restart the settler
@@ -163,17 +166,16 @@ not to perform the revert.
     every external consumer of the old tip; the finality store holds both
     eras' certificates; the custody trail records the era transition.
 
-### What survives, on purpose
+### What survives
 
 Chain data at and below N; the finality store in full (certificates are
 permanent and digest-keyed across eras; epoch-keyed records — custody,
 registry derivations, floors — are era-scoped, so the new era starts its own
-trail without colliding with the dead one); preimages; the tombstone. What a
-fork costs, it costs in the open.
+trail without colliding with the dead one); preimages; the tombstone.
 
 ### Rehearsal
 
-The choreography is executable, not aspirational: the simulation corpus pins
+The choreography is executable end to end: the simulation corpus pins
 the fork's arithmetic (`lib/consensus/sim/tests/fork_back.rs` — a quorum fork
 lives, below-quorum adoption freezes both eras, and a real-execution fork
 re-converges to identical committed state), and the integration drill runs the
@@ -181,11 +183,11 @@ full runbook against real nodes, real storage, and a real L1, including the
 settler backstop (`integration-tests/tests/node/fork.rs`). Run those whenever
 you change the tooling.
 
-Rehearse by hand once per operator generation — the difference between a runbook
-and a legend — on the [local consensus devnet](../setup/consensus_devnet.md) (a
-real multi-validator committee over a local L1; the devnet page has the
-bring-up). The steps below are this runbook's *how* on that cluster's compose
-tooling. The generated cluster makes one node the settler (`validator-0`, with
+Rehearse by hand whenever the operator team changes — a runbook only stays
+reliable if the current operators have actually run it — on the
+[local consensus devnet](../setup/consensus_devnet.md) (a real multi-validator
+committee over a local L1; the devnet page has the bring-up). The steps below
+run this runbook on that cluster's compose tooling. The generated cluster makes one node the settler (`validator-0`, with
 `batcher.enabled: true`); the rest sequence only — that is the node this runbook
 stops first and restarts last.
 
@@ -193,7 +195,7 @@ stops first and restarts last.
 below the current tip. It must also sit at or above the last L1-executed block —
 but you do not have to measure that by hand: the tool reads the executed-batch
 floor from L1 directly and refuses (naming the floor) if `N` is below it, so if a
-choice is rejected, nudge `N` up. On a drained, idle devnet everything committed
+choice is rejected, raise `N`. On a drained, idle devnet everything committed
 is already executed, which is exactly the motivating case (the poisoned suffix was
 never executed).
 
@@ -238,6 +240,20 @@ docker compose -f ./devnet/docker-compose.yaml run --rm --no-deps --entrypoint s
   validator-0 -c 'cat /db/tombstone-<N>/manifest.json' | jq .hash_at_truncation_point
 ```
 
+`chain-tip` reads the anchor directly and works on every validator, including
+one that already ended at `N` and has no tombstone:
+
+```sh
+docker compose -f ./devnet/docker-compose.yaml run --rm validator-0 \
+  --config /app/local-chains/local_dev.yaml \
+  --config /app/<chain>/config.yaml \
+  --config /config/validator.yaml \
+  chain-tip
+```
+
+The last line of output is `<N>:<hash at N>` — the value for the
+`acknowledge_fork` setting below.
+
 **5. Deploy the fork config and clear engine state.** For each validator, edit its
 host-side overlay `./devnet/validator-<i>/validator.yaml`, adding under
 `consensus:` the new anchor, a bumped protocol version, and the acknowledgment:
@@ -274,10 +290,10 @@ docker start chaos-validator-0
 If the settler refuses to start, naming committed batches past its chain, then L1
 still holds committed-but-unexecuted batches above `N`: revert them first (the
 L1-revert step above — the `L1Revert` rebuild mode) and start it again. On a fully
-drained devnet there are none, so the backstop stays quiet and this step is the
-no-op it should be.
+drained devnet there are none, so the backstop does not fire and this step is
+a no-op.
 
-## When the machine itself is suspect
+## When the consensus machinery itself is suspect
 
 Everything above assumes consensus did its job — the blocks were finalized
 correctly by a working protocol, and the *state* was the problem. A defect in

@@ -40,8 +40,8 @@ curl -s localhost:<status-port>/status | jq .consensus
 
 Host ports for each validator (L2 RPC, status, prometheus) are listed in
 `./devnet/manifest.json`. Any validator's RPC accepts transactions: validators gossip
-pending transactions to each other, so a transaction submitted to one node rides a
-block regardless of which validator leads next.
+pending transactions to each other, so a transaction submitted to one node lands
+in a block regardless of which validator leads next.
 
 ## Day-to-day
 

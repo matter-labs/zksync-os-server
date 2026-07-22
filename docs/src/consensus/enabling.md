@@ -1,16 +1,19 @@
-# Running consensus: new chains and migrations
+# Running consensus
 
 ## The two modes
 
 `consensus.enabled = false` (the default) is the single-sequencer node, unchanged.
 `consensus.enabled = true` puts the node on the consensus network, in one of two
-roles (`consensus.role`): a **validator** — block production is driven by
-consensus leadership instead of a local loop, every block is verified by
-re-execution before this node votes for it, and only finalized blocks reach the
-write-ahead log — or an **observer**, which follows the same chain through the
-same machinery without ever voting (see "Observers" below). In either mode,
-exactly one node per chain runs the batcher (settlement); every consensus node
-serves RPC and the external-node replay stream.
+roles (`consensus.role`):
+
+- **validator** — block production is driven by consensus leadership instead of
+  a local loop, every block is verified by re-execution before this node votes
+  for it, and only finalized blocks reach the write-ahead log;
+- **observer** — follows the same chain through the same machinery without ever
+  voting (see [Observers](#observers)).
+
+In either role, exactly one node per chain runs the batcher (settlement), and
+every consensus node serves RPC and the external-node replay stream.
 
 Startup **guards** protect every transition described on this page: each one
 refuses to start into a state that could mix chain histories, and each failure
@@ -24,8 +27,9 @@ Conceptually, four steps:
 1. **Keys.** Each validator generates its two keypairs (network identity +
    consensus signing) with the `consensus-keygen` tool (`tools/consensus-keygen`).
 2. **The committee list.** One entry per validator —
-   `<network_key>:<bls_key>@<host:port>` — identical on every node
-   (`consensus.validators`). The committee *is* this list; there is no discovery.
+   `<network_key>:<bls_key>@<ip:port>`, a numeric address (DNS names are not
+   resolved) — identical on every node (`consensus.validators`). The committee
+   *is* this list; there is no discovery.
    (`validators` is shorthand for a single-entry committee *schedule*; a set that
    will change over time uses `consensus.committees` — see
    [changing the committee](#changing-the-committee).)
@@ -39,6 +43,26 @@ Conceptually, four steps:
    quorum has paired up. Stragglers join late and catch up on their own — a
    committee never waits for its slowest member unless quorum demands it.
 
+One validator's consensus configuration, with the per-validator and
+committee-uniform parts marked:
+
+```yaml
+consensus:
+  enabled: true
+  # per-validator: this node's own keys (from `consensus-keygen`) and listener
+  network_key: "<ed25519 secret>"
+  bls_key: "<bls secret>"
+  listen_address: 0.0.0.0:3054
+  # committee-uniform: the same list on every validator, numeric ip:port only
+  validators:
+    - "<network_pub_1>:<bls_pub_1>@10.0.1.11:3054"
+    - "<network_pub_2>:<bls_pub_2>@10.0.1.12:3054"
+    - "<network_pub_3>:<bls_pub_3>@10.0.1.13:3054"
+    - "<network_pub_4>:<bls_pub_4>@10.0.1.14:3054"
+batcher:
+  enabled: true   # on exactly one validator (the settler); `false` on the rest
+```
+
 For a hands-on local version of all of this, the
 [local consensus devnet](../setup/consensus_devnet.md) page generates keys,
 configs, and a compose file in one command.
@@ -49,13 +73,13 @@ height, and the certified watermark — the height up to which finality certific
 are durably stored), plus the consensus runtime's own metrics registry served at
 `/status/consensus-metrics` as a second scrape target.
 
-## The protocol version: deploy ≠ activate
+## Deploying and activating the protocol version
 
 `consensus.protocol_version` names the version of the consensus protocol the
 committee speaks, and it is baked into the network's handshake and vote signing: a
 validator configured with a different version **cannot pair** — it fails loudly at
 the handshake and freezes where its disk left off, while a committee of `n ≥ 3f+1`
-rides through it as one tolerated fault.
+tolerates it as one fault.
 
 The operational consequence is a clean two-step upgrade discipline: *deploying* a
 binary that supports a newer protocol version is always safe and can be rolled out
@@ -95,17 +119,19 @@ The procedure:
    configuration, and pre-stage chain-state snapshots on the future validator
    machines — pre-staging is what keeps the eventual gap short.
 2. **Drain**: stop the sequencer. Its write-ahead log ends at some height H; that
-   H becomes `consensus.genesis_height` in every validator's config. (H is read
-   from the stopped node's database — an RPC height taken before the stop is not
-   reliable, since the sequencer produces until the moment it winds down.)
+   H becomes `consensus.genesis_height` in every validator's config. Read H from
+   the stopped node's database with the `chain-tip` subcommand:
+   `zksync-os-server --config <its config> chain-tip` prints `<height>:<hash>`
+   as the last line of its output. An RPC height taken before the stop is not
+   reliable, since the sequencer produces until the moment it winds down.
 3. **Distribute**: every validator needs the chain through H — the validated path
    is copying the drained node's databases (with pre-staged snapshots, only the
    tail moves during the gap, and the node's own startup replay rebuilds
    everything downstream of the write-ahead log). A machine that was running an
    external node already has compatible storage; it can be converted in place
-   *provided its log ends exactly at H*, which is worth checking rather than
-   assuming — once the sequencer stops, external nodes freeze wherever the replay
-   stream left them.
+   *provided its log ends exactly at H*, which is worth checking with
+   `chain-tip` rather than assuming — once the sequencer stops, external nodes
+   freeze wherever the replay stream left them.
 4. **Cut over**: start the validators. The guards verify that this first start of
    the era happens *exactly* at H — a node that is behind is missing history; a
    log past H means someone kept sequencing past the agreed anchor — and record
@@ -128,19 +154,29 @@ not a URL.
 
 Configuration, on top of the committee schedule every consensus node carries:
 
-- `consensus.role = observer`, a network key, and **no** `consensus.bls_key`
-  (configuring one is refused — a key that exists but never signs invites the
-  wrong conclusions).
-- `consensus.observers`: the admission list — `<ed25519_hex>@<host:port>` per
-  observer, configured identically on **every** node. The consensus network only
-  completes handshakes with explicitly listed identities, so this list is the
-  observers' admission perimeter; an observer must find its own identity in it.
-  Observers hold no committee power — the worst an admitted one can do is consume
-  resources, which the network's rate quotas bound.
-- `consensus.tx_forward_rpc_urls`: validator RPC urls. An observer has no leader
-  turns, so a transaction submitted to its RPC is kept as a local mirror (pending
-  views stay coherent) and forwarded round-robin to a validator, which gossips it
-  to whoever leads next.
+```yaml
+consensus:
+  enabled: true
+  role: observer
+  # this observer's identity; no `bls_key` — an observer never signs, and
+  # configuring one is refused
+  network_key: "<ed25519 secret>"
+  listen_address: 0.0.0.0:3054
+  # the admission list: identical on every node (validators included), and it
+  # must contain this observer's own identity
+  observers:
+    - "<network_pub>@10.0.1.20:3054"
+  # observers have no leader turns: transactions submitted to this node's RPC
+  # are forwarded round-robin to these validator RPC urls (and kept locally as
+  # a mirror, so pending views stay coherent)
+  tx_forward_rpc_urls:
+    - "http://10.0.1.11:3050"
+```
+
+The consensus network only completes handshakes with explicitly listed
+identities, so the `observers` list is the admission perimeter. Observers hold
+no committee power — the worst an admitted one can do is consume resources,
+which the network's rate quotas bound.
 
 Two guards keep the roles honest: an observer whose network key is scheduled into
 a committee refuses to start (the committee would wait for votes that never
@@ -167,8 +203,8 @@ first entry must activate at epoch 0 so every epoch in history resolves to a
 committee (backfilled certificates stay verifiable forever). Reconfiguration is an
 **append**: every operator deploys a config with the new entry *before* its
 activation epoch arrives — pick an activation comfortably in the future, roll the
-config out validator by validator (a restart per validator; the committee rides
-through each as one tolerated fault), and the chain crosses the boundary into the
+config out validator by validator (a restart per validator; the committee
+tolerates each as one fault), and the chain crosses the boundary into the
 new committee with no further coordination. The handoff itself is protocol-level:
 the new committee's first act is re-certifying the old committee's final block.
 
@@ -184,7 +220,8 @@ The choreography per direction:
   following the chain as an observer (it still verifies finality certificates and
   serves RPC from its growing history). For a machine that should keep following
   deliberately, restart it as `consensus.role = observer` (with its entry moved
-  to the admission list); otherwise repoint it as an external node at leisure.
+  to the admission list); otherwise repoint it as an external node whenever
+  convenient.
   The `acknowledge_non_member` flag covers the tail case of restarting a machine
   whose key has left the schedule entirely.
 - **Promoting an observer** (the growing case, starting from a node that already
@@ -219,7 +256,7 @@ which committee held it, from which block — kept in the node's own finality st
 next to the certificates, so the chain's committee history is reconstructible
 from durable data alone, independent of any config file's current contents.
 
-Two sharp edges, both loud by design:
+Two pitfalls, both failing loudly by design:
 
 - The schedule is a committee-wide constant. A validator whose config is missing
   the newest entry crosses the boundary on the old committee: it cannot verify
@@ -315,7 +352,7 @@ before anything depends on it.
 ### Recovery: switching the registry off
 
 A halted chain cannot rotate itself through its own state, and a broken
-registry must never hold committee changes hostage. Recovery is a mode change,
+registry must never block committee changes. Recovery is a mode change,
 not a config override: set `consensus.registry_mode` back to `schedule` (or
 `shadow`, to keep deriving and alarming while the registry is repaired), put
 the desired committee in `consensus.committees`, deploy across the committee,
@@ -353,7 +390,7 @@ start from are gone. The floor comes from the node's own finality store, which
 is exactly why that store is never pruned: certificates there are the permanent
 proof trail, and the floors for every future rebuild.
 
-> Day-two operations — the alarm table, timing characteristics, and the
+> Ongoing operations — the alarm table, timing characteristics, and the
 > incident playbook — live in [Operating a committee](operating.md).
 
 ## Unsupported configurations
@@ -377,8 +414,8 @@ compose with consensus (each error names the reason):
 Interop is not supported under consensus yet: proposal verification rejects
 interop system transactions outright (they have no authenticity rule the way
 L1 priority transactions do), and the corresponding input cursors are pinned.
-The greppable registry of these deliberate holds is `TODO(consensus)` in the
-source tree.
+These deliberate gaps are marked `TODO(consensus)` in the source tree, so the
+full list is one grep away.
 
 ## The committee as the batch-verification set
 
@@ -394,7 +431,7 @@ To enable it, on **every validator**:
 
 - `network.enabled = true`, with a stable `network.secret_key` and
   `network.boot_nodes` listing the other validators — the committee meshes on
-  the devp2p network, and batch-verification traffic rides those connections
+  the devp2p network, and batch-verification traffic travels over those connections
   (the `zks_2fa` subprotocol, multiplexed beside the replay-serving `zks` one).
   Whoever currently settles collects from its own peers, so the verifier set
   follows a settlement failover with no reconfiguration.
@@ -443,7 +480,7 @@ and a quiet chain seals empty blocks around the clock at the block time.
 The policy is leader-local — blocks and passed turns both verify, so
 validators with differing settings interoperate — but configure it uniformly
 so the chain's cadence is predictable. The heartbeat also sets the floor on
-settlement activity: each pulse eventually rides to L1 through the batcher,
+settlement activity: each pulse eventually reaches L1 through the batcher,
 which is the deliberate cost of keeping the pipeline warm and observable.
 
 ## Rolling back
@@ -463,9 +500,10 @@ One subtlety, worth understanding rather than memorizing: **finality runs slight
 ahead of durability.** A block is finalized the instant a quorum's certificate
 exists, but each validator writes it to its own log a moment later — so at the
 instant a committee stops, one validator's log can end a block or two before
-another's. Roll back from the validator with the **highest** write-ahead-log tip,
-and treat the in-flight tail as lost: rollback is a disaster procedure, and a
-few hundred milliseconds of blocks is its honest cost. (Settled blocks are never
+another's. Roll back from the validator with the **highest** write-ahead-log tip (read
+each stopped validator's tip with `chain-tip`), and treat the in-flight tail
+as lost: rollback is a disaster procedure, and its cost is a few hundred
+milliseconds of blocks. (Settled blocks are never
 in that gap — the batcher only settles blocks that reached a log.)
 
 Rolling back to the single sequencer keeps every finalized block — it changes
@@ -482,13 +520,14 @@ A rolled-back chain can be migrated a second time at a new cutover. The era guar
 makes the procedure deliberate: consensus refuses to start when its recorded era
 does not match the configured anchor — *unless* the consensus engine state was
 explicitly cleared, which is the documented re-migration step (the finality store
-keeps the previous era's certificates either way; provable history is never the
-thing you delete). A fresh era start must again land exactly on the new cutover
+keeps the previous era's certificates either way; provable history is never
+deleted). A fresh era start must again land exactly on the new cutover
 height.
 
 ## Current assumptions
 
-Stated here so the page survives its own future: the validator set changes by
+Stated explicitly so a future reader can tell what has changed since this was
+written: the validator set changes by
 **configured schedule** — operators deploy matching schedules out of band, and no
 on-chain registry or in-band vote authorizes a change (the custody records make
 the history auditable; a registry is the designed evolution); migration and
@@ -496,6 +535,6 @@ reconfiguration choreography is **manual with guards** — correctness never
 depends on orchestration, which is exactly what makes automating it later a
 convenience rather than a safety project; finality certificates are recorded and
 durable, while *externally verifiable* finality (light clients checking
-certificates without trusting a node) is the designed-for future the certificate
+certificates without trusting a node) is a planned evolution the certificate
 and committee formats already accommodate; and settlement remains a single-node
 concern — consensus makes sequencing highly available, not (yet) the batcher.
