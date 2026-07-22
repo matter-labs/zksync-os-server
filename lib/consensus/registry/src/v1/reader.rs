@@ -275,3 +275,126 @@ fn ensure_entry_ingresses_distinct(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    struct MapState(HashMap<B256, B256>);
+
+    impl ReadStorage for MapState {
+        fn read(&mut self, key: B256) -> Option<B256> {
+            self.0.get(&key).copied()
+        }
+    }
+
+    const REGISTRY: Address = Address::repeat_byte(0x42);
+
+    fn slots(pairs: &[(U256, U256)]) -> Slots<MapState> {
+        Slots {
+            state: MapState(
+                pairs
+                    .iter()
+                    .map(|(slot, value)| {
+                        (
+                            crate::flat_key(REGISTRY, *slot),
+                            B256::from(value.to_be_bytes::<32>()),
+                        )
+                    })
+                    .collect(),
+            ),
+            address: REGISTRY,
+        }
+    }
+
+    /// The declared-count caps refuse only *beyond* the limit: the limit itself
+    /// is a legal registry the reader must proceed into.
+    #[test]
+    fn declared_counts_refuse_beyond_the_limit_not_at_it() {
+        let identity_count = |count: u64| {
+            read_identity_count(&mut slots(&[(
+                U256::from(layout::SLOT_IDENTITY_COUNT),
+                U256::from(count),
+            )]))
+        };
+        assert_eq!(identity_count(MAX_IDENTITIES), Ok(MAX_IDENTITIES));
+        assert_eq!(
+            identity_count(MAX_IDENTITIES + 1),
+            Err(RegistryRefusal::TooManyIdentities {
+                found: U256::from(MAX_IDENTITIES + 1)
+            })
+        );
+
+        let entry_count = |count: u64| {
+            read_schedule_entry_count(&mut slots(&[(
+                U256::from(layout::SLOT_SCHEDULE_COUNT),
+                U256::from(count),
+            )]))
+        };
+        assert_eq!(entry_count(MAX_SCHEDULE_ENTRIES), Ok(MAX_SCHEDULE_ENTRIES));
+        assert_eq!(
+            entry_count(MAX_SCHEDULE_ENTRIES + 1),
+            Err(RegistryRefusal::TooManyScheduleEntries {
+                found: U256::from(MAX_SCHEDULE_ENTRIES + 1)
+            })
+        );
+    }
+
+    /// The per-entry bounds sit exactly on their limits: `u64::MAX` is a
+    /// representable activation and the member cap itself reads through into
+    /// member validation — only one-beyond refuses.
+    #[test]
+    fn schedule_entry_bounds_sit_exactly_on_their_limits() {
+        let base = layout::schedule_base(0);
+        let activation_slot = base + U256::from(layout::ENTRY_ACTIVATION_EPOCH);
+        let member_count_slot = base + U256::from(layout::ENTRY_MEMBER_COUNT);
+
+        // Activation at the u64 boundary is representable; the entry proceeds
+        // and fails as *empty*, not as malformed.
+        assert_eq!(
+            read_schedule_entry(&mut slots(&[(activation_slot, U256::from(u64::MAX))]), 0, 1).err(),
+            Some(RegistryRefusal::EmptyEntry { index: 0 })
+        );
+        // One beyond u64 is malformed.
+        assert_eq!(
+            read_schedule_entry(
+                &mut slots(&[(activation_slot, U256::from(u64::MAX) + U256::from(1))]),
+                0,
+                1
+            )
+            .err(),
+            Some(RegistryRefusal::MalformedEntry {
+                index: 0,
+                field: "activation epoch",
+            })
+        );
+        // The member cap itself proceeds into member validation (and dies on
+        // the duplicate zero-members, proving it got there)…
+        assert_eq!(
+            read_schedule_entry(
+                &mut slots(&[(member_count_slot, U256::from(MAX_ENTRY_SIZE))]),
+                0,
+                1
+            )
+            .err(),
+            Some(RegistryRefusal::DuplicateMember {
+                index: 0,
+                member: 0,
+            })
+        );
+        // …one beyond refuses as too large before reading any member.
+        assert_eq!(
+            read_schedule_entry(
+                &mut slots(&[(member_count_slot, U256::from(MAX_ENTRY_SIZE + 1))]),
+                0,
+                1
+            )
+            .err(),
+            Some(RegistryRefusal::EntryTooLarge {
+                index: 0,
+                found: U256::from(MAX_ENTRY_SIZE + 1),
+            })
+        );
+    }
+}

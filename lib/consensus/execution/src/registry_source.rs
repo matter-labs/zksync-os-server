@@ -222,6 +222,77 @@ mod tests {
         .expect("distinct keys")
     }
 
+    fn test_identity(seed: u8) -> RegistryIdentity {
+        use commonware_codec::DecodeExt as _;
+        use commonware_cryptography::bls12381::primitives::{group, ops};
+        let network = commonware_cryptography::ed25519::PrivateKey::decode([seed; 32].as_slice())
+            .expect("seed");
+        let mut scalar = [0u8; 32];
+        scalar[31] = seed;
+        let bls = group::Private::decode(scalar.as_slice()).expect("small scalar");
+        RegistryIdentity {
+            owner: Address::repeat_byte(seed),
+            bls_key: ops::compute_public::<
+                commonware_cryptography::bls12381::primitives::variant::MinPk,
+            >(&bls),
+            network_key: network.public_key(),
+            ingress: "127.0.0.1:3000".parse().expect("socket addr"),
+            egress: "127.0.0.1".parse().expect("ip addr"),
+        }
+    }
+
+    #[test]
+    fn registry_members_become_the_committee_in_entry_order() {
+        let first = test_identity(1);
+        let second = test_identity(2);
+        let committee = registry_committee(&[&first, &second]).expect("distinct keys");
+        // The registry's entry order *is* the agreement — certificate bitmaps
+        // index into it — and every member must be present.
+        assert_eq!(committee, test_committee(&[1, 2]));
+
+        // Duplicate keys cannot form a committee: refusal, not silent dedup.
+        assert!(registry_committee(&[&first, &first]).is_err());
+    }
+
+    /// An absent (all-zero) registry must read as "nothing scheduled", never as
+    /// a recorded refusal: undeployed is the steady state of every shadow
+    /// rollout, and a refusal is a permanent chain fact.
+    #[test]
+    fn an_undeployed_registry_reads_as_no_entry_not_a_refusal() {
+        #[derive(Clone, Debug)]
+        struct EmptyView;
+        impl zksync_os_interface::traits::ReadStorage for EmptyView {
+            fn read(&mut self, _key: alloy::primitives::B256) -> Option<alloy::primitives::B256> {
+                None
+            }
+        }
+        impl zksync_os_interface::traits::PreimageSource for EmptyView {
+            fn get_preimage(&mut self, _hash: alloy::primitives::B256) -> Option<Vec<u8>> {
+                None
+            }
+        }
+        #[derive(Clone, Debug)]
+        struct EmptyState;
+        impl ReadStateHistory for EmptyState {
+            fn state_view_at(
+                &self,
+                _block_number: u64,
+            ) -> zksync_os_storage_api::StateResult<impl zksync_os_storage_api::ViewState>
+            {
+                Ok(EmptyView)
+            }
+            fn block_range_available(&self) -> std::ops::RangeInclusive<u64> {
+                0..=u64::MAX
+            }
+        }
+
+        let mut source = StateDerivationSource::new(EmptyState, Address::repeat_byte(0x42), 270);
+        match source.derive(1, 10) {
+            DerivationAttempt::Reading(RegistryReading::NoEntry) => {}
+            other => panic!("undeployed registry must read as NoEntry, got {other:?}"),
+        }
+    }
+
     #[test]
     fn ledger_roundtrips_records_first_observed_wins_and_survives_reopen() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -841,6 +841,12 @@ mod tests {
         let mut record = valid_record(Vec::new());
         record.block_context.timestamp = NOW + 9;
         assert_verdict!(check(&record, &StubInputs::default()).await, Verdict::Valid);
+
+        // Exactly at the skew bound: still valid — the rule rejects strictly
+        // *beyond* the allowance, so the bound itself belongs to the leader.
+        let mut record = valid_record(Vec::new());
+        record.block_context.timestamp = NOW + 10;
+        assert_verdict!(check(&record, &StubInputs::default()).await, Verdict::Valid);
     }
 
     #[tokio::test]
@@ -947,6 +953,41 @@ mod tests {
                 force_preimages: preimages,
             },
         }
+    }
+
+    #[tokio::test]
+    async fn a_same_version_upgrade_tx_still_requires_the_watched_upgrade() {
+        // No version bump, but an upgrade transaction rides along. That is
+        // upgrade involvement (the genesis shape), never a free pass: it must
+        // match an upgrade the local watcher saw, so unseen means withhold.
+        let record = valid_record(vec![ZkTransaction::from(upgrade_tx(&version("0.31.0")))]);
+        assert_verdict!(
+            check(&record, &StubInputs::default()).await,
+            Verdict::Withhold(_)
+        );
+    }
+
+    #[tokio::test]
+    async fn upgrade_activation_may_lead_the_block_by_the_grace_bound_only() {
+        let block_timestamp = PARENT_TIMESTAMP + 1;
+        let honest = |activation: u64| {
+            let target = version("0.32.0");
+            let mut inputs = StubInputs::default();
+            let mut info = upgrade_info("0.32.0", true, Vec::new());
+            info.metadata.timestamp = activation;
+            inputs.upgrades.insert(target.clone(), info);
+            let mut record = valid_record(vec![ZkTransaction::from(upgrade_tx(&target))]);
+            record.protocol_version = target;
+            (record, inputs)
+        };
+
+        // Activation exactly at the +5s grace bound belongs to the block…
+        let (record, inputs) = honest(block_timestamp + 5);
+        assert_verdict!(check(&record, &inputs).await, Verdict::Valid);
+
+        // …strictly beyond it does not.
+        let (record, inputs) = honest(block_timestamp + 6);
+        assert_verdict!(check(&record, &inputs).await, Verdict::Invalid(_));
     }
 
     #[tokio::test]

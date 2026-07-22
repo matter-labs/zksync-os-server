@@ -293,6 +293,21 @@ mod tests {
         ));
     }
 
+    /// Only the all-zero layout version reads as "not deployed yet" — a real
+    /// unknown version and every other refusal must alarm, never blend into
+    /// the shadow-rollout steady state.
+    #[test]
+    fn only_the_zero_layout_version_reads_as_uninitialized() {
+        assert!(RegistryRefusal::UnknownLayoutVersion { found: U256::ZERO }.is_uninitialized());
+        assert!(
+            !RegistryRefusal::UnknownLayoutVersion {
+                found: U256::from(2)
+            }
+            .is_uninitialized()
+        );
+        assert!(!RegistryRefusal::TooManyIdentities { found: U256::ZERO }.is_uninitialized());
+    }
+
     #[test]
     fn a_proof_of_possession_for_the_wrong_context_is_refused() {
         // The proof is valid cryptography, signed for a different owner —

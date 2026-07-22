@@ -48,3 +48,20 @@ zksync_os_multivm.workspace = true
 # helpers for signing test transactions.
 zksync_os_consensus_sim.workspace = true
 commonware-runtime.workspace = true
+# The block-builder rig: a detached mempool over in-memory state, plus the
+# offline Genesis handle the pool carries (dead-endpoint provider, never used).
+zksync_os_provider.workspace = true
+zksync_os_contract_interface.workspace = true
+zksync_os_reth_compat.workspace = true
+zksync_os_base_token_adjuster.workspace = true
+reth-tasks.workspace = true
+tracing-subscriber.workspace = true
+alloy = { workspace = true, features = [
+    "consensus",
+    "signer-local",
+    "providers",
+    "k256",
+    "rlp",
+    "std",
+    "kzg",
+] }

@@ -102,6 +102,15 @@ impl BaseTokenPriceHandle {
         Self { receiver }
     }
 
+    /// Creates a handle carrying a fixed, already-published price. For test
+    /// harnesses and tools that drive fee-producing components without a
+    /// running updater; `wait_for_prices` resolves immediately and the value
+    /// never changes.
+    pub fn published(prices: TokenPricesForFees) -> Self {
+        let (_sender, receiver) = watch::channel(Some(prices));
+        Self { receiver }
+    }
+
     /// Latest token prices for fees, or `None` until the first successful fetch (or fallback).
     pub fn current(&self) -> Option<TokenPricesForFees> {
         self.receiver.borrow().clone()

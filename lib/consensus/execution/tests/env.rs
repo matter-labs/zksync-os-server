@@ -11,6 +11,7 @@ use commonware_codec::{Encode, Read as _};
 use commonware_cryptography::Digestible;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use zksync_os_consensus_core::ExecutionEnv;
 use zksync_os_consensus_execution::{
@@ -836,6 +837,62 @@ async fn contradictory_redelivery_below_the_tip_still_panics() {
         .await;
     let forged = ConsensusBlock::from_record(&rig.genesis_block, forged);
     rig.env.commit(forged).await;
+}
+
+/// A severed persistence pipeline must *hold* the commit forever, never complete
+/// it: a returned `commit` tells consensus the block is durable, and the honest
+/// answer with a closed sink is to park until the process restarts and marshal
+/// redelivers (the false-commit-ack fix).
+#[tokio::test]
+async fn a_closed_persistence_sink_holds_the_commit_instead_of_acking() {
+    let mut rig = Rig::new().await;
+    let (record, _el, _diff) = rig
+        .produce_record(
+            None,
+            rig.genesis.header_hash,
+            None,
+            rig.genesis.context.timestamp + 1,
+            vec![transfer(&rig.genesis, 0)],
+        )
+        .await;
+    let block = ConsensusBlock::from_record(&rig.genesis_block, record);
+
+    // A stalled pipeline that then tears down: the applier parks the payload
+    // at the closed gate and winds down without ever reporting it durable —
+    // the mid-flight shutdown shape the false-commit-ack fix is for.
+    rig.applier_gate.send(false).expect("applier is alive");
+    drop(rig.applier_gate);
+
+    let held = tokio::time::timeout(Duration::from_secs(1), rig.env.commit(block)).await;
+    assert!(
+        held.is_err(),
+        "a commit whose durability path died must hold, not report delivery"
+    );
+}
+
+/// Linkage guards the record-level facts the replay path relies on. The
+/// declared previous-block timestamp is pure linkage metadata — it does not
+/// feed execution, so a record lying about it still re-executes to its declared
+/// outputs and only `check_linkage` stands in the way of a vote.
+#[tokio::test]
+async fn verify_rejects_a_record_misdeclaring_its_parent_timestamp() {
+    let mut rig = Rig::new().await;
+    let (mut record, _el, _diff) = rig
+        .produce_record(
+            None,
+            rig.genesis.header_hash,
+            None,
+            rig.genesis.context.timestamp + 1,
+            vec![transfer(&rig.genesis, 0)],
+        )
+        .await;
+    record.previous_block_timestamp += 1;
+    let block = ConsensusBlock::from_record(&rig.genesis_block, record);
+
+    assert!(
+        !rig.env.verify(rig.genesis_block.clone(), block).await,
+        "a record misdeclaring its parent's timestamp must not earn a vote"
+    );
 }
 
 /// The era-relativity of `committed_height`, pinned at exactly the arithmetic

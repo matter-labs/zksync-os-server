@@ -104,6 +104,34 @@ impl<T: L2Subpool> Pool<T> {
         })
     }
 
+    /// A pool with no L1 watchers attached — for test harnesses that seed the
+    /// subpools directly (the consensus block-builder tests). Production pools
+    /// come from [`Pool::new`], which wires the watchers; a detached pool never
+    /// receives L1 traffic on its own, and its `genesis` is only consulted when
+    /// [`Pool::init`] starts at the genesis block.
+    pub fn new_detached(
+        runtime: Runtime,
+        genesis: Genesis,
+        interop_roots_per_tx: usize,
+        upgrade_subpool: UpgradeSubpool,
+        l1_subpool: L1Subpool,
+        l2_subpool: T,
+    ) -> Self {
+        Self {
+            runtime,
+            genesis,
+            upgrade_subpool,
+            interop_fee_subpool: InteropFeeSubpool::default(),
+            interop_roots_subpool: InteropRootsSubpool::new(interop_roots_per_tx),
+            l1_subpool,
+            l2_subpool,
+            subcomponents: Subcomponents {
+                upgrade_watcher: None,
+                l1_tx_watcher: None,
+            },
+        }
+    }
+
     /// Initializes mempool with the starting block, expects to be called exactly once during the
     /// node's lifetime.
     ///

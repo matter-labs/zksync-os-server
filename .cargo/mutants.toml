@@ -1,0 +1,20 @@
+# Mutation-testing config for the consensus campaign
+# (consensus_follow_ups/testing/mutation-testing-campaign.md): stage 1 runs each
+# mutant against the mutated package's own nextest lane; survivors get a stage-2
+# re-test against the sim fast lane before they count as coverage gaps.
+test_tool = "nextest"
+
+# The quiet-chain catch-up-stall reproducer keeps `proptest_scenarios` red by
+# design until the fix lands; keep it out of the mutant lane so baselines pass.
+additional_cargo_test_args = [
+    "-E",
+    "not test(any_configuration_upholds_liveness_activation_and_agreement)",
+]
+
+# Test-support harnesses and metric registration: mutants there are noise, not
+# coverage signal.
+exclude_globs = ["**/conformance.rs", "**/metrics.rs"]
+
+# RocksDB-backed store tests and sim scenarios need headroom over the
+# auto (5x baseline) timeout.
+minimum_test_timeout = 60

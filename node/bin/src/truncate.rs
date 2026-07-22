@@ -73,10 +73,9 @@ pub async fn run_truncate(
          never rebuild its derived state"
     );
     let rocks = config.general_config.rocks_db_path.clone();
-    let chain_id = config
-        .genesis_config
-        .chain_id
-        .context("`genesis.chain_id` is required to open the WAL and verify the L1-executed floor")?;
+    let chain_id = config.genesis_config.chain_id.context(
+        "`genesis.chain_id` is required to open the WAL and verify the L1-executed floor",
+    )?;
 
     // Opening the databases doubles as the running-node guard: RocksDB holds
     // an exclusive lock per database while the node lives.

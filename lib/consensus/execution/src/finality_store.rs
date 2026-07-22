@@ -789,6 +789,54 @@ mod tests {
     }
 
     #[test]
+    fn same_era_re_recording_only_floors_the_watermark_upward() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FinalityStore::open(dir.path()).expect("open");
+        store.record_consensus_era([7; 32], 20).expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(20));
+
+        // A same-era re-record with a *higher* anchor (a deeper pre-consensus
+        // import) floors up to it: certificates for the gap will never exist.
+        store.record_consensus_era([7; 32], 25).expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(25));
+
+        // With the watermark already at or above the anchor, re-recording must
+        // not floor *down* — that would un-certify certified history.
+        store.record_consensus_era([7; 32], 24).expect("write");
+        assert_eq!(store.certified_watermark().expect("read"), Some(25));
+    }
+
+    #[test]
+    fn a_new_era_over_an_anchor_floors_the_watermark_and_cuts_the_index_above_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = FinalityStore::open(dir.path()).expect("open");
+        store.record_consensus_era([0xA; 32], 0).expect("era A");
+        for height in 1..=3u64 {
+            store
+                .index_height(height, [height as u8; 32])
+                .expect("write");
+            store
+                .put_certificate(&certificate(height, [height as u8; 32]))
+                .expect("write");
+        }
+        assert_eq!(store.certified_watermark().expect("read"), Some(3));
+
+        // The disaster-hardfork shape: truncate to 2, fork into a new era
+        // anchored there. Heights above the anchor belong to the dead era and
+        // leave the index; the anchor itself is shared history and stays.
+        store.record_consensus_era([0xB; 32], 2).expect("era B");
+        assert_eq!(store.certified_watermark().expect("read"), Some(2));
+        assert!(store.digest_at_height(2).expect("read").is_some());
+        assert!(store.digest_at_height(3).expect("read").is_none());
+
+        // An era anchored *above* every certificate (a deeper pre-consensus
+        // import): the anchor floor is load-bearing here — no walk over the
+        // certificate index can reach 5 on its own.
+        store.record_consensus_era([0xC; 32], 5).expect("era C");
+        assert_eq!(store.certified_watermark().expect("read"), Some(5));
+    }
+
+    #[test]
     fn a_new_era_at_genesis_clears_the_watermark() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = FinalityStore::open(dir.path()).expect("open");
