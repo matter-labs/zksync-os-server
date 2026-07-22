@@ -1,13 +1,13 @@
 ecosystem:
   owner:
-    address: '0xd5e5bc64b8eb265479de369545d44cda89bd4592'
-    private_key: '0xdf2a39a713b1b28c125351184b10329eadbbd9677279cec281b8ac03f9f7631e'
+    address: '0xac71a21c0cb7b029b525320c367f2dfba9f06bf4'
+    private_key: '0x53a947cecc01a295dc8bae4895bded5293d8ca5e05cfd0f0276256dae2aed56e'
   governor:
-    address: '0x806cd593425cbd39bfc23968a5cdb68a09fe09af'
-    private_key: '0x1f68b79de919e91808808318724dd2fbcb0e09a8781acf25c8b3cac15ca3a177'
+    address: '0xe54a6e73d455dc4bf50c7dd3c9ac5ebcb83c54d2'
+    private_key: '0xe69f9e591bba0751d280db311e0e5c4cdc01b94c68b969f0afebce38d0b39ae0'
   token_multiplier_setter:
-    address: '0x96bbcd26f909f7995268be6e7fb5ac521317b58f'
-    private_key: '0x2e580ec6ac80d49a18abc698462b00299243c1a77ef6a7de89f5ca744174c548'
+    address: '0x42628591c15deb6da9ba50fd8e1c061bc71408ec'
+    private_key: '0x7e2821e7f6e29fd2478c6d131fe6ee19df83e4e2f78ade144a7f3346f5d876ca'
 6565:
   owner:
     address: '0x2b7b4554e8db6472f4c2cb2da55e1373fefa851c'
@@ -40,19 +40,3 @@ ecosystem:
   operator_execute_sk:
     address: '0xecdd73a37a4cee521fd1e8f9f577dd778a0dcf36'
     private_key: '0xaab971e3760af3990b8665258bb099d917be7c29a7f6a2ae50870ceca0789872'
-6567:
-  owner:
-    address: '0x399eb6aafed7842d14b98d429a2b11104165bfea'
-    private_key: '0x570dc984bb2c9a07ea43807cc84ee8c2973672a5abe0a2a011fd4bc37abb0c6e'
-  fee_account:
-    address: '0x36450e60730d4059c0760a6d3cf643fe5647a2c3'
-    private_key: '0x32c32988695c434ceba364f13ce50101cef2c2664b267fd4860ae2084b2e36d9'
-  operator_commit_sk:
-    address: '0xc0561156892edbf3e0459e032fd702c490ef1f9f'
-    private_key: '0x4c44c83dd60a46b6f512f58240b20846e8c7024e3de3d17cfa43bead3d5ab491'
-  operator_prove_sk:
-    address: '0xb1c92bb2bb2606180064bd31eb7298fdc4ac5fa2'
-    private_key: '0xbce3ab1ba5945bb1f6117189dff4d74965b007afc4a76cc3fcd458e70d1a113d'
-  operator_execute_sk:
-    address: '0xe0bfa5f732a4025147100b2c40898a77f54e406b'
-    private_key: '0x07f06c59375f09d401d44449458840e7d21495ac26e05fbff25e63767ff7b380'
