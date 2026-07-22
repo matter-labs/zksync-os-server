@@ -104,7 +104,7 @@ impl GasAdjuster {
 
         let last_processed_block = self.base_fee_statistics.last_processed_block();
 
-        if current_block > last_processed_block {
+        if current_block >= last_processed_block {
             let n_blocks = current_block - last_processed_block;
             let fee_data =
                 Self::base_fee_history(&self.l1_provider, current_block, n_blocks).await?;
