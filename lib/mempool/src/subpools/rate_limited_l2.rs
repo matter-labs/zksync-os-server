@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Receiver;
+use zksync_os_types::{FeeParams, ProtocolSemanticVersion};
 
 /// Rate limiter for incoming L2 transactions, gating admission based on the sequencer's
 /// total recent execution throughput.
@@ -217,6 +218,14 @@ impl<T> RateLimitedL2Subpool<T> {
 impl<T: L2Subpool> L2Subpool for RateLimitedL2Subpool<T> {
     fn arm_gas_rate_limiter(&self) {
         self.arm();
+    }
+
+    fn update_pending_fee_params(&self, fee_params: FeeParams) {
+        self.inner.update_pending_fee_params(fee_params)
+    }
+
+    fn update_pending_protocol_version(&self, protocol_version: ProtocolSemanticVersion) {
+        self.inner.update_pending_protocol_version(protocol_version)
     }
 }
 
