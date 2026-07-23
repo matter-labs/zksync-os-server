@@ -97,6 +97,7 @@ k256 = { version = "0.13.4", default-features = false, features = [
     "pem",
     "std",
 ] }
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_with = "3.14.0"
 serde_json = "1"
