@@ -21,10 +21,9 @@ const RATE_LIMIT_ERROR_CODE: i64 = -32005;
 const RICH_WALLET: &str = "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049";
 
 /// 100k gas/s refill with max credit capped at 1s (100k gas); defaults for the rest.
-/// A 10-transfer burst (210k executed gas) reliably exhausts the bank.
+/// Each transfer costs 21k gas, so ~5 of them exhaust the bank.
 const GAS_PER_SECOND: u64 = 100_000;
 const MAX_CREDIT_SECONDS: f64 = 1.0;
-const BURST_TRANSFERS: u64 = 10;
 
 struct TxParams {
     chain_id: u64,
@@ -83,6 +82,37 @@ async fn send_transfer(
     send_transfer_with_nonce(provider, params, from, to, value, nonce).await
 }
 
+/// Extracts and validates a rejection from the executed-gas rate limiter specifically.
+/// Panics on anything else.
+fn expect_gas_rate_limit_error(
+    err: &alloy::transports::RpcError<alloy::transports::TransportErrorKind>,
+    context: &str,
+) -> alloy::rpc::json_rpc::ErrorPayload {
+    let resp = err
+        .as_error_resp()
+        .unwrap_or_else(|| panic!("expected JSON-RPC error response ({context}), got: {err:?}"))
+        .clone();
+    assert_eq!(
+        resp.code, RATE_LIMIT_ERROR_CODE,
+        "unexpected error ({context}): {resp:?}"
+    );
+    assert!(
+        resp.message.contains("gas rate limit"),
+        "unexpected message ({context}): {}",
+        resp.message
+    );
+    let retry_data = resp
+        .data
+        .as_ref()
+        .unwrap_or_else(|| panic!("rate limit error carries no retry data ({context})"))
+        .to_string();
+    assert!(
+        retry_data.contains("retryAfterMs"),
+        "unexpected data: {retry_data}"
+    );
+    resp
+}
+
 /// Extracts the rate limiter's `retryAfterMs` hint from a `-32005` error's `data`.
 fn retry_after_ms(data: &serde_json::value::RawValue) -> u64 {
     #[derive(serde::Deserialize)]
@@ -103,9 +133,6 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
 
     let env = CURRENT_TO_L1.environment().await?;
     let mut config = env.default_config().await?;
-    // Admission alone never drains the bank — only a sealed block's executed gas does. A generous
-    // block time keeps the whole burst in the mempool, unsealed, until every send has been admitted.
-    config.sequencer_config.block_time = Duration::from_secs(2);
     config.rpc_config.tx_gas_rate_limit = Some(TxGasRateLimitConfig {
         gas_per_second: NonZeroU64::new(GAS_PER_SECOND).unwrap(),
         max_credit_seconds: MAX_CREDIT_SECONDS,
@@ -129,60 +156,35 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
         .expect_successful_receipt()
         .await?;
 
-    // Burst: executed gas (10 × 21k = 210k) far exceeds the bank's max credit (100k),
-    // so the gate must close once these blocks seal.
+    // Send transfers until the gate closes. Admission alone never drains the bank — only a
+    // sealed block's executed gas does — so how many sends land before the first rejection
+    // depends on block-sealing timing, not a fixed count: keep sending until one is rejected,
+    // bounded by a deadline as the only safety net.
     let first_nonce = provider.get_transaction_count(limited).pending().await?;
-    futures::future::try_join_all((0..BURST_TRANSFERS).map(|i| {
-        send_transfer_with_nonce(
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut sent = 0u64;
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "gate did not close after {sent} transfers within 15s"
+        );
+        match send_transfer_with_nonce(
             &provider,
             &params,
             limited,
             sink,
             U256::from(1),
-            first_nonce + i,
+            first_nonce + sent,
         )
-    }))
-    .await
-    .expect("burst txs are admitted while the gate is open");
-
-    // The drain is block-granular: poll until a submission is rejected with -32005.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let rate_limit_error = loop {
-        match send_transfer(&provider, &params, limited, sink, U256::from(1)).await {
+        .await
+        {
+            Ok(_) => sent += 1,
             Err(err) => {
-                let resp = err
-                    .as_error_resp()
-                    .unwrap_or_else(|| panic!("expected JSON-RPC error response, got: {err:?}"))
-                    .clone();
-                assert_eq!(
-                    resp.code, RATE_LIMIT_ERROR_CODE,
-                    "unexpected error while waiting for the gate to close: {resp:?}"
-                );
-                break resp;
-            }
-            Ok(_) => {
-                assert!(
-                    Instant::now() < deadline,
-                    "gate did not close within 15s of exhausting the bank"
-                );
-                sleep(Duration::from_millis(250)).await;
+                expect_gas_rate_limit_error(&err, "while closing the gate");
+                break;
             }
         }
-    };
-    assert!(
-        rate_limit_error.message.contains("gas rate limit"),
-        "unexpected message: {}",
-        rate_limit_error.message
-    );
-    let retry_data = rate_limit_error
-        .data
-        .as_ref()
-        .expect("rate limit error carries retry data")
-        .to_string();
-    assert!(
-        retry_data.contains("retryAfterMs"),
-        "unexpected data: {retry_data}"
-    );
+    }
 
     // While the gate is closed, exempt senders are unaffected end-to-end.
     let exempt_pending = send_transfer(&provider, &params, rich, sink, U256::from(1))
@@ -201,10 +203,7 @@ async fn gas_rate_limiter_closes_gate_and_recovers() -> Result<()> {
         match send_transfer(&provider, &params, limited, sink, U256::from(1)).await {
             Ok(pending) => break pending,
             Err(err) => {
-                let resp = err
-                    .as_error_resp()
-                    .unwrap_or_else(|| panic!("expected JSON-RPC error response, got: {err:?}"));
-                assert_eq!(resp.code, RATE_LIMIT_ERROR_CODE);
+                let resp = expect_gas_rate_limit_error(&err, "while waiting to reopen");
                 assert!(Instant::now() < deadline, "gate did not reopen within 30s");
                 let wait = retry_after_ms(resp.data.as_deref().expect("retry data present"));
                 sleep(Duration::from_millis(wait)).await;
