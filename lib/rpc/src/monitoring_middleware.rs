@@ -194,6 +194,7 @@ where
             BatchResponse = MethodResponse,
         > + Clone
         + Send
+        + Sync
         + 'static,
 {
     type MethodResponse = MethodResponse;
@@ -209,7 +210,7 @@ where
         let inner = self.inner.clone();
 
         async move {
-            let id = request.id.clone().into_owned();
+            let id = request.id.clone();
             let handler = RPC_TASK_MONITOR.instrument(async move { inner.call(request).await });
             let on_panic = || MethodResponse::error(id, internal_rpc_err("Internal error"));
             CallGuard::new(CallKind::Call, method, request_size)
@@ -297,14 +298,11 @@ where
                 //
                 // Abort-on-drop prevents calls from running detached after the batch is cancelled.
                 // Cancellation takes effect when a handler next yields.
-                //
-                // Own a service handle in the closure so the stream stays `Send` without `S: Sync`.
-                let svc = service.clone();
+                let service = &service;
                 let response_capacity = prepared.len();
-                let mut response_stream = futures::stream::iter(
-                    prepared.into_iter().enumerate().map(move |(index, entry)| {
-                        let service = svc.clone();
-                        async move {
+                let mut response_stream =
+                    futures::stream::iter(prepared.into_iter().enumerate().map(
+                        move |(index, entry)| async move {
                             let rp = match entry {
                                 Prepared::Call { id, req } => {
                                     match AbortOnDropHandle::new(tokio::spawn(service.call(req)))
@@ -322,10 +320,9 @@ where
                                 Prepared::Ready(rp) => rp,
                             };
                             (index, rp)
-                        }
-                    }),
-                )
-                .buffer_unordered(MAX_CONCURRENT_BATCH_ENTRIES);
+                        },
+                    ))
+                    .buffer_unordered(MAX_CONCURRENT_BATCH_ENTRIES);
 
                 // Enforce the limit as unordered results arrive. This caps retained responses and
                 // dropping the stream on overflow cancels work whose output would be discarded.
