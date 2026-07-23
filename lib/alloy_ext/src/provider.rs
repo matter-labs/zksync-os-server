@@ -46,6 +46,10 @@ pub trait ZksyncApi: Provider<Zksync> {
             .await
     }
 
+    async fn get_latest_batch_number(&self) -> TransportResult<u64> {
+        self.client().request("zks_getLatestBatchNumber", ()).await
+    }
+
     async fn get_batch_number_by_block_number(
         &self,
         block_number: BlockNumber,
