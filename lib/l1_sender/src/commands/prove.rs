@@ -17,15 +17,27 @@ const FAKE_PROOF_MAGIC_VALUE: u32 = 13;
 pub struct ProofCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     proof: SnarkProof,
+    /// keccak commitment to the runtime chain config, the third word of the batch proof public
+    /// input (`Executor._getBatchProofPublicInputZKsyncOS`). Computed by the caller from the
+    /// chain id (see `zksync_os_native_pig::v32_chain_config_hash`).
+    chain_config_hash: B256,
 }
 
 impl ProofCommand {
-    pub fn new(batches: Vec<SignedBatchEnvelope<FriProof>>, proof: SnarkProof) -> Self {
+    pub fn new(
+        batches: Vec<SignedBatchEnvelope<FriProof>>,
+        proof: SnarkProof,
+        chain_config_hash: B256,
+    ) -> Self {
         assert!(
             !batches.is_empty(),
             "ProofCommand must contain at least one batch"
         );
-        Self { batches, proof }
+        Self {
+            batches,
+            proof,
+            chain_config_hash,
+        }
     }
 }
 
@@ -85,14 +97,25 @@ impl ProofCommand {
         B256::from_slice(&bytes)
     }
 
-    fn get_batch_public_input(prev_batch: &StoredBatchInfo, batch: &StoredBatchInfo) -> B256 {
-        let mut bytes = Vec::with_capacity(32 * 3);
+    fn get_batch_public_input(
+        prev_batch: &StoredBatchInfo,
+        batch: &StoredBatchInfo,
+        chain_config_hash: &B256,
+    ) -> B256 {
+        // Mirrors `Executor._getBatchProofPublicInputZKsyncOS`: the chain config hash sits
+        // between the state commitments and the batch commitment.
+        let mut bytes = Vec::with_capacity(32 * 4);
         bytes.extend_from_slice(prev_batch.state_commitment.as_slice());
         bytes.extend_from_slice(batch.state_commitment.as_slice());
+        bytes.extend_from_slice(chain_config_hash.as_slice());
         bytes.extend_from_slice(batch.commitment.as_slice());
         keccak256(&bytes)
     }
-    fn snark_public_input(previous_batch: &StoredBatchInfo, batches: &[StoredBatchInfo]) -> B256 {
+    fn snark_public_input(
+        previous_batch: &StoredBatchInfo,
+        batches: &[StoredBatchInfo],
+        chain_config_hash: &B256,
+    ) -> B256 {
         let mut hash_map: HashMap<usize, &StoredBatchInfo> = HashMap::new();
         hash_map.insert(previous_batch.batch_number as usize, previous_batch);
         for batch in batches {
@@ -106,7 +129,7 @@ impl ProofCommand {
         for i in start..=end {
             let batch = hash_map.get(&i).expect("Batch not found");
             let prev_batch = hash_map.get(&(i - 1)).expect("Previous batch not found");
-            let public_input = Self::get_batch_public_input(prev_batch, batch);
+            let public_input = Self::get_batch_public_input(prev_batch, batch, chain_config_hash);
             // Snark public input is public_input >> 32.
             let snark_input = Self::shift_b256_right(&public_input);
 
@@ -153,7 +176,11 @@ impl ProofCommand {
         };
 
         // todo: remove tostring
-        let public_input = Self::snark_public_input(previous_batch_info, &stored_batch_infos);
+        let public_input = Self::snark_public_input(
+            previous_batch_info,
+            &stored_batch_infos,
+            &self.chain_config_hash,
+        );
 
         tracing::info!(">> public input: {}", public_input);
 

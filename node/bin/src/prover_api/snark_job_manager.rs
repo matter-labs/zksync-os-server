@@ -127,12 +127,21 @@ impl SnarkJobManager {
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
 
+        let chain_config_hash = zksync_os_native_pig::v32_chain_config_hash(
+            consumed_batches_proven
+                .first()
+                .expect("proof command must contain at least one batch")
+                .batch
+                .batch_info
+                .chain_id,
+        )?;
         permit.send(ProofCommand::new(
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
                 proving_execution_version: proving_version as u32,
             }),
+            chain_config_hash,
         ));
         Ok(())
     }
@@ -192,14 +201,23 @@ impl SnarkJobManager {
             };
 
             // Add observability traces
-            let batches_with_fake_proofs = completed
+            let batches_with_fake_proofs: Vec<_> = completed
                 .into_iter()
                 .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedFake))
                 .collect();
 
+            let chain_config_hash = zksync_os_native_pig::v32_chain_config_hash(
+                batches_with_fake_proofs
+                    .first()
+                    .expect("proof command must contain at least one batch")
+                    .batch
+                    .batch_info
+                    .chain_id,
+            )?;
             permit.send(ProofCommand::new(
                 batches_with_fake_proofs,
                 SnarkProof::Fake,
+                chain_config_hash,
             ));
         }
     }
