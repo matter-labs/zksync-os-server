@@ -35,6 +35,11 @@
 //! * A transaction evicted from the L1 pool (fee spike, pool pressure) is detected by the
 //!   inclusion watcher and resent at its nonce — waiting for its receipt would wedge the
 //!   window forever. The old hash stays tracked in case the evicted original still mines.
+//! * The L1 RPC endpoint is assumed to serve a single consistent view (one node, or sticky
+//!   routing to one): startup recovery trusts a single `pending` nonce read. A backend that
+//!   has not seen our pooled transactions makes the sender race its own earlier sends —
+//!   still safe (single-use nonces + the contract's batch-chain check revert anything
+//!   inconsistent), but each affected nonce costs wasted gas and a spurious restart.
 
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderFeeConfig;
