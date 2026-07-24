@@ -140,15 +140,21 @@ impl BatchTreeProof {
         leaf_count_before_update: u64,
     ) -> impl Iterator<Item = ((u8, u64), B256)> {
         let mut sibling_hashes = vec![];
-        Self::zip_leaves(
-            &Blake2Hasher,
-            tree_depth,
-            leaf_count_before_update,
-            self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
-            self.hashes.iter(),
-            Some(&mut sibling_hashes),
-        )
-        .expect("invalid batch tree proof");
+        // A batch that touched no leaves (e.g. only empty blocks — a normal
+        // occurrence on an idle chain under consensus) has no Merkle paths to
+        // fill, and the fold below cannot run on zero leaves: it reconstructs
+        // the root from them.
+        if !self.sorted_leaves.is_empty() {
+            Self::zip_leaves(
+                &Blake2Hasher,
+                tree_depth,
+                leaf_count_before_update,
+                self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
+                self.hashes.iter(),
+                Some(&mut sibling_hashes),
+            )
+            .expect("invalid batch tree proof");
+        }
 
         sibling_hashes
             .into_iter()
@@ -169,15 +175,19 @@ impl BatchTreeProof {
         // in the same way they will be queried below; the order correctness is asserted
         // (see the `get_sibling_hash` closure).
         let mut sibling_hashes = vec![];
-        Self::zip_leaves(
-            &Blake2Hasher,
-            tree_depth,
-            leaf_count,
-            self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
-            self.hashes.iter(),
-            Some(&mut sibling_hashes),
-        )
-        .expect("invalid batch tree proof");
+        // Same emptiness guard as in `sibling_hashes`: zero touched leaves
+        // means zero Merkle paths, and the fold cannot run on zero leaves.
+        if !self.sorted_leaves.is_empty() {
+            Self::zip_leaves(
+                &Blake2Hasher,
+                tree_depth,
+                leaf_count,
+                self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
+                self.hashes.iter(),
+                Some(&mut sibling_hashes),
+            )
+            .expect("invalid batch tree proof");
+        }
 
         let proof_entries = self.sorted_leaves.iter().map(|(&index, leaf)| {
             let proof_entry = StorageSlotProofEntry {
@@ -283,6 +293,22 @@ mod tests {
                 .map(|_| B256::random_with(rng))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn empty_batch_proof_yields_no_paths() {
+        // A batch whose blocks touched no tree leaves (e.g. only empty blocks
+        // on an idle chain under consensus) has no Merkle paths. Both flat
+        // conversions must yield nothing instead of panicking in the leaf
+        // fold, which reconstructs the root and needs at least one leaf.
+        let proof = BatchTreeProof {
+            operations: vec![],
+            read_operations: vec![],
+            sorted_leaves: std::collections::BTreeMap::new(),
+            hashes: vec![],
+        };
+        assert_eq!(proof.sibling_hashes(64, 1_000).count(), 0);
+        assert_eq!(proof.to_flat(64, 1_000).count(), 0);
     }
 
     #[test]
