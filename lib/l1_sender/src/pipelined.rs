@@ -32,6 +32,9 @@
 //! * Transient window overshoot (an L1 reorg can briefly return "mined" transactions to the
 //!   pool after their permits were released) is absorbed by treating pool-capacity rejections
 //!   as retryable with a generous budget.
+//! * A transaction evicted from the L1 pool (fee spike, pool pressure) is detected by the
+//!   inclusion watcher and resent at its nonce — waiting for its receipt would wedge the
+//!   window forever. The old hash stays tracked in case the evicted original still mines.
 
 use crate::commands::{L1SenderCommand, SendToL1};
 use crate::config::L1SenderFeeConfig;
@@ -63,11 +66,22 @@ const MINED_QUEUE_CAPACITY_FACTOR: usize = 4;
 /// A transaction submitted to L1 but not yet observed mined. Holds one unmined-window permit,
 /// released by the inclusion watcher at the first receipt sighting.
 struct InFlightTx<Input> {
-    tx_hash: B256,
+    /// Candidate hashes for this nonce, oldest first. Grows when a pool-evicted transaction
+    /// is resent: the old hash stays a candidate because eviction is observed remotely and
+    /// the original may still mine (e.g. it was propagated before the eviction).
+    tx_hashes: Vec<B256>,
     nonce: u64,
     command: Input,
     submitted_at: Instant,
     permit: OwnedSemaphorePermit,
+}
+
+/// Inclusion-watcher → submitter request to resend the transaction at `nonce` (its previous
+/// send was evicted from the L1 pool). The submitter rebuilds it from the nonce's
+/// simulation-prefix entry and replies with the new hash.
+struct ResendRequest {
+    nonce: u64,
+    reply: tokio::sync::oneshot::Sender<B256>,
 }
 
 /// A transaction observed mined, awaiting `required_confirmations` before its command is
@@ -97,6 +111,8 @@ struct RecoveredInFlight<Input> {
     command: Input,
     /// Fees the transaction was actually sent with — reused for its simulation-prefix entry.
     fee_params: FeeParams,
+    /// Gas limit the transaction was sent with — reused if it must be resent after eviction.
+    gas_limit: u64,
 }
 
 /// Startup state for the pipelined sender, derived from in-flight transaction recovery.
@@ -155,6 +171,9 @@ where
             mpsc::channel::<MinedTx<Input>>(MINED_QUEUE_CAPACITY_FACTOR * window + 64);
         // "All nonces below this value have been observed mined."
         let (mined_floor_tx, mined_floor_rx) = watch::channel(start.mined_floor);
+        // Inclusion watcher asks the submitter to resend pool-evicted transactions. The
+        // watcher requests resends one at a time (head of line), so capacity 1 suffices.
+        let (resend_tx, mut resend_rx) = mpsc::channel::<ResendRequest>(1);
 
         let state_reporter = &state_reporter;
 
@@ -180,14 +199,22 @@ where
                 loop {
                     // Wait for window capacity first, then for commands: idle permits are
                     // never contended, and this order keeps commands in the channel (visible
-                    // to backpressure) until they can actually be sent.
+                    // to backpressure) until they can actually be sent. Both waits service
+                    // resend requests: the watcher may need a resend precisely when the
+                    // window is full and no new sends can proceed.
                     state_reporter.enter_state(L1SenderState::WaitingL1Inclusion);
-                    let mut permits = vec![
-                        Arc::clone(&slots)
-                            .acquire_owned()
-                            .await
-                            .expect("in-flight window semaphore is never closed"),
-                    ];
+                    let first_permit = loop {
+                        tokio::select! {
+                            biased;
+                            Some(request) = resend_rx.recv() => {
+                                self.resend_evicted(&mut state, request, operator_address).await?;
+                            }
+                            permit = Arc::clone(&slots).acquire_owned() => {
+                                break permit.expect("in-flight window semaphore is never closed");
+                            }
+                        }
+                    };
+                    let mut permits = vec![first_permit];
                     while permits.len() < window {
                         match Arc::clone(&slots).try_acquire_owned() {
                             Ok(permit) => permits.push(permit),
@@ -196,7 +223,17 @@ where
                     }
 
                     state_reporter.enter_state(L1SenderState::Idle);
-                    let received = inbound.recv_many(&mut raw_buffer, permits.len()).await;
+                    let received = loop {
+                        tokio::select! {
+                            biased;
+                            Some(request) = resend_rx.recv() => {
+                                self.resend_evicted(&mut state, request, operator_address).await?;
+                            }
+                            received = inbound.recv_many(&mut raw_buffer, permits.len()) => {
+                                break received;
+                            }
+                        }
+                    };
                     if received == 0 {
                         tracing::info!(command_name, "inbound channel closed");
                         // Drop `submitted_tx` (by returning) so the inclusion watcher and the
@@ -247,19 +284,22 @@ where
         let inclusion_watcher = {
             let slots = Arc::clone(&slots);
             let mined_tx = mined_tx;
+            let resend_tx = resend_tx;
             async move {
-                while let Some(entry) = submitted_rx.recv().await {
+                while let Some(mut entry) = submitted_rx.recv().await {
+                    // Same-sender transactions mine in nonce order, so head-of-line sighting
+                    // is exhaustive: this receipt appearing implies nothing behind it is
+                    // mined-but-unobserved for long.
+                    let mined_hash = self
+                        .wait_for_inclusion(&mut entry, operator_address, &resend_tx)
+                        .await?;
                     let InFlightTx {
-                        tx_hash,
                         nonce,
                         command,
                         submitted_at,
                         permit,
+                        ..
                     } = entry;
-                    // Same-sender transactions mine in nonce order, so head-of-line sighting
-                    // is exhaustive: this receipt appearing implies nothing behind it is
-                    // mined-but-unobserved for long.
-                    self.wait_for_receipt_existence(tx_hash).await?;
                     // First sighting frees an unmined-window slot; confirmation depth is the
                     // forwarder's concern only.
                     drop(permit);
@@ -268,7 +308,7 @@ where
                         .set((window - slots.available_permits()) as u64);
                     if mined_tx
                         .send(MinedTx {
-                            tx_hash,
+                            tx_hash: mined_hash,
                             nonce,
                             command,
                             submitted_at,
@@ -343,6 +383,7 @@ where
                 calldata: seed.command.solidity_call(&operator_address),
                 sidecar,
                 fee_params: seed.fee_params,
+                gas_limit: seed.gas_limit,
             });
             self.note_submitted_batches(&seed.command);
             // If there are more seeds than window slots (the window was larger in a previous
@@ -354,7 +395,7 @@ where
                 .expect("in-flight window semaphore is never closed");
             submitted_tx
                 .send(InFlightTx {
-                    tx_hash: seed.tx_hash,
+                    tx_hashes: vec![seed.tx_hash],
                     nonce: seed.nonce,
                     command: seed.command,
                     submitted_at: Instant::now(),
@@ -457,6 +498,7 @@ where
                 calldata,
                 sidecar: prepared_sidecar,
                 fee_params,
+                gas_limit,
             });
 
             let permit = permits
@@ -464,7 +506,7 @@ where
                 .context("fewer permits than commands in a wave")?;
             submitted_tx
                 .send(InFlightTx {
-                    tx_hash,
+                    tx_hashes: vec![tx_hash],
                     nonce,
                     command,
                     submitted_at: Instant::now(),
@@ -505,11 +547,23 @@ where
         }
     }
 
-    /// Polls until a receipt for `tx_hash` exists (any depth). Warns on the configured
-    /// transaction-timeout cadence; like the confirmation poller, it never gives up —
-    /// a permanently stuck transaction requires operator intervention
-    /// (`force_transaction_resubmission`).
-    async fn wait_for_receipt_existence(&self, tx_hash: B256) -> anyhow::Result<()> {
+    /// Polls until one of the entry's candidate transactions has a receipt (any depth) and
+    /// returns that hash. Never gives up on a transaction that is merely unmined — but a
+    /// transaction *evicted from the pool* (fee spike, pool pressure) would otherwise be
+    /// waited on forever, wedging the whole window, so eviction is detected and the
+    /// transaction is resent at its nonce via the submitter.
+    async fn wait_for_inclusion(
+        &self,
+        entry: &mut InFlightTx<Input>,
+        operator_address: Address,
+        resend_tx: &mpsc::Sender<ResendRequest>,
+    ) -> anyhow::Result<B256> {
+        /// Pool presence is probed every N-th empty receipt poll (it costs one RPC per
+        /// candidate), and eviction is acted on only after two consecutive absent probes —
+        /// a just-submitted transaction can be transiently invisible.
+        const EVICTION_PROBE_EVERY: u32 = 5;
+        const EVICTION_PROBES_TO_CONFIRM: u32 = 2;
+
         let timeout = self.config.transaction_timeout;
         let poll_interval = self.config.poll_interval;
         let started_at = Instant::now();
@@ -518,16 +572,34 @@ where
         } else {
             Some(timeout)
         };
+        let mut polls: u32 = 0;
+        let mut consecutive_absent: u32 = 0;
         loop {
-            let receipt = self
-                .provider
-                .get_transaction_receipt(tx_hash)
-                .await
-                .with_context(|| {
-                    format!("fetch receipt while waiting for L1 inclusion of tx {tx_hash}")
-                })?;
-            if receipt.is_some() {
-                return Ok(());
+            for &tx_hash in &entry.tx_hashes {
+                let receipt = self
+                    .provider
+                    .get_transaction_receipt(tx_hash)
+                    .await
+                    .with_context(|| {
+                        format!("fetch receipt while waiting for L1 inclusion of tx {tx_hash}")
+                    })?;
+                if receipt.is_some() {
+                    return Ok(tx_hash);
+                }
+            }
+
+            polls += 1;
+            if polls.is_multiple_of(EVICTION_PROBE_EVERY) {
+                if self.all_candidates_absent(entry).await? {
+                    consecutive_absent += 1;
+                } else {
+                    consecutive_absent = 0;
+                }
+                if consecutive_absent >= EVICTION_PROBES_TO_CONFIRM {
+                    self.handle_evicted_entry(entry, operator_address, resend_tx)
+                        .await?;
+                    consecutive_absent = 0;
+                }
             }
 
             let elapsed = started_at.elapsed();
@@ -536,7 +608,8 @@ where
             {
                 tracing::warn!(
                     command_name = Input::COMPONENT_ID.as_str(),
-                    ?tx_hash,
+                    tx_hashes = ?entry.tx_hashes,
+                    nonce = entry.nonce,
                     waited_secs = elapsed.as_secs_f64(),
                     "still waiting for L1 inclusion; if the transaction is stuck underpriced, \
                      restart with `force_transaction_resubmission.enabled = true`",
@@ -545,6 +618,140 @@ where
             }
             tokio::time::sleep(poll_interval).await;
         }
+    }
+
+    /// True when none of the entry's candidate transactions are known to the L1 node —
+    /// neither pooled nor mined.
+    async fn all_candidates_absent(&self, entry: &InFlightTx<Input>) -> anyhow::Result<bool> {
+        for &tx_hash in &entry.tx_hashes {
+            let known = self
+                .provider
+                .get_transaction_by_hash(tx_hash)
+                .await
+                .with_context(|| format!("probe pool presence of tx {tx_hash}"))?
+                .is_some();
+            if known {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// All candidates for this nonce vanished from the pool. If the nonce was consumed by a
+    /// transaction that is none of ours, another sender is using the operator account — fatal.
+    /// Otherwise the transaction was evicted (fee spike, pool pressure): ask the submitter to
+    /// resend it at the same nonce and track the new hash alongside the old candidates (the
+    /// eviction is observed remotely, so an old candidate may still mine elsewhere).
+    async fn handle_evicted_entry(
+        &self,
+        entry: &mut InFlightTx<Input>,
+        operator_address: Address,
+        resend_tx: &mpsc::Sender<ResendRequest>,
+    ) -> anyhow::Result<()> {
+        let latest_nonce = self
+            .provider
+            .get_transaction_count(operator_address)
+            .await
+            .context("get confirmed nonce while handling a pool eviction")?;
+        if latest_nonce > entry.nonce {
+            // Give in-flight receipt propagation one more chance before declaring foul play.
+            for &tx_hash in &entry.tx_hashes {
+                if self
+                    .provider
+                    .get_transaction_receipt(tx_hash)
+                    .await?
+                    .is_some()
+                {
+                    return Ok(());
+                }
+            }
+            anyhow::bail!(
+                "nonce {} was consumed by a transaction that is not one of ours ({:?}); \
+                 the operator account is being used by another sender",
+                entry.nonce,
+                entry.tx_hashes,
+            );
+        }
+
+        tracing::warn!(
+            command_name = Input::COMPONENT_ID.as_str(),
+            nonce = entry.nonce,
+            tx_hashes = ?entry.tx_hashes,
+            "in-flight transaction was evicted from the L1 pool; resending at the same nonce",
+        );
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        resend_tx
+            .send(ResendRequest {
+                nonce: entry.nonce,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("submitter terminated during an eviction resend"))?;
+        let new_hash = reply_rx
+            .await
+            .context("submitter dropped an eviction resend request")?;
+        entry.tx_hashes.push(new_hash);
+        entry.submitted_at = Instant::now();
+        Ok(())
+    }
+
+    /// Rebuilds and resends the transaction at `request.nonce` from its simulation-prefix
+    /// entry after a pool eviction. Fees are re-resolved and floored at 2x the original send
+    /// (the blob RBF bump rule) in case the evicted transaction resurfaces in the pool.
+    async fn resend_evicted(
+        &self,
+        state: &mut SubmitterState,
+        request: ResendRequest,
+        operator_address: Address,
+    ) -> anyhow::Result<()> {
+        let entry = state
+            .in_flight_prefix
+            .iter_mut()
+            .find(|entry| entry.nonce == request.nonce)
+            .with_context(|| {
+                format!(
+                    "no in-flight prefix entry for evicted nonce {}",
+                    request.nonce
+                )
+            })?;
+
+        let resolved = self
+            .resolve_fee_params(
+                self.config.fee_config,
+                self.config.force_transaction_resubmission,
+            )
+            .await?;
+        let fee_params = resolved.max(entry.fee_params.doubled());
+
+        let blob_base_fee = if entry.sidecar.is_some() {
+            Some(self.provider.get_blob_base_fee().await?)
+        } else {
+            None
+        };
+        let tx_request = self.build_tx_request(
+            entry.calldata.clone(),
+            operator_address,
+            entry.nonce,
+            entry.gas_limit,
+            fee_params,
+            entry.sidecar.as_deref(),
+            blob_base_fee,
+        );
+        let pending_tx = self
+            .send_tx_with_retries(tx_request, &format!("resend of nonce {}", request.nonce))
+            .await?;
+        entry.fee_params = fee_params;
+
+        let new_hash = *pending_tx.tx_hash();
+        tracing::info!(
+            command_name = Input::COMPONENT_ID.as_str(),
+            nonce = request.nonce,
+            tx_hash = ?new_hash,
+            "resent evicted L1 transaction",
+        );
+        // The watcher owns the entry lifecycle; if it is gone the try_join surfaces its error.
+        let _ = request.reply.send(new_hash);
+        Ok(())
     }
 
     /// Detects in-flight L1 transactions from a previous session and derives the pipelined
@@ -711,6 +918,7 @@ where
                         nonce,
                         command: cmd,
                         fee_params: fee_params_of_tx(&tx, self.config.fee_config),
+                        gas_limit: ConsensusTransaction::gas_limit(&tx),
                     });
                 }
             }
@@ -781,11 +989,7 @@ where
 
         stale_fee_max.map(|fees| ReplacementPlan {
             until_nonce,
-            fee_floor: FeeParams {
-                max_fee_per_gas: fees.max_fee_per_gas.saturating_mul(2),
-                max_priority_fee_per_gas: fees.max_priority_fee_per_gas.saturating_mul(2),
-                max_fee_per_blob_gas: fees.max_fee_per_blob_gas.saturating_mul(2),
-            },
+            fee_floor: fees.doubled(),
         })
     }
 
