@@ -1071,6 +1071,11 @@ pub struct RpcConfig {
     #[config(nest)]
     pub rate_limits: RpcRateLimitsConfig,
 
+    /// Rate limiter for incoming L2 transactions based on executed gas throughput.
+    /// Absent = disabled.
+    #[config(nest)]
+    pub tx_gas_rate_limit: Option<TxGasRateLimitConfig>,
+
     /// List of disabled methods.
     /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
     /// They get rejected with -32601 "Method disabled".
@@ -1112,6 +1117,80 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
                 m_methods,
                 custom_methods,
             },
+        }
+    }
+}
+
+/// Rate limiter for incoming L2 transactions, gating admission based on the sequencer's
+/// *total* recent execution throughput — L1 priority / upgrade / interop txs all count
+/// toward it too, even though only L2 admission is ever actually gated. Only effective on
+/// the main node.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(validate(
+    Self::check_credit_windows,
+    "max_credit_seconds must be positive, other windows non-negative, and reopen_credit_seconds must not exceed max_credit_seconds"
+))]
+pub struct TxGasRateLimitConfig {
+    /// Target sustained executed-gas throughput, in gas per second.
+    pub gas_per_second: NonZeroU64,
+
+    /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`. Sized to
+    /// absorb realistic bursty traffic without tripping, while staying under the
+    /// backpressure mechanism's own block-diff horizon.
+    #[config(default_t = 30.0)]
+    pub max_credit_seconds: f64,
+
+    /// Credit required to resume acceptance after the bank was exhausted, in seconds'
+    /// worth of `gas_per_second`.
+    #[config(default_t = 1.0)]
+    pub reopen_credit_seconds: f64,
+
+    /// Max remembered deficit, in seconds' worth of `gas_per_second`. Capacity consumed
+    /// above target while closing is repaid before reopening; `0` clamps the bank at zero.
+    #[config(default_t = 2.0)]
+    pub deficit_floor_seconds: f64,
+
+    /// Senders whose transactions are never rate-limited.
+    #[config(default, with = Delimited::new(","))]
+    pub exempt_senders: HashSet<Address>,
+}
+
+impl TxGasRateLimitConfig {
+    fn check_credit_windows(&self) -> Result<(), ErrorWithOrigin> {
+        let windows = [
+            self.max_credit_seconds,
+            self.reopen_credit_seconds,
+            self.deficit_floor_seconds,
+        ];
+        if windows.iter().any(|w| !w.is_finite() || *w < 0.0) {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit seconds windows must be finite and non-negative",
+            ));
+        }
+        // A zero-capacity bank pins the level at <= 0 and makes the gate flap on
+        // every submission.
+        if self.max_credit_seconds == 0.0 {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit.max_credit_seconds must be positive",
+            ));
+        }
+        // A reopen threshold above capacity is unreachable: once closed, the gate
+        // would never reopen.
+        if self.reopen_credit_seconds > self.max_credit_seconds {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit.reopen_credit_seconds must not exceed max_credit_seconds",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_lib(self) -> zksync_os_mempool::TxGasRateLimitConfig {
+        zksync_os_mempool::TxGasRateLimitConfig {
+            gas_per_second: self.gas_per_second.get(),
+            max_credit_seconds: self.max_credit_seconds,
+            reopen_credit_seconds: self.reopen_credit_seconds,
+            deficit_floor_seconds: self.deficit_floor_seconds,
+            exempt_senders: self.exempt_senders,
         }
     }
 }

@@ -152,6 +152,21 @@ pub(crate) static VALIDATION_POOL_METRICS: vise::Global<TxPoolValidationMetrics>
 pub(crate) static VALIDATOR_POOL_METRICS: vise::Global<TxPoolValidatorMetrics> =
     vise::Global::new();
 
+/// Metrics for the executed-gas transaction rate limiter.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "tx_gas_rate_limiter")]
+pub struct TxGasRateLimiterMetrics {
+    /// Current gas bank level. Negative values are a deficit being repaid before reopening.
+    pub bank_level_gas: Gauge<i64>,
+    /// Whether non-exempt transactions are currently accepted (1 = open, 0 = closed).
+    pub gate_open: Gauge<u64>,
+    /// Number of times the gate closed.
+    pub gate_closes: Counter,
+}
+
+#[vise::register]
+pub static TX_GAS_RATE_LIMITER: vise::Global<TxGasRateLimiterMetrics> = vise::Global::new();
+
 /// A recorder that wraps `vise` metrics as into `metrics`-compatible structs.
 pub(crate) struct ViseRecorder;
 

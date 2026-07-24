@@ -28,8 +28,8 @@ use crate::command_source::{
     ConsensusNodeCommandSource, ExternalNodeCommandSource, RebuildOptions,
 };
 use crate::config::{
-    Config, ProverApiConfig, RebuildConfig, base_token_price_updater_config, gas_adjuster_config,
-    report_static_config_metrics,
+    Config, ProverApiConfig, RebuildConfig, TxGasRateLimitConfig, base_token_price_updater_config,
+    gas_adjuster_config, report_static_config_metrics,
 };
 use crate::en_remote_config::load_remote_config;
 use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_forwarder};
@@ -339,10 +339,29 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
 
     tracing::info!("Initializing mempools");
     let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
+    // The gas rate limiter models sequencer capacity, which only the main node owns: other
+    // roles forward txs to the main node, whose limiter is authoritative and whose rejections
+    // (incl. `retryAfterMs`) propagate back to the caller.
+    let gas_rate_limit = if node_role.is_main() {
+        config
+            .rpc_config
+            .tx_gas_rate_limit
+            .clone()
+            .map(TxGasRateLimitConfig::into_lib)
+    } else {
+        if config.rpc_config.tx_gas_rate_limit.is_some() {
+            tracing::warn!(
+                "rpc.tx_gas_rate_limit is ignored on non-main nodes; the executed-gas \
+                 rate limiter runs on the main node only"
+            );
+        }
+        None
+    };
     let l2_subpool = zksync_os_mempool::subpools::l2::in_memory(
         zk_provider_factory.clone(),
         config.mempool_config.clone().into(),
         config.tx_validator_config.clone().into(),
+        gas_rate_limit,
     );
 
     let (
@@ -934,11 +953,15 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         .port();
 
     let repositories_for_wait = repositories.clone();
+    let l2_subpool_for_wait = l2_subpool.clone();
     let wait_for_db = async move {
         // Wait for repositories to be ready to be used in RPC.
         repositories_for_wait
             .wait_for_db_ready_to_process_blocks()
             .await;
+        // Enable gas rate limiter when the node is ready to process blocks, so that the limiter is not active
+        // during the startup phase.
+        l2_subpool_for_wait.arm_gas_rate_limiter();
         // `rpc::spawn` awaits this future before serving.
         let _ = rpc_ready.set(());
     };

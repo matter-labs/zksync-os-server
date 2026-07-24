@@ -88,6 +88,9 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionError> for Result<Ok, EthSendRawTr
             EthSendRawTransactionError::NotAcceptingTransactions(_) => {
                 internal_rpc_err(err.to_string())
             }
+            EthSendRawTransactionError::GasRateLimited { ref retry_after } => {
+                rate_limited_rpc_err(err.to_string(), retry_after.as_millis() as u64)
+            }
             EthSendRawTransactionError::ForwardError(ref forward_err) => {
                 forward_error_to_rpc_err(forward_err, &err)
             }
@@ -187,7 +190,13 @@ fn forward_error_to_rpc_err(
 ) -> jsonrpsee::types::error::ErrorObject<'static> {
     match forward_err {
         TxForwardError::Rpc(RpcError::ErrorResp(payload)) => {
-            rpc_error_with_code(payload.code as i32, display.to_string())
+            // Preserve structured data (e.g. the gas rate limiter's `retryAfterMs`)
+            // so hints survive EN → main forwarding.
+            jsonrpsee::types::error::ErrorObject::owned(
+                payload.code as i32,
+                display.to_string(),
+                payload.data.clone(),
+            )
         }
         TxForwardError::Rpc(_) | TxForwardError::NoKnownLeader | TxForwardError::NoProvider(_) => {
             internal_rpc_err(display.to_string())
@@ -198,6 +207,26 @@ fn forward_error_to_rpc_err(
 /// Constructs an unimplemented JSON-RPC error.
 pub fn unimplemented_rpc_err() -> jsonrpsee::types::error::ErrorObject<'static> {
     internal_rpc_err("unimplemented")
+}
+
+/// EIP-1474 "Limit exceeded" — the de facto Ethereum rate-limit code (Infura, Alchemy, etc.);
+/// clients treat it as retriable, unlike -32003 (transaction rejected).
+pub const RATE_LIMIT_ERROR_CODE: i32 = -32005;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetryData {
+    retry_after_ms: u64,
+}
+
+/// Constructs a rate-limit JSON-RPC error with a structured `retryAfterMs` hint.
+pub fn rate_limited_rpc_err(
+    msg: impl Into<String>,
+    retry_after_ms: u64,
+) -> jsonrpsee::types::error::ErrorObject<'static> {
+    let data = jsonrpsee::core::to_json_raw_value(&RetryData { retry_after_ms })
+        .expect("infallible serialization");
+    jsonrpsee::types::error::ErrorObject::owned(RATE_LIMIT_ERROR_CODE, msg.into(), Some(data))
 }
 
 /// Constructs an invalid params JSON-RPC error.
