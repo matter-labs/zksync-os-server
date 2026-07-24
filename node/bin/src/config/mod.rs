@@ -1162,10 +1162,21 @@ pub struct L1SenderConfig {
     pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
+    /// With pipelined sending this is the in-flight window size: the max number of
+    /// submitted-but-not-yet-mined L1 transactions. Must not exceed the L1 node's per-account
+    /// pool cap — 16 for both geth's blobpool (`maxTxsPerAccount`) and reth's default
+    /// `max-account-slots` — or sends are rejected until the pool drains.
     #[config(default_t = 16)]
     pub command_limit: usize,
 
-    /// How often to poll L1 for new blocks.
+    /// When true (default), L1 transactions are submitted through a bounded in-flight window
+    /// and confirmations are tracked separately, so submission never waits for inclusion.
+    /// When false, falls back to stop-and-wait: drain up to `command_limit` commands, send,
+    /// wait for all receipts + confirmations, repeat. Kill switch for the pipelined sender.
+    #[config(default_t = true)]
+    pub pipelining_enabled: bool,
+
+    /// Receipt/inclusion polling cadence of the L1 senders.
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
 
@@ -1209,22 +1220,49 @@ pub struct L1SenderConfig {
 
 #[derive(Clone, Copy, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
+#[config(validate(
+    Self::check_replacement_multipliers,
+    "replacement multipliers must be >= 2.0 while force resubmission is enabled: geth and reth \
+     only replace a blob transaction when tip, fee cap AND blob fee cap are all bumped by 100%"
+))]
 pub struct ForceTransactionResubmissionConfig {
     /// Skips startup in-flight recovery and resubmits queued L1 transactions with replacement fee caps.
     #[config(default_t = false)]
     pub enabled: bool,
 
     /// Multiplier applied to `max_fee_per_gas` when force transaction resubmission is enabled.
-    #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
+    /// Must be >= 2.0: replacing a blob transaction requires a 100% bump on all three fee caps.
+    #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_gas_replacement_multiplier: f64,
 
     /// Multiplier applied to `max_priority_fee_per_gas` when force transaction resubmission is enabled.
-    #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
+    /// Must be >= 2.0: replacing a blob transaction requires a 100% bump on all three fee caps.
+    #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
     pub max_priority_fee_per_gas_replacement_multiplier: f64,
 
     /// Multiplier applied to `max_fee_per_blob_gas` when force transaction resubmission is enabled.
+    /// Must be >= 2.0: replacing a blob transaction requires a 100% bump on all three fee caps.
     #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_blob_gas_replacement_multiplier: f64,
+}
+
+impl ForceTransactionResubmissionConfig {
+    /// Replacing an in-pool blob transaction requires >= 100% bump on tip, fee cap and blob
+    /// fee cap (geth blobpool and reth default price bump). Lower multipliers make every
+    /// forced resubmission fail as "replacement transaction underpriced" — a crash loop —
+    /// so they are rejected up front.
+    fn check_replacement_multipliers(&self) -> Result<(), ErrorWithOrigin> {
+        if self.enabled
+            && (self.max_fee_per_gas_replacement_multiplier < 2.0
+                || self.max_priority_fee_per_gas_replacement_multiplier < 2.0
+                || self.max_fee_per_blob_gas_replacement_multiplier < 2.0)
+        {
+            return Err(ErrorWithOrigin::custom(
+                "replacement multipliers must be >= 2.0 while force resubmission is enabled",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn is_positive_f64(&val: &f64) -> bool {
@@ -2036,6 +2074,7 @@ impl L1SenderConfig {
             },
             force_transaction_resubmission: force_transaction_resubmission.enabled,
             command_limit: self.command_limit,
+            pipelining_enabled: self.pipelining_enabled,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
@@ -2460,6 +2499,7 @@ mod tests {
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
                 force_transaction_resubmission: ForceTransactionResubmissionConfig::default(),
                 command_limit: 16,
+                pipelining_enabled: true,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
                 required_confirmations: DEFAULT_REQUIRED_CONFIRMATIONS_L1,
