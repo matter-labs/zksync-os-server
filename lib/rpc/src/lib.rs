@@ -26,6 +26,7 @@ mod method_filter_middleware;
 mod monitoring_middleware;
 mod net_impl;
 mod rate_limit_middleware;
+mod readiness_middleware;
 mod sandbox;
 mod trace_filter;
 mod tx_forwarder;
@@ -47,6 +48,7 @@ use crate::monitoring_middleware::Monitoring;
 use crate::net_impl::NetNamespace;
 use crate::ots_impl::OtsNamespace;
 use crate::rate_limit_middleware::RateLimiting;
+use crate::readiness_middleware::Readiness;
 use crate::txpool_impl::TxpoolNamespace;
 use crate::unstable_impl::UnstableNamespace;
 use crate::web3_impl::Web3Namespace;
@@ -153,6 +155,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     let max_response_size_bytes = config.max_response_size_bytes();
     let limiter = LoggingLimiter::new(Limiter::new(config.rate_limits.clone().into_limits()));
     let rate_limit_logging = LoggingLimiter::run(limiter.clone());
+    let (ready_tx, ready_rx) = watch::channel(false);
     let method_filter = Arc::new(config.method_filter.clone());
     // Snapshot the registered method names so monitoring can bound metric label cardinality:
     // any other method name (e.g. junk sent to pollute metrics) is collapsed to a single label.
@@ -162,6 +165,8 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         .layer_fn(move |service| {
             Monitoring::new(service, max_response_size_bytes, known_methods.clone())
         })
+        // Make static config methods available while gating DB-dependent calls until they are ready.
+        .layer_fn(move |service| Readiness::new(service, ready_rx.clone()))
         .layer_fn(move |service| MethodFiltering::new(service, method_filter.clone()))
         .layer_fn(move |service| RateLimiting::new(service, limiter.clone()));
 
@@ -195,14 +200,25 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     runtime.spawn_critical_with_graceful_shutdown_signal("rpc server", |shutdown| async move {
         tokio::pin!(shutdown);
 
+        // Starting RPC before DB is ready.
+        //
+        // On a fresh external node the first block arrives only after peer
+        // discovery and P2P replay, which can take a while. Starting here keeps
+        // static methods (chain ID, bridgehub address, genesis) available
+        // immediately. The Readiness middleware returns -32000 in the meantime.
+        let server_handle = server.start(rpc);
+
+        // Signal DB readiness, or stop the server if shutdown fires first.
         tokio::select! {
-            _ready = wait_for_db => {}
+            _ = wait_for_db => { ready_tx.send(true).ok(); }
             _guard = &mut shutdown => {
+                server_handle.stop().expect("failed to stop server");
+                server_handle.stopped().await;
+                tracing::info!("RPC server graceful shutdown complete");
                 return;
             }
         }
 
-        let server_handle = server.start(rpc);
         tokio::select! {
             // The JSON-RPC server stopped on its own before shutdown was requested.
             _ = server_handle.clone().stopped() => {

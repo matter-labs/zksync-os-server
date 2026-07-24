@@ -4,6 +4,7 @@ use super::en::run_en_connection;
 use super::events::PeerConnectionHandle;
 use super::handler_shared_state::HandlerSharedState;
 use super::mn::run_mn_connection;
+use super::upstream::UpstreamGuard;
 use super::{ConnectionRegistry, ProtocolEvent};
 use crate::version::ZksProtocolVersionSpec;
 use crate::wire::message::{ZKS_PROTOCOL, ZksMessage};
@@ -30,7 +31,11 @@ enum ProtocolRole<Replay> {
         replay: Replay,
         config: MainNodeProtocolConfig,
     },
-    ExternalNode(ExternalNodeProtocolConfig),
+    ExternalNode {
+        replay: Replay,
+        config: ExternalNodeProtocolConfig,
+        upstream: UpstreamGuard,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -69,13 +74,18 @@ impl<P: ZksProtocolVersionSpec, Replay: Clone> ZksProtocolHandler<P, Replay> {
     }
 
     pub fn for_external_node(
-        _replay: Replay,
+        replay: Replay,
         config: ExternalNodeProtocolConfig,
+        upstream: UpstreamGuard,
         state: HandlerSharedState,
         connection_registry: ConnectionRegistry,
     ) -> Self {
         Self {
-            role: ProtocolRole::ExternalNode(config),
+            role: ProtocolRole::ExternalNode {
+                replay,
+                config,
+                upstream,
+            },
             state,
             connection_registry,
             _phantom: Default::default(),
@@ -215,9 +225,21 @@ impl<P: ZksProtocolVersionSpec, Replay: ReadReplay + Clone> ConnectionHandler
                 )
                 .instrument(tracing::info_span!("mn_connection", %peer_id)),
             ),
-            ProtocolRole::ExternalNode(config) => tokio::spawn(
-                run_en_connection::<P>(conn, outbound_tx, peer_id, config)
-                    .instrument(tracing::info_span!("en_connection", %peer_id)),
+            ProtocolRole::ExternalNode {
+                replay,
+                config,
+                upstream,
+            } => tokio::spawn(
+                run_en_connection::<P, _>(
+                    conn,
+                    outbound_tx,
+                    events_sender.clone(),
+                    peer_id,
+                    replay,
+                    config,
+                    upstream,
+                )
+                .instrument(tracing::info_span!("en_connection", %peer_id)),
             ),
         };
 

@@ -502,7 +502,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 runtime.clone(),
                 ZksProtocolConfig::MainNode(MainNodeProtocolConfig {
                     accepted_verifier_signers,
-                    verify_result_tx: verify_result_tx.clone(),
+                    verify_result_tx,
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,
@@ -536,6 +536,12 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                             outgoing_verify_results: outgoing_verify_results.clone(),
                         }
                     }),
+                    trusted_peers: config
+                        .network_config
+                        .boot_nodes
+                        .iter()
+                        .map(|n| n.id)
+                        .collect(),
                 }),
                 block_replay_storage.clone(),
                 zk_provider_factory,

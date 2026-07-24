@@ -50,8 +50,10 @@ pub trait ZksyncTestingProvider: Provider<Zksync> {
     async fn wait_for_block(&self, block_number: u64) -> anyhow::Result<()> {
         tracing::info!("Waiting for block {block_number} to be processed on L2");
         loop {
-            let latest_block = self.get_block_number_by_id(BlockId::latest()).await?;
-            if latest_block >= Some(block_number) {
+            if matches!(
+                self.get_block_number_by_id(BlockId::latest()).await,
+                Ok(n) if n >= Some(block_number)
+            ) {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

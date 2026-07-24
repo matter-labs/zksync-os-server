@@ -1,6 +1,8 @@
 use crate::service::{PeerVerifyBatch, PeerVerifyBatchResult};
 use crate::wire::replays::RecordOverride;
 use alloy::primitives::{Address, BlockNumber};
+use reth_network_peers::PeerId;
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_storage_api::ReplayRecord;
@@ -27,6 +29,10 @@ pub struct ExternalNodeProtocolConfig {
     pub replay_sender: mpsc::Sender<ReplayRecord>,
     /// Optional verifier configuration. When absent, this EN only participates in replay sync.
     pub verification: Option<ExternalNodeVerifierConfig>,
+    /// Peer IDs that are allowed to act as the upstream replay source. When empty, any peer is
+    /// accepted (useful for tests and unconfigured deployments). Populated from boot nodes in
+    /// production.
+    pub trusted_peers: HashSet<PeerId>,
 }
 
 /// Verifier identity used by an external node when opting into verifier-role authentication.

@@ -43,13 +43,18 @@ impl RepositoryManager {
             .expect("Missing genesis block in DB");
         let (block_sender, _) = broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE);
 
+        // If the DB already has blocks it was left in a consistent state by a previous run.
+        // Mark ready immediately so RPC and the persist loop do not stall waiting for the
+        // first populate() call, which may never come if the node is already fully synced.
+        let db_has_existing_blocks = db.get_latest_block() > 0;
+
         RepositoryManager {
             // Initializes in-memory repository with genesis block. It is never pruned from cache.
             in_memory: RepositoryInMemory::new(genesis_block),
             db,
             max_blocks_in_memory: blocks_to_retain as u64,
             block_sender,
-            db_ready_to_process_blocks: Arc::new(AtomicBool::new(false)),
+            db_ready_to_process_blocks: Arc::new(AtomicBool::new(db_has_existing_blocks)),
         }
     }
 
