@@ -38,7 +38,11 @@ impl TryFrom<&ProtocolSemanticVersion> for ExecutionVersion {
         match version.minor {
             29 => Ok(ExecutionVersion::V4),
             30 => Ok(ExecutionVersion::V5),
-            31 => Ok(ExecutionVersion::V6),
+            // LOCAL DEV: the atomic-interop era-contracts line still reports protocol
+            // 0.31.x, but its chains run the timestamped-interop STF — route them to the
+            // 0.4.0 lane (local ad-atomic-interop-da checkout) like the fork server did
+            // with its patched "current" lane.
+            31 => Ok(ExecutionVersion::V7),
             32 => Ok(ExecutionVersion::V7),
             33 => Ok(ExecutionVersion::V7),
             _ => Err(ExecutionVersionError::UnsupportedVersion(version.clone())),
@@ -66,8 +70,8 @@ mod tests {
             ((0, 29, 1), ExecutionVersion::V4),
             ((0, 30, 0), ExecutionVersion::V5),
             ((0, 30, 1), ExecutionVersion::V5),
-            ((0, 31, 0), ExecutionVersion::V6),
-            ((0, 31, 1), ExecutionVersion::V6),
+            ((0, 31, 0), ExecutionVersion::V7),
+            ((0, 31, 1), ExecutionVersion::V7),
             ((0, 32, 0), ExecutionVersion::V7),
             ((0, 32, 1), ExecutionVersion::V7),
             ((0, 33, 0), ExecutionVersion::V7),
