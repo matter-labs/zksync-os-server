@@ -113,7 +113,80 @@ fork. So a migration has a sequencing gap by design. Reads don't stop: nodes kee
 serving RPC from their synced state throughout; what pauses is transaction
 inclusion.
 
-The procedure:
+The batcher moves to exactly one validator (conventionally the ex-sequencer's
+machine); settlement pauses during the gap and reconciles on startup through the
+same recovery machinery every restart uses.
+
+### Scheduled cutover
+
+The default migration path: operators agree the cutover height N ahead of time,
+deploy one configuration per node, and the cutover happens on its own.
+
+1. **Pick N** comfortably above the current tip — far enough that every
+   configuration deploys before the chain reaches it.
+2. **Deploy the final consensus configuration on every node**, with rolling
+   restarts; the chain keeps running. A `consensus.genesis_height` above the
+   local chain tip arms the cutover: each node keeps running its
+   `general.node_role` behavior — the sequencer sequences, external nodes
+   follow — but nothing is written past N.
+3. **The cutover happens at N.** The sequencer seals block N as its last
+   block. Every node that reaches N logs "the chain reached the scheduled
+   consensus anchor" and shuts down cleanly; the supervisor's restart finds
+   the write-ahead log ending exactly at N and starts consensus. The first
+   consensus block is N+1.
+
+The configuration for an external node being converted, on top of the
+committee example above — the same file serves both phases:
+
+```yaml
+general:
+  node_role: external    # the node's behavior before the cutover; from the
+                         # anchor on, every consensus node runs as a main node
+genesis:
+  # a plain external node fetches these from the main node at runtime; a
+  # consensus node carries every main-node fact itself (validated at startup)
+  chain_id: <chain id>
+  bridgehub_address: <bridgehub address>
+  bytecode_supplier_address: <bytecode supplier address>
+  genesis_input_path: <path to genesis.json>
+l1_sender:
+  pubdata_mode: <the chain's pubdata mode>
+batcher:
+  enabled: false         # the settler stays on exactly one validator
+consensus:
+  enabled: true
+  genesis_height: <N>    # above the current tip = the scheduled cutover
+  # ...plus this validator's keys, listen address, and the committee list,
+  # exactly as in the new-chain example above
+```
+
+The ex-sequencer's configuration is the same with `node_role: main` and
+`batcher.enabled: true`.
+
+What to watch: every armed node serves `/status.scheduled_cutover` with
+`{genesis_height, tip}` — `tip` reaching `genesis_height` is the cutover.
+After the restarts the section disappears and `consensus` takes its place.
+
+The details that matter:
+
+- **Supervision is assumed.** A node that reaches N exits cleanly (exit code
+  0) and must be restarted by its environment. Without a supervisor, restart
+  it by hand — the effect is the same.
+- **RPC never stops.** Transactions submitted after the chain reaches N stay
+  pending. The mempool is in-memory, so anything still pending at the restart
+  is dropped and needs resubmission; inclusion resumes the moment a quorum
+  pairs up.
+- **Deposits slow down at deploy time, not at N.** With consensus enabled, L1
+  inputs are ingested from finalized L1 blocks only — this begins as soon as
+  the armed configuration deploys, not at the cutover.
+- **A configuration that lands too late refuses loudly.** If the chain passes
+  N before a node received the configuration, that node refuses to start ("a
+  consensus era must start exactly at the agreed cutover") and leaves its
+  chain intact. Schedule a new N and redeploy.
+
+### Manual cutover
+
+The fallback for draining by hand:
 
 1. **Prepare** (no downtime): generate validator keys, agree the committee
    configuration, and pre-stage chain-state snapshots on the future validator
@@ -137,31 +210,8 @@ The procedure:
    log past H means someone kept sequencing past the agreed anchor — and record
    the era. Inclusion resumes the moment a quorum pairs up.
 
-The batcher moves to exactly one validator (conventionally the ex-sequencer's
-machine); settlement pauses during the gap and reconciles on startup through the
-same recovery machinery every restart uses.
-
-Converting an external node in place is a configuration change on top of the
-committee example above:
-
-```yaml
-general:
-  node_role: main    # was `external`; `main_node_rpc_url` can be removed
-genesis:
-  # an external node fetches these from the main node at runtime; a validator
-  # carries them itself — copy the values from the drained sequencer's config
-  chain_id: <chain id>
-  bridgehub_address: <bridgehub address>
-  bytecode_supplier_address: <bytecode supplier address>
-  genesis_input_path: <path to genesis.json>
-batcher:
-  enabled: false     # the settler stays on exactly one validator
-consensus:
-  enabled: true
-  genesis_height: <H>    # the drained tip, from `chain-tip`
-  # ...plus this validator's keys, listen address, and the committee list,
-  # exactly as in the new-chain example above
-```
+The conversion configuration is the scheduled cutover's, with
+`consensus.genesis_height` set to the drained tip H read by `chain-tip`.
 
 ## Observers
 

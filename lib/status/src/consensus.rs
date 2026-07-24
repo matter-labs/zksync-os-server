@@ -52,6 +52,35 @@ pub struct RegistryStatus {
     pub committee_size: usize,
 }
 
+/// Where the status server reads a pending scheduled cutover from. Present only
+/// while consensus is configured to start at a chain height this node has not
+/// reached yet: the node runs its pre-cutover role (sequencing or following)
+/// until `genesis_height`, then restarts into consensus.
+#[derive(Clone)]
+pub struct ScheduledCutoverStatusSource {
+    pub genesis_height: u64,
+    /// The node's current write-ahead-log tip, updated by the cutover sentinel.
+    pub tip: watch::Receiver<u64>,
+}
+
+impl ScheduledCutoverStatusSource {
+    pub fn snapshot(&self) -> ScheduledCutoverStatus {
+        ScheduledCutoverStatus {
+            genesis_height: self.genesis_height,
+            tip: *self.tip.borrow(),
+        }
+    }
+}
+
+/// The `scheduled_cutover` section of a `/status` response. `tip` advancing
+/// toward `genesis_height` is the migration's progress indicator; the section
+/// disappears once the node restarts into consensus (replaced by `consensus`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ScheduledCutoverStatus {
+    pub genesis_height: u64,
+    pub tip: u64,
+}
+
 /// Where the status server reads consensus facts from.
 pub struct ConsensusStatusSource {
     /// `"validator"` or `"observer"` — whether this node votes or only follows.

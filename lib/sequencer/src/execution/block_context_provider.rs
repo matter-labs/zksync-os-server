@@ -47,6 +47,10 @@ pub struct Config {
     pub service_block_delay: Duration,
     pub max_transactions_in_block: usize,
     pub interop_roots_per_block: u64,
+    /// Do not produce blocks above this height. Set for a scheduled consensus
+    /// cutover: the sequencer seals exactly this block as its last one, so the
+    /// chain ends at the agreed consensus anchor without a manual drain.
+    pub produce_up_to_block: Option<u64>,
 }
 
 struct LastBlock {
@@ -90,6 +94,20 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
     }
 
     async fn produce(&mut self) -> anyhow::Result<Option<PreparedBlockCommand<'_>>> {
+        // Checked before `last_block` is taken: a declined turn must leave the
+        // provider able to answer the next command.
+        if let Some(bound) = self.config.produce_up_to_block {
+            let tip = self
+                .last_block
+                .as_ref()
+                .expect("tried to produce a block without replaying at least one record")
+                .record
+                .block_context
+                .block_number;
+            if tip >= bound {
+                return Ok(None);
+            }
+        }
         let LastBlock {
             record: previous_record,
             hash: previous_block_hash,

@@ -354,7 +354,9 @@ impl BlockReplayStorage {
 
     /// Returns the greatest block number that has been appended, or `None` if empty.
     /// This can only return `None` on the very first start before genesis got inserted.
-    fn latest_record_checked(&self) -> Option<BlockNumber> {
+    /// Public for tooling and startup logic that must read the tip of a possibly-empty
+    /// log (a store opened with [`Self::new_without_genesis`] never inserts genesis).
+    pub fn latest_record_checked(&self) -> Option<BlockNumber> {
         self.db
             .get_cf(BlockReplayColumnFamily::Latest, Self::LATEST_KEY)
             .expect("Cannot read from DB")

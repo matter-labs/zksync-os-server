@@ -225,10 +225,11 @@ pub async fn main() {
     let prometheus_config = config.observability_config.prometheus.clone();
     let prometheus_port = prometheus_config.port;
 
-    match config.general_config.state_backend {
+    let launched = match config.general_config.state_backend {
         StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config).await,
         StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config).await,
     };
+    let scheduled_cutover_reached = launched.scheduled_cutover_reached;
 
     let prometheus_push_shutdown = if ephemeral_enabled {
         tracing::info!("Ephemeral mode enabled, skipping Prometheus push exporter");
@@ -257,7 +258,7 @@ pub async fn main() {
                 std::process::exit(1);
             }
         },
-        _ = handle_delayed_termination(runtime) => {},
+        _ = handle_delayed_termination(runtime, scheduled_cutover_reached) => {},
     }
 }
 
@@ -312,7 +313,10 @@ async fn wait_for_prometheus_push_shutdown(handle: Option<JoinHandle<()>>) {
     }
 }
 
-async fn handle_delayed_termination(runtime: Runtime) {
+async fn handle_delayed_termination(
+    runtime: Runtime,
+    scheduled_cutover_reached: Option<tokio::sync::watch::Receiver<bool>>,
+) {
     // sigint is sent on Ctrl+C
     let mut sigint =
         signal(SignalKind::interrupt()).expect("failed to register interrupt signal handler");
@@ -320,6 +324,20 @@ async fn handle_delayed_termination(runtime: Runtime) {
     // sigterm is sent on `kill <pid>` or by kubernetes during pod shutdown
     let mut sigterm =
         signal(SignalKind::terminate()).expect("failed to register terminate signal handler");
+
+    // Fires when the chain reaches a scheduled consensus cutover; pends forever
+    // when none is armed. The exit is deliberate and clean (code 0): the
+    // supervisor restarts the node, and the next start runs consensus from the
+    // anchor the write-ahead log now ends at.
+    let cutover_reached = async move {
+        match scheduled_cutover_reached {
+            Some(mut reached) => {
+                let _ = reached.wait_for(|reached| *reached).await;
+            }
+            None => std::future::pending().await,
+        }
+    };
+
     tokio::select! {
         _ = sigterm.recv() => {
             tracing::info!("received SIGTERM: shutting down immediately");
@@ -344,6 +362,13 @@ async fn handle_delayed_termination(runtime: Runtime) {
         },
         _ = sigint.recv() => {
             tracing::info!("received SIGINT: shutting down gracefully (within 10s)");
+            runtime.graceful_shutdown_with_timeout(GRACEFUL_SHUTDOWN_TIMEOUT);
+        },
+        _ = cutover_reached => {
+            tracing::info!(
+                "scheduled consensus cutover reached: shutting down; the next start \
+                 of this node runs consensus"
+            );
             runtime.graceful_shutdown_with_timeout(GRACEFUL_SHUTDOWN_TIMEOUT);
         },
     }

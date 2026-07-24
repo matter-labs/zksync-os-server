@@ -386,6 +386,10 @@ fn log_all_errors(errors: ParseErrors) -> anyhow::Error {
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct GeneralConfig {
+    /// `main` (sequences blocks) or `external` (follows a main node's replay
+    /// stream). With consensus enabled, this describes the node's behavior
+    /// before the scheduled cutover only: from the consensus anchor on, every
+    /// consensus node runs as a main node regardless of this value.
     #[config(default_t = NodeRole::MainNode, with = Serde![str])]
     pub node_role: NodeRole,
 
@@ -621,10 +625,25 @@ impl std::fmt::Display for ConsensusRole {
 #[config(derive(Default))]
 pub struct ConsensusConfig {
     /// Whether BFT consensus is enabled. WARNING: experimental.
+    ///
+    /// Legal with either `general.node_role`: the role describes the node's
+    /// behavior *before* a scheduled cutover (a `genesis_height` above the local
+    /// chain tip); from the anchor on, every consensus node runs as a main node.
     #[config(default_t = false)]
     #[config_validate(custom(
-        |root: &Config, value: &bool| !*value || root.general_config.node_role.is_main(),
-        "requires `general.node_role=main`"
+        |root: &Config, value: &bool| {
+            !*value
+                || (root.genesis_config.chain_id.is_some()
+                    && root.genesis_config.bridgehub_address.is_some()
+                    && root.genesis_config.bytecode_supplier_address.is_some()
+                    && root.genesis_config.genesis_input_path.is_some()
+                    && root.l1_sender_config.pubdata_mode.is_some())
+        },
+        "requires every main-node fact in the local configuration \
+         (`genesis.chain_id`, `genesis.bridgehub_address`, \
+         `genesis.bytecode_supplier_address`, `genesis.genesis_input_path`, \
+         `l1_sender.pubdata_mode`) — a consensus node runs as a main node from \
+         the anchor on and must not depend on another node's RPC for them"
     ))]
     pub enabled: bool,
     /// Whether this node votes (`validator`) or only follows (`observer`) — see
@@ -794,6 +813,13 @@ pub struct ConsensusConfig {
     /// name the same height, and the first consensus start must happen with the
     /// write-ahead log ending exactly there (the guard refuses otherwise). The first
     /// consensus-decided block is `genesis_height + 1`.
+    ///
+    /// A height the local chain has *not reached yet* schedules the cutover: the
+    /// node runs its `general.node_role` behavior (sequencing or following) until
+    /// the chain reaches this height, then shuts down cleanly — the supervisor's
+    /// restart runs consensus from the anchor. A log already *past* this height is
+    /// still refused (the chain sequenced beyond the agreed anchor; schedule a new
+    /// one).
     #[config(default_t = 0)]
     pub genesis_height: u64,
     /// Single-sequencer operation refuses to start on a chain that has previously

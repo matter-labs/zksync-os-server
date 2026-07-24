@@ -215,6 +215,11 @@ pub struct Tester {
     task_manager_handle: Option<JoinHandle<Result<(), PanickedTaskError>>>,
     config: Config,
     bound_ports: ServerPorts,
+    /// Flips to `true` when the node's write-ahead log reaches a scheduled
+    /// consensus anchor; `None` when the launch armed no cutover. In
+    /// production the binary reacts by shutting down for its supervisor —
+    /// in tests, the test is the supervisor: await this, stop, start.
+    pub scheduled_cutover_reached: Option<tokio::sync::watch::Receiver<bool>>,
 
     #[allow(dead_code)]
     tempdir: Arc<tempfile::TempDir>,
@@ -657,14 +662,14 @@ impl Tester {
         // blocking pool and can lag its runtime shutdown. The conflict clears
         // as soon as the straggling drop lands.
         let launch_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        let bound_ports = loop {
+        let launched = loop {
             let launch = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
                 zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
                     .instrument(node_span.clone()),
             ))
             .await;
             let panic = match launch {
-                Ok(bound_ports) => break bound_ports,
+                Ok(launched) => break launched,
                 Err(panic) => panic,
             };
             let message = panic
@@ -683,6 +688,10 @@ impl Tester {
             }
             anyhow::bail!("node startup panicked: {message}");
         };
+        let zksync_os_server::LaunchedNode {
+            ports: bound_ports,
+            scheduled_cutover_reached,
+        } = launched;
         let task_manager_handle = runtime
             .take_task_manager_handle()
             .expect("Runtime must contain a TaskManager handle");
@@ -761,6 +770,7 @@ impl Tester {
             task_manager_handle: Some(task_manager_handle),
             config,
             bound_ports,
+            scheduled_cutover_reached,
             l2_rpc_address,
             status_server_url,
             node_record,

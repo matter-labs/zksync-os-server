@@ -135,20 +135,86 @@ const REPOSITORY_DB_NAME: &str = "repository";
 const BATCH_DB_NAME: &str = "batch";
 pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 
+/// What `run` hands back to its embedder — the binary's `main`, or a test
+/// harness. The embedder owns the reaction to a reached cutover: the
+/// production binary shuts down so its supervisor restarts it into consensus;
+/// a test harness restarts the node itself.
+pub struct LaunchedNode {
+    pub ports: ServerPorts,
+    /// Flips to `true` when the write-ahead log reaches the scheduled
+    /// consensus anchor. `None` when no cutover is pending on this boot.
+    pub scheduled_cutover_reached: Option<watch::Receiver<bool>>,
+}
+
+/// With consensus enabled, decides whether this boot happens before the
+/// scheduled cutover: `Some(anchor)` when the local write-ahead log has not
+/// reached `consensus.genesis_height` yet. The log is opened read-only here
+/// and dropped again before the node's real storage initialization.
+fn scheduled_cutover_pending(config: &Config) -> Option<u64> {
+    if !config.consensus_config.enabled {
+        return None;
+    }
+    let anchor = config.consensus_config.genesis_height;
+    if anchor == 0 {
+        // Consensus from the chain's genesis — there is no pre-cutover phase.
+        return None;
+    }
+    // The chain id is only consulted when replay records are assembled; the
+    // tip read below never assembles one. A fresh database reads as tip 0.
+    let wal = BlockReplayStorage::new_without_genesis(
+        &config
+            .general_config
+            .rocks_db_path
+            .join(BLOCK_REPLAY_WAL_DB_NAME),
+        config.genesis_config.chain_id.unwrap_or(0),
+    );
+    let tip = wal.latest_record_checked().unwrap_or(0);
+    (tip < anchor).then_some(anchor)
+}
+
+/// Whether the configuration carries every genesis fact a main node needs —
+/// the set an external node otherwise fetches from the main node at runtime.
+fn genesis_facts_configured(genesis: &crate::config::GenesisConfig) -> bool {
+    genesis.bridgehub_address.is_some()
+        && genesis.bytecode_supplier_address.is_some()
+        && genesis.chain_id.is_some()
+        && genesis.genesis_input_path.is_some()
+}
+
 pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
     runtime: &Runtime,
     config: Config,
-) -> ServerPorts {
+) -> LaunchedNode {
+    // A consensus start scheduled at a height this node has not reached yet:
+    // `Some(anchor)` arms the pre-cutover mode — the node runs its
+    // `general.node_role` behavior bounded to the anchor, then signals the
+    // embedder to shut it down; the next start finds the write-ahead log
+    // ending exactly at the anchor and runs consensus. `node_role` describes
+    // only that pre-cutover behavior: from the anchor on, every consensus
+    // node runs as a main node.
+    let scheduled_cutover = scheduled_cutover_pending(&config);
+    let node_role = if config.consensus_config.enabled && scheduled_cutover.is_none() {
+        NodeRole::MainNode
+    } else {
+        config.general_config.node_role
+    };
+    if node_role != config.general_config.node_role {
+        tracing::info!(
+            configured_role = config.general_config.node_role.as_str(),
+            "consensus governs this chain from its anchor; `general.node_role` \
+             applies before the cutover only — running as a main node"
+        );
+    }
+
     let BoundListeners {
         rpc: rpc_listener,
         status: prebound_status_listener,
         prover_api: prebound_prover_api_listener,
-    } = BoundListeners::bind_from_config(&config)
+    } = BoundListeners::bind_from_config(&config, node_role)
         .await
         .expect("failed to prebind node ports");
     report_static_config_metrics(&config);
 
-    let node_role = config.general_config.node_role;
     let role: &'static str = node_role.as_str();
 
     let process_started_at = Instant::now();
@@ -163,15 +229,26 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     }
     tracing::info!(version = NODE_VERSION, role, "Initializing Node");
 
-    // One client for all main-node RPC; `None` on a main node (nothing to talk to).
-    let main_node_client = config
-        .general_config
-        .main_node_rpc_url
-        .as_ref()
-        .map(|url| MainNodeClient::new(url).expect("failed to build main node RPC client"));
+    // One client for all main-node RPC; `None` on a main node (nothing to talk
+    // to). Gated on the effective role: after a scheduled cutover the config
+    // may still carry `main_node_rpc_url`, but a consensus node defers to no
+    // other node.
+    let main_node_client = if node_role.is_main() {
+        None
+    } else {
+        config
+            .general_config
+            .main_node_rpc_url
+            .as_ref()
+            .map(|url| MainNodeClient::new(url).expect("failed to build main node RPC client"))
+    };
 
+    // Genesis facts come from the local configuration whenever it carries them
+    // — a consensus configuration always does (validated) — and are fetched
+    // from the main node otherwise. A consensus node must not depend on
+    // another node's RPC to know its own chain, in either cutover phase.
     let (bridgehub_address, bytecode_supplier_address, chain_id, genesis_input_source) =
-        if node_role.is_main() {
+        if node_role.is_main() || genesis_facts_configured(&config.genesis_config) {
             let genesis_input_source: Arc<dyn GenesisInputSource> =
                 Arc::new(FileGenesisInputSource::new(
                     config
@@ -700,12 +777,19 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let _ = stop_sender_for_shutdown.send(true);
     });
 
-    let tx_forwarder = if let Some(url) = config.general_config.main_node_rpc_url.as_ref() {
-        Some(build_static_tx_forwarder(url).await)
-    } else if config.consensus_config.enabled && config.consensus_config.role.is_observer() {
+    let tx_forwarder = if config.consensus_config.enabled
+        && config.consensus_config.role.is_observer()
+        && scheduled_cutover.is_none()
+    {
         // A consensus observer includes nothing itself: its RPC keeps a local
         // mirror (pending views stay coherent) and forwards to the validators.
         Some(build_round_robin_tx_forwarder(&config.consensus_config.tx_forward_rpc_urls).await)
+    } else if !node_role.is_main()
+        && let Some(url) = config.general_config.main_node_rpc_url.as_ref()
+    {
+        // Following (an external node, or any pre-cutover follower): forward to
+        // the node that sequences today.
+        Some(build_static_tx_forwarder(url).await)
     } else {
         None
     };
@@ -848,6 +932,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     let (block_context_provider, consensus_committed_receiver, consensus_status_source) = if config
         .consensus_config
         .enabled
+        && scheduled_cutover.is_none()
     {
         // The mempool expects to be initialized with the last replayed block exactly
         // once; the local production pipeline does this on its first replay, consensus
@@ -1179,10 +1264,63 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
                 max_transactions_in_block: config.sequencer_config.max_transactions_in_block,
                 // We set the value to the same as for the batch, since it should be enforced by batcher, but don't want to exceed it for the block
                 interop_roots_per_block: config.batcher_config.interop_roots_per_batch_limit,
+                // A scheduled cutover ends local production exactly at the
+                // consensus anchor; the sentinel below handles the rest.
+                produce_up_to_block: scheduled_cutover,
             },
             last_constructed_block_ctx_sender,
         );
         (Some(provider), None, None)
+    };
+
+    // The cutover sentinel: on a boot that precedes the scheduled consensus
+    // anchor, watch the write-ahead log and tell the embedder the moment it
+    // reaches the anchor. The bounded sources above guarantee nothing is
+    // written past the anchor; the embedder shuts the node down, and the next
+    // start finds the log ending exactly there and runs consensus.
+    let (scheduled_cutover_reached, scheduled_cutover_status) = match scheduled_cutover {
+        Some(anchor) => {
+            let tip = block_replay_storage.latest_record();
+            tracing::info!(
+                anchor,
+                tip,
+                pre_cutover_role = config.general_config.node_role.as_str(),
+                "scheduled consensus cutover armed; running the pre-cutover role \
+                 until the chain reaches the anchor"
+            );
+            let (reached_sender, reached_receiver) = watch::channel(false);
+            let (tip_sender, tip_receiver) = watch::channel(tip);
+            let wal = block_replay_storage.clone();
+            runtime.spawn_with_graceful_shutdown_signal(move |shutdown| async move {
+                let mut poll = tokio::time::interval(std::time::Duration::from_millis(250));
+                tokio::pin!(shutdown);
+                loop {
+                    tokio::select! {
+                        _ = &mut shutdown => return,
+                        _ = poll.tick() => {}
+                    }
+                    let tip = wal.latest_record();
+                    let _ = tip_sender.send(tip);
+                    if tip >= anchor {
+                        tracing::info!(
+                            anchor,
+                            "the chain reached the scheduled consensus anchor; the \
+                             next start of this node runs consensus from here"
+                        );
+                        let _ = reached_sender.send(true);
+                        return;
+                    }
+                }
+            });
+            (
+                Some(reached_receiver),
+                Some(zksync_os_status_server::ScheduledCutoverStatusSource {
+                    genesis_height: anchor,
+                    tip: tip_receiver,
+                }),
+            )
+        }
+        None => (None, None),
     };
 
     // ========== Start L1 Persist Batch Watcher ===========
@@ -1285,6 +1423,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
             chain_id,
             verify_batch_rx,
             outgoing_verify_results.clone(),
+            scheduled_cutover,
         )
         .await
     };
@@ -1312,6 +1451,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         let status_state = StatusServerState {
             pipeline_snapshot: pipeline_snapshot_rx,
             consensus: Arc::new(consensus_status_source),
+            scheduled_cutover: scheduled_cutover_status,
             ready: rpc_ready.clone(),
         };
         runtime.spawn_critical_with_graceful_shutdown_signal(
@@ -1369,11 +1509,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     GENERAL_METRICS.startup_time[&"total"].set(startup_time.as_secs_f64());
     tracing::info!("All components scheduled for initialization in {startup_time:?}");
 
-    ServerPorts {
-        rpc: rpc_port,
-        status: status_port,
-        prover_api: prover_api_port,
-        network,
+    LaunchedNode {
+        ports: ServerPorts {
+            rpc: rpc_port,
+            status: status_port,
+            prover_api: prover_api_port,
+            network,
+        },
+        scheduled_cutover_reached,
     }
 }
 
@@ -1849,6 +1992,7 @@ async fn run_en_pipeline(
     chain_id: u64,
     verify_batch_rx: tokio::sync::mpsc::Receiver<PeerVerifyBatch>,
     outgoing_verify_results: tokio::sync::broadcast::Sender<PeerVerifyBatchResult>,
+    scheduled_cutover: Option<u64>,
 ) -> PipelineHandles {
     let internal_config_manager = init_and_report_internal_config_manager(
         config
@@ -1865,7 +2009,14 @@ async fn run_en_pipeline(
     let pipeline = Pipeline::new(runtime.clone())
         .pipe(ExternalNodeCommandSource {
             replays_for_sequencer,
-            up_to_block: config.sequencer_config.en_sync_up_to_block,
+            // A scheduled cutover caps replay at the consensus anchor, below
+            // any operator-configured bound.
+            up_to_block: config
+                .sequencer_config
+                .en_sync_up_to_block
+                .into_iter()
+                .chain(scheduled_cutover)
+                .min(),
             pipeline_gate,
         })
         .pipe(BlockExecutor {

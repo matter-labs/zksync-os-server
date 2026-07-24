@@ -14,7 +14,7 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use std::time::Duration;
-use zksync_os_integration_tests::multi_node::MultiNodeTester;
+use zksync_os_integration_tests::multi_node::{CommitteeSeat, MultiNodeTester};
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 
 // Sized for a loaded machine (a full-suite run packs several committees
@@ -154,6 +154,224 @@ async fn single_sequencer_chain_migrates_to_a_committee(main_node: Tester) -> an
     }
 
     cluster.shutdown_all().await
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn a_scheduled_cutover_migrates_a_running_chain(main_node: Tester) -> anyhow::Result<()> {
+    // Pre-cutover traffic on the plain single sequencer.
+    let recipient = Address::repeat_byte(0x64);
+    let value = U256::from(5_000_000u64);
+    let (pre_block, _) = transfer_via(&main_node, recipient, value).await?;
+
+    // The anchor is agreed ahead of time, comfortably above the current tip —
+    // nobody reads it from a drained database in this flow.
+    let tip = main_node.l2_provider.get_block_number().await?;
+    let anchor = tip + 4;
+
+    // Two committee seats: the sequencer and the external node that follows it.
+    let seat_main = CommitteeSeat::reserve().await?;
+    let seat_en = CommitteeSeat::reserve().await?;
+    let committee = vec![seat_main.committee_entry(), seat_en.committee_entry()];
+
+    // One config deploy per node: the same file serves the pre-cutover role and
+    // the consensus node after it. The sequencer keeps `node_role = main`...
+    let main_node = main_node
+        .stop()
+        .await?
+        .start_with_overrides(|config| {
+            seat_main.arm_consensus(config, committee.clone(), anchor);
+        })
+        .await?;
+    // ...and the follower keeps `node_role = external` (its pre-cutover
+    // behavior); the batcher stays on exactly one node. The follower's config
+    // must already carry every main-node fact it needs from the anchor on —
+    // the harness's external-node defaults strip the pubdata mode, so restore
+    // the chain's value.
+    let pubdata_mode = main_node.config().l1_sender_config.pubdata_mode;
+    let en = main_node
+        .launch_external_node_overrides(|config| {
+            seat_en.arm_consensus(config, committee.clone(), anchor);
+            config.batcher_config.enabled = false;
+            config.l1_sender_config.pubdata_mode = pubdata_mode;
+        })
+        .await?;
+
+    let mut main_cutover = main_node
+        .scheduled_cutover_reached
+        .clone()
+        .expect("the sequencer armed a scheduled cutover");
+    let mut en_cutover = en
+        .scheduled_cutover_reached
+        .clone()
+        .expect("the follower armed a scheduled cutover");
+
+    // Drive traffic across the anchor. Submissions past it stay pending by
+    // design (the sequencer seals nothing above the anchor), so nothing here
+    // waits for receipts.
+    let driver = async {
+        loop {
+            let _ = main_node
+                .l2_provider
+                .send_transaction(
+                    TransactionRequest::default()
+                        .with_to(recipient)
+                        .with_value(U256::from(1u64)),
+                )
+                .await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    };
+    let cutovers = async {
+        main_cutover.wait_for(|reached| *reached).await?;
+        en_cutover.wait_for(|reached| *reached).await?;
+        anyhow::Ok(())
+    };
+    tokio::select! {
+        result = tokio::time::timeout(CONVERGENCE_TIMEOUT, cutovers) => result??,
+        _ = driver => unreachable!("the traffic driver never finishes"),
+    }
+
+    // Both nodes stopped producing/following at exactly the anchor, and the
+    // pending cutover is visible on the status surface.
+    assert_eq!(main_node.l2_provider.get_block_number().await?, anchor);
+    assert_eq!(en.l2_provider.get_block_number().await?, anchor);
+    let pending = main_node
+        .status()
+        .await?
+        .scheduled_cutover
+        .expect("a pending cutover surfaces in /status");
+    assert_eq!(pending.genesis_height, anchor);
+    assert_eq!(pending.tip, anchor);
+
+    // The supervisor's restart, played by the test: stop both, start both with
+    // the exact same configuration. The next boot finds the log ending at the
+    // anchor and runs consensus.
+    let en_stopped = en.stop().await?;
+    let main_stopped = main_node.stop().await?;
+    let main_node = main_stopped.start().await?;
+    let en = en_stopped.start().await?;
+
+    // The committee (both nodes — n=2 needs both) continues the chain past the
+    // anchor; the ex-follower is a validator now and includes traffic.
+    let (post_block, _) = transfer_via(&en, recipient, value).await?;
+    assert!(
+        post_block > anchor,
+        "consensus-era traffic lands above the anchor"
+    );
+    assert!(
+        pre_block < anchor,
+        "sanity: pre-cutover history sits below the anchor"
+    );
+
+    // Agreement at the consensus era's first blocks, and the status surfaces
+    // flipped from pending-cutover to consensus on both nodes.
+    let deadline = tokio::time::Instant::now() + CONVERGENCE_TIMEOUT;
+    loop {
+        let (main_block, en_block) = (
+            main_node
+                .l2_provider
+                .get_block(alloy::eips::BlockId::number(post_block))
+                .await?
+                .map(|block| block.header.hash),
+            en.l2_provider
+                .get_block(alloy::eips::BlockId::number(post_block))
+                .await?
+                .map(|block| block.header.hash),
+        );
+        if let (Some(main_hash), Some(en_hash)) = (main_block, en_block) {
+            assert_eq!(
+                main_hash, en_hash,
+                "the committee disagrees at {post_block}"
+            );
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "block {post_block} did not reach both nodes in time",
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    for node in [&main_node, &en] {
+        let status = node.status().await?;
+        assert!(
+            status.scheduled_cutover.is_none(),
+            "no cutover is pending once consensus runs"
+        );
+        assert!(
+            status.consensus.is_some(),
+            "the consensus section is live after the cutover"
+        );
+    }
+
+    // Pre-cutover history is ordinary chain history to the committee: both big
+    // transfers serve (the driver's 1-wei transfers land on top in unknown
+    // number, so this is a floor, not an equality).
+    assert!(
+        en.l2_provider.get_balance(recipient).await? >= value + value,
+        "pre- and post-cutover effects both serve",
+    );
+
+    Ok(())
+}
+
+#[test_multisetup([CURRENT_TO_L1])]
+async fn a_cutover_scheduled_below_the_tip_refuses_to_start(
+    main_node: Tester,
+) -> anyhow::Result<()> {
+    // Two blocks of history, so an anchor at the first one sits strictly below
+    // the tip while still having a write-ahead-log record.
+    let recipient = Address::repeat_byte(0x65);
+    let (first_block, _) = transfer_via(&main_node, recipient, U256::from(1u64)).await?;
+    let (second_block, _) = transfer_via(&main_node, recipient, U256::from(1u64)).await?;
+    anyhow::ensure!(second_block > first_block, "two blocks of history");
+
+    let seat = CommitteeSeat::reserve().await?;
+    let seat_peer = CommitteeSeat::reserve().await?;
+    let committee = vec![seat.committee_entry(), seat_peer.committee_entry()];
+
+    // The chain already sequenced past the anchor — the config landed too late.
+    // The node must refuse rather than truncate or re-anchor on its own.
+    let stopped = main_node.stop().await?;
+    let backup = stopped.backup();
+    let refused = stopped
+        .start_with_overrides(|config| {
+            seat.arm_consensus(config, committee.clone(), first_block);
+            // No external nodes take part here, and a refused start must not
+            // leave a devp2p service holding the databases past the relaunch
+            // below (the network service is spawned before the era guard).
+            config.network_config.enabled = false;
+        })
+        .await;
+    let error = refused.expect_err("a chain past the anchor must refuse to start consensus");
+    assert!(
+        error
+            .to_string()
+            .contains("must start exactly at the agreed cutover"),
+        "unexpected refusal: {error:#}",
+    );
+
+    // The refusal leaves the chain intact, and the documented remedy — schedule
+    // a fresh anchor above the tip — arms the cutover on the same databases.
+    let node = backup
+        .restore()
+        .await?
+        .start_with_overrides(|config| {
+            seat.arm_consensus(config, committee.clone(), second_block + 50);
+            config.network_config.enabled = false;
+        })
+        .await?;
+    assert!(
+        node.scheduled_cutover_reached.is_some(),
+        "a future anchor arms the scheduled cutover",
+    );
+    let pending = node
+        .status()
+        .await?
+        .scheduled_cutover
+        .expect("the pending cutover surfaces in /status");
+    assert_eq!(pending.genesis_height, second_block + 50);
+
+    Ok(())
 }
 
 #[test_multisetup([CURRENT_TO_L1])]

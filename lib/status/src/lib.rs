@@ -28,7 +28,7 @@ use zksync_os_backpressure::PipelineSnapshot;
 
 pub use consensus::{
     ConsensusMetricsEncoder, ConsensusStatus, ConsensusStatusSource, FinalizedObservation,
-    RegistryStatus,
+    RegistryStatus, ScheduledCutoverStatus, ScheduledCutoverStatusSource,
 };
 pub use status::StatusResponse;
 
@@ -38,6 +38,8 @@ pub struct StatusServerState {
     /// Present only on nodes running BFT consensus (`Arc` because the source is
     /// not clonable while axum state must be).
     pub consensus: Arc<Option<ConsensusStatusSource>>,
+    /// Present only while a consensus start is scheduled at a future height.
+    pub scheduled_cutover: Option<ScheduledCutoverStatusSource>,
     pub ready: Arc<OnceLock<()>>,
 }
 

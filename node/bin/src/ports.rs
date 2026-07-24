@@ -49,12 +49,18 @@ impl std::fmt::Display for Service {
 }
 
 impl BoundListeners {
-    pub(crate) async fn bind_from_config(config: &Config) -> anyhow::Result<Self> {
+    /// `node_role` is the caller's *effective* role, which under a consensus
+    /// configuration can differ from `general.node_role` (that field describes
+    /// the node's behavior before a scheduled cutover only).
+    pub(crate) async fn bind_from_config(
+        config: &Config,
+        node_role: zksync_os_types::NodeRole,
+    ) -> anyhow::Result<Self> {
         let status_address = config
             .status_server_config
             .enabled
             .then_some(config.status_server_config.address.as_str());
-        let prover_api_address = (config.general_config.node_role.is_main()
+        let prover_api_address = (node_role.is_main()
             && config.batcher_config.enabled
             && config.prover_api_config.enabled)
             .then_some(config.prover_api_config.address.as_str());

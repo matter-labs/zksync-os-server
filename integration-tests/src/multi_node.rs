@@ -45,6 +45,44 @@ fn generate_validator_keys() -> ValidatorKeys {
     }
 }
 
+/// A fresh consensus identity plus a reserved p2p port, for tests that build a
+/// committee by hand — e.g. a scheduled cutover, which arms consensus on nodes
+/// the multi-node harness does not manage. Keep the seat alive for the test's
+/// duration: dropping it releases the reserved port.
+pub struct CommitteeSeat {
+    keys: ValidatorKeys,
+    port: crate::utils::LockedPort,
+}
+
+impl CommitteeSeat {
+    pub async fn reserve() -> anyhow::Result<Self> {
+        Ok(Self {
+            keys: generate_validator_keys(),
+            port: crate::utils::LockedPort::acquire_unused().await?,
+        })
+    }
+
+    /// This seat's entry for every node's `consensus.validators` list.
+    pub fn committee_entry(&self) -> String {
+        format!(
+            "{}@127.0.0.1:{}",
+            self.keys.committee_entry_keys, self.port.port
+        )
+    }
+
+    /// Arms consensus on `config` as this seat, over the given committee.
+    pub fn arm_consensus(&self, config: &mut Config, committee: Vec<String>, genesis_height: u64) {
+        config.consensus_config.enabled = true;
+        config.consensus_config.network_key =
+            Some(alloy::hex::encode(self.keys.network.encode()).into());
+        config.consensus_config.bls_key = Some(alloy::hex::encode(self.keys.bls.encode()).into());
+        config.consensus_config.listen_address = format!("127.0.0.1:{}", self.port.port);
+        config.consensus_config.validators = committee;
+        config.consensus_config.allow_private_ips = true;
+        config.consensus_config.genesis_height = genesis_height;
+    }
+}
+
 /// One validator's deviation from the shared committee schedule: the validator
 /// index and the full schedule its config carries instead (activation epoch →
 /// validator indices per entry).
