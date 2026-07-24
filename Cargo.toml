@@ -173,12 +173,15 @@ full_statement_verifier = { git = "https://github.com/antoniolocascio-bot/zksync
 # zksync-os v0.4.0 lane for the new STF and native batch proving.
 # This stays separate from the current released version because it is wired as distinct
 # execution/proving versions (V7/V8) on the server side.
-zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0", features = [
+# LOCAL DEV: points at the local `ad-atomic-interop-da` checkout (atomic-interop DA changes:
+# always-public IMT leaves & L2->L1 logs, PubdataContent scheme/mode split) instead of the
+# draft-0.4.0 branch.
+zk_os_forward_system_0_4_0 = { package = "forward_system", path = "../zksync-os/forward_system", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
-zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
+zk_ee_0_4_0 = { package = "zk_ee", path = "../zksync-os/zk_ee" }
+zk_os_basic_system_0_4_0 = { package = "basic_system", path = "../zksync-os/basic_system" }
 # Airbender crates for verifying V8 FRI proofs submitted by external provers. The rev must match
 # the one the V8 VK was generated with (see `V8_VK_HASH` provenance in lib/types).
 execution_utils_0_4_0 = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender", rev = "4e8701d5", features = [
