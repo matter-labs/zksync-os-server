@@ -73,8 +73,13 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .expect("Failed to load L1 sender config")
         .parse()
         .expect("Failed to parse L1 sender config");
-    if general_config.node_role.is_external() {
-        // This line just enforces that we expect no pubdata mode for external node.
+    if general_config.node_role.is_external() && !consensus_config.enabled {
+        // A plain external node learns the pubdata mode from its main node at
+        // runtime; a locally-configured value could only mask a mismatch, so it
+        // is dropped. With consensus enabled it must survive: `node_role` is
+        // then only the pre-cutover behavior, the node runs as a main node from
+        // the anchor on, and validation requires the fact locally — stripping
+        // it here would make every armed pre-cutover follower refuse to boot.
         l1_sender_config.pubdata_mode = None;
     }
 
@@ -218,5 +223,64 @@ pub fn load_config_file_sources(config_sources: &mut ConfigSources, config_paths
                 config_sources.push(Json::new(source_name.as_ref(), config_json));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds the config exactly the way production does — schema, a YAML
+    /// source, [`build_external_config`] — which is the only path that
+    /// exercises the role-conditional adjustments below. The integration-test
+    /// harness hands `run` a ready [`Config`] struct and never comes through
+    /// here.
+    async fn config_from_yaml(yaml: &str) -> Config {
+        let schema = Config::schema();
+        let mapping: serde_yaml::Mapping = serde_yaml::from_str(yaml).expect("valid test yaml");
+        let source = Yaml::new("test.yaml", mapping).expect("valid yaml source");
+        let repo = ConfigRepository::new(&schema).with(source);
+        build_external_config(repo).await
+    }
+
+    const ARMED_FOLLOWER_YAML: &str = r#"
+        general:
+          node_role: external
+          main_node_rpc_url: http://main.example:3050/
+        genesis:
+          chain_id: 270
+          bridgehub_address: '0x0000000000000000000000000000000000000001'
+          bytecode_supplier_address: '0x0000000000000000000000000000000000000002'
+          genesis_input_path: genesis.json
+        l1_sender:
+          pubdata_mode: Validium
+        consensus:
+          enabled: true
+    "#;
+
+    /// The armed pre-cutover follower: `node_role: external` with consensus
+    /// enabled. Every main-node fact in its file must survive loading — the
+    /// consensus validation requires them locally, so stripping any of them
+    /// here would make the node refuse to boot on exactly the configuration
+    /// the scheduled cutover prescribes.
+    #[tokio::test]
+    async fn armed_external_node_keeps_its_pubdata_mode() {
+        let config = config_from_yaml(ARMED_FOLLOWER_YAML).await;
+        assert!(
+            config.l1_sender_config.pubdata_mode.is_some(),
+            "an armed follower's locally-configured pubdata mode must survive loading"
+        );
+    }
+
+    /// The pre-existing invariant stays: a plain external node (no consensus)
+    /// never carries a local pubdata mode — it learns it from the main node.
+    #[tokio::test]
+    async fn plain_external_node_still_drops_its_pubdata_mode() {
+        let yaml = ARMED_FOLLOWER_YAML.replace("enabled: true", "enabled: false");
+        let config = config_from_yaml(&yaml).await;
+        assert!(
+            config.l1_sender_config.pubdata_mode.is_none(),
+            "a plain external node's pubdata mode comes from the main node at runtime"
+        );
     }
 }
