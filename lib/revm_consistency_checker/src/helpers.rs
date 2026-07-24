@@ -150,6 +150,7 @@ pub fn zk_tx_into_revm_tx(
         .settlement_layer_chain_id(settlement_layer_chain_id)
         .gas_used_override(Some(gas_used))
         .force_fail(!execution_status)
+        .tx_hash(*tx.hash())
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build TxEnv: {e:?}"))
 }

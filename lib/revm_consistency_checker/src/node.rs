@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use tokio::sync::mpsc;
 use zk_ee::common_structs::derive_flat_storage_key;
 use zk_ee::utils::Bytes32;
+use zksync_os_interface::traits::PreimageSource;
 use zksync_os_internal_config::InternalConfigManager;
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
@@ -201,6 +202,35 @@ where
                 // For each block, we create an in-memory cache database to accumulate transaction state changes separately
                 let state_provider =
                     RevmStateProvider::new(state_view, block_hashes, state_block_number);
+
+                // Force deployments (upgrade/genesis blocks) mint code inside
+                // this very block; the deployer precompile looks it up by its
+                // observable keccak256 hash, which the pre-state view cannot
+                // resolve. Preload it from the block's own outputs: the
+                // post-state account carries both hashes and the unpadded
+                // length, and the post-state preimage store has the blob.
+                let mut post_state_view = self
+                    .state
+                    .state_view_at(replay_record.block_context.block_number)
+                    .map_err(anyhow::Error::from)?;
+                for diff in &block_output.account_diffs {
+                    let Some(props) = post_state_view.get_account(diff.address) else {
+                        continue;
+                    };
+                    if props.bytecode_hash.is_zero() || props.observable_bytecode_hash.is_zero() {
+                        continue;
+                    }
+                    let blake2s_hash = B256::from(props.bytecode_hash.as_u8_array());
+                    let Some(padded) = post_state_view.get_preimage(blake2s_hash) else {
+                        continue;
+                    };
+                    let raw = crate::helpers::get_unpadded_code(&padded, &props);
+                    state_provider.preload_code(
+                        B256::from(props.observable_bytecode_hash.as_u8_array()),
+                        raw,
+                    );
+                }
+
                 let cache_db = CacheDB::new(state_provider);
                 let mut evm = ZkContext::<EmptyDB>::default()
                     .with_db(cache_db)
@@ -239,16 +269,54 @@ where
 
                 match revm_txs {
                     Ok(txs) => {
-                        // Commit after each tx
-                        for tx in txs {
-                            evm.transact_commit(tx)?;
-                        }
+                        // Execute + compare inside catch_unwind: a checker-side
+                        // panic (often itself caused by divergent state) must
+                        // surface as a divergence signal, not tear down the node.
+                        let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                            || -> anyhow::Result<CompareReport> {
+                                let mut log_mismatches = Vec::new();
+                                for (tx_index, (tx, tx_output_raw)) in
+                                    txs.into_iter().zip(&block_output.tx_results).enumerate()
+                                {
+                                    let tx_output = tx_output_raw.as_ref().expect(
+                                        "block_output of a sealed block must not contain invalid transactions",
+                                    );
+                                    evm.0.ctx.chain.set_tx_number(tx_index as u16);
+                                    let result = evm.transact_commit(tx)?;
+                                    let revm_l2_to_l1 = evm.0.ctx.chain.take_logs();
+                                    compare_tx_logs(
+                                        tx_index,
+                                        &result,
+                                        &revm_l2_to_l1,
+                                        tx_output,
+                                        &mut log_mismatches,
+                                    );
+                                }
 
-                        let compare_report = CompareReport::build(
-                            evm.0.db_mut(),
-                            &block_output.storage_writes,
-                            &block_output.account_diffs,
-                        )?;
+                                let mut report = CompareReport::build(
+                                    evm.0.db_mut(),
+                                    &block_output.storage_writes,
+                                    &block_output.account_diffs,
+                                )?;
+                                report.logs = log_mismatches;
+                                Ok(report)
+                            },
+                        ));
+
+                        let compare_report = match checked {
+                            Ok(Ok(report)) => report,
+                            Ok(Err(err)) => CompareReport::from_failure(format!(
+                                "checker execution failed: {err:#}"
+                            )),
+                            Err(panic) => {
+                                let msg = panic
+                                    .downcast_ref::<&str>()
+                                    .map(|s| (*s).to_string())
+                                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                                    .unwrap_or_else(|| "non-string panic payload".to_string());
+                                CompareReport::from_failure(format!("checker panicked: {msg}"))
+                            }
+                        };
                         self.handle_report(block_output, &replay_record, &compare_report)?;
                     }
                     Err(err) => {
@@ -334,6 +402,46 @@ fn calculate_blob_base_fee_for_excess_blob_gas(
         excess_blob_gas as u128,
         blob_base_fee_update_fraction,
     )
+}
+
+/// Compare a replayed transaction's event logs and L2→L1 logs against the
+/// native outputs, recording formatted mismatches.
+///
+/// Natively-failed txs are replayed as forced failures which execute nothing,
+/// so both sides are empty for them. L2→L1 log preimages are not compared:
+/// they are hashed into the log's value.
+fn compare_tx_logs(
+    tx_index: usize,
+    result: &revm::context::result::ExecutionResult,
+    revm_l2_to_l1: &[zksync_os_revm::l2_to_l1_logs::L2ToL1Log],
+    tx_output: &zksync_os_interface::types::TxOutput,
+    mismatches: &mut Vec<String>,
+) {
+    if result.logs() != tx_output.logs.as_slice() {
+        mismatches.push(format!(
+            "tx {tx_index}: event logs diverge (revm {} vs native {})",
+            result.logs().len(),
+            tx_output.logs.len(),
+        ));
+    }
+
+    let native_l2_to_l1 = &tx_output.l2_to_l1_logs;
+    let l2_to_l1_match = revm_l2_to_l1.len() == native_l2_to_l1.len()
+        && revm_l2_to_l1.iter().zip(native_l2_to_l1).all(|(r, n)| {
+            r.l2_shard_id == n.log.l2_shard_id
+                && r.is_service == n.log.is_service
+                && r.tx_number_in_block == n.log.tx_number_in_block
+                && r.sender == n.log.sender
+                && r.key == n.log.key
+                && r.value == n.log.value
+        });
+    if !l2_to_l1_match {
+        mismatches.push(format!(
+            "tx {tx_index}: L2→L1 logs diverge (revm {} vs native {})",
+            revm_l2_to_l1.len(),
+            native_l2_to_l1.len(),
+        ));
+    }
 }
 
 #[cfg(test)]

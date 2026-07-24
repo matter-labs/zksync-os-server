@@ -49,6 +49,25 @@ pub struct AccountMismatch {
 pub struct CompareReport {
     pub storage: Vec<StorageMismatch>,
     pub accounts: Vec<AccountMismatch>,
+    /// Per-transaction EVM event log / L2→L1 log divergences (formatted).
+    pub logs: Vec<String>,
+    /// Checker-side execution failures (EVM errors, panics) surfaced as
+    /// divergence signals instead of tearing down the node.
+    pub failures: Vec<String>,
+}
+
+impl CompareReport {
+    /// A report representing a checker failure: the check could not run to
+    /// completion, which must page like a divergence rather than crash the
+    /// node or pass silently.
+    pub fn from_failure(message: String) -> Self {
+        Self {
+            storage: Vec::new(),
+            accounts: Vec::new(),
+            logs: Vec::new(),
+            failures: vec![message],
+        }
+    }
 }
 
 impl CompareReport {
@@ -74,11 +93,16 @@ impl CompareReport {
         Ok(CompareReport {
             storage: storage_report,
             accounts: account_report,
+            logs: Vec::new(),
+            failures: Vec::new(),
         })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.storage.is_empty() && self.accounts.is_empty()
+        self.storage.is_empty()
+            && self.accounts.is_empty()
+            && self.logs.is_empty()
+            && self.failures.is_empty()
     }
 
     /// Print a structured summary via `tracing`
@@ -97,8 +121,17 @@ impl CompareReport {
         tracing::warn!(
             storage_mismatches = self.storage.len(),
             account_mismatches = self.accounts.len(),
+            log_mismatches = self.logs.len(),
+            checker_failures = self.failures.len(),
             "State diffs do not match"
         );
+
+        for m in self.logs.iter().take(max_show) {
+            tracing::info!("LOG DIVERGENCE: {m}");
+        }
+        for m in self.failures.iter().take(max_show) {
+            tracing::info!("CHECKER FAILURE: {m}");
+        }
 
         // STORAGE
         tracing::info!(total = self.storage.len(), "=== STORAGE DIFFS ===");
@@ -454,4 +487,34 @@ fn code_hash_equivalent(a: B256, b: B256) -> bool {
 #[inline]
 fn is_empty_code_hash(hash: B256) -> bool {
     hash == B256::ZERO || hash == EMPTY_BYTE_CODE_HASH || hash == KECCAK256_EMPTY
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_report() -> CompareReport {
+        CompareReport {
+            storage: Vec::new(),
+            accounts: Vec::new(),
+            logs: Vec::new(),
+            failures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn report_with_log_mismatch_is_not_empty() {
+        let mut report = empty_report();
+        assert!(report.is_empty());
+        report.logs.push("tx 0: event logs diverge".to_string());
+        assert!(!report.is_empty());
+    }
+
+    #[test]
+    fn failure_report_is_not_empty() {
+        let report = CompareReport::from_failure("checker panicked: boom".to_string());
+        assert!(!report.is_empty());
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.storage.is_empty() && report.accounts.is_empty() && report.logs.is_empty());
+    }
 }
