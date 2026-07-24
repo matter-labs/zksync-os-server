@@ -95,8 +95,23 @@ impl FeeParams {
         }
     }
 
-    /// Fee floor for replacing this transaction in the pool: geth and reth both require a
-    /// 100% bump on tip, fee cap AND blob fee cap to replace a blob transaction.
+    /// Fee floor for replacing this transaction in the pool. Geth and reth require a 100%
+    /// bump on tip, fee cap AND blob fee cap to replace a blob transaction, but only a 10%
+    /// bump for regular transactions.
+    pub(crate) fn replacement_floor(self, carries_blobs: bool) -> FeeParams {
+        if carries_blobs {
+            self.doubled()
+        } else {
+            let bump = |fee: u128| fee.saturating_add(fee.div_ceil(10));
+            FeeParams {
+                max_fee_per_gas: bump(self.max_fee_per_gas),
+                max_priority_fee_per_gas: bump(self.max_priority_fee_per_gas),
+                max_fee_per_blob_gas: self.max_fee_per_blob_gas,
+            }
+        }
+    }
+
+    /// See [`Self::replacement_floor`] — the blob replacement bump.
     pub(crate) fn doubled(self) -> FeeParams {
         FeeParams {
             max_fee_per_gas: self.max_fee_per_gas.saturating_mul(2),
@@ -1031,7 +1046,14 @@ where
         force_transaction_resubmission: bool,
     ) -> anyhow::Result<FeeParams> {
         if force_transaction_resubmission {
-            return Ok(fee_config.replacement_fee_params());
+            let params = fee_config.replacement_fee_params();
+            // Blob-capable senders need a 100% bump to replace pooled blob transactions;
+            // the configured multipliers only have to satisfy the regular 10% bump rule.
+            return Ok(if Input::MAY_SEND_BLOBS {
+                params.max(fee_config.configured_fee_params().doubled())
+            } else {
+                params
+            });
         }
 
         let configured_params = fee_config.configured_fee_params();
