@@ -1,4 +1,15 @@
 //! Support for representing the version of the `zks` protocol.
+//!
+//! Version history:
+//! - `zks/0` — test-only, never registered in production.
+//! - `zks/1`–`zks/4` — retired and removed. `zks/1`/`zks/2` were replay-only on older record
+//!   encodings; `zks/3`/`zks/4` additionally carried the verifier messages inline (message IDs
+//!   0x02–0x06) before those moved to the standalone `zks_2fa` subprotocol.
+//! - `zks/5` — current version; replay-only, `v3` record encoding.
+//!
+//! Versions evolve additively and are removed only in a later breaking release once the whole
+//! fleet speaks a newer one; retired version numbers are never reused. See the "Version
+//! lifecycle" section in `docs/src/design/devp2p.md` before touching this file.
 
 use crate::wire::replays::{WireReplayRecord, v0, v3};
 use std::fmt::Debug;

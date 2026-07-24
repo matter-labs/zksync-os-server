@@ -162,6 +162,12 @@ impl<P: ZksProtocolVersionSpec, Replay: ReadReplay + Clone> ConnectionHandler
         if supported.iter_caps().any(|c| c.name() == ZKS_PROTOCOL) {
             OnNotSupported::KeepAlive
         } else {
+            // Outdated peers keep redialing (backoff is deliberately short), so the log stays at
+            // debug to avoid indefinite spam; the counter gives operators persistent visibility
+            // of outdated peers without enabling debug logs.
+            crate::metrics::ZKS_PROTOCOL_METRICS
+                .unsupported_version_disconnects
+                .inc();
             tracing::debug!(
                 %peer_id,
                 ?direction,

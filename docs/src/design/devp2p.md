@@ -43,6 +43,25 @@ The `zks` subprotocol is mandatory: a peer that does not share any registered `z
 (e.g. a retired `zks/1`–`zks/4`-only peer, or a plain `eth` peer) is disconnected during the
 RLPx handshake. `zks_2fa` is optional and never causes a disconnect on its own.
 
+## Version lifecycle
+
+Deployed peers negotiate a specific `zks/N` capability, so versions must evolve additively:
+
+1. **Never change the wire behavior of a registered version.** Renumbering, stripping messages,
+   or altering the record encoding of an existing version silently breaks mixed old/new fleets.
+   Any change to the message surface or record encoding gets a NEW version (and, for record
+   changes, a new `wire/replays/v*.rs` file) registered alongside the existing ones.
+2. **Keep old versions registered through the transition.** RLPx negotiates the highest common
+   version, so new↔new pairs use the new path while new↔old pairs keep working on the old one.
+3. **Removing old versions is a separate, breaking change** (`feat!` with rollout instructions),
+   shipped only once every deployed peer — including third-party ENs — runs a release that
+   speaks the newer version. It is never done as a side effect of another change.
+4. **Retired version numbers and message IDs are never reused.**
+
+History: `zks/1` (initial replay) through `zks/4` followed this lifecycle — `zks/3`/`zks/4`
+carried the verifier messages inline until they moved to `zks_2fa/1`, after which replay-only
+`zks/5` was added alongside them (v0.20.12) and versions 1–4 were removed in a later release.
+
 ## Module split
 
 - `service.rs`
