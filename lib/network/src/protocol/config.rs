@@ -5,7 +5,10 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_storage_api::ReplayRecord;
 
-/// Dependencies required to run the main-node side of the `zks` protocol.
+/// Network dependencies for the main-node role.
+///
+/// These fields configure the `zks_2fa` handler. The replay-only `zks` handler receives its
+/// storage dependency separately.
 #[derive(Debug, Clone)]
 pub struct MainNodeProtocolConfig {
     /// Accepted verifier signers for this main node.
@@ -14,7 +17,10 @@ pub struct MainNodeProtocolConfig {
     pub verify_result_tx: mpsc::Sender<PeerVerifyBatchResult>,
 }
 
-/// Dependencies required to run the external-node side of the `zks` protocol.
+/// Network dependencies for the external-node role.
+///
+/// Replay fields configure the `zks` handler. Setting [`Self::verification`] also registers the
+/// optional `zks_2fa` handler.
 #[derive(Debug, Clone)]
 pub struct ExternalNodeProtocolConfig {
     /// Block number to start streaming from.
@@ -25,11 +31,11 @@ pub struct ExternalNodeProtocolConfig {
     pub max_blocks_per_message: u64,
     /// Channel used to forward replay records into the local sequencer.
     pub replay_sender: mpsc::Sender<ReplayRecord>,
-    /// Optional verifier configuration. When absent, this EN only participates in replay sync.
+    /// Optional verifier configuration used to register `zks_2fa` alongside replay sync.
     pub verification: Option<ExternalNodeVerifierConfig>,
 }
 
-/// Verifier identity used by an external node when opting into verifier-role authentication.
+/// Verifier identity and channels used by an external node participating in `zks_2fa`.
 #[derive(Debug, Clone)]
 pub struct ExternalNodeVerifierConfig {
     pub signing_key: secrecy::SecretString,
@@ -37,7 +43,7 @@ pub struct ExternalNodeVerifierConfig {
     pub outgoing_verify_results: broadcast::Sender<PeerVerifyBatchResult>,
 }
 
-/// Role-specific protocol configuration for the `zks` subprotocol.
+/// Role-specific configuration used to register the `zks` and optional `zks_2fa` handlers.
 #[derive(Debug, Clone)]
 pub enum ZksProtocolConfig {
     MainNode(MainNodeProtocolConfig),

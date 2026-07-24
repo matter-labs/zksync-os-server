@@ -16554,7 +16554,6 @@ dependencies = [
  "semver 1.0.26",
  "serde",
  "serde_json",
- "test-casing",
  "test-log",
  "thiserror 2.0.17",
  "tokio",

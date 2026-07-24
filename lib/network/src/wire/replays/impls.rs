@@ -1,9 +1,8 @@
-//! Trait implementations for all versioned replay messages.
+//! Conversions between storage replay records and the supported versioned wire formats.
 //!
-//! Note that this file is allowed to change as traits can evolve over time and hence can the
-//! surrounding logic.
+//! Unlike the versioned wire structs, these implementations may evolve with the storage API.
 
-use crate::wire::replays::{WireReplayRecord, v0, v1, v2, v3};
+use crate::wire::replays::{WireReplayRecord, v0, v3};
 use crate::wire::{BlockHashes, ForcedPreimage};
 use alloy::consensus::crypto::RecoveryError;
 use alloy::primitives::{BlockNumber, Bytes};
@@ -11,12 +10,9 @@ use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_storage_api::BlockContext as StorageBlockContext;
 use zksync_os_storage_api::BlockHashes as StorageBlockHashes;
 use zksync_os_storage_api::ReplayRecord as StorageReplayRecord;
-use zksync_os_types::InteropRootsLogIndex;
 use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
-// ==================================================
-// | Implementations for protocol version 0 (Dummy) |
-// ==================================================
+// Test-only v0 replay record conversions.
 
 impl WireReplayRecord for v0::ReplayRecord {
     fn block_number(&self) -> BlockNumber {
@@ -53,229 +49,7 @@ impl TryFrom<v0::ReplayRecord> for StorageReplayRecord {
     }
 }
 
-// ==========================================
-// | Implementations for protocol version 1 |
-// ==========================================
-
-impl WireReplayRecord for v1::ReplayRecord {
-    fn block_number(&self) -> BlockNumber {
-        self.block_context.block_number
-    }
-}
-
-impl From<StorageBlockContext> for v1::BlockContext {
-    fn from(value: StorageBlockContext) -> Self {
-        Self {
-            chain_id: value.chain_id,
-            block_number: value.block_number,
-            block_hashes: BlockHashes(value.block_hashes.0),
-            timestamp: value.timestamp,
-            eip1559_basefee: value.eip1559_basefee,
-            pubdata_price: value.pubdata_price,
-            native_price: value.native_price,
-            coinbase: value.coinbase,
-            gas_limit: value.gas_limit,
-            pubdata_limit: value.pubdata_limit,
-            mix_hash: value.mix_hash,
-            execution_version: value.execution_version,
-            blob_fee: value.blob_fee,
-        }
-    }
-}
-
-impl From<StorageReplayRecord> for v1::ReplayRecord {
-    fn from(value: StorageReplayRecord) -> Self {
-        Self {
-            block_context: value.block_context.into(),
-            starting_l1_priority_id: value.starting_cursors.l1_priority_id,
-            transactions: value
-                .transactions
-                .into_iter()
-                .map(|tx| tx.into_envelope())
-                .collect(),
-            previous_block_timestamp: value.previous_block_timestamp,
-            protocol_version: value.protocol_version,
-            block_output_hash: value.block_output_hash,
-            force_preimages: value
-                .force_preimages
-                .into_iter()
-                .map(|(hash, preimage)| ForcedPreimage {
-                    hash,
-                    preimage: Bytes::from(preimage),
-                })
-                .collect(),
-            // v1 format uses InteropRootsLogIndex; default it since log_id is not recoverable
-            starting_interop_event_index: InteropRootsLogIndex::default(),
-        }
-    }
-}
-
-impl From<v1::BlockContext> for StorageBlockContext {
-    fn from(value: v1::BlockContext) -> Self {
-        Self {
-            chain_id: value.chain_id,
-            block_number: value.block_number,
-            block_hashes: StorageBlockHashes(value.block_hashes.0),
-            timestamp: value.timestamp,
-            eip1559_basefee: value.eip1559_basefee,
-            pubdata_price: value.pubdata_price,
-            native_price: value.native_price,
-            coinbase: value.coinbase,
-            gas_limit: value.gas_limit,
-            pubdata_limit: value.pubdata_limit,
-            mix_hash: value.mix_hash,
-            execution_version: value.execution_version,
-            blob_fee: value.blob_fee,
-        }
-    }
-}
-
-impl TryFrom<v1::ReplayRecord> for StorageReplayRecord {
-    type Error = RecoveryError;
-
-    fn try_from(value: v1::ReplayRecord) -> Result<Self, Self::Error> {
-        Ok(Self {
-            block_context: StorageBlockContext::from(value.block_context),
-            transactions: value
-                .transactions
-                .into_iter()
-                .map(|tx| tx.try_into_recovered())
-                .collect::<Result<Vec<_>, _>>()?,
-            previous_block_timestamp: value.previous_block_timestamp,
-            // Stamp replay record with this node's version
-            node_version: NODE_SEMVER_VERSION.clone(),
-            protocol_version: value.protocol_version,
-            block_output_hash: value.block_output_hash,
-            force_preimages: value
-                .force_preimages
-                .into_iter()
-                .map(|p| (p.hash, p.preimage.into()))
-                .collect(),
-            starting_cursors: BlockStartCursors {
-                l1_priority_id: value.starting_l1_priority_id,
-                // v1 format has InteropRootsLogIndex; map to 0 since block/index is not the log_id
-                interop_root_id: 0,
-                migration_number: 0,
-                interop_fee_number: 0,
-            },
-        })
-    }
-}
-
-// ==========================================
-// | Implementations for protocol version 2 |
-// ==========================================
-
-impl WireReplayRecord for v2::ReplayRecord {
-    fn block_number(&self) -> BlockNumber {
-        self.block_context.block_number
-    }
-}
-
-impl From<StorageBlockContext> for v2::BlockContext {
-    fn from(value: StorageBlockContext) -> Self {
-        Self {
-            chain_id: value.chain_id,
-            block_number: value.block_number,
-            block_hashes: BlockHashes(value.block_hashes.0),
-            timestamp: value.timestamp,
-            eip1559_basefee: value.eip1559_basefee,
-            pubdata_price: value.pubdata_price,
-            native_price: value.native_price,
-            coinbase: value.coinbase,
-            gas_limit: value.gas_limit,
-            pubdata_limit: value.pubdata_limit,
-            mix_hash: value.mix_hash,
-            execution_version: value.execution_version,
-            blob_fee: value.blob_fee,
-        }
-    }
-}
-
-impl From<v2::BlockContext> for StorageBlockContext {
-    fn from(value: v2::BlockContext) -> Self {
-        Self {
-            chain_id: value.chain_id,
-            block_number: value.block_number,
-            block_hashes: StorageBlockHashes(value.block_hashes.0),
-            timestamp: value.timestamp,
-            eip1559_basefee: value.eip1559_basefee,
-            pubdata_price: value.pubdata_price,
-            native_price: value.native_price,
-            coinbase: value.coinbase,
-            gas_limit: value.gas_limit,
-            pubdata_limit: value.pubdata_limit,
-            mix_hash: value.mix_hash,
-            execution_version: value.execution_version,
-            blob_fee: value.blob_fee,
-        }
-    }
-}
-
-impl From<StorageReplayRecord> for v2::ReplayRecord {
-    fn from(value: StorageReplayRecord) -> Self {
-        Self {
-            block_context: value.block_context.into(),
-            starting_l1_priority_id: value.starting_cursors.l1_priority_id,
-            transactions: value
-                .transactions
-                .into_iter()
-                .map(|tx| tx.into_envelope())
-                .collect(),
-            previous_block_timestamp: value.previous_block_timestamp,
-            protocol_version: value.protocol_version,
-            block_output_hash: value.block_output_hash,
-            force_preimages: value
-                .force_preimages
-                .into_iter()
-                .map(|(hash, preimage)| ForcedPreimage {
-                    hash,
-                    preimage: Bytes::from(preimage),
-                })
-                .collect(),
-            // v2 format uses InteropRootsLogIndex; log_id is not recoverable from it
-            starting_interop_event_index: InteropRootsLogIndex::default(),
-            starting_migration_number: value.starting_cursors.migration_number,
-            starting_interop_fee_number: value.starting_cursors.interop_fee_number,
-        }
-    }
-}
-
-impl TryFrom<v2::ReplayRecord> for StorageReplayRecord {
-    type Error = RecoveryError;
-
-    fn try_from(value: v2::ReplayRecord) -> Result<Self, Self::Error> {
-        Ok(Self {
-            block_context: StorageBlockContext::from(value.block_context),
-            transactions: value
-                .transactions
-                .into_iter()
-                .map(|tx| tx.try_into_recovered())
-                .collect::<Result<Vec<_>, _>>()?,
-            previous_block_timestamp: value.previous_block_timestamp,
-            // Stamp replay record with this node's version
-            node_version: NODE_SEMVER_VERSION.clone(),
-            protocol_version: value.protocol_version,
-            block_output_hash: value.block_output_hash,
-            force_preimages: value
-                .force_preimages
-                .into_iter()
-                .map(|p| (p.hash, p.preimage.into()))
-                .collect(),
-            starting_cursors: BlockStartCursors {
-                l1_priority_id: value.starting_l1_priority_id,
-                // v2 format has InteropRootsLogIndex; map to 0 since block/index is not the log_id
-                interop_root_id: 0,
-                migration_number: value.starting_migration_number,
-                interop_fee_number: value.starting_interop_fee_number,
-            },
-        })
-    }
-}
-
-// ==========================================
-// | Implementations for protocol version 3 |
-// ==========================================
+// Production v3 replay record conversions (`zks/5` pins this format).
 
 impl WireReplayRecord for v3::ReplayRecord {
     fn block_number(&self) -> BlockNumber {
@@ -363,7 +137,7 @@ impl TryFrom<v3::ReplayRecord> for StorageReplayRecord {
                 .map(|tx| tx.try_into_recovered())
                 .collect::<Result<Vec<_>, _>>()?,
             previous_block_timestamp: value.previous_block_timestamp,
-            // Stamp replay record with this node's version
+            // Replay wire formats omit node semver, so the receiver stamps its own binary version.
             node_version: NODE_SEMVER_VERSION.clone(),
             protocol_version: value.protocol_version,
             block_output_hash: value.block_output_hash,
