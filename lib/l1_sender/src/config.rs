@@ -32,8 +32,8 @@ pub struct L1SenderConfig<Input> {
 
     /// When true (default), transactions are submitted through a bounded in-flight window and
     /// confirmations are tracked by a separate task, so submission never waits for inclusion.
-    /// When false, falls back to stop-and-wait: drain up to `command_limit` commands, send,
-    /// wait for all receipts + confirmations, repeat. Kill switch for the pipelined sender.
+    /// When false, commands are processed in synchronous cycles instead: drain up to
+    /// `command_limit` commands, send, wait for all receipts + confirmations, repeat.
     pub pipelining_enabled: bool,
 
     /// Receipt/inclusion polling cadence.
