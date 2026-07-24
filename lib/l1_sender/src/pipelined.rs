@@ -99,9 +99,9 @@ struct MinedTx<Input> {
 }
 
 /// Fee floor applying while the submitter replaces a stale in-flight suffix left by a previous
-/// session (recovery calldata mismatch or a dropped transaction). Blob-tx replacement requires
-/// a 100% bump on tip, fee cap AND blob fee cap in both geth and reth, so the floor is
-/// 2x the stale transactions' actual fees.
+/// session (recovery calldata mismatch or a dropped transaction). The floor is the stale
+/// transactions' actual fees bumped by the pool's price-bump rule: 100% on all three fields
+/// for blob transactions (geth and reth), 10% otherwise.
 #[derive(Clone, Copy, Debug)]
 struct ReplacementPlan {
     /// Nonces below this replace previously-submitted transactions.
@@ -701,8 +701,8 @@ where
     }
 
     /// Rebuilds and resends the transaction at `request.nonce` from its simulation-prefix
-    /// entry after a pool eviction. Fees are re-resolved and floored at 2x the original send
-    /// (the blob RBF bump rule) in case the evicted transaction resurfaces in the pool.
+    /// entry after a pool eviction. Fees are re-resolved and floored at the original send's
+    /// fees plus the pool's replacement bump, in case the evicted transaction resurfaces.
     async fn resend_evicted(
         &self,
         state: &mut SubmitterState,
@@ -726,7 +726,7 @@ where
                 self.config.force_transaction_resubmission,
             )
             .await?;
-        let fee_params = resolved.max(entry.fee_params.doubled());
+        let fee_params = resolved.max(entry.fee_params.replacement_floor(entry.sidecar.is_some()));
 
         let blob_base_fee = if entry.sidecar.is_some() {
             Some(self.provider.get_blob_base_fee().await?)
@@ -948,9 +948,10 @@ where
     }
 
     /// Computes the replacement-fee floor for a stale in-flight suffix `[from_nonce,
-    /// until_nonce)`: 2x the per-field maximum of every still-visible stale transaction, which
-    /// satisfies the 100% price-bump rule geth and reth apply to blob-transaction replacement.
-    /// Returns `None` when no stale transaction is visible anymore (nothing to outbid).
+    /// until_nonce)`: the per-field maximum of every still-visible stale transaction, bumped
+    /// by the pool's price-bump rule — 100% when any stale transaction carries blobs, 10%
+    /// otherwise. Returns `None` when no stale transaction is visible anymore (nothing to
+    /// outbid).
     async fn build_replacement_plan(
         &self,
         operator_address: Address,
@@ -959,8 +960,10 @@ where
         first_stale: Option<&L1TxResponse>,
     ) -> Option<ReplacementPlan> {
         let mut stale_fee_max: Option<FeeParams> = None;
+        let mut any_blobs = false;
         let mut fold = |tx: &L1TxResponse| {
             let fees = fee_params_of_tx(tx, self.config.fee_config);
+            any_blobs |= ConsensusTransaction::max_fee_per_blob_gas(tx).is_some();
             stale_fee_max = Some(match stale_fee_max {
                 Some(current) => current.max(fees),
                 None => fees,
@@ -994,7 +997,7 @@ where
 
         stale_fee_max.map(|fees| ReplacementPlan {
             until_nonce,
-            fee_floor: fees.doubled(),
+            fee_floor: fees.replacement_floor(any_blobs),
         })
     }
 

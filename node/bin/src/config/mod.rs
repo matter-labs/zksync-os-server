@@ -1222,8 +1222,9 @@ pub struct L1SenderConfig {
 #[config(derive(Default))]
 #[config(validate(
     Self::check_replacement_multipliers,
-    "replacement multipliers must be >= 2.0 while force resubmission is enabled: geth and reth \
-     only replace a blob transaction when tip, fee cap AND blob fee cap are all bumped by 100%"
+    "replacement multipliers must be >= 1.1 (>= 2.0 for the blob fee) while force resubmission \
+     is enabled: geth and reth replace a pooled transaction only with a 10% fee bump (100% for \
+     blob transactions)"
 ))]
 pub struct ForceTransactionResubmissionConfig {
     /// Skips startup in-flight recovery and resubmits queued L1 transactions with replacement fee caps.
@@ -1231,34 +1232,39 @@ pub struct ForceTransactionResubmissionConfig {
     pub enabled: bool,
 
     /// Multiplier applied to `max_fee_per_gas` when force transaction resubmission is enabled.
-    /// Must be >= 2.0: replacing a blob transaction requires a 100% bump on all three fee caps.
-    #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
+    /// Must be >= 1.1 (the pool price-bump rule). The commit sender raises its effective
+    /// multipliers to 2.0 as needed — replacing a blob transaction requires a 100% bump.
+    #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_gas_replacement_multiplier: f64,
 
     /// Multiplier applied to `max_priority_fee_per_gas` when force transaction resubmission is enabled.
-    /// Must be >= 2.0: replacing a blob transaction requires a 100% bump on all three fee caps.
-    #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
+    /// Must be >= 1.1 (the pool price-bump rule). The commit sender raises its effective
+    /// multipliers to 2.0 as needed — replacing a blob transaction requires a 100% bump.
+    #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
     pub max_priority_fee_per_gas_replacement_multiplier: f64,
 
     /// Multiplier applied to `max_fee_per_blob_gas` when force transaction resubmission is enabled.
-    /// Must be >= 2.0: replacing a blob transaction requires a 100% bump on all three fee caps.
+    /// Must be >= 2.0: only blob transactions have a blob fee, and replacing one requires a
+    /// 100% bump on all three fee caps.
     #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_blob_gas_replacement_multiplier: f64,
 }
 
 impl ForceTransactionResubmissionConfig {
-    /// Replacing an in-pool blob transaction requires >= 100% bump on tip, fee cap and blob
-    /// fee cap (geth blobpool and reth default price bump). Lower multipliers make every
-    /// forced resubmission fail as "replacement transaction underpriced" — a crash loop —
-    /// so they are rejected up front.
+    /// Replacing a pooled transaction requires a >= 10% fee bump (geth/reth default price
+    /// bump); the blob fee cap only exists on blob transactions, whose replacement requires
+    /// 100% on every field — the commit sender enforces that 2.0 minimum itself. Lower
+    /// multipliers make every forced resubmission fail as "replacement transaction
+    /// underpriced" — a crash loop — so they are rejected up front.
     fn check_replacement_multipliers(&self) -> Result<(), ErrorWithOrigin> {
         if self.enabled
-            && (self.max_fee_per_gas_replacement_multiplier < 2.0
-                || self.max_priority_fee_per_gas_replacement_multiplier < 2.0
+            && (self.max_fee_per_gas_replacement_multiplier < 1.1
+                || self.max_priority_fee_per_gas_replacement_multiplier < 1.1
                 || self.max_fee_per_blob_gas_replacement_multiplier < 2.0)
         {
             return Err(ErrorWithOrigin::custom(
-                "replacement multipliers must be >= 2.0 while force resubmission is enabled",
+                "replacement multipliers must be >= 1.1 (>= 2.0 for the blob fee) while force \
+                 resubmission is enabled",
             ));
         }
         Ok(())
