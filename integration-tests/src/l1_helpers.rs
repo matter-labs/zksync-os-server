@@ -1,7 +1,6 @@
 use crate::Tester;
 use crate::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL};
 use alloy::providers::Provider;
-use backon::{ConstantBuilder, Retryable};
 use zksync_os_alloy_ext::provider::ZksyncApi;
 use zksync_os_contract_interface::l1_discovery::L1State;
 
@@ -20,19 +19,24 @@ pub async fn wait_for_l1_state(
     description: &str,
     predicate: impl Fn(&L1State) -> bool,
 ) -> anyhow::Result<L1State> {
-    let max_times = DEFAULT_TIMEOUT.div_duration_f64(POLL_INTERVAL).floor() as usize;
-    (|| async {
-        let state = fetch_l1_state(tester).await?;
-        if predicate(&state) {
-            Ok(state)
-        } else {
-            anyhow::bail!("waiting for L1 state: {description}")
+    let deadline = std::time::Instant::now() + DEFAULT_TIMEOUT;
+    let mut last_err: Option<anyhow::Error> = None;
+    loop {
+        // The L1 state lives on anvil, so a dead node would otherwise burn the whole timeout
+        // and report an unhelpful "waiting for ..." error; fail fast with the real cause.
+        anyhow::ensure!(
+            !tester.has_crashed(),
+            "node crashed while waiting for L1 state: {description}",
+        );
+        match fetch_l1_state(tester).await {
+            Ok(state) if predicate(&state) => return Ok(state),
+            Ok(_) => {}
+            Err(err) => last_err = Some(err),
         }
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(POLL_INTERVAL)
-            .with_max_times(max_times),
-    )
-    .await
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for L1 state: {description} (last fetch error: {last_err:?})",
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 }

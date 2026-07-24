@@ -1556,7 +1556,7 @@ fn effective_main_node_pubdata_mode(config: &Config) -> PubdataMode {
 /// Counts commit transactions a previous session left in the L1 mempool (pending minus latest
 /// nonce of the commit operator). Used to arm the `UnexpectedCommit` guard above them: they may
 /// mine before the pipeline's in-flight recovery seeds the `commit_submitted` watch. Degrades
-/// to 0 (today's tighter guard) when the operator key is absent or L1 reads fail — the guard is
+/// to 0 (the tightest guard) when the operator key is absent or L1 reads fail — the guard is
 /// an alarm, not a correctness mechanism, so startup must not depend on it.
 async fn in_flight_commit_tx_count(config: &Config, l1_provider: &NodeProvider) -> u64 {
     let Some(signer) = &config.l1_sender_config.operator_commit_sk else {

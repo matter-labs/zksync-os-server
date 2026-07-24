@@ -180,9 +180,8 @@ fn build_l1_simulation_request(
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
-/// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
-/// Waits for all transactions to be mined, sends them to the output channel
-/// and then starts with the next `command_limit` commands.
+/// Keeps up to `command_limit` transactions in flight, forwarding each command to the output
+/// channel once its transaction is confirmed — see `pipelined` for the send machinery.
 ///
 /// Important: the same provider (sender address) must not be used outside this process.
 ///     Otherwise, there will be a nonce conflict and a failed L1 transaction
@@ -228,17 +227,18 @@ where
             .context("KZG trusted setup preload task panicked")?;
         }
 
+        // Both send paths are large state machines; boxing keeps them out of this future
+        // (and of the component future moved by value at pipeline spawn), whose size is
+        // stack-critical — see the stack-overflow note in `pipelined.rs`.
         if self.config.pipelining_enabled {
-            self.run_pipelined(inbound, outbound, state_reporter).await
+            Box::pin(self.run_pipelined(inbound, outbound, state_reporter)).await
         } else {
-            self.run_stop_and_wait(inbound, outbound, state_reporter)
-                .await
+            Box::pin(self.run_stop_and_wait(inbound, outbound, state_reporter)).await
         }
     }
 
-    /// Legacy stop-and-wait sending: drain up to `command_limit` commands, send them, wait for
-    /// all receipts + confirmations, repeat. Kept verbatim as the kill-switch fallback for the
-    /// pipelined sender (`pipelining_enabled = false`).
+    /// Fallback send path (`pipelining_enabled = false`): drain up to `command_limit`
+    /// commands, send them, wait for all receipts + confirmations, repeat.
     async fn run_stop_and_wait(
         &self,
         mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
@@ -406,9 +406,7 @@ where
                     anyhow::Ok((receipt_fut, cmd, submitted_at))
                 }
             })
-            // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
-            // but this is not necessary for now - the pipelined mode covers that; here we only
-            // wait for them to be included in parallel
+            // Transactions are sent sequentially and only waited on in parallel.
             .try_collect::<Vec<_>>()
             .await?;
             tracing::info!(command_name, range, "sent to L1, waiting for inclusion");
@@ -418,9 +416,9 @@ where
     }
 
     /// Converts every blob-carrying command's sidecar into the chain's accepted wire format
-    /// exactly once. The result is shared between gas simulation, the send path and (in
-    /// pipelined mode) in-flight simulation prefixes; the EIP-7594 conversion computes KZG
-    /// cell proofs and must never run twice for the same sidecar.
+    /// exactly once. The result is shared between gas simulation, the send path and
+    /// in-flight simulation prefixes; the EIP-7594 conversion computes KZG cell proofs and
+    /// must never run twice for the same sidecar.
     pub(crate) async fn prepare_sidecars(
         &self,
         commands: &[Input],
@@ -547,7 +545,7 @@ where
     /// resolve the ambiguity without risking local nonce divergence.
     pub(crate) async fn send_tx_with_retries(
         &self,
-        tx_request: TransactionRequest,
+        mut tx_request: TransactionRequest,
         range: &str,
     ) -> anyhow::Result<alloy::providers::PendingTransactionBuilder<alloy::network::Ethereum>> {
         let command_name = Input::COMPONENT_ID.as_str();
@@ -610,6 +608,52 @@ where
                         );
                     }
                     tokio::time::sleep(self.config.nonce_error_retry_backoff).await;
+                    // Re-resolve fees before retrying: the market may have moved permanently
+                    // past this wave's estimate while still being below the configured caps —
+                    // retrying the stale estimate would stall until the market came back down.
+                    match self
+                        .resolve_fee_params(
+                            self.config.fee_config,
+                            self.config.force_transaction_resubmission,
+                        )
+                        .await
+                    {
+                        Ok(fresh) => {
+                            // Fees only ratchet up: EIP-1559 replacement rules reject
+                            // lowering, and the original fees may carry a replacement floor.
+                            let raised = FeeParams {
+                                max_fee_per_gas: tx_request
+                                    .max_fee_per_gas
+                                    .unwrap_or_default()
+                                    .max(fresh.max_fee_per_gas),
+                                max_priority_fee_per_gas: tx_request
+                                    .max_priority_fee_per_gas
+                                    .unwrap_or_default()
+                                    .max(fresh.max_priority_fee_per_gas),
+                                max_fee_per_blob_gas: tx_request
+                                    .max_fee_per_blob_gas
+                                    .unwrap_or_default()
+                                    .max(fresh.max_fee_per_blob_gas),
+                            };
+                            tx_request.max_fee_per_gas = Some(raised.max_fee_per_gas);
+                            tx_request.max_priority_fee_per_gas =
+                                Some(raised.max_priority_fee_per_gas);
+                            if tx_request.max_fee_per_blob_gas.is_some() {
+                                tx_request.max_fee_per_blob_gas = Some(raised.max_fee_per_blob_gas);
+                            }
+                        }
+                        Err(err) => {
+                            // Estimation hiccups must not kill the wait loop; the next
+                            // iteration retries with the current fees.
+                            tracing::warn!(
+                                command_name,
+                                range,
+                                %err,
+                                "failed to refresh fee estimate while waiting out the fee \
+                                 market; retrying with current fees"
+                            );
+                        }
+                    }
                 }
                 Err(err) => return Err(err.into()),
             }

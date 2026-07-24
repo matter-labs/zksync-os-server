@@ -1,8 +1,8 @@
 //! Pipelined ("two-watermark") L1 sending.
 //!
-//! The stop-and-wait sender ties up the whole cycle waiting for inclusion + confirmations
-//! (~40-70s on mainnet) during which nothing new is submitted. This module decouples the
-//! three phases into concurrently running tasks joined by bounded queues:
+//! Submission, inclusion tracking, and confirmation run as concurrent tasks joined by
+//! bounded queues, so new transactions go out while earlier ones are still waiting to be
+//! mined or confirmed:
 //!
 //! ```text
 //! submitter ──(submitted queue: entries hold an unmined-slot permit)──▶ inclusion watcher
@@ -16,8 +16,8 @@
 //!   observed mined. This matches the L1 pool's *per-account* cap (geth blobpool
 //!   `maxTxsPerAccount` = reth `max-account-slots` = 16), which counts pooled (unmined)
 //!   transactions only. Each submission takes a semaphore permit that the inclusion watcher
-//!   releases at the *first receipt sighting* — never at confirmation, which would waste
-//!   `(required_confirmations-1)` blocks of window budget per tx and cap throughput at ~2x.
+//!   releases at the *first receipt sighting* — never at confirmation, which would keep each
+//!   window slot occupied for `required_confirmations - 1` extra blocks per transaction.
 //! * **Confirmation depth** — downstream forwarding still waits for `required_confirmations`,
 //!   handled by a separate FIFO task so it delays forwarding by a constant without ever
 //!   blocking submission.
@@ -307,7 +307,15 @@ where
             anyhow::Ok(())
         };
 
-        tokio::try_join!(submitter, inclusion_watcher, confirmation_forwarder)?;
+        // Boxed for stack safety, not style: these three state machines (the submitter
+        // embeds the whole wave-submission and recovery-seeding machinery) otherwise live
+        // inline in this future, which itself is moved by value when the pipeline spawns the
+        // component — that spike overflowed an 8 MiB thread stack in debug builds.
+        tokio::try_join!(
+            Box::pin(submitter),
+            Box::pin(inclusion_watcher),
+            Box::pin(confirmation_forwarder)
+        )?;
         Ok(())
     }
 
@@ -500,7 +508,7 @@ where
     /// Polls until a receipt for `tx_hash` exists (any depth). Warns on the configured
     /// transaction-timeout cadence; like the confirmation poller, it never gives up —
     /// a permanently stuck transaction requires operator intervention
-    /// (`force_transaction_resubmission`) exactly as in stop-and-wait mode.
+    /// (`force_transaction_resubmission`).
     async fn wait_for_receipt_existence(&self, tx_hash: B256) -> anyhow::Result<()> {
         let timeout = self.config.transaction_timeout;
         let poll_interval = self.config.poll_interval;
@@ -543,11 +551,12 @@ where
     /// startup state: which transactions to track as already-submitted, which nonce to
     /// continue from, and whether a stale suffix must be replaced with bumped fees.
     ///
-    /// Pairing works like the stop-and-wait recovery: for each pending nonce the on-chain
-    /// transaction's calldata is compared against the next queued command (pinned to the same
-    /// L1 block at which the inbound queue was constructed — see `l1_block_number`). Unlike
-    /// stop-and-wait, a mismatch or dropped transaction produces a [`ReplacementPlan`] so the
-    /// stale suffix is replaced at its own nonces instead of appending duplicates behind it.
+    /// Pairing: for each pending nonce the on-chain transaction's calldata is compared
+    /// against the next queued command (pinned to the same L1 block at which the inbound
+    /// queue was constructed — see `l1_block_number`). A match is tracked as
+    /// already-submitted; a mismatch or dropped transaction produces a [`ReplacementPlan`] so
+    /// the stale suffix is replaced at its own nonces instead of appending duplicates behind
+    /// it.
     ///
     /// Returns `None` when the inbound channel closes mid-recovery.
     async fn plan_pipelined_recovery(
