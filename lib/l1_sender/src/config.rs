@@ -6,7 +6,7 @@ use zksync_os_operator_signer::SignerConfig;
 pub const DEFAULT_REQUIRED_CONFIRMATIONS_L1: u64 = 3;
 /// Default max submission attempts per L1 transaction when the node rejects it with a
 /// nonce-class error.
-pub const DEFAULT_NONCE_ERROR_MAX_ATTEMPTS: usize = 5;
+pub const DEFAULT_NONCE_ERROR_MAX_ATTEMPTS: usize = 10;
 /// Default backoff between attempts after a nonce-class rejection.
 pub const DEFAULT_NONCE_ERROR_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 

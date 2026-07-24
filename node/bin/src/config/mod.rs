@@ -1072,9 +1072,9 @@ pub struct RpcConfig {
     pub rate_limits: RpcRateLimitsConfig,
 
     /// Rate limiter for incoming L2 transactions based on executed gas throughput.
-    /// Absent = disabled.
-    #[config(nest)]
-    pub tx_gas_rate_limit: Option<TxGasRateLimitConfig>,
+    /// Disabled by default; set `enabled = true` to turn it on.
+    #[config(nest, default)]
+    pub tx_gas_rate_limit: TxGasRateLimitConfig,
 
     /// List of disabled methods.
     /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
@@ -1126,12 +1126,18 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
 /// toward it too, even though only L2 admission is ever actually gated. Only effective on
 /// the main node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
 #[config(validate(
     Self::check_credit_windows,
     "max_credit_seconds must be positive, other windows non-negative, and reopen_credit_seconds must not exceed max_credit_seconds"
 ))]
 pub struct TxGasRateLimitConfig {
+    /// Whether the gas rate limiter is enabled. Only effective on the main node.
+    #[config(default_t = false)]
+    pub enabled: bool,
+
     /// Target sustained executed-gas throughput, in gas per second.
+    #[config(default_t = NonZeroU64::new(72_000_000).unwrap())]
     pub gas_per_second: NonZeroU64,
 
     /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`. Sized to
