@@ -33,8 +33,12 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
             (30, 0) => Ok(ProvingVersion::V5),
             (30, 1) => Ok(ProvingVersion::V6),
             (30, 2) => Ok(ProvingVersion::V6),
-            (31, 0) => Ok(ProvingVersion::V7),
-            (31, 1) => Ok(ProvingVersion::V7),
+            // LOCAL DEV: the atomic-interop era-contracts line reports protocol 0.31.x
+            // but runs the 0.4.0-generation STF (local ad-atomic-interop-da), which only
+            // materializes pubdata at batch level — so batches must be sealed via the
+            // V8 native batch PIG, mirroring the v32 wiring.
+            (31, 0) => Ok(ProvingVersion::V8),
+            (31, 1) => Ok(ProvingVersion::V8),
             (32, 0) => Ok(ProvingVersion::V8),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
@@ -128,8 +132,8 @@ mod tests {
             ((0, 29, 1), ProvingVersion::V4),
             ((0, 30, 0), ProvingVersion::V5),
             ((0, 30, 1), ProvingVersion::V6),
-            ((0, 31, 0), ProvingVersion::V7),
-            ((0, 31, 1), ProvingVersion::V7),
+            ((0, 31, 0), ProvingVersion::V8),
+            ((0, 31, 1), ProvingVersion::V8),
             ((0, 32, 0), ProvingVersion::V8),
         ];
 
