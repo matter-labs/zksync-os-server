@@ -484,6 +484,15 @@ fn config() -> ProptestConfig {
         .unwrap_or(64);
     ProptestConfig {
         cases,
+        // Replay the pinned counterexamples in the sibling file before
+        // generating novel cases, and record new ones there. The default
+        // source-parallel persistence cannot locate a source root in a
+        // `tests/` target and silently does neither.
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::Direct(
+                "tests/registry_equivalence.proptest-regressions",
+            ),
+        )),
         ..ProptestConfig::default()
     }
 }

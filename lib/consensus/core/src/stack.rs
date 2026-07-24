@@ -60,6 +60,7 @@ use commonware_consensus::{Reporter, Reporters};
 use commonware_cryptography::Digestible;
 use commonware_cryptography::certificate::Scheme as _;
 use commonware_cryptography::ed25519::PublicKey;
+use commonware_p2p::Recipients;
 use commonware_p2p::utils::mux::{MuxHandle, Muxer, SubReceiver, SubSender};
 use commonware_parallel::Sequential;
 use commonware_runtime::buffer::paged::CacheRef;
@@ -72,6 +73,14 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::info;
+
+/// How often every node re-announces the latest finalization certificate it
+/// holds (the tip beacon in [`start_validator`]). Certificate gossip otherwise
+/// happens only when consensus produces something new, so this cadence bounds
+/// how long a node that missed the tip can stay wedged on a quiet chain. One
+/// small message per node per interval; node-local, safe to differ across the
+/// committee.
+const TIP_BEACON_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Tuning knobs for one validator stack. `new` gives values suitable for tests and local
 /// networks; production profiles adjust the timeouts to real network latencies.
@@ -440,7 +449,7 @@ where
         channels.votes.1,
         config.mailbox_size.get(),
     );
-    let (certificates_muxer, certificates_mux, certificate_backup) = {
+    let (certificates_muxer, certificates_mux, certificate_backup, certificate_sender) = {
         use commonware_p2p::utils::mux::Builder as _;
         Muxer::builder(
             context.child("certificates_mux"),
@@ -449,6 +458,7 @@ where
             config.mailbox_size.get(),
         )
         .with_backup()
+        .with_global_sender()
         .build()
     };
     let (certificate_backfill_muxer, certificate_backfill_mux) = Muxer::new(
@@ -629,6 +639,53 @@ where
     });
 
     support_tasks.push(tip_scout);
+
+    // The sending half of the catch-up story above: the scout can only verify
+    // certificates that actually arrive, and certificate gossip happens only
+    // when consensus produces something new. On a quiet chain, a node that
+    // missed the latest finalization (a restart, a healed partition) would
+    // otherwise wait for traffic that never comes. Every node therefore
+    // re-announces the latest finalization it holds at a slow fixed cadence: a
+    // peer that already has it drops a duplicate, and a peer that does not
+    // verifies it through the scout and catches up.
+    let tip_beacon = context.child("tip_beacon").spawn({
+        let marshal_mailbox = marshal_mailbox.clone();
+        let mut certificate_sender = certificate_sender;
+        move |context| async move {
+            // Holds the marshal mailbox across sleeps, so it must watch the
+            // stop signal or it outlives shutdown (and with it, the storage
+            // the mailbox keeps open). The sleep races the signal: a stopping
+            // node must not wait out a beacon interval.
+            let mut stopped = context.stopped();
+            loop {
+                let sleep = context.sleep(TIP_BEACON_INTERVAL);
+                futures::pin_mut!(sleep);
+                match futures::future::select(sleep, &mut stopped).await {
+                    futures::future::Either::Left(_) => {}
+                    futures::future::Either::Right(_) => return,
+                }
+                let Some(height) = marshal_mailbox.get_processed_height().await else {
+                    continue;
+                };
+                let Some(finalization) = marshal_mailbox.get_finalization(height).await else {
+                    continue;
+                };
+                use commonware_codec::Encode as _;
+                let epoch = finalization.round().epoch();
+                let certificate =
+                    Certificate::<Scheme, <X::Block as Digestible>::Digest>::Finalization(
+                        finalization,
+                    );
+                let _ = certificate_sender.send(
+                    epoch.get(),
+                    Recipients::All,
+                    certificate.encode(),
+                    false,
+                );
+            }
+        }
+    });
+    support_tasks.push(tip_beacon);
     support_tasks.push(commit_worker);
 
     ValidatorStack {

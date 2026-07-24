@@ -489,8 +489,19 @@ fn config() -> ProptestConfig {
         // Every shrink attempt is a full scenario run, and attempts that
         // still fail cost a whole stalled-scenario budget each; cap the walk
         // so a failure reports in minutes. 16 attempts minimize well across
-        // this plan's seven dimensions.
+        // this plan's seven dimensions; the wall-clock cap bounds the worst
+        // case where most attempts stall (the plan stays readable unshrunk).
         max_shrink_iters: 16,
+        max_shrink_time: 300_000,
+        // Replay the pinned counterexamples in the sibling file before
+        // generating novel cases, and record new ones there. The default
+        // source-parallel persistence cannot locate a source root in a
+        // `tests/` target and silently does neither.
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::Direct(
+                "tests/proptest_scenarios.proptest-regressions",
+            ),
+        )),
         ..ProptestConfig::default()
     }
 }
