@@ -2605,19 +2605,20 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
- "basic_system 0.1.0",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "cfg-if",
  "cycle_marker 0.1.0",
- "evm_interpreter 0.1.0",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "paste",
  "ruint",
  "serde-big-array",
  "strum_macros",
- "system_hooks 0.1.0",
- "zk_ee 0.1.0",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
 ]
 
 [[package]]
@@ -2716,25 +2717,26 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
- "cc-traits 0.1.0",
+ "cc-traits 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "const-hex",
  "cycle_marker 0.1.0",
  "either",
- "evm_interpreter 0.1.0",
- "modexp 0.1.0",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "num-bigint",
  "num-traits",
  "paste",
  "rand 0.9.5",
  "ruint",
  "serde",
- "storage_models 0.1.0",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "strum_macros",
  "u256",
- "zk_ee 0.1.0",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
 ]
 
 [[package]]
@@ -3500,14 +3502,15 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "airbender-crypto",
- "basic_bootloader 0.1.0",
- "basic_system 0.1.0",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "c-kzg",
- "oracle_provider 0.1.0",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "ruint",
- "zk_ee 0.1.0",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
 ]
 
 [[package]]
@@ -3678,6 +3681,7 @@ dependencies = [
 [[package]]
 name = "cc-traits"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 
 [[package]]
 name = "cc-traits"
@@ -4673,6 +4677,7 @@ source = "git+https://github.com/antoniolocascio-bot/zksync-os.git?rev=e0549959e
 [[package]]
 name = "cycle_marker"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 
 [[package]]
 name = "darling"
@@ -4858,6 +4863,7 @@ dependencies = [
 [[package]]
 name = "delegated_u256"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "ruint",
  "serde",
@@ -5369,6 +5375,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
@@ -5378,7 +5385,7 @@ dependencies = [
  "ruint",
  "strum_macros",
  "u256",
- "zk_ee 0.1.0",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
 ]
 
 [[package]]
@@ -5921,23 +5928,24 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "airbender-crypto",
  "alloy",
- "basic_bootloader 0.1.0",
- "basic_system 0.1.0",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "bincode 1.3.3",
- "callable_oracles 0.1.0",
- "evm_interpreter 0.1.0",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "hex",
  "log",
- "oracle_provider 0.1.0",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "paste",
  "ruint",
  "serde",
  "strum_macros",
- "system_hooks 0.1.0",
- "zk_ee 0.1.0",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "zksync_os_evm_errors",
  "zksync_os_interface",
 ]
@@ -8623,6 +8631,7 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 
 [[package]]
 name = "modexp"
@@ -9344,9 +9353,10 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "riscv_transpiler 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
- "zk_ee 0.1.0",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
 ]
 
 [[package]]
@@ -14056,8 +14066,9 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
- "zk_ee 0.1.0",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
 ]
 
 [[package]]
@@ -14290,14 +14301,15 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "arrayvec",
  "cycle_marker 0.1.0",
- "evm_interpreter 0.1.0",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "paste",
  "ruint",
  "strum_macros",
- "zk_ee 0.1.0",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
 ]
 
 [[package]]
@@ -15397,6 +15409,7 @@ dependencies = [
 [[package]]
 name = "u256"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "delegated_u256",
  "ruint",
@@ -17013,6 +17026,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop#358eff280d40051fc2934180c2367882ab703cb0"
 dependencies = [
  "airbender-crypto",
  "arrayvec",
@@ -17584,7 +17598,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "cargo_metadata",
- "forward_system 0.1.0",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?rev=0c99261a748f)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?rev=19d4bbcf2d8d)",
  "forward_system 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-os.git?rev=3d2977d0a5a6)",
@@ -17606,11 +17620,11 @@ version = "0.20.11"
 dependencies = [
  "alloy",
  "anyhow",
- "basic_system 0.1.0",
- "forward_system 0.1.0",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "tracing",
  "vise",
- "zk_ee 0.1.0",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=dev-20260724-atomic-interop)",
  "zksync_os_batch_types",
  "zksync_os_interface",
  "zksync_os_merkle_tree",
