@@ -279,23 +279,12 @@ impl PendingBatchInfo {
                 )
                     .abi_encode_packed(),
             )),
-            31 | 32 => B256::from(keccak256(
-                (
-                    U256::from(commit_info.chain_id),
-                    commit_info.first_block_timestamp,
-                    commit_info.last_block_timestamp,
-                    U256::from(commit_info.l2_da_commitment_scheme as u8),
-                    commit_info.da_commitment,
-                    U256::from(commit_info.number_of_layer1_txs),
-                    U256::from(commit_info.number_of_layer2_txs),
-                    commit_info.priority_operations_hash,
-                    commit_info.l2_to_l1_logs_root_hash,
-                    upgrade_tx_hash,
-                    commit_info.dependency_roots_rolling_hash,
-                    U256::from(commit_info.sl_chain_id),
-                )
-                    .abi_encode_packed(),
-            )),
+            // The atomic-interop contracts (this line reports protocol 0.31.x) and the v32
+            // contracts commit the batch output WITHOUT the leading chain id — it moved into
+            // the chain config hash of the batch public input (`Committer.batchOutputHash` /
+            // zksync-os `BatchOutput::hash`). This is the same layout as
+            // [`Self::v32_batch_output_hash`].
+            31 | 32 => self.v32_batch_output_hash(),
             _ => panic!("Unsupported protocol version: {}", self.protocol_version),
         }
     }
