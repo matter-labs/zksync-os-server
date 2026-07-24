@@ -47,6 +47,7 @@ members = [
     "lib/backpressure",
     "lib/alloy_ext",
     "lib/provider",
+    "lib/versioned_merkle_tree",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -357,6 +358,7 @@ zksync_os_server = { version = "=0.21.0", path = "node/bin" }
 #zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
 
+versioned_merkle_tree = { version = "=0.21.0", path = "lib/versioned_merkle_tree" }
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
 overflow-checks = true
