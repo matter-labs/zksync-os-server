@@ -94,6 +94,16 @@ impl FeeParams {
             max_fee_per_blob_gas: self.max_fee_per_blob_gas.max(other.max_fee_per_blob_gas),
         }
     }
+
+    /// Fee floor for replacing this transaction in the pool: geth and reth both require a
+    /// 100% bump on tip, fee cap AND blob fee cap to replace a blob transaction.
+    pub(crate) fn doubled(self) -> FeeParams {
+        FeeParams {
+            max_fee_per_gas: self.max_fee_per_gas.saturating_mul(2),
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas.saturating_mul(2),
+            max_fee_per_blob_gas: self.max_fee_per_blob_gas.saturating_mul(2),
+        }
+    }
 }
 
 /// A blob sidecar converted once into the wire format the chain accepts.
@@ -146,6 +156,9 @@ pub(crate) struct SimPrefixEntry {
     pub(crate) calldata: Bytes,
     pub(crate) sidecar: Option<Arc<PreparedSidecar>>,
     pub(crate) fee_params: FeeParams,
+    /// Gas limit the transaction was sent with; reused when the transaction is evicted from
+    /// the pool and must be resent at the same nonce.
+    pub(crate) gas_limit: u64,
 }
 
 fn build_l1_simulation_request(
@@ -556,10 +569,27 @@ where
         loop {
             match self.provider.send_transaction(tx_request.clone()).await {
                 Ok(pending_tx) => return Ok(pending_tx),
-                Err(err)
-                    if is_nonce_error(&err)
-                        && nonce_error_attempt < self.config.nonce_error_max_attempts =>
-                {
+                Err(err) if is_nonce_error(&err) || is_already_known_error(&err) => {
+                    // The transport layer retries dropped connections, so a send whose
+                    // response was lost may have been accepted (and mined) on the first
+                    // attempt — the retry then reports "nonce too low"/"already known" even
+                    // though our transaction landed. Adopt it if it is on chain or in the
+                    // pool at our nonce.
+                    if let Some(pending_tx) = self.find_landed_tx(&tx_request).await {
+                        tracing::info!(
+                            command_name,
+                            range,
+                            tx_hash = ?pending_tx.tx_hash(),
+                            "transaction already landed at its nonce (transport-level retry \
+                             double-send); adopting it"
+                        );
+                        return Ok(pending_tx);
+                    }
+                    if !is_nonce_error(&err)
+                        || nonce_error_attempt >= self.config.nonce_error_max_attempts
+                    {
+                        return Err(err.into());
+                    }
                     tracing::warn!(
                         command_name,
                         range,
@@ -584,6 +614,16 @@ where
                     );
                     tokio::time::sleep(self.config.nonce_error_retry_backoff).await;
                     pool_capacity_attempt += 1;
+                }
+                Err(err) if is_replacement_underpriced_error(&err) => {
+                    // Notably hit when `force_transaction_resubmission` is re-run against
+                    // transactions a previous force run already priced at the configured
+                    // replacement fees — those fees are absolute, so no further bump happens.
+                    return Err(anyhow::Error::from(err).context(
+                        "replacement fees did not outbid the transaction already pooled at \
+                         this nonce; if this repeats, raise the \
+                         `force_transaction_resubmission` multipliers or the fee caps",
+                    ));
                 }
                 Err(err) if is_fee_too_low_error(&err) => {
                     let elapsed = started_at.elapsed();
@@ -656,6 +696,38 @@ where
                     }
                 }
                 Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    /// Checks whether a transaction with this request's calldata already sits at its nonce —
+    /// on chain or in the pool — and returns a pending-transaction handle for it if so. Used
+    /// to disambiguate nonce/already-known send rejections. Returns `None` (never an error)
+    /// when the provider cannot answer; the caller falls back to its retry policy.
+    async fn find_landed_tx(
+        &self,
+        tx_request: &TransactionRequest,
+    ) -> Option<alloy::providers::PendingTransactionBuilder<alloy::network::Ethereum>> {
+        let from = tx_request.from?;
+        let nonce = tx_request.nonce?;
+        match self
+            .provider
+            .get_transaction_by_sender_nonce(from, nonce)
+            .await
+        {
+            Ok(Some(tx)) if Some(ConsensusTransaction::input(&tx)) == tx_request.input.input() => {
+                Some(alloy::providers::PendingTransactionBuilder::new(
+                    self.provider.root().clone(),
+                    tx.tx_hash(),
+                ))
+            }
+            Ok(_) => None,
+            Err(err) => {
+                tracing::debug!(
+                    %err,
+                    "could not probe for a landed transaction at the send nonce"
+                );
+                None
             }
         }
     }
@@ -1276,6 +1348,35 @@ fn is_nonce_error(err: &TransportError) -> bool {
     }
 }
 
+/// Replacement-underpriced `eth_sendRawTransaction` rejections: the fee bump over the
+/// transaction already pooled at this nonce is below the node's price-bump requirement.
+/// Waiting never fixes an insufficient bump, so this class is fatal — restart recovery
+/// reprices from the pooled transaction's actual fees.
+fn is_replacement_underpriced_error(err: &TransportError) -> bool {
+    match err {
+        TransportError::ErrorResp(payload) => {
+            let message = payload.message.to_lowercase();
+            message.contains("replacement") && message.contains("underpriced")
+        }
+        _ => false,
+    }
+}
+
+/// `eth_sendRawTransaction` rejections reporting that the exact same transaction is already
+/// in the pool — the signature of a transport-level send retry whose first attempt was
+/// accepted but whose response was lost.
+fn is_already_known_error(err: &TransportError) -> bool {
+    match err {
+        TransportError::ErrorResp(payload) => {
+            let message = payload.message.to_lowercase();
+            message.contains("already known")
+                || message.contains("already imported")
+                || message.contains("already in the pool")
+        }
+        _ => false,
+    }
+}
+
 /// Max submission attempts when the L1 node rejects a transaction because the tx pool is at
 /// capacity. Sized to outlast several L1 slots — pool capacity frees as blocks mine, e.g.
 /// after a reorg briefly returns already-mined transactions to the pool while the in-flight
@@ -1424,6 +1525,32 @@ mod tests {
             "replacement transaction underpriced"
         )));
         assert!(!is_nonce_error(&TransportErrorKind::custom_str(
+            "error sending request"
+        )));
+    }
+
+    #[test]
+    fn already_known_classification() {
+        use alloy::rpc::json_rpc::ErrorPayload;
+        use alloy::transports::TransportErrorKind;
+
+        let resp = |message: &str| {
+            TransportError::ErrorResp(ErrorPayload {
+                code: -32000,
+                message: message.to_string().into(),
+                data: None,
+            })
+        };
+
+        // geth: "already known"; reth: "transaction already imported"; anvil: "already
+        // imported". All signal a transport-retry double-send of the same raw transaction.
+        assert!(is_already_known_error(&resp("already known")));
+        assert!(is_already_known_error(&resp(
+            "transaction already imported"
+        )));
+        assert!(is_already_known_error(&resp("ALREADY known")));
+        assert!(!is_already_known_error(&resp("nonce too low")));
+        assert!(!is_already_known_error(&TransportErrorKind::custom_str(
             "error sending request"
         )));
     }
