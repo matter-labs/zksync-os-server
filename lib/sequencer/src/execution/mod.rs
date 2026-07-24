@@ -1,4 +1,7 @@
-pub use fee_provider::{FeeConfig, FeeParams, FeeProvider, fee_params_within_protocol_bounds};
+pub use fee_provider::{FeeConfig, FeeProvider, fee_params_within_protocol_bounds};
+// `FeeParams` lives in `zksync_os_types`; re-exported here because the
+// consensus crates import it through the execution module.
+pub use zksync_os_types::FeeParams;
 
 pub mod block_applier;
 pub mod block_canonizer;

@@ -44,6 +44,7 @@ alloy = { workspace = true, default-features = false, features = ["provider-anvi
 anyhow.workspace = true
 flate2.workspace = true
 fs2.workspace = true
+libc.workspace = true
 reqwest.workspace = true
 tar.workspace = true
 tokio.workspace = true

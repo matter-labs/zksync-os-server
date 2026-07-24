@@ -169,8 +169,7 @@ impl<Subpool: L2Subpool> ConsensusBlockBuilder<Subpool> {
             .fee_provider
             .produce_fee_params_on(parent.fee_params)
             .await?;
-        self.pool
-            .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
+        self.pool.update_pending_block_fees(fee_params, None);
 
         // TODO(consensus): interop traffic is not supported under consensus yet, so
         // interop system transactions are held back indefinitely (the corresponding

@@ -102,6 +102,7 @@ k256 = { version = "0.13.4", default-features = false, features = [
     "pem",
     "std",
 ] }
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_with = "3.14.0"
 serde_json = "1"
@@ -185,6 +186,7 @@ full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbend
 #], default-features = false }
 #zk_ee_dev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
 #zk_os_basic_system_dev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
+#zk_os_api_dev = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.0" }
 
 # Other dependencies.
 
