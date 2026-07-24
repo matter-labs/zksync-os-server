@@ -65,7 +65,6 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
                         .context("native batch PIG requires per-block tree data")?,
                 })
             })
-<<<<<<< HEAD
             .collect::<anyhow::Result<Vec<_>>>()?;
         let started_at = std::time::Instant::now();
         let batch_run = generate_batch_run(

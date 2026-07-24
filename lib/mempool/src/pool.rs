@@ -19,7 +19,9 @@ use tokio::time::Instant;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::AccountDiff;
-use zksync_os_l1_watcher::{InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig, StartResolver};
+use zksync_os_l1_watcher::{
+    InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig, StartResolver,
+};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
     L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo, UpgradeMetadata,

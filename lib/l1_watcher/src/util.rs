@@ -166,8 +166,7 @@ pub async fn find_l1_block_by_interop_root_id(
     }
 
     let message_root_address = bridgehub.message_root_address().await?;
-    let message_root =
-        MessageRoot::new(message_root_address, bridgehub.provider().clone());
+    let message_root = MessageRoot::new(message_root_address, bridgehub.provider().clone());
 
     // The provider's cache resolves (and remembers) the MessageRoot deployment block, giving the
     // search a tight lower bound without a per-iteration code-existence guard.
