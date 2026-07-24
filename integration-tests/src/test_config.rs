@@ -41,6 +41,9 @@ pub(crate) async fn build_node_config(
     let mut config = load_chain_config(chain_layout).await;
     config.l1_provider_config =
         ProviderConfig::new(l1.address.clone(), TEST_PROVIDER_POLL_INTERVAL);
+    // The L1 senders poll receipts on their own cadence (1s default) — keep tests fast
+    // against anvil's 0.25s blocks.
+    config.l1_sender_config.poll_interval = TEST_PROVIDER_POLL_INTERVAL;
     config.sequencer_config.fee_collector_address = Address::random();
     config.rpc_config.send_raw_transaction_sync_timeout = Duration::from_secs(10);
     config.prover_api_config.fake_fri_provers.enabled = !with_proofs;
