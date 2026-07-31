@@ -190,7 +190,9 @@ fn eth_config_reports_eip7594(config: &serde_json::Value) -> Option<bool> {
 /// at most once. Each address gets its own [`OnceCell`] so concurrent lookups for the same address
 /// run the binary search exactly once and the rest await its result.
 type DeploymentBlockCache = Arc<Mutex<HashMap<Address, Arc<OnceCell<u64>>>>>;
-type HeaderWatcher = Arc<OnceCell<watch::Sender<<Ethereum as Network>::HeaderResponse>>>;
+// Holds a `Receiver` (not the `Sender`) so the poller task owns the only sender: if the task
+// ever dies, the channel closes and subscribers observe it instead of waiting forever.
+type HeaderWatcher = Arc<OnceCell<watch::Receiver<<Ethereum as Network>::HeaderResponse>>>;
 
 /// A version of `DynProvider` that exposes `wallet()` and `wallet_mut()` as defined in
 /// `EthWalletProvider`. Also uses `Box` instead of `Arc` to make sure the wallets are mutable.
@@ -258,13 +260,17 @@ impl NodeProvider {
     pub async fn latest_header_watcher(
         &self,
     ) -> watch::Receiver<<Ethereum as Network>::HeaderResponse> {
-        self.latest_header_watcher
+        let mut rx = self
+            .latest_header_watcher
             .get_or_init(|| async {
                 self.build_header_watcher(BlockNumberOrTag::Latest, self.latest_poll_interval)
                     .await
             })
             .await
-            .subscribe()
+            .clone();
+        // Match `Sender::subscribe` semantics: a new subscriber has seen the current value.
+        rx.mark_unchanged();
+        rx
     }
 
     /// Returns a shared watcher for the finalized block header via
@@ -278,13 +284,17 @@ impl NodeProvider {
         } else {
             BlockNumberOrTag::Latest
         };
-        self.finalized_header_watcher
+        let mut rx = self
+            .finalized_header_watcher
             .get_or_init(|| async {
                 self.build_header_watcher(finalized, self.finalized_poll_interval)
                     .await
             })
             .await
-            .subscribe()
+            .clone();
+        // Match `Sender::subscribe` semantics: a new subscriber has seen the current value.
+        rx.mark_unchanged();
+        rx
     }
 
     /// Builds a provider-owned header watcher backed by a raw RPC client request.
@@ -299,21 +309,22 @@ impl NodeProvider {
         &self,
         block: BlockNumberOrTag,
         poll_interval: Duration,
-    ) -> watch::Sender<<Ethereum as Network>::HeaderResponse> {
+    ) -> watch::Receiver<<Ethereum as Network>::HeaderResponse> {
         let initial_block: Option<<Ethereum as Network>::BlockResponse> = self
             .client()
             .request("eth_getBlockByNumber", (block, false))
             .await
             .unwrap_or_else(|err| panic!("failed to initialize {block:?} header watcher: {err}"));
-        let (tx, _) = watch::channel(
+        let (tx, rx) = watch::channel(
             initial_block
                 .expect("header watcher RPC returned no block for a chain head")
                 .header()
                 .clone(),
         );
         let weak_client = self.weak_client();
-        let tx_task = tx.clone();
 
+        // The task owns the only sender: if it exits or panics, subscribers see the channel
+        // close rather than a silently frozen stream.
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(poll_interval);
             loop {
@@ -322,17 +333,25 @@ impl NodeProvider {
                     return;
                 };
 
-                let block: Option<<Ethereum as Network>::BlockResponse> = client
-                    .request("eth_getBlockByNumber", (block, false))
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("failed to poll {block:?} header watcher: {err}");
-                    });
-                let header = block
+                // Transient RPC failures (the L1 endpoint hiccuping) must not kill the watcher:
+                // the next tick is the retry.
+                let block_response: Option<<Ethereum as Network>::BlockResponse> =
+                    match client.request("eth_getBlockByNumber", (block, false)).await {
+                        Ok(response) => response,
+                        Err(err) => {
+                            tracing::warn!(
+                                %err,
+                                ?block,
+                                "header watcher poll failed; retrying at next tick"
+                            );
+                            continue;
+                        }
+                    };
+                let header = block_response
                     .expect("header watcher RPC returned no block for a chain head")
                     .header()
                     .clone();
-                tx_task.send_if_modified(|current: &mut <Ethereum as Network>::HeaderResponse| {
+                tx.send_if_modified(|current: &mut <Ethereum as Network>::HeaderResponse| {
                     if current.hash() == header.hash() {
                         false
                     } else {
@@ -343,7 +362,7 @@ impl NodeProvider {
             }
         });
 
-        tx
+        rx
     }
 
     /// Returns the optional features the underlying provider was detected to support.
@@ -1065,5 +1084,84 @@ mod tests {
             .expect("mocked provider construction should succeed");
         assert!(!provider.capabilities().supports_eip7594);
         assert!(asserter.read_q().is_empty(), "all responses consumed");
+    }
+
+    /// Distinct hashes matter for header-watcher tests: `send_if_modified` dedupes on hash, so
+    /// two default-hash blocks would never notify subscribers.
+    fn block_with_number_and_hash(number: u64, hash_byte: u8) -> Block {
+        let mut block = block_with_number(number);
+        block.header.hash = B256::repeat_byte(hash_byte);
+        block
+    }
+
+    fn transient_error() -> ErrorPayload {
+        ErrorPayload {
+            code: -32000,
+            message: Cow::Borrowed("connection reset by peer"),
+            data: None,
+        }
+    }
+
+    /// Pushes the four capability-probe responses consumed by `NodeProvider` construction
+    /// (get_header supported, finalized tag supported, no eth_config, non-anvil chain id).
+    fn push_probe_responses(asserter: &Asserter) {
+        asserter.push_success(&header_with_number(1));
+        asserter.push_success(&header_with_number(1));
+        asserter.push_failure(unsupported_method());
+        asserter.push_success(&U64::from(1));
+    }
+
+    #[tokio::test]
+    async fn header_watcher_recovers_after_transient_poll_error() {
+        let asserter = Asserter::new();
+        push_probe_responses(&asserter);
+        // Watcher lifecycle: initial head, one transient poll failure, then a new head.
+        asserter.push_success(&block_with_number_and_hash(1, 1));
+        asserter.push_failure(transient_error());
+        asserter.push_success(&block_with_number_and_hash(2, 2));
+
+        let provider = NodeProvider::new_with_features(
+            mocked_provider(&asserter),
+            Duration::from_millis(10),
+            Duration::from_millis(10),
+            0,
+        )
+        .await
+        .expect("mocked provider construction should succeed");
+
+        let mut headers = provider.latest_header_watcher().await;
+        tokio::time::timeout(Duration::from_secs(5), headers.changed())
+            .await
+            .expect("header watcher should keep polling after a transient RPC error")
+            .expect("header watcher channel should stay open across transient errors");
+        assert_eq!(headers.borrow().number, 2);
+    }
+
+    #[tokio::test]
+    async fn header_watcher_closes_channel_when_poller_task_dies() {
+        let asserter = Asserter::new();
+        push_probe_responses(&asserter);
+        asserter.push_success(&block_with_number_and_hash(1, 1));
+        // A null block for a chain head is unrecoverable: the poller task panics. Subscribers
+        // must observe that as a closed channel instead of waiting forever.
+        asserter.push_success(&serde_json::Value::Null);
+
+        let provider = NodeProvider::new_with_features(
+            mocked_provider(&asserter),
+            Duration::from_millis(10),
+            Duration::from_millis(10),
+            0,
+        )
+        .await
+        .expect("mocked provider construction should succeed");
+
+        let mut headers = provider.latest_header_watcher().await;
+        let changed = tokio::time::timeout(Duration::from_secs(5), headers.changed())
+            .await
+            .expect("subscribers should be woken when the poller task dies");
+        assert!(
+            changed.is_err(),
+            "channel should report closed when the poller task dies"
+        );
     }
 }
