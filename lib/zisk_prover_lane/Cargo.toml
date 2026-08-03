@@ -1,0 +1,39 @@
+[package]
+name = "zisk_prover_lane"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+# Exposes structurally exact (cryptographically invalid) proof-stream fixtures
+# for tests in other crates (`node/bin`). Off in production builds.
+test-support = []
+
+[dependencies]
+zksync_os_types.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_batch_types.workspace = true
+zksync_os_merkle_tree.workspace = true
+zksync_os_contract_interface.workspace = true
+zisk_witness.workspace = true
+
+zksync-os-zisk-lib.workspace = true
+zisk-verifier = { workspace = true, features = ["stark-native"] }
+
+alloy.workspace = true
+vise.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync", "macros", "rt"] }
+serde = { workspace = true, features = ["derive"] }
+
+axum.workspace = true
+base64.workspace = true
+http.workspace = true

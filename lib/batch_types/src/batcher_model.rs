@@ -273,6 +273,41 @@ pub enum SnarkProof {
     Real(RealSnarkProof),
 }
 
+/// ZiSK SNARK proof size: 24 BN254 points × 32 bytes = 768 bytes.
+pub const ZISK_SNARK_PROOF_BYTES: usize = 768;
+
+/// Combined proof for the multi-proof system (Airbender + ZiSK).
+///
+/// Both proof systems must independently verify the same batch state transition.
+/// The `MultiProofVerifier` L1 contract rejects the proof if either fails.
+///
+/// Proof encoding on L1 (type 5):
+/// `[type|version, prevHash, N, airbender[N], zisk[24]]`
+///
+/// The type-5 payload carries the SNARK words only. The on-chain
+/// MultiProofVerifier reconstructs the ZiSK public values from its pinned VKs
+/// and the batch public inputs. The aggregation manager validates the binding
+/// digest off-chain before submission.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MultiProofSnarkProof {
+    /// Airbender SNARK proof bytes (Plonk format, multiple of 32 bytes).
+    pub airbender_proof: Vec<u8>,
+    /// ZiSK SNARK proof bytes (768 bytes = 24 BN254 points).
+    pub zisk_proof: Vec<u8>,
+    /// Proving execution version for verifier routing.
+    pub proving_execution_version: u32,
+}
+
+impl std::fmt::Debug for MultiProofSnarkProof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultiProofSnarkProof")
+            .field("airbender_proof_len", &self.airbender_proof.len())
+            .field("zisk_proof_len", &self.zisk_proof.len())
+            .field("proving_execution_version", &self.proving_execution_version)
+            .finish()
+    }
+}
+
 // V1 can be dropped if there testnet-alpha will be regenerated from scratch.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
