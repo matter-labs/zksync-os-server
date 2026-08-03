@@ -253,103 +253,14 @@ where
             let mut got_notification = false;
 
             if service.parallel_batches {
-                enum Prepared {
-                    /// An owned call ready to spawn. Its id is used if the task cannot be joined.
-                    Call {
-                        id: Id<'static>,
-                        req: Request<'static>,
-                    },
-                    /// A malformed entry whose error response is already known.
-                    Ready(MethodResponse),
-                }
-
-                let mut prepared = Vec::with_capacity(batch.len());
-                for batch_entry in batch.into_iter() {
-                    match batch_entry {
-                        Ok(BatchEntry::Call(mut req)) => {
-                            let id = req.id.clone().into_owned();
-                            // Spawned tasks require `'static` data. Rebuild the request from owned
-                            // parts, including the per-connection context in its extensions.
-                            let mut owned = Request::owned(
-                                req.method_name().to_owned(),
-                                req.params.take().map(|params| params.into_owned()),
-                                id.clone(),
-                            );
-                            *owned.extensions_mut() = std::mem::take(req.extensions_mut());
-                            prepared.push(Prepared::Call { id, req: owned });
-                        }
-                        Ok(BatchEntry::Notification(n)) => {
-                            got_notification = true;
-                            // jsonrpsee's root service only propagates notification extensions;
-                            // awaiting it here records our metrics without making `Prepared`
-                            // borrow from the batch.
-                            service.notification(n).await;
-                        }
-                        Err(err) => {
-                            let (err, id) = err.into_parts();
-                            prepared.push(Prepared::Ready(MethodResponse::error(id, err)));
-                        }
-                    }
-                }
-
-                // Spawning lets CPU-heavy handlers use multiple runtime workers. An unordered
-                // buffer keeps the window full when an early call is slow; sorting below restores
-                // request order before the response is built.
-                //
-                // Abort-on-drop prevents calls from running detached after the batch is cancelled.
-                // Cancellation takes effect when a handler next yields.
-                let service = &service;
-                let response_capacity = prepared.len();
-                let mut response_stream =
-                    futures::stream::iter(prepared.into_iter().enumerate().map(
-                        move |(index, entry)| async move {
-                            let rp = match entry {
-                                Prepared::Call { id, req } => {
-                                    match AbortOnDropHandle::new(tokio::spawn(service.call(req)))
-                                        .await
-                                    {
-                                        Ok(rp) => rp,
-                                        // `CallGuard` converts handler panics. Treat any remaining
-                                        // task failure as an internal error for this call.
-                                        Err(_) => MethodResponse::error(
-                                            id,
-                                            internal_rpc_err("Internal error"),
-                                        ),
-                                    }
-                                }
-                                Prepared::Ready(rp) => rp,
-                            };
-                            (index, rp)
-                        },
-                    ))
-                    .buffer_unordered(MAX_CONCURRENT_BATCH_ENTRIES);
-
-                // Enforce the limit as unordered results arrive. This caps retained responses and
-                // dropping the stream on overflow cancels work whose output would be discarded.
-                // The accounting mirrors `BatchResponseBuilder`: `[` plus every response and one
-                // delimiter, with the final comma replaced by `]`.
-                let mut responses = Vec::with_capacity(response_capacity);
-                let mut response_size = 1usize;
-                while let Some((index, rp)) = response_stream.next().await {
-                    let next_size = response_size
-                        .checked_add(rp.as_json().get().len())
-                        .and_then(|size| size.checked_add(1));
-                    match next_size {
-                        Some(next_size) if next_size <= service.max_response_size_bytes => {
-                            response_size = next_size;
-                            responses.push((index, rp));
-                        }
-                        _ => {
-                            return MethodResponse::error(
-                                Id::Null,
-                                reject_too_big_batch_response(service.max_response_size_bytes),
-                            );
-                        }
-                    }
-                }
-
-                responses.sort_unstable_by_key(|(index, _)| *index);
-                for (_, rp) in responses {
+                let responses = match service
+                    .execute_batch_parallel(batch, &mut got_notification)
+                    .await
+                {
+                    Ok(responses) => responses,
+                    Err(err) => return err,
+                };
+                for rp in responses {
                     if let Err(err) = batch_rp.append(rp) {
                         return err;
                     }
@@ -404,6 +315,121 @@ where
                 .handle_result(handler, MethodResponse::notification)
                 .await
         }
+    }
+}
+
+impl<S> Monitoring<S>
+where
+    S: RpcServiceT<
+            MethodResponse = MethodResponse,
+            NotificationResponse = MethodResponse,
+            BatchResponse = MethodResponse,
+        > + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    /// Executes a batch's calls in parallel, with at most [`MAX_CONCURRENT_BATCH_ENTRIES`] in
+    /// flight, and returns their responses in request order. Notifications are handled inline
+    /// (they have no response slot) and reported via `got_notification`.
+    ///
+    /// Fails with the whole-batch error response when the combined response size exceeds
+    /// `max_response_size_bytes`.
+    async fn execute_batch_parallel(
+        &self,
+        batch: Batch<'_>,
+        got_notification: &mut bool,
+    ) -> Result<Vec<MethodResponse>, MethodResponse> {
+        enum Prepared {
+            /// An owned call ready to spawn. Its id is used if the task cannot be joined.
+            Call {
+                id: Id<'static>,
+                req: Request<'static>,
+            },
+            /// A malformed entry whose error response is already known.
+            Ready(MethodResponse),
+        }
+
+        let mut prepared = Vec::with_capacity(batch.len());
+        for batch_entry in batch.into_iter() {
+            match batch_entry {
+                Ok(BatchEntry::Call(mut req)) => {
+                    let id = req.id.clone().into_owned();
+                    // Spawned tasks require `'static` data. Rebuild the request from owned
+                    // parts, including the per-connection context in its extensions.
+                    let mut owned = Request::owned(
+                        req.method_name().to_owned(),
+                        req.params.take().map(|params| params.into_owned()),
+                        id.clone(),
+                    );
+                    *owned.extensions_mut() = std::mem::take(req.extensions_mut());
+                    prepared.push(Prepared::Call { id, req: owned });
+                }
+                Ok(BatchEntry::Notification(n)) => {
+                    *got_notification = true;
+                    // jsonrpsee's root service only propagates notification extensions;
+                    // awaiting it here records our metrics without making `Prepared`
+                    // borrow from the batch.
+                    self.notification(n).await;
+                }
+                Err(err) => {
+                    let (err, id) = err.into_parts();
+                    prepared.push(Prepared::Ready(MethodResponse::error(id, err)));
+                }
+            }
+        }
+
+        // Spawning lets CPU-heavy handlers use multiple runtime workers. An unordered
+        // buffer keeps the window full when an early call is slow; sorting below restores
+        // request order before the response is built.
+        //
+        // Abort-on-drop prevents calls from running detached after the batch is cancelled.
+        // Cancellation takes effect when a handler next yields.
+        let response_capacity = prepared.len();
+        let mut response_stream = futures::stream::iter(prepared.into_iter().enumerate().map(
+            move |(index, entry)| async move {
+                let rp = match entry {
+                    Prepared::Call { id, req } => {
+                        match AbortOnDropHandle::new(tokio::spawn(self.call(req))).await {
+                            Ok(rp) => rp,
+                            // `CallGuard` converts handler panics. Treat any remaining
+                            // task failure as an internal error for this call.
+                            Err(_) => MethodResponse::error(id, internal_rpc_err("Internal error")),
+                        }
+                    }
+                    Prepared::Ready(rp) => rp,
+                };
+                (index, rp)
+            },
+        ))
+        .buffer_unordered(MAX_CONCURRENT_BATCH_ENTRIES);
+
+        // Enforce the limit as unordered results arrive. This caps retained responses and
+        // dropping the stream on overflow cancels work whose output would be discarded.
+        // The accounting mirrors `BatchResponseBuilder`: `[` plus every response and one
+        // delimiter, with the final comma replaced by `]`.
+        let mut responses = Vec::with_capacity(response_capacity);
+        let mut response_size = 1usize;
+        while let Some((index, rp)) = response_stream.next().await {
+            let next_size = response_size
+                .checked_add(rp.as_json().get().len())
+                .and_then(|size| size.checked_add(1));
+            match next_size {
+                Some(next_size) if next_size <= self.max_response_size_bytes => {
+                    response_size = next_size;
+                    responses.push((index, rp));
+                }
+                _ => {
+                    return Err(MethodResponse::error(
+                        Id::Null,
+                        reject_too_big_batch_response(self.max_response_size_bytes),
+                    ));
+                }
+            }
+        }
+
+        responses.sort_unstable_by_key(|(index, _)| *index);
+        Ok(responses.into_iter().map(|(_, rp)| rp).collect())
     }
 }
 
