@@ -27,7 +27,6 @@ jobs:
     uses: matter-labs/zksync-ci-common/.github/workflows/release-please.yaml@905a2a2dffe79187430cc0bc597db2bb0d2f1f9d # release-please-signed-commits
     secrets:
       slack_webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}  # Slack webhook for release notifications
-      gh_token: ${{ secrets.RELEASE_TOKEN }}                # GitHub token for creating PRs and releases
       # Org-level secret; the App ID comes from the org-level MATTERLABS_BOTS_APP_ID
       # variable, resolved by the reusable workflow itself. API commits are auto-signed.
       MATTERLABS_BOTS_PRIVATE_KEY: ${{ secrets.MATTERLABS_BOTS_PRIVATE_KEY }}
