@@ -1032,6 +1032,19 @@ pub struct RpcConfig {
     #[config(default_t = 24)]
     pub max_response_size: u32,
 
+    /// Limits the work admitted by one JSON-RPC batch. The server rejects larger batches before
+    /// dispatching any entry, so one request cannot create an unbounded work queue.
+    #[config(default_t = 1000)]
+    pub max_batch_size: u32,
+
+    /// Allows entries in one JSON-RPC batch to run concurrently, with a per-batch limit.
+    ///
+    /// Responses stay in request order, but execution does not. For example, a transaction and a
+    /// read that depends on it may race when sent in the same batch. Keep this disabled for clients
+    /// that rely on sequential batch execution.
+    #[config(default_t = false)]
+    pub parallel_batches: bool,
+
     /// Maximum number of blocks that could be scanned per filter
     #[config(default_t = 10_000)]
     pub max_blocks_per_filter: u64,
@@ -2002,6 +2015,8 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_connections: c.max_connections,
             max_request_size: c.max_request_size,
             max_response_size: c.max_response_size,
+            max_batch_size: c.max_batch_size,
+            parallel_batches: c.parallel_batches,
             max_blocks_per_filter: c.max_blocks_per_filter,
             max_logs_per_response: c.max_logs_per_response,
             l2_signer_blacklist: c.l2_signer_blacklist,
