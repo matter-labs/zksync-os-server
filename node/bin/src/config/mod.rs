@@ -1270,11 +1270,38 @@ pub struct SequencerConfig {
     #[config(default_t = true)]
     pub revm_consistency_checker_enabled: bool,
     /// If enabled, node will revert block with divergence detected by REVM consistency checker.
+    ///
+    /// The revert works by re-running the chain with the offending block emptied, which rewrites
+    /// that block's hash and every descendant — impossible under consensus, where the block
+    /// carries a finalization certificate from the committee. Detection stays on either way;
+    /// only the automatic local repair is refused.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        |root: &Config, value: &bool| !*value || !root.consensus_config.enabled,
+        "cannot be combined with `consensus.enabled=true`: rewriting a finalized block forks \
+         this node off the committee instead of healing it. Leave \
+         `sequencer.revm_consistency_checker_enabled` on for detection and recover a diverged \
+         validator through the disaster-fork runbook"
+    ))]
     pub revm_consistency_checker_revert_on_divergence: bool,
 
     /// Block rebuild / L1 revert options. See [`RebuildConfig`] for the three modes.
+    ///
+    /// The two local-block modes are refused under consensus; `L1Revert` touches only L1 and
+    /// stays available, since the disaster-fork runbook depends on it.
     #[config(nest)]
+    #[config_validate(custom(
+        |root: &Config, value: &Option<RebuildConfig>| {
+            !root.consensus_config.enabled
+                || value.as_ref().is_none_or(|rebuild| rebuild.bounds().is_none())
+        },
+        "must not rebuild local blocks when `consensus.enabled=true`: rebuilding rewrites them \
+         (emptied transactions, reset timestamps), and they were finalized by the committee — so \
+         this node forks off the chain instead of recovering. Faithful WAL replay on startup is \
+         unaffected. Use `L1Revert` (L1 only) or the disaster-fork runbook. This also rejects a \
+         rebuild synthesized from `failing_block` in `internal_config.json` — clear it by hand \
+         after resolving the divergence"
+    ))]
     pub rebuild: Option<RebuildConfig>,
 
     /// If set, external node will sync up to and including this block number and then stop processing blocks.
@@ -2976,6 +3003,97 @@ mod tests {
         let err = config.validate().await.unwrap_err().to_string();
 
         assert!(err.contains("cannot be enabled on a consensus observer"));
+    }
+
+    /// A committee validator whose config is otherwise complete, so these tests fail only on
+    /// what they are about.
+    fn consensus_validator_config() -> Config {
+        let mut config = base_config(NodeRole::MainNode);
+        config.consensus_config.enabled = true;
+        config.consensus_config.network_key = Some("00".repeat(32));
+        config.consensus_config.bls_key = Some("00".repeat(32));
+        config.consensus_config.validators = vec!["validator-a".into(), "validator-b".into()];
+        config
+    }
+
+    #[tokio::test]
+    async fn auto_revert_on_divergence_is_refused_under_consensus() {
+        let mut config = consensus_validator_config();
+        config
+            .sequencer_config
+            .revm_consistency_checker_revert_on_divergence = true;
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(
+            err.contains("`sequencer.revm_consistency_checker_revert_on_divergence`"),
+            "{err}"
+        );
+        assert!(
+            err.contains("cannot be combined with `consensus.enabled=true`"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn detection_without_auto_revert_is_allowed_under_consensus() {
+        let mut config = consensus_validator_config();
+        config.sequencer_config.revm_consistency_checker_enabled = true;
+        config
+            .sequencer_config
+            .revm_consistency_checker_revert_on_divergence = false;
+
+        config.validate().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_block_rebuild_is_refused_under_consensus() {
+        let mut config = consensus_validator_config();
+        config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
+            bounds: RebuildBounds {
+                from_block_number: 42,
+                from_block_hash: B256::repeat_byte(0x11),
+                blocks_to_empty: vec![42],
+                reset_timestamps: false,
+            },
+        });
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(err.contains("`sequencer.rebuild`"), "{err}");
+        assert!(
+            err.contains("must not rebuild local blocks when `consensus.enabled=true`"),
+            "{err}"
+        );
+    }
+
+    /// The disaster-fork runbook reverts committed batches on L1 while leaving local blocks
+    /// alone — that mode must survive the guard above.
+    #[tokio::test]
+    async fn l1_only_revert_is_allowed_under_consensus() {
+        let mut config = consensus_validator_config();
+        config.sequencer_config.rebuild = Some(RebuildConfig::L1Revert {
+            from_batch_number: NonZeroU64::new(7).unwrap(),
+            from_batch_commit_tx_hash: B256::repeat_byte(0x22),
+            l1_reverter_sk: local_signer(0x33),
+        });
+
+        config.validate().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_block_rebuild_is_still_allowed_without_consensus() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.sequencer_config.rebuild = Some(RebuildConfig::BlockRebuild {
+            bounds: RebuildBounds {
+                from_block_number: 42,
+                from_block_hash: B256::repeat_byte(0x11),
+                blocks_to_empty: vec![42],
+                reset_timestamps: false,
+            },
+        });
+
+        config.validate().await.unwrap();
     }
 
     #[tokio::test]

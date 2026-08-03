@@ -43,6 +43,14 @@ pub(crate) async fn build_node_config(
     // blocks): existing scenarios time their waits around continuous block
     // production. Dedicated idle-policy tests opt into heartbeats explicitly.
     config.consensus_config.idle_heartbeat = std::time::Duration::ZERO;
+    // `local_dev.yaml` arms the REVM auto-revert, which repairs a divergence by rewriting the
+    // offending block — refused under consensus, where the block carries a finalization
+    // certificate. Off for every test rather than per consensus scenario: the config validator
+    // that enforces this cannot catch a regression here, since tests never call `validate()`.
+    // Detection is untouched, so a divergence still logs and bumps `revm_divergences_detected`.
+    config
+        .sequencer_config
+        .revm_consistency_checker_revert_on_divergence = false;
     config.l1_provider_config =
         ProviderConfig::new(l1.address.clone(), TEST_PROVIDER_POLL_INTERVAL);
     if let Some(gateway_provider_config) = &mut config.gateway_provider_config {

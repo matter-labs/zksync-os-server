@@ -388,6 +388,9 @@ observability:
 sequencer:
   fee_collector_address: '{fee_collector}'
   block_dump_path: /db/block_dumps
+  # `local_dev.yaml` (the base layer) arms the REVM auto-revert, which rewrites a finalized
+  # block and is refused under consensus. Divergences still get detected and logged.
+  revm_consistency_checker_revert_on_divergence: false
 batcher:
   enabled: {batcher_enabled}
 prover_api:
