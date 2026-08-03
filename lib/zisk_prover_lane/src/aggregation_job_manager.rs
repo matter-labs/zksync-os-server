@@ -27,6 +27,12 @@
 //! buffered per-batch streams — and parked in `completed` until the
 //! Airbender SNARK for the same range takes it (`SnarkJobManager` is the
 //! rendezvous point, exactly like the per-batch flow).
+//!
+//! Under [`MultiProofMode::Shadow`] no rendezvous follows: the multi-proof
+//! never reaches L1, so an accepted proof retires its range on the spot and the
+//! validation outcome is the product. Settlement then only marks how late the
+//! verification was ([`ZiskAggregationJobManager::on_batches_settled`]), which
+//! keeps a lagging ZiSK lane covering the batches it settles behind.
 
 use alloy::primitives::{B256, keccak256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -35,9 +41,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::commitment::ZISK_PUBLIC_VALUES_BYTES;
+use crate::job_manager::{MultiProofMode, ZiskVkSet};
 use crate::metrics::ZISK_LANE_METRICS;
 use crate::persistence::ZiskAggregationPersistence;
 use zksync_os_batch_types::batcher_model::ZISK_SNARK_PROOF_BYTES;
+use zksync_os_types::ProtocolSemanticVersion;
 
 /// Cap on buffered per-batch inputs (~330 KiB each). When full, new
 /// arrivals are dropped with a warning; the SNARK-side wait timeout is the
@@ -48,6 +56,15 @@ const MAX_BUFFERED_INPUTS: usize = 64;
 /// consumed in order by the Airbender lane, so more than a couple parked
 /// ranges means the Airbender lane is stuck — cap and complain.
 const MAX_COMPLETED: usize = 16;
+
+/// Cap on ranges tracked while their inputs are still incomplete. In shadow
+/// proving the floor advances only when a range is verified, so a lane whose
+/// provers stay offline would otherwise track one range per settled Airbender
+/// SNARK forever, and hold their inputs with them. The lowest tracked range is
+/// retired when the cap is passed, which counts its buffered inputs as lost
+/// coverage. Unreachable while the multi-proof is required — settlement waits
+/// for the range there.
+const MAX_TRACKED_RANGES: usize = 128;
 
 /// Give-up threshold for a range whose submitted proof fails binding-digest
 /// validation. A DETERMINISTIC mismatch (a real divergence, or inputs the
@@ -66,6 +83,10 @@ const MAX_DIGEST_MISMATCH_ATTEMPTS: u32 = 3;
 pub struct AggregationInput {
     /// The full serialized proof stream the aggregator guest verifies.
     pub stream: Vec<u8>,
+    /// Protocol version of the batch this input proves. Keys the inner vadcop
+    /// VK tripwire, so each input is checked against the guest build of its own
+    /// version.
+    pub protocol_version: ProtocolSemanticVersion,
     /// Inner STF guest program VK (32-byte big-endian wire form).
     pub program_vk: B256,
     /// vadcop-final VK / rootCVadcopFinal (32-byte big-endian wire form).
@@ -181,6 +202,35 @@ struct State {
     /// Batches at or below this can never join a range: they were either
     /// consumed by a taken range or sent downstream without aggregation.
     floor: u64,
+    /// Highest batch that went downstream on L1. Shadow proving only, where
+    /// settlement does not retire the range: it marks a range verified after
+    /// its batches settled, which is the coverage the lane would otherwise
+    /// lose silently. The floor stays put, so those batches keep proving.
+    settled_up_to: u64,
+}
+
+/// Why the lane is retiring everything at or below a cut.
+#[derive(Debug, Clone, Copy)]
+enum RetireCause {
+    /// An aggregated proof over `from..=to` was verified, so those batches have
+    /// their second-proof coverage. Anything else the cut drops does not.
+    Verified { from: u64, to: u64 },
+    /// The batches went downstream with no aggregated ZiSK proof at all, so
+    /// everything the cut drops is lost coverage.
+    Unverified,
+}
+
+impl RetireCause {
+    fn covers(&self, batch: u64) -> bool {
+        matches!(self, Self::Verified { from, to } if (*from..=*to).contains(&batch))
+    }
+
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Verified { .. } => "batches covered by a verified aggregated ZiSK proof",
+            Self::Unverified => "batches sent downstream without aggregation",
+        }
+    }
 }
 
 impl State {
@@ -231,7 +281,11 @@ impl State {
     /// all inputs at or below it, and advance the floor. Ranges straddling
     /// the cut are dropped whole (they can never rendezvous), but their
     /// above-the-cut inputs stay: re-keyed ranges may reuse them.
-    fn retire_up_to(&mut self, batch_to: u64, reason: &str) {
+    ///
+    /// Every dropped input the `cause` does not cover is a batch that keeps no
+    /// second-proof verification, so it raises the coverage-lost alarm.
+    fn retire_up_to(&mut self, batch_to: u64, cause: RetireCause) {
+        let reason = cause.reason();
         let stale = |&(from, _): &(u64, u64)| from <= batch_to;
         for range in self
             .targets
@@ -290,8 +344,20 @@ impl State {
             );
         }
         let stale_inputs: Vec<u64> = self.inputs.range(..=batch_to).map(|(&b, _)| b).collect();
+        let mut lost = 0u64;
         for b in stale_inputs {
             self.inputs.remove(&b);
+            lost += u64::from(!cause.covers(b));
+        }
+        if lost > 0 {
+            ZISK_LANE_METRICS.coverage_lost.inc_by(lost);
+            tracing::error!(
+                batch_to,
+                lost,
+                reason,
+                "ZiSK coverage lost: buffered per-batch inputs retired without a range proof \
+                 over them — those batches keep no second-proof verification"
+            );
         }
         for range in self
             .mismatch_attempts
@@ -328,12 +394,15 @@ pub struct ZiskAggregationJobManager {
     /// rejected and counted — the prover runs a different aggregator
     /// build. Unset: the reported VK is only logged.
     expected_program_vk: Option<B256>,
-    /// Expected INNER vadcop-final VK (`rootCVadcopFinal`) shared by the
-    /// range's per-batch inputs. When set, a range whose inputs carry a
-    /// different vadcop VK is rejected and counted
-    /// (`zisk_lane_aggregated_vadcop_vk_drift`). Mirrors the per-batch lane's
-    /// vadcop tripwire; the same VK is pinned on L1. Unset: not checked here.
-    expected_vadcop_vk: Option<B256>,
+    /// Expected INNER per-batch VK sets per protocol version — the same map the
+    /// per-batch lane checks against. Every buffered input of a range is
+    /// checked against the vadcop-final VK (`rootCVadcopFinal`) of its own
+    /// protocol version, so an upgrade window where two versions coexist keeps
+    /// the tripwire armed for both. A drift rejects the range and is counted
+    /// (`zisk_lane_aggregated_vadcop_vk_drift`); the same VK is pinned on L1.
+    /// No entry for an input's version (or an empty map): that input's vadcop
+    /// VK is not checked here.
+    expected_inner_vks: HashMap<ProtocolSemanticVersion, ZiskVkSet>,
     /// Whether to run the off-chain proof verification on each aggregated-range
     /// submission. True (the production default) runs the native aggregated-
     /// range PLONK wire check. False skips only that cryptographic check; the
@@ -345,6 +414,9 @@ pub struct ZiskAggregationJobManager {
     /// `ProofStorage`), set only when the second proof system is enabled.
     /// Unset: the lane stays fully in-memory.
     proof_storage: std::sync::Mutex<Option<Arc<dyn ZiskAggregationPersistence>>>,
+    /// Whether a verified range proof composes into the L1 multi-proof or is
+    /// the terminal event of the range. See [`Self::on_batches_settled`].
+    multi_proof_mode: MultiProofMode,
 }
 
 impl ZiskAggregationJobManager {
@@ -352,8 +424,9 @@ impl ZiskAggregationJobManager {
         range_size: usize,
         assignment_timeout: Duration,
         expected_program_vk: Option<B256>,
-        expected_vadcop_vk: Option<B256>,
+        expected_inner_vks: HashMap<ProtocolSemanticVersion, ZiskVkSet>,
         proof_verification_enabled: bool,
+        multi_proof_mode: MultiProofMode,
     ) -> Self {
         assert!(range_size >= 1, "aggregation range_size must be >= 1");
         Self {
@@ -365,13 +438,15 @@ impl ZiskAggregationJobManager {
                 completed: BTreeMap::new(),
                 mismatch_attempts: HashMap::new(),
                 floor: 0,
+                settled_up_to: 0,
             }),
             range_size: range_size as u64,
             assignment_timeout,
             expected_program_vk,
-            expected_vadcop_vk,
+            expected_inner_vks,
             proof_verification_enabled,
             proof_storage: std::sync::Mutex::new(None),
+            multi_proof_mode,
         }
     }
 
@@ -515,6 +590,22 @@ impl ZiskAggregationJobManager {
         );
         state.targets.insert(range);
         state.form_ready_ranges();
+        // Retiring the lowest range also releases the inputs it was holding, so
+        // a lane that never proves cannot grow this set or the input buffer
+        // behind it without limit.
+        while state.targets.len() > MAX_TRACKED_RANGES {
+            let Some(&(oldest_from, oldest_to)) = state.targets.iter().next() else {
+                break;
+            };
+            tracing::error!(
+                from = oldest_from,
+                to = oldest_to,
+                max = MAX_TRACKED_RANGES,
+                "too many ZiSK aggregation ranges waiting for their inputs — retiring the \
+                 lowest (the ZiSK lane is not keeping up with the Airbender lane)"
+            );
+            state.retire_up_to(oldest_to, RetireCause::Unverified);
+        }
     }
 
     /// Feed one accepted per-batch `vadcop_final` proof (called by
@@ -533,10 +624,12 @@ impl ZiskAggregationJobManager {
     ) -> AggregationInputOutcome {
         let mut state = self.state.lock().await;
         if batch_number <= state.floor {
-            tracing::warn!(
+            ZISK_LANE_METRICS.coverage_lost.inc();
+            tracing::error!(
                 batch = batch_number,
                 floor = state.floor,
-                "ZiSK aggregation: proof arrived below the range floor — batch can no longer join a range, dropping"
+                "ZiSK coverage lost: a validated per-batch proof arrived below the range floor \
+                 — the batch can no longer join a range, dropping the proof"
             );
             return AggregationInputOutcome::BelowFloor;
         }
@@ -731,12 +824,19 @@ impl ZiskAggregationJobManager {
                 });
             }
         };
-        // Inner vadcop-final VK (rootCVadcopFinal) tripwire: the range's
-        // per-batch inputs all share one vadcop VK (the digest recompute
-        // enforces this); reject the range if it is not the configured one.
-        // Mirrors the per-batch program-VK tripwire. Copy the value out so the
-        // `inputs` borrow ends before the state is mutated below.
-        let reported_vadcop_vk = inputs.first().map(|i| i.vadcop_vk);
+        // Inner vadcop-final VK (rootCVadcopFinal) tripwire: every buffered
+        // input is checked against the VK set of its own protocol version, so
+        // an upgrade window with an entry per version keeps the check armed for
+        // each of them. An input whose version has no entry is not checked.
+        // Mirrors the per-batch lane's vadcop tripwire. Copy the values out so
+        // the `inputs` borrow ends before the state is mutated below.
+        let inner_vadcop_drift = inputs.iter().find_map(|input| {
+            let expected = self
+                .expected_inner_vks
+                .get(&input.protocol_version)?
+                .vadcop_vk;
+            (input.vadcop_vk != expected).then_some((input.vadcop_vk, expected))
+        });
         let expected = match expected_aggregated_public_input(&inputs) {
             Ok(digest) => digest,
             Err(msg) => {
@@ -755,9 +855,7 @@ impl ZiskAggregationJobManager {
                 return Err(ZiskAggregationSubmitError::DigestMismatch(msg));
             }
         };
-        if let (Some(expected_vk), Some(reported)) = (self.expected_vadcop_vk, reported_vadcop_vk)
-            && reported != expected_vk
-        {
+        if let Some((reported, expected_vk)) = inner_vadcop_drift {
             ZISK_LANE_METRICS.aggregated_vadcop_vk_drift.inc();
             tracing::error!(
                 from = from_batch,
@@ -843,6 +941,43 @@ impl ZiskAggregationJobManager {
             ));
         }
 
+        ZISK_LANE_METRICS.aggregated_proofs_accepted.inc();
+        // Accepted: clear any prior mismatch attempts so the give-up counter
+        // never carries over to a later re-keyed range with the same bounds.
+        state.mismatch_attempts.remove(&range);
+
+        if self.multi_proof_mode == MultiProofMode::Shadow {
+            // Shadow proving composes nothing, so the verification IS the end
+            // of the range: retire it here, because no rendezvous will ever take
+            // a parked proof. The range keeps its coverage; whatever else the cut
+            // drops is counted as lost.
+            let late = to_batch <= state.settled_up_to;
+            state.retire_up_to(
+                to_batch,
+                RetireCause::Verified {
+                    from: from_batch,
+                    to: to_batch,
+                },
+            );
+            state.record_gauges();
+            drop(state);
+            if late {
+                ZISK_LANE_METRICS.ranges_verified_after_settlement.inc();
+            }
+            tracing::info!(
+                from = from_batch,
+                to = to_batch,
+                prover_id,
+                aggregator_program_vk = %reported_vk,
+                digest = %got,
+                late,
+                "aggregated ZiSK proof accepted and verified; shadow proving keeps it off L1, \
+                 so the range is complete"
+            );
+            self.prune_storage_up_to(to_batch).await;
+            return Ok(());
+        }
+
         tracing::info!(
             from = from_batch,
             to = to_batch,
@@ -851,10 +986,6 @@ impl ZiskAggregationJobManager {
             digest = %got,
             "aggregated ZiSK proof accepted, awaiting Airbender SNARK for multi-proof composition"
         );
-        ZISK_LANE_METRICS.aggregated_proofs_accepted.inc();
-        // Accepted: clear any prior mismatch attempts so the give-up counter
-        // never carries over to a later re-keyed range with the same bounds.
-        state.mismatch_attempts.remove(&range);
         let parked = CompletedAggregatedProof {
             proof,
             public_values,
@@ -896,7 +1027,13 @@ impl ZiskAggregationJobManager {
         let taken = {
             let mut state = self.state.lock().await;
             let taken = state.completed.remove(&(from_batch, to_batch))?;
-            state.retire_up_to(to_batch, "batches consumed by a composed multi-proof");
+            state.retire_up_to(
+                to_batch,
+                RetireCause::Verified {
+                    from: from_batch,
+                    to: to_batch,
+                },
+            );
             state.record_gauges();
             taken
         };
@@ -906,18 +1043,37 @@ impl ZiskAggregationJobManager {
         Some(taken)
     }
 
-    /// Drop aggregation state for batches at or below `batch_to`: called
-    /// when those batches were sent downstream without a multi-proof
-    /// (shadow mode, degraded sends, fake-SNARK pass) — they can never
-    /// join a rendezvous anymore. Ranges straddling the cut are dropped
-    /// whole; inputs above the cut stay for future re-keyed ranges.
+    /// Drop aggregation state for batches at or below `batch_to`: called when
+    /// those batches were sent downstream and can never join a rendezvous
+    /// anymore (a required-mode settlement, or the fake-SNARK pass). Ranges
+    /// straddling the cut are dropped whole; inputs above the cut stay for
+    /// future re-keyed ranges.
     pub async fn discard_up_to(&self, batch_to: u64) {
         {
             let mut state = self.state.lock().await;
-            state.retire_up_to(batch_to, "batches sent downstream without aggregation");
+            state.retire_up_to(batch_to, RetireCause::Unverified);
             state.record_gauges();
         }
         self.prune_storage_up_to(batch_to).await;
+    }
+
+    /// The batches at or below `batch_to` went downstream on L1.
+    ///
+    /// - [`MultiProofMode::Required`]: they settled through a composed
+    ///   multi-proof (or, on the Airbender-only fallback, without one), so no
+    ///   range over them can rendezvous — their state is discarded.
+    /// - [`MultiProofMode::Shadow`]: settlement never waits for this lane, so
+    ///   the range keeps its inputs and its place in the queue and is still
+    ///   proven and verified. Only the settlement watermark moves, which marks
+    ///   that verification as late when it lands.
+    pub async fn on_batches_settled(&self, batch_to: u64) {
+        match self.multi_proof_mode {
+            MultiProofMode::Required => self.discard_up_to(batch_to).await,
+            MultiProofMode::Shadow => {
+                let mut state = self.state.lock().await;
+                state.settled_up_to = state.settled_up_to.max(batch_to);
+            }
+        }
     }
 }
 
@@ -984,12 +1140,20 @@ mod tests {
     use super::*;
 
     const K: usize = 4;
+    const TEST_PROTOCOL_VERSION: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
 
-    fn manager() -> ZiskAggregationJobManager {
+    fn manager(multi_proof_mode: MultiProofMode) -> ZiskAggregationJobManager {
         // The submitted aggregated-range proofs are well-shaped SNARK
         // artifacts, which pass the wire-form verification, so proof
         // verification stays on here.
-        ZiskAggregationJobManager::new(K, Duration::from_secs(60), None, None, true)
+        ZiskAggregationJobManager::new(
+            K,
+            Duration::from_secs(60),
+            None,
+            HashMap::new(),
+            true,
+            multi_proof_mode,
+        )
     }
 
     /// A buffered input with the given commitment byte pattern and the
@@ -999,9 +1163,21 @@ mod tests {
     fn input(commitment_byte: u8) -> AggregationInput {
         AggregationInput {
             stream: vec![commitment_byte; 64],
+            protocol_version: TEST_PROTOCOL_VERSION,
             program_vk: B256::repeat_byte(0xA1),
             vadcop_vk: B256::repeat_byte(0xB2),
             commitment: B256::repeat_byte(commitment_byte),
+        }
+    }
+
+    /// The same input, tagged with another batch protocol version.
+    fn input_of_version(
+        commitment_byte: u8,
+        protocol_version: ProtocolSemanticVersion,
+    ) -> AggregationInput {
+        AggregationInput {
+            protocol_version,
+            ..input(commitment_byte)
         }
     }
 
@@ -1030,22 +1206,23 @@ mod tests {
     /// the same values. Update all pins together.
     #[test]
     fn binding_digest_matches_cross_stack_vector() {
-        let program_vk: B256 = "0x481748830df5c3b7aa5522333ace2c4b533352637b92fd3c83ecc506c5104ead"
+        let program_vk: B256 = "0x1d16f620e2bc7e58044df7ee8d4284422a0dd37cf151cf79ecf324c131e50468"
             .parse()
             .unwrap();
         let vadcop_vk: B256 = "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
             .parse()
             .unwrap();
         let commitments = [
-            "0x95693fd871251f2a04f558f94852d31d4f7b0cd38b0ee2c746bd2851dc701dca",
-            "0x4962160e4e0addc72fe2178dbbf3c5882ca1033790bb968d4fa451485987f99b",
-            "0xe697864dd72ddded6f1818db6618efff8e695714db8492ac50abc9f5d8b6221e",
-            "0x3cbda79d374329af945a0b1d2d73c87b2cd2cadb69ab3d6c03166a690dfff898",
+            "0x6c41981c6fd0bd9a9262fe3dcc9fe4f0d8e142651f80316a8846d6922b5214ea",
+            "0x1f56fcbd24636dc0a635bc51808d7db9eabf3914f66611c93cf37ea440a5fe27",
+            "0x9d909d7416f29633c361bfc00073a9004423f0e1cc46105cdd24550543c0e41c",
+            "0x6ca5ada4916397cfb1b07a2f115f21fedf7e4a14a827995b3c5b392966532ad6",
         ];
         let inputs: Vec<AggregationInput> = commitments
             .iter()
             .map(|c| AggregationInput {
                 stream: vec![],
+                protocol_version: TEST_PROTOCOL_VERSION,
                 program_vk,
                 vadcop_vk,
                 commitment: c.parse().unwrap(),
@@ -1055,7 +1232,7 @@ mod tests {
         let digest = expected_aggregated_public_input(&refs).unwrap();
         assert_eq!(
             format!("{digest:#x}"),
-            "0x5f47db9b336cf84b7b7fc49ca77eadb5160e373dc8f12057d719f45d3b2fbd84"
+            "0x7eabba6c7a68150706e10101195be54eaf3b39f699bc8da5f34c8033eedec13e"
         );
     }
 
@@ -1072,37 +1249,88 @@ mod tests {
         assert_eq!(digest, keccak256(binding));
     }
 
-    /// With an expected inner vadcop VK pinned, a range whose buffered
-    /// per-batch inputs carry a different vadcop VK is rejected before the
-    /// digest comparison. Inputs use vadcop VK 0xB2 (see `input`).
+    /// The upgrade-window seam of the inner vadcop tripwire: with an entry per
+    /// protocol version, a range of EITHER version whose buffered inputs carry
+    /// a foreign vadcop VK is rejected before the digest comparison, and a
+    /// range whose version has no entry is not checked (log-only, so a correct
+    /// digest is accepted). Inputs carry vadcop VK 0xB2 (see `input`), which
+    /// matches neither configured entry.
     #[tokio::test]
-    async fn inner_vadcop_vk_drift_rejects_range() {
-        let manager = ZiskAggregationJobManager::new(
-            K,
-            Duration::from_secs(60),
-            None,
-            Some(B256::repeat_byte(0xEE)),
-            true,
-        );
+    async fn inner_vadcop_vk_drift_rejects_range_of_either_version() {
+        const NEXT_PROTOCOL_VERSION: ProtocolSemanticVersion =
+            ProtocolSemanticVersion::new(0, 32, 0);
+        const UNMAPPED_PROTOCOL_VERSION: ProtocolSemanticVersion =
+            ProtocolSemanticVersion::new(0, 33, 0);
+        // Both versions are configured throughout; a rejected range is
+        // requeued, so each case runs on its own manager to keep the picked
+        // range unambiguous.
+        let manager_with_both_versions = || {
+            let vk_set = |vadcop_byte: u8| ZiskVkSet {
+                program_vk: B256::repeat_byte(0xA1),
+                vadcop_vk: B256::repeat_byte(vadcop_byte),
+            };
+            ZiskAggregationJobManager::new(
+                K,
+                Duration::from_secs(60),
+                None,
+                HashMap::from([
+                    (TEST_PROTOCOL_VERSION, vk_set(0xCC)),
+                    (NEXT_PROTOCOL_VERSION, vk_set(0xDD)),
+                ]),
+                true,
+                MultiProofMode::Required,
+            )
+        };
+
+        for version in [TEST_PROTOCOL_VERSION, NEXT_PROTOCOL_VERSION] {
+            let manager = manager_with_both_versions();
+            manager.note_snark_range(1, 4).await;
+            for batch in 1..=4u64 {
+                manager
+                    .on_proof_completed(batch, input_of_version(batch as u8, version.clone()))
+                    .await;
+            }
+            manager.pick_next_job("agg-1").await.expect("range 1..4");
+            let err = manager
+                .submit_proof(
+                    1,
+                    4,
+                    vec![0; ZISK_SNARK_PROOF_BYTES],
+                    aggregated_pv(B256::ZERO),
+                    "agg-1",
+                )
+                .await
+                .expect_err("inner vadcop VK drift rejected");
+            assert!(
+                matches!(err, ZiskAggregationSubmitError::InnerVadcopVkDrift { .. }),
+                "version {version}: {err}"
+            );
+        }
+
+        // A range whose protocol version has no entry is log-only: it reaches
+        // the digest check and its correct digest is accepted.
+        let manager = manager_with_both_versions();
         manager.note_snark_range(1, 4).await;
         for batch in 1..=4u64 {
-            feed(&manager, batch).await;
+            manager
+                .on_proof_completed(
+                    batch,
+                    input_of_version(batch as u8, UNMAPPED_PROTOCOL_VERSION),
+                )
+                .await;
         }
         manager.pick_next_job("agg-1").await.expect("range 1..4");
-        let err = manager
+        let digest = expected_digest(&manager, 1, 4).await;
+        manager
             .submit_proof(
                 1,
                 4,
                 vec![0; ZISK_SNARK_PROOF_BYTES],
-                aggregated_pv(B256::ZERO),
+                aggregated_pv(digest),
                 "agg-1",
             )
             .await
-            .expect_err("inner vadcop VK drift rejected");
-        assert!(
-            matches!(err, ZiskAggregationSubmitError::InnerVadcopVkDrift { .. }),
-            "{err}"
-        );
+            .expect("an unmapped protocol version is log-only, so accepted");
     }
 
     #[test]
@@ -1124,7 +1352,7 @@ mod tests {
     /// still forms the range once the run is complete, in batch order.
     #[tokio::test]
     async fn ranges_form_only_when_noted() {
-        let manager = manager();
+        let manager = manager(MultiProofMode::Required);
         for batch in [9u64, 7, 10, 8] {
             feed(&manager, batch).await;
         }
@@ -1148,7 +1376,7 @@ mod tests {
     /// fills.
     #[tokio::test]
     async fn noted_range_waits_for_inputs() {
-        let manager = manager();
+        let manager = manager(MultiProofMode::Required);
         manager.note_snark_range(1, 4).await;
         for batch in [1u64, 2, 4] {
             feed(&manager, batch).await;
@@ -1170,7 +1398,7 @@ mod tests {
     /// continues cleanly.
     #[tokio::test]
     async fn lifecycle_and_floor_advance() {
-        let manager = manager();
+        let manager = manager(MultiProofMode::Required);
         manager.note_snark_range(5, 8).await;
         for batch in 5..=8u64 {
             feed(&manager, batch).await;
@@ -1224,7 +1452,7 @@ mod tests {
     /// the overlapping alternative.
     #[tokio::test]
     async fn overlapping_rekeyed_ranges_share_inputs() {
-        let manager = manager();
+        let manager = manager(MultiProofMode::Required);
         manager.note_snark_range(1, 2).await;
         manager.note_snark_range(1, 4).await;
         for batch in 1..=4u64 {
@@ -1282,7 +1510,14 @@ mod tests {
     /// re-offered with identical streams.
     #[tokio::test]
     async fn timeout_reassigns_range() {
-        let manager = ZiskAggregationJobManager::new(K, Duration::ZERO, None, None, true);
+        let manager = ZiskAggregationJobManager::new(
+            K,
+            Duration::ZERO,
+            None,
+            HashMap::new(),
+            true,
+            MultiProofMode::Required,
+        );
         manager.note_snark_range(1, 4).await;
         for batch in 1..=4u64 {
             feed(&manager, batch).await;
@@ -1310,8 +1545,9 @@ mod tests {
             K,
             Duration::from_secs(60),
             Some(expected_vk),
-            None,
+            HashMap::new(),
             true,
+            MultiProofMode::Required,
         );
         manager.note_snark_range(1, 4).await;
         for batch in 1..=4u64 {
@@ -1381,7 +1617,7 @@ mod tests {
     /// or tracked) at it.
     #[tokio::test]
     async fn persistent_digest_mismatch_gives_up() {
-        let manager = manager();
+        let manager = manager(MultiProofMode::Required);
         manager.note_snark_range(1, 4).await;
         for batch in 1..=4u64 {
             feed(&manager, batch).await;
@@ -1430,7 +1666,7 @@ mod tests {
     /// The per-batch lane keys its completion-marker parking on this.
     #[tokio::test]
     async fn on_proof_completed_reports_outcome() {
-        let manager = manager();
+        let manager = manager(MultiProofMode::Required);
         assert_eq!(
             manager.on_proof_completed(5, input(5)).await,
             AggregationInputOutcome::Buffered,
@@ -1468,7 +1704,7 @@ mod tests {
     /// floor, but keep above-the-cut inputs for future re-keyed ranges.
     #[tokio::test]
     async fn discard_keeps_inputs_above_the_cut() {
-        let manager = manager();
+        let manager = manager(MultiProofMode::Required);
         manager.note_snark_range(3, 6).await;
         for batch in 3..=6u64 {
             feed(&manager, batch).await;
@@ -1518,11 +1754,68 @@ mod tests {
         assert!(manager.take_completed(5, 6).await.is_none());
     }
 
+    /// Shadow proving: a range whose batches already settled on L1 keeps its
+    /// place in the lane. Streams that arrive afterwards still buffer, the
+    /// range still forms and is still picked, and the proof is still verified —
+    /// counted as a late verification, with nothing reported lost. Verifying it
+    /// is also the end of the range: nothing composes, so nothing is parked.
+    #[tokio::test]
+    async fn shadow_mode_verifies_a_range_after_settlement() {
+        let manager = manager(MultiProofMode::Shadow);
+        let lost_before = ZISK_LANE_METRICS.coverage_lost.get();
+        let late_before = ZISK_LANE_METRICS.ranges_verified_after_settlement.get();
+
+        // The Airbender lane settles the range before any ZiSK proof arrives.
+        manager.note_snark_range(1, 4).await;
+        manager.on_batches_settled(4).await;
+
+        for batch in 1..=4u64 {
+            assert_eq!(
+                manager.on_proof_completed(batch, input(batch as u8)).await,
+                AggregationInputOutcome::Buffered,
+                "a settled batch must still buffer its stream"
+            );
+        }
+        let job = manager
+            .pick_next_job("agg-1")
+            .await
+            .expect("the settled range is still offered");
+        assert_eq!((job.from_batch, job.to_batch), (1, 4));
+
+        let digest = expected_digest(&manager, 1, 4).await;
+        manager
+            .submit_proof(
+                1,
+                4,
+                vec![0; ZISK_SNARK_PROOF_BYTES],
+                aggregated_pv(digest),
+                "agg-1",
+            )
+            .await
+            .expect("the late range proof is verified");
+
+        assert_eq!(
+            manager.range_status(1, 4).await,
+            ZiskAggregationRangeStatus::Unknown,
+            "a verified range is complete in shadow proving"
+        );
+        assert!(
+            manager.take_completed(1, 4).await.is_none(),
+            "shadow proving composes nothing, so nothing is parked"
+        );
+        assert_eq!(manager.queue_counts().await.inputs_buffered, 0);
+        assert_eq!(
+            ZISK_LANE_METRICS.ranges_verified_after_settlement.get() - late_before,
+            1
+        );
+        assert_eq!(ZISK_LANE_METRICS.coverage_lost.get() - lost_before, 0);
+    }
+
     /// Feeding the same batch twice keeps the first input (idempotence),
     /// and re-noting a known range is a no-op.
     #[tokio::test]
     async fn duplicate_feed_and_note_are_idempotent() {
-        let manager = manager();
+        let manager = manager(MultiProofMode::Required);
         manager.note_snark_range(1, 1).await;
         manager.note_snark_range(1, 1).await;
         manager.on_proof_completed(1, input(0xAA)).await;

@@ -39,6 +39,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use zisk_witness::ZiskChainConfig;
 use zksync_os_batch_types::batcher_model::BatchMetadata;
+use zksync_os_types::ProtocolSemanticVersion;
 
 /// Maximum number of pending + assigned + completed-awaiting-SNARK ZiSK jobs.
 /// Prevents unbounded memory growth if ZiSK provers are slow or offline, and
@@ -61,7 +62,7 @@ const MAX_BACKLOG_AGE: Duration = Duration::from_secs(86400); // 24 hours
 /// Continue-mode give-up threshold: after this many commitment mismatches for
 /// the same batch, the job is abandoned instead of requeued. A DETERMINISTIC
 /// divergence (a real bug in one proof system, or a batch the guest cannot
-/// reproduce) would otherwise requeue forever — `discard_completed_up_to` only
+/// reproduce) would otherwise requeue forever — `on_batches_settled` only
 /// sweeps `completed`, never a requeued `pending` job — leaking a
 /// `MAX_TOTAL_JOBS` slot until ZiSK coverage stops. Small enough to free
 /// the slot promptly; > 1 so a genuinely flaky prover still gets retries.
@@ -182,6 +183,33 @@ impl ZiskJobState {
     }
 }
 
+/// The expected ZiSK verification keys of one protocol version's STF guest
+/// build: the program VK (public values `[0..32]`) and the inner vadcop-final
+/// VK / `rootCVadcopFinal` (public values `[288..320]`, or the `vadcop_final`
+/// stream tail in aggregated mode). Both are pinned together because a guest
+/// build fixes both at once.
+#[derive(Debug, Clone, Copy)]
+pub struct ZiskVkSet {
+    pub program_vk: B256,
+    pub vadcop_vk: B256,
+}
+
+/// Whether the multi-proof gates L1 settlement. Fixed at startup from
+/// `multi_proof_verifier` and given to both ZiSK job managers, because it
+/// decides what a settled batch range means for this lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiProofMode {
+    /// The MultiProof is required on L1: a range settles only once the
+    /// Airbender range SNARK and the aggregated ZiSK range proof compose, so
+    /// settlement consumes the range's ZiSK state.
+    Required,
+    /// Shadow proving: the Airbender-only proof settles the range, and the
+    /// server never sends the MultiProof to L1. A settled range keeps its place
+    /// in the ZiSK lane, so a late proof is still verified, measured, and
+    /// logged.
+    Shadow,
+}
+
 /// Manages ZiSK SNARK proof jobs with pick/submit assignment model.
 pub struct ZiskJobManager {
     state: Mutex<ZiskJobState>,
@@ -191,17 +219,15 @@ pub struct ZiskJobManager {
     /// task listening on this channel (a mismatch means one proof system is
     /// wrong — a security event). Unset: log + count + retry.
     halt_on_mismatch: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
-    /// Expected ZiSK program VK of the STF guest build. When set, a
-    /// submission with a different VK is rejected and counted
-    /// (`zisk_lane_vk_drift`) — the prover runs a different guest build.
-    /// Unset: the reported VK is only logged.
-    expected_program_vk: Option<B256>,
-    /// Expected inner vadcop-final VK (`rootCVadcopFinal`). When set, a
-    /// submission whose vadcop VK (PLONK public values [288..320], or the
-    /// vadcop_final stream tail in aggregated mode) differs is rejected and
-    /// counted (`zisk_lane_vadcop_vk_drift`). Unset: only logged. Mirrors
-    /// `expected_program_vk`.
-    expected_vadcop_vk: Option<B256>,
+    /// Expected ZiSK verification keys per protocol version. A batch's set is
+    /// looked up by `batch_metadata.batch_info.protocol_version`, so an upgrade
+    /// window where two protocol versions coexist validates each batch against
+    /// its own guest build — mirroring how the Airbender lane picks its VK per
+    /// batch. No entry for a batch's version: the reported VKs are only logged
+    /// (`zisk_lane_vk_drift`/`zisk_lane_vadcop_vk_drift` never fire). An entry:
+    /// both VKs are drift-checked and a mismatch is rejected and counted. An
+    /// empty map is the "no expected VK" (log-only) mode.
+    expected_vks: HashMap<ProtocolSemanticVersion, ZiskVkSet>,
     /// When set, the lane runs in AGGREGATED mode: per-batch submissions
     /// are `vadcop_final` streams, every accepted one is buffered in the
     /// aggregation manager as range input, and discards are forwarded so
@@ -219,16 +245,19 @@ pub struct ZiskJobManager {
     /// aggregated lane's stream. False skips only that cryptographic check; the
     /// batch commitment binding above it always runs.
     proof_verification_enabled: bool,
+    /// What a settled batch range means for this lane. See
+    /// [`Self::on_batches_settled`].
+    multi_proof_mode: MultiProofMode,
 }
 
 impl ZiskJobManager {
     pub fn new(
         assignment_timeout: Duration,
-        expected_program_vk: Option<B256>,
-        expected_vadcop_vk: Option<B256>,
+        expected_vks: HashMap<ProtocolSemanticVersion, ZiskVkSet>,
         chain_id: u64,
         chain_config: ZiskChainConfig,
         proof_verification_enabled: bool,
+        multi_proof_mode: MultiProofMode,
     ) -> Self {
         Self {
             state: Mutex::new(ZiskJobState {
@@ -240,12 +269,12 @@ impl ZiskJobManager {
             }),
             assignment_timeout,
             halt_on_mismatch: std::sync::Mutex::new(None),
-            expected_program_vk,
-            expected_vadcop_vk,
+            expected_vks,
             aggregation_sink: std::sync::Mutex::new(None),
             chain_id,
             chain_config,
             proof_verification_enabled,
+            multi_proof_mode,
         }
     }
 
@@ -322,8 +351,8 @@ impl ZiskJobManager {
 
     /// Evict parked inputs that expired (older than `MAX_BACKLOG_AGE`) or that
     /// overflow `MAX_BACKLOG_ENTRIES` (oldest first). Every eviction is a sealed
-    /// batch that loses its ZiSK proof path without a re-seal, so each is
-    /// counted and logged.
+    /// batch that loses its ZiSK proof path without a re-seal, so each raises
+    /// the coverage-lost alarm as well as its by-reason counter.
     fn evict_backlog(state: &mut ZiskJobState) {
         let expired: Vec<u64> = state
             .backlog
@@ -334,7 +363,12 @@ impl ZiskJobManager {
         for batch in expired {
             state.backlog.remove(&batch);
             ZISK_LANE_METRICS.backlog_evictions[&ZiskBacklogEvictionReason::Expired].inc();
-            tracing::warn!(batch, "evicting expired ZiSK input from the backlog");
+            ZISK_LANE_METRICS.coverage_lost.inc();
+            tracing::error!(
+                batch,
+                "ZiSK coverage lost: evicting an expired sealed input from the backlog — \
+                 the batch can no longer be proven without a re-seal"
+            );
         }
         while state.backlog.len() > MAX_BACKLOG_ENTRIES {
             let Some((&oldest, _)) = state.backlog.iter().min_by_key(|(_, data)| data.added_at)
@@ -343,10 +377,12 @@ impl ZiskJobManager {
             };
             state.backlog.remove(&oldest);
             ZISK_LANE_METRICS.backlog_evictions[&ZiskBacklogEvictionReason::Overflow].inc();
-            tracing::warn!(
+            ZISK_LANE_METRICS.coverage_lost.inc();
+            tracing::error!(
                 batch = oldest,
                 max = MAX_BACKLOG_ENTRIES,
-                "evicting ZiSK input from the backlog (full)"
+                "ZiSK coverage lost: evicting a sealed input from the full backlog — \
+                 the batch can no longer be proven without a re-seal"
             );
         }
     }
@@ -559,10 +595,29 @@ impl ZiskJobManager {
             )
         };
 
+        // Select the expected VK set by the batch's protocol version, read from
+        // the assigned job WITHOUT consuming it — a VK drift must leave the job
+        // assigned so it times out back to pending for another prover. A job
+        // that is not assigned has no version to key on; it falls through to the
+        // `UnknownJob` error at the removal step below. The lookup is reused for
+        // the off-chain verification's key binding after the job is removed:
+        // reaching that point means the peek found the job, so the set matches.
+        let expected_vks = {
+            let state = self.state.lock().await;
+            state
+                .assigned
+                .get(&batch_number)
+                .and_then(|(_, _, data)| {
+                    self.expected_vks
+                        .get(&data.batch_metadata.batch_info.protocol_version)
+                })
+                .copied()
+        };
+
         // Program VK tripwire: drift means the prover runs a different
         // guest build — reject before touching the job, so it stays assigned
         // and times out back to pending for another prover.
-        if let Some(expected) = self.expected_program_vk {
+        if let Some(expected) = expected_vks.map(|set| set.program_vk) {
             if reported_vk != expected {
                 ZISK_LANE_METRICS.vk_drift.inc();
                 tracing::error!(
@@ -578,13 +633,13 @@ impl ZiskJobManager {
                 });
             }
         } else {
-            tracing::info!(batch = batch_number, %reported_vk, "ZiSK program VK reported (no expected VK configured)");
+            tracing::info!(batch = batch_number, %reported_vk, "ZiSK program VK reported (no expected VK configured for this protocol version)");
         }
 
         // Inner vadcop-final VK (rootCVadcopFinal) tripwire — same fail-closed
         // semantics as the program VK: reject before touching the job so it
         // times out back to pending.
-        if let Some(expected) = self.expected_vadcop_vk
+        if let Some(expected) = expected_vks.map(|set| set.vadcop_vk)
             && reported_vadcop_vk != expected
         {
             ZISK_LANE_METRICS.vadcop_vk_drift.inc();
@@ -641,7 +696,7 @@ impl ZiskJobManager {
             } else {
                 // Continue mode: retry a faulty/transient prover, but do NOT
                 // requeue a DETERMINISTIC divergence forever — that leaks the
-                // job's `MAX_TOTAL_JOBS` slot (`discard_completed_up_to` only
+                // job's `MAX_TOTAL_JOBS` slot (`on_batches_settled` only
                 // sweeps `completed`) until ZiSK coverage stops. Give up after
                 // `MAX_COMMITMENT_MISMATCH_ATTEMPTS`: drop the job (freeing the
                 // slot), raise the distinct `zisk_lane_unprovable` alert, and
@@ -724,6 +779,11 @@ impl ZiskJobManager {
                     batch_number,
                     AggregationInput {
                         stream: proof.clone(),
+                        protocol_version: job_data
+                            .batch_metadata
+                            .batch_info
+                            .protocol_version
+                            .clone(),
                         program_vk: parsed.program_vk,
                         vadcop_vk: parsed.vadcop_vk,
                         commitment: parsed.commitment,
@@ -748,8 +808,9 @@ impl ZiskJobManager {
                     return Ok(());
                 }
                 crate::aggregation_job_manager::AggregationInputOutcome::BelowFloor => {
-                    // The range already went downstream; drop the input. The
-                    // slot the job held is now free — let a parked input take it.
+                    // The range already went downstream; drop the input (the
+                    // sink counted the lost coverage). The slot the job held is
+                    // now free — let a parked input take it.
                     let mut state = self.state.lock().await;
                     state.mismatch_attempts.remove(&batch_number);
                     Self::promote_from_backlog(&mut state);
@@ -774,17 +835,26 @@ impl ZiskJobManager {
         Ok(())
     }
 
-    /// Drop parked proofs for batches at or below `batch_to`. Called when a
-    /// batch is consumed downstream (composed multi-proof, optional mode, or
-    /// degraded after the wait timeout): batches are processed in order, so
-    /// a proof for an already-sent batch can never be composed. In-flight
-    /// jobs are deliberately left alone — their submit-time validation still
-    /// provides the shadow-mode divergence signal.
-    pub async fn discard_completed_up_to(&self, batch_to: u64) {
-        // Batches sent downstream can never join an aggregation range
-        // either — drop the buffered inputs and any range they overlapped.
+    /// The batches at or below `batch_to` went downstream. Called from the
+    /// Airbender SNARK submission path once the range is consumed; what the
+    /// ZiSK lane keeps depends on the mode:
+    ///
+    /// - [`MultiProofMode::Required`]: the range settled through a composed
+    ///   multi-proof (or, on the Airbender-only fallback, without one). Nothing
+    ///   below the cut can compose anymore, so parked proofs AND parked inputs
+    ///   are dropped here and the sink drops their aggregation state.
+    /// - [`MultiProofMode::Shadow`]: settlement never waited for this lane, so a
+    ///   settled batch keeps its proving path — a parked input still becomes a
+    ///   job, still proves, and its range is still verified (late). Only the
+    ///   parked proofs are swept: they are completion markers whose stream the
+    ///   aggregation sink already holds, and sweeping them frees active slots
+    ///   for the batches still to prove.
+    ///
+    /// In-flight jobs are left alone in both modes — their submit-time
+    /// validation is the divergence signal.
+    pub async fn on_batches_settled(&self, batch_to: u64) {
         if let Some(sink) = self.aggregation_sink() {
-            sink.discard_up_to(batch_to).await;
+            sink.on_batches_settled(batch_to).await;
         }
         let mut state = self.state.lock().await;
         let stale_completed: Vec<u64> = state
@@ -793,14 +863,17 @@ impl ZiskJobManager {
             .copied()
             .filter(|&b| b <= batch_to)
             .collect();
-        // A parked input at or below a batch already sent downstream can never
-        // prove-and-compose either. Drop it, or the backlog leaks these entries.
-        let stale_backlog: Vec<u64> = state
-            .backlog
-            .keys()
-            .copied()
-            .filter(|&b| b <= batch_to)
-            .collect();
+        let stale_backlog: Vec<u64> = match self.multi_proof_mode {
+            // A parked input at or below a composed batch can never
+            // prove-and-compose. Drop it, or the backlog leaks these entries.
+            MultiProofMode::Required => state
+                .backlog
+                .keys()
+                .copied()
+                .filter(|&b| b <= batch_to)
+                .collect(),
+            MultiProofMode::Shadow => Vec::new(),
+        };
         if stale_completed.is_empty() && stale_backlog.is_empty() {
             return;
         }
@@ -817,7 +890,7 @@ impl ZiskJobManager {
             batch_to,
             discarded_completed = stale_completed.len(),
             discarded_backlog = stale_backlog.len(),
-            "discarded parked ZiSK proofs and inputs for batches already sent downstream"
+            "swept parked ZiSK proofs for batches already sent downstream"
         );
         Self::record_queue_gauges(&state);
     }
@@ -865,12 +938,23 @@ mod tests {
     use zksync_os_batch_types::batcher_model::ZISK_SNARK_PROOF_BYTES;
     use zksync_os_types::ProvingVersion;
 
+    const TEST_PROTOCOL_VERSION: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
+
     fn job_data(batch_number: u64, zisk_data: Vec<u8>) -> ZiskJobData {
+        job_data_versioned(batch_number, zisk_data, TEST_PROTOCOL_VERSION)
+    }
+
+    /// Build job data whose batch carries `protocol_version`, so the
+    /// version-keyed VK lookup in `submit_proof` can be exercised. The
+    /// fixture's legacy genesis version has no batch-commitment encoding;
+    /// `submit_proof` calls `into_stored`, which needs a current one (v30/v31).
+    fn job_data_versioned(
+        batch_number: u64,
+        zisk_data: Vec<u8>,
+        protocol_version: ProtocolSemanticVersion,
+    ) -> ZiskJobData {
         let mut envelope = create_test_batch_envelope(batch_number, FriProof::Fake);
-        // The fixture's legacy genesis version has no batch-commitment
-        // encoding; submit_proof calls into_stored, which needs a current one.
-        envelope.batch.batch_info.protocol_version =
-            zksync_os_types::ProtocolSemanticVersion::new(0, 31, 0);
+        envelope.batch.batch_info.protocol_version = protocol_version;
         ZiskJobData {
             zisk_data,
             batch_metadata: envelope.batch,
@@ -885,15 +969,30 @@ mod tests {
     };
 
     fn manager(expected_vk: Option<B256>) -> ZiskJobManager {
-        // The per-batch PLONK lane submits well-shaped SNARK artifacts, which
-        // pass the wire-form verification, so proof verification stays on here.
+        // A configured program VK arms the drift tripwire for the fixture's v31
+        // batches; the vadcop VK is pinned to zero so it matches the zeroed
+        // `public_values[288..320]` the plain fixtures carry, exercising the
+        // program VK alone. The per-batch PLONK lane submits well-shaped SNARK
+        // artifacts, which pass wire-form verification, so proof verification
+        // stays on here.
+        let expected_vks = expected_vk
+            .map(|program_vk| {
+                HashMap::from([(
+                    TEST_PROTOCOL_VERSION,
+                    ZiskVkSet {
+                        program_vk,
+                        vadcop_vk: B256::ZERO,
+                    },
+                )])
+            })
+            .unwrap_or_default();
         ZiskJobManager::new(
             Duration::from_secs(60),
-            expected_vk,
-            None,
+            expected_vks,
             TEST_CHAIN_ID,
             TEST_CHAIN_CONFIG,
             true,
+            MultiProofMode::Required,
         )
     }
 
@@ -906,26 +1005,39 @@ mod tests {
     /// Returns the sink so tests can inspect buffered inputs.
     fn manager_with_sink(
         expected_vk: Option<B256>,
+        multi_proof_mode: MultiProofMode,
     ) -> (
         ZiskJobManager,
         std::sync::Arc<crate::aggregation_job_manager::ZiskAggregationJobManager>,
     ) {
+        let expected_vks = expected_vk
+            .map(|program_vk| {
+                HashMap::from([(
+                    TEST_PROTOCOL_VERSION,
+                    ZiskVkSet {
+                        program_vk,
+                        // The stream fixtures carry these vadcop limbs.
+                        vadcop_vk: vk_bytes([5, 6, 7, 8]),
+                    },
+                )])
+            })
+            .unwrap_or_default();
         let manager = ZiskJobManager::new(
             Duration::from_secs(60),
-            expected_vk,
-            // The stream fixtures carry these vadcop limbs.
-            Some(vk_bytes([5, 6, 7, 8])),
+            expected_vks,
             TEST_CHAIN_ID,
             TEST_CHAIN_CONFIG,
             false,
+            multi_proof_mode,
         );
         let agg = std::sync::Arc::new(
             crate::aggregation_job_manager::ZiskAggregationJobManager::new(
                 1,
                 Duration::from_secs(60),
                 None,
-                None,
+                HashMap::new(),
                 false,
+                multi_proof_mode,
             ),
         );
         manager.set_aggregation_sink(agg.clone());
@@ -950,11 +1062,11 @@ mod tests {
     fn aggregated_lane_manager() -> ZiskJobManager {
         ZiskJobManager::new(
             Duration::from_secs(60),
-            None,
-            None,
+            HashMap::new(),
             TEST_CHAIN_ID,
             TEST_CHAIN_CONFIG,
             false,
+            MultiProofMode::Required,
         )
     }
 
@@ -977,10 +1089,10 @@ mod tests {
 
     /// The seal-to-consumption happy path: an accepted stream parks in
     /// `completed` (status `Completed`) until the downstream send clears it
-    /// via `discard_completed_up_to`, and the batch is `Unknown` afterwards.
+    /// via `on_batches_settled`, and the batch is `Unknown` afterwards.
     #[tokio::test]
     async fn accepted_proof_parks_until_discarded() {
-        let (manager, _agg) = manager_with_sink(None);
+        let (manager, _agg) = manager_with_sink(None, MultiProofMode::Required);
 
         let zisk_data = vec![0xAB; 32];
         let data = job_data(7, zisk_data.clone());
@@ -1002,7 +1114,7 @@ mod tests {
             .expect("valid submission accepted");
         assert_eq!(manager.batch_status(7).await, ZiskBatchStatus::Completed);
 
-        manager.discard_completed_up_to(7).await;
+        manager.on_batches_settled(7).await;
         assert_eq!(manager.batch_status(7).await, ZiskBatchStatus::Unknown);
     }
 
@@ -1011,7 +1123,7 @@ mod tests {
     /// (the restart-regeneration path may re-offer batches).
     #[tokio::test]
     async fn add_job_is_idempotent() {
-        let (manager, _agg) = manager_with_sink(None);
+        let (manager, _agg) = manager_with_sink(None, MultiProofMode::Required);
 
         let data = job_data(7, vec![0xAB; 32]);
         let stream = matching_vadcop_stream(&data);
@@ -1044,11 +1156,11 @@ mod tests {
         // A zero timeout makes every assignment reassignable at the next pick.
         let manager = ZiskJobManager::new(
             Duration::ZERO,
-            None,
-            None,
+            HashMap::new(),
             TEST_CHAIN_ID,
             TEST_CHAIN_CONFIG,
             true,
+            MultiProofMode::Required,
         );
         manager.add_job(7, job_data(7, vec![0xAB; 32])).await;
 
@@ -1097,7 +1209,7 @@ mod tests {
     /// accumulate orphaned jobs.
     #[tokio::test]
     async fn discard_batches_clears_all_state() {
-        let (manager, _agg) = manager_with_sink(None);
+        let (manager, _agg) = manager_with_sink(None, MultiProofMode::Required);
 
         let data8 = job_data(8, vec![2; 8]);
         let stream8 = matching_vadcop_stream(&data8);
@@ -1127,7 +1239,7 @@ mod tests {
     /// silently requeuing the job for endless re-proving.
     #[tokio::test]
     async fn commitment_mismatch_fires_halt_when_armed() {
-        let (manager, _agg) = manager_with_sink(None);
+        let (manager, _agg) = manager_with_sink(None, MultiProofMode::Required);
         let (halt_tx, halt_rx) = tokio::sync::oneshot::channel();
         manager.set_halt_on_mismatch(halt_tx);
 
@@ -1160,7 +1272,7 @@ mod tests {
     #[tokio::test]
     async fn persistent_mismatch_gives_up_and_frees_slot() {
         // Continue mode: no halt armed.
-        let (manager, _agg) = manager_with_sink(None);
+        let (manager, _agg) = manager_with_sink(None, MultiProofMode::Required);
         manager.add_job(7, job_data(7, vec![0xAB; 32])).await;
 
         // Each attempt: pick the requeued job, submit a mismatching proof.
@@ -1213,7 +1325,7 @@ mod tests {
     /// count forward: the give-up counter resets on acceptance.
     #[tokio::test]
     async fn mismatch_then_success_resets_attempts() {
-        let (manager, _agg) = manager_with_sink(None);
+        let (manager, _agg) = manager_with_sink(None, MultiProofMode::Required);
         let data = job_data(7, vec![0xAB; 32]);
         let good_stream = matching_vadcop_stream(&data);
         manager.add_job(7, data).await;
@@ -1245,8 +1357,9 @@ mod tests {
             1,
             Duration::from_secs(60),
             None,
-            None,
+            HashMap::new(),
             false,
+            MultiProofMode::Required,
         ));
         manager.set_aggregation_sink(agg.clone());
 
@@ -1286,8 +1399,9 @@ mod tests {
             1,
             Duration::from_secs(60),
             None,
-            None,
+            HashMap::new(),
             false,
+            MultiProofMode::Required,
         ));
         manager.set_aggregation_sink(agg.clone());
 
@@ -1352,8 +1466,9 @@ mod tests {
             1,
             Duration::from_secs(60),
             None,
-            None,
+            HashMap::new(),
             false,
+            MultiProofMode::Required,
         ));
         manager.set_aggregation_sink(agg.clone());
 
@@ -1384,7 +1499,8 @@ mod tests {
     #[tokio::test]
     async fn vk_drift_rejects_submit_and_keeps_job_assigned() {
         // The good stream fixtures carry program limbs [1, 2, 3, 4].
-        let (manager, _agg) = manager_with_sink(Some(vk_bytes([1, 2, 3, 4])));
+        let (manager, _agg) =
+            manager_with_sink(Some(vk_bytes([1, 2, 3, 4])), MultiProofMode::Required);
 
         let data = job_data(7, vec![0xAB; 32]);
         let commitment = expected_commitment(&data).0;
@@ -1434,19 +1550,26 @@ mod tests {
         let expected_vadcop_limbs = [0x99u64, 0x99, 0x99, 0x99];
         let manager = ZiskJobManager::new(
             Duration::from_secs(60),
-            Some(vk_bytes([1, 2, 3, 4])),
-            Some(vk_bytes(expected_vadcop_limbs)),
+            HashMap::from([(
+                TEST_PROTOCOL_VERSION,
+                ZiskVkSet {
+                    program_vk: vk_bytes([1, 2, 3, 4]),
+                    vadcop_vk: vk_bytes(expected_vadcop_limbs),
+                },
+            )]),
             TEST_CHAIN_ID,
             TEST_CHAIN_CONFIG,
             false,
+            MultiProofMode::Required,
         );
         manager.set_aggregation_sink(std::sync::Arc::new(
             crate::aggregation_job_manager::ZiskAggregationJobManager::new(
                 1,
                 Duration::from_secs(60),
                 None,
-                None,
+                HashMap::new(),
                 false,
+                MultiProofMode::Required,
             ),
         ));
 
@@ -1481,6 +1604,111 @@ mod tests {
             .await
             .expect("corrected submission succeeds");
         assert_eq!(manager.batch_status(7).await, ZiskBatchStatus::Completed);
+    }
+
+    /// The upgrade-window seam: two protocol versions with DIFFERENT
+    /// configured program VKs each drift-check against their OWN VK (a batch
+    /// proven under the other version's key is rejected), and a batch whose
+    /// protocol version has no configured entry is accepted with the VK only
+    /// logged. So two guest builds can be validated at once and adding a
+    /// version is a config-only change.
+    #[tokio::test]
+    async fn vk_selected_per_protocol_version() {
+        const V30: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 0);
+        const V31: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
+        const V32: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 32, 0);
+        let limbs_v30 = [0x30u64, 0x30, 0x30, 0x30];
+        let limbs_v31 = [0x31u64, 0x31, 0x31, 0x31];
+        // The vadcop expectation matches the fixture limbs, so only the
+        // program VK is exercised. V32 has no entry: its batches are
+        // log-only.
+        let manager = ZiskJobManager::new(
+            Duration::from_secs(60),
+            HashMap::from([
+                (
+                    V30,
+                    ZiskVkSet {
+                        program_vk: vk_bytes(limbs_v30),
+                        vadcop_vk: vk_bytes([5, 6, 7, 8]),
+                    },
+                ),
+                (
+                    V31,
+                    ZiskVkSet {
+                        program_vk: vk_bytes(limbs_v31),
+                        vadcop_vk: vk_bytes([5, 6, 7, 8]),
+                    },
+                ),
+            ]),
+            TEST_CHAIN_ID,
+            TEST_CHAIN_CONFIG,
+            false,
+            MultiProofMode::Required,
+        );
+        let agg = std::sync::Arc::new(
+            crate::aggregation_job_manager::ZiskAggregationJobManager::new(
+                1,
+                Duration::from_secs(60),
+                None,
+                HashMap::new(),
+                false,
+                MultiProofMode::Required,
+            ),
+        );
+        manager.set_aggregation_sink(agg);
+
+        // A v30 batch proven under the v30 key is accepted.
+        let d30 = job_data_versioned(1, vec![0xAB; 8], V30);
+        let s30 = synthetic_stream(limbs_v30, [5, 6, 7, 8], expected_commitment(&d30).0);
+        manager.add_job(1, d30).await;
+        manager.pick_next_job("p").await.expect("job 1");
+        manager
+            .submit_proof(1, s30, vec![], "p")
+            .await
+            .expect("v30 key accepted for a v30 batch");
+        assert_eq!(manager.batch_status(1).await, ZiskBatchStatus::Completed);
+
+        // A v31 batch is checked against ITS key (vk_v31): the v30 key drifts,
+        // and the v31 key from the same assignment is then accepted.
+        let d31 = job_data_versioned(2, vec![0xCD; 8], V31);
+        let c31 = expected_commitment(&d31).0;
+        manager.add_job(2, d31).await;
+        manager.pick_next_job("p").await.expect("job 2");
+        let err = manager
+            .submit_proof(
+                2,
+                synthetic_stream(limbs_v30, [5, 6, 7, 8], c31),
+                vec![],
+                "p",
+            )
+            .await
+            .expect_err("the other version's key must drift");
+        assert!(matches!(err, ZiskSubmitError::VkDrift { .. }), "{err}");
+        manager
+            .submit_proof(
+                2,
+                synthetic_stream(limbs_v31, [5, 6, 7, 8], c31),
+                vec![],
+                "p",
+            )
+            .await
+            .expect("v31 key accepted for a v31 batch");
+        assert_eq!(manager.batch_status(2).await, ZiskBatchStatus::Completed);
+
+        // A v32 batch has no configured entry: any VK is accepted (log-only).
+        let d32 = job_data_versioned(3, vec![0xEE; 8], V32);
+        let s32 = synthetic_stream(
+            [0xAA, 0xAA, 0xAA, 0xAA],
+            [5, 6, 7, 8],
+            expected_commitment(&d32).0,
+        );
+        manager.add_job(3, d32).await;
+        manager.pick_next_job("p").await.expect("job 3");
+        manager
+            .submit_proof(3, s32, vec![], "p")
+            .await
+            .expect("an unmapped protocol version is log-only, so accepted");
+        assert_eq!(manager.batch_status(3).await, ZiskBatchStatus::Completed);
     }
 
     /// A full active queue parks new inputs instead of dropping them, then
@@ -1534,6 +1762,66 @@ mod tests {
         assert_eq!(
             manager.batch_status(parked_high).await,
             ZiskBatchStatus::InFlight
+        );
+    }
+
+    /// Settlement passing a parked input must not void that batch's ZiSK
+    /// coverage in shadow proving, where settlement never waited for this lane:
+    /// the sealed input stays parked and still becomes a job. Under a required
+    /// multi-proof, settlement means the range composed, so the same input is
+    /// dropped.
+    #[tokio::test]
+    async fn shadow_mode_keeps_parked_inputs_past_settlement() {
+        for (mode, kept) in [
+            (MultiProofMode::Required, false),
+            (MultiProofMode::Shadow, true),
+        ] {
+            let (manager, _agg) = manager_with_sink(None, mode);
+            // Fill the active queue so the next sealed batch parks.
+            for batch in 1..=MAX_TOTAL_JOBS as u64 {
+                manager
+                    .add_job(batch, job_data(batch, vec![batch as u8]))
+                    .await;
+            }
+            let parked = MAX_TOTAL_JOBS as u64 + 1;
+            manager.add_job(parked, job_data(parked, vec![0xAA])).await;
+            assert_eq!(manager.peek_input(parked).await, Some(vec![0xAA]));
+
+            manager.on_batches_settled(parked).await;
+            assert_eq!(
+                manager.peek_input(parked).await.is_some(),
+                kept,
+                "{mode:?}: the settled batch's parked input"
+            );
+        }
+    }
+
+    /// Every parked input the backlog bound forces out is ZiSK coverage the
+    /// lane will never provide, so each eviction raises the coverage-lost
+    /// alarm.
+    #[tokio::test]
+    async fn backlog_overflow_counts_lost_coverage() {
+        let (manager, _agg) = manager_with_sink(None, MultiProofMode::Shadow);
+        let lost_before = ZISK_LANE_METRICS.coverage_lost.get();
+
+        // Fill the active queue and the backlog, then overflow the backlog.
+        let overflow = 2u64;
+        let sealed = (MAX_TOTAL_JOBS + MAX_BACKLOG_ENTRIES) as u64 + overflow;
+        for batch in 1..=sealed {
+            manager
+                .add_job(batch, job_data(batch, vec![batch as u8]))
+                .await;
+        }
+
+        assert_eq!(
+            manager.queue_counts().await.inputs_in_backlog,
+            MAX_BACKLOG_ENTRIES as u64,
+            "the backlog stays at its bound"
+        );
+        assert_eq!(
+            ZISK_LANE_METRICS.coverage_lost.get() - lost_before,
+            overflow,
+            "one alarm per evicted input"
         );
     }
 

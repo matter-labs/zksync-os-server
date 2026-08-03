@@ -57,7 +57,7 @@ pub const ZISK_VADCOP_STREAM_BYTES: usize = VADCOP_STREAM_WORDS * 8;
 /// The public data of a validated `vadcop_final` proof stream, in the same
 /// serialization the rest of the stack uses:
 /// - VKs as the 32-byte big-endian value (the four u64 limbs, big-endian,
-///   in order) — matching the `zisk_program_vk` config format and bytes
+///   in order) — matching the `zisk_vks` config VK format and bytes
 ///   `[0..32]` / `[288..320]` of the PLONK wire public values.
 /// - The commitment exactly as bytes `[32..64]` of the wire public values
 ///   (u32 words packed little-endian).

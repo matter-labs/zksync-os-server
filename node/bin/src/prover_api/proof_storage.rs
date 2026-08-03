@@ -605,6 +605,7 @@ impl BoundedFileStorage {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use zksync_os_types::ProtocolSemanticVersion;
 
     // Make sure files are being removed as expected
     #[tokio::test]
@@ -749,6 +750,7 @@ mod tests {
 
         let input = AggregationInput {
             stream: vec![3u8; 2048],
+            protocol_version: ProtocolSemanticVersion::new(0, 31, 0),
             program_vk: B256::repeat_byte(0x11),
             vadcop_vk: B256::repeat_byte(0x22),
             commitment: B256::repeat_byte(0x33),
@@ -789,6 +791,7 @@ mod tests {
         let storage = ProofStorage::new(zisk_config(&dir), false).await?;
         let input = AggregationInput {
             stream: vec![0u8; 2048],
+            protocol_version: ProtocolSemanticVersion::new(0, 31, 0),
             program_vk: B256::repeat_byte(0x11),
             vadcop_vk: B256::repeat_byte(0x22),
             commitment: B256::repeat_byte(0x33),

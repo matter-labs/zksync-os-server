@@ -44,12 +44,13 @@ pub struct ZiskLaneMetrics {
     pub degraded_to_single_proof: vise::Counter,
     /// A ZiSK prover submitted a proof whose embedded program VK differs
     /// from the server's expected one — the prover is running a different
-    /// guest build. Fires only when `zisk_program_vk` is configured.
+    /// guest build. Fires only when the batch's protocol version has a
+    /// `zisk_vks` entry.
     pub vk_drift: vise::Counter,
     /// A ZiSK prover submitted a proof whose embedded inner vadcop-final VK
     /// (`rootCVadcopFinal`) differs from the server's expected one — the
-    /// prover is running a different recursive setup. Fires only when
-    /// `zisk_vadcop_vk` is configured.
+    /// prover is running a different recursive setup. Fires only when the
+    /// batch's protocol version has a `zisk_vks` entry.
     pub vadcop_vk_drift: vise::Counter,
     /// A per-batch ZiSK proof failed the server's off-chain verification after
     /// the commitment binding passed. In the per-batch PLONK lane this is the
@@ -87,7 +88,8 @@ pub struct ZiskLaneMetrics {
     pub aggregated_vk_drift: vise::Counter,
     /// An aggregation range's buffered per-batch inputs carry an inner
     /// vadcop-final VK (`rootCVadcopFinal`) differing from the server's
-    /// expected one. Fires only when `zisk_vadcop_vk` is configured.
+    /// expected one. Fires only when the input's protocol version has a
+    /// `zisk_vks` entry.
     pub aggregated_vadcop_vk_drift: vise::Counter,
     /// An aggregated range proof's committed binding digest disagreed with
     /// the digest recomputed from the buffered per-batch proofs.
@@ -99,6 +101,19 @@ pub struct ZiskLaneMetrics {
     pub aggregated_proof_verification_failures: vise::Counter,
     /// Aggregated range proofs accepted and parked for the rendezvous.
     pub aggregated_proofs_accepted: vise::Counter,
+    /// ZiSK work dropped before any range proof verified it: a sealed input
+    /// evicted under a queue bound, a buffered input retired with a range that
+    /// was never proven, or a validated per-batch proof that arrived after its
+    /// range went downstream. One event per batch-level item, so the count
+    /// approximates the number of settled batches left with no second-proof
+    /// coverage. Any growth means coverage is being lost — page on it.
+    pub coverage_lost: vise::Counter,
+    /// Aggregated ranges verified AFTER their batches settled on L1. Shadow
+    /// proving only: settlement there never waits for this lane, so a lagging
+    /// range keeps proving and its verification outcome is measured. Growth
+    /// tracks how far the ZiSK lane runs behind the Airbender lane; it is not
+    /// an error.
+    pub ranges_verified_after_settlement: vise::Counter,
     /// Per-batch `vadcop_final` streams buffered as aggregation inputs.
     pub aggregation_inputs_buffered: Gauge<u64>,
     /// Validated aggregated range proofs parked awaiting their Airbender

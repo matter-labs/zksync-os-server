@@ -1216,6 +1216,39 @@ async fn run_main_node_pipeline(
     .await
     .expect("Failed to initialize ProofStorage");
 
+    // Version-keyed expected ZiSK VKs for the per-batch STF-guest proof: each
+    // batch is validated against the entry for its own protocol version (see
+    // `ProverApiConfig::zisk_vks`), so an upgrade window with two versions
+    // validates each against its own guest build. The aggregation stage checks
+    // the inner vadcop VK of a range's buffered inputs against the same map. An
+    // empty map (no configured entries) means no expected VK — the reported VKs
+    // are only logged.
+    let expected_zisk_vks = config
+        .prover_api_config
+        .zisk_vks
+        .iter()
+        .map(|entry| {
+            (
+                entry.protocol_version.clone(),
+                zisk_prover_lane::ZiskVkSet {
+                    program_vk: entry.program_vk,
+                    vadcop_vk: entry.vadcop_vk,
+                },
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    // What a settled batch range means for the ZiSK lane. Required: settlement
+    // implies the range composed, so its ZiSK state is consumed. Shadow: the
+    // Airbender-only proof settles the range without this lane, so the range
+    // keeps proving and its late verification is measured (see
+    // `ZiskJobManager::on_batches_settled`).
+    let multi_proof_mode = if config.prover_input_generator_config.multi_proof_verifier {
+        zisk_prover_lane::MultiProofMode::Required
+    } else {
+        zisk_prover_lane::MultiProofMode::Shadow
+    };
+
     // The ZiSK job manager is driven by the batcher (which opens a per-batch
     // ZiSK job at seal, so proving starts immediately and independently of the
     // Airbender FRI/SNARK lane) and by the SNARK step (the rendezvous that
@@ -1227,8 +1260,7 @@ async fn run_main_node_pipeline(
         tracing::info!("ZiSK proof generation enabled");
         Some(Arc::new(zisk_prover_lane::ZiskJobManager::new(
             config.prover_api_config.snark_job_timeout,
-            config.prover_api_config.zisk_program_vk,
-            config.prover_api_config.zisk_vadcop_vk,
+            expected_zisk_vks.clone(),
             chain_id,
             crate::batcher::zisk_batch::ZiskChainConfig {
                 fri_proof_verification_enabled: config
@@ -1237,6 +1269,7 @@ async fn run_main_node_pipeline(
                 max_tx_gas_limit: config.genesis_config.max_tx_gas_limit,
             },
             config.prover_api_config.zisk_proof_verification_enabled,
+            multi_proof_mode,
         )))
     } else {
         None
@@ -1255,12 +1288,16 @@ async fn run_main_node_pipeline(
         // A range covers exactly one Airbender SNARK job, so the range width
         // is `max_fris_per_snark` (single source of truth, no separate knob).
         let range_size = config.prover_api_config.max_fris_per_snark;
+        // The aggregator guest keeps its own single program VK; the range's
+        // INNER vadcop tripwire uses the version-keyed per-batch VK map, so it
+        // stays armed for every configured version.
         let agg = Arc::new(zisk_prover_lane::ZiskAggregationJobManager::new(
             range_size,
             agg_config.job_timeout,
             agg_config.program_vk,
-            config.prover_api_config.zisk_vadcop_vk,
+            expected_zisk_vks,
             config.prover_api_config.zisk_proof_verification_enabled,
+            multi_proof_mode,
         ));
         zisk_job_manager.set_aggregation_sink(agg.clone());
         tracing::info!(

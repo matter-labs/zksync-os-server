@@ -35,7 +35,7 @@ use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_raft::RaftConsensusConfig;
 use zksync_os_tx_validators::deployment_filter;
-use zksync_os_types::{NodeRole, PubdataMode};
+use zksync_os_types::{NodeRole, ProtocolSemanticVersion, PubdataMode};
 
 mod build_external_config;
 mod cli;
@@ -1530,6 +1530,31 @@ pub struct ProverInputGeneratorConfig {
     pub zisk_shadow_execution: bool,
 }
 
+/// One protocol version's expected ZiSK verification keys. See
+/// [`ProverApiConfig::zisk_vks`]. Parsed from config as, e.g.:
+///
+/// ```yaml
+/// zisk_vks:
+///   - protocol_version: "0.31.0"
+///     program_vk: "0x..."
+///     vadcop_vk: "0x..."
+/// ```
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ZiskVkConfigEntry {
+    /// The protocol version whose STF guest build these keys pin, e.g.
+    /// `"0.31.0"`.
+    pub protocol_version: ProtocolSemanticVersion,
+    /// Expected program VK: the first 32 bytes of a ZiSK proof's public
+    /// values, fixed by the guest build (record it from the reproducible
+    /// build output).
+    pub program_vk: B256,
+    /// Expected inner vadcop-final VK / `rootCVadcopFinal`: the STF proof's
+    /// recursive verification key, at public-values bytes [288..320] and in
+    /// the tail of the vadcop_final stream. On L1 the same VK is pinned as
+    /// `rootCVadcopFinal`.
+    pub vadcop_vk: B256,
+}
+
 /// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
@@ -1604,21 +1629,31 @@ pub struct ProverApiConfig {
     /// from when the batch entered SNARK proving.
     pub multi_proof_wait_timeout: Option<Duration>,
 
-    /// Expected ZiSK program VK: the first 32 bytes of a ZiSK proof's public
-    /// values, fixed by the guest build (record it from the reproducible
-    /// build output). When set, a submission with a different VK is rejected
-    /// and counted (`zisk_lane_vk_drift`) — the prover is running a different
-    /// guest build. Unset: the reported VK is only logged on each submit.
-    pub zisk_program_vk: Option<B256>,
-
-    /// Expected inner ZiSK vadcop-final VK (`rootCVadcopFinal`): the STF
-    /// proof's recursive verification key, carried at bytes [288..320] of the
-    /// PLONK public values and in the tail of the vadcop_final stream. When
-    /// set, a submission (or, in aggregated mode, an aggregation input) with a
-    /// different vadcop VK is rejected and counted — the prover is running a
-    /// different recursive setup. Mirrors `zisk_program_vk`; on L1 the same VK
-    /// is pinned as `rootCVadcopFinal`. Unset: the reported VK is only logged.
-    pub zisk_vadcop_vk: Option<B256>,
+    /// Expected ZiSK verification keys, keyed by protocol version — one
+    /// [`ZiskVkConfigEntry`] per version's STF guest build. A batch's per-batch
+    /// ZiSK proof is validated against the entry for its own protocol version,
+    /// so an upgrade window where two versions coexist validates each batch
+    /// against its own guest build — mirroring how the Airbender lane picks its
+    /// VK per batch. A future guest-changing upgrade is then a config-only
+    /// change: add the new version's entry. When a batch's protocol version has
+    /// an entry, a submission with a different program or vadcop VK is rejected
+    /// and counted (`zisk_lane_vk_drift`/`zisk_lane_vadcop_vk_drift`) — the
+    /// prover runs a different guest build. No entry for a version, or an empty
+    /// list: the reported VKs are only logged on each submit. The aggregation
+    /// stage reads the same entries: a range's buffered per-batch inputs are
+    /// checked against the vadcop VK of their own version
+    /// (`zisk_lane_aggregated_vadcop_vk_drift`). These entries hold the
+    /// per-batch STF-guest VKs; the aggregator guest VK
+    /// (`zisk_aggregation.program_vk`) stays a single value.
+    #[config(default, with = Serde![*])]
+    #[config_validate(custom(
+        |_root: &Config, value: &Vec<ZiskVkConfigEntry>| {
+            let mut seen = HashSet::new();
+            value.iter().all(|entry| seen.insert(&entry.protocol_version))
+        },
+        "must not contain duplicate protocol_version entries"
+    ))]
+    pub zisk_vks: Vec<ZiskVkConfigEntry>,
 
     /// Whether the server runs the off-chain proof verification on each ZiSK
     /// submission. Default: true (the production setting). When true the server

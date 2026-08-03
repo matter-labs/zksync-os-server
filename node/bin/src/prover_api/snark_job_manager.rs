@@ -393,7 +393,8 @@ mod tests {
     use alloy::primitives::B256;
     use zisk_prover_lane::synthetic_stream;
     use zisk_prover_lane::{
-        AggregationInput, ZiskAggregationJobManager, expected_aggregated_public_input,
+        AggregationInput, MultiProofMode, ZISK_LANE_METRICS, ZiskAggregationJobManager,
+        expected_aggregated_public_input,
     };
 
     const TEST_PROGRAM_VK: [u64; 4] = [1, 2, 3, 4];
@@ -420,23 +421,31 @@ mod tests {
         ProvingVersion,
     ) {
         let (tx, rx) = mpsc::channel(4);
+        let multi_proof_mode = if require {
+            MultiProofMode::Required
+        } else {
+            MultiProofMode::Shadow
+        };
         let mut snark_job_manager = SnarkJobManager::new(tx, 2, Duration::from_secs(60), 10);
         let zisk_job_manager = Arc::new(ZiskJobManager::new(
             Duration::from_secs(60),
-            None,
-            None,
+            // No expected VKs configured: the reported VKs are only logged.
+            Default::default(),
             TEST_CHAIN_ID,
             TEST_CHAIN_CONFIG,
             // These tests submit synthetic ZiSK proofs, so proof verification
             // is disabled; the batch commitment binding still runs.
             false,
+            multi_proof_mode,
         ));
         let zisk_aggregation_job_manager = Arc::new(ZiskAggregationJobManager::new(
             2,
             Duration::from_secs(60),
             None,
-            None,
+            // No expected VKs configured: the reported VKs are only logged.
+            Default::default(),
             false,
+            multi_proof_mode,
         ));
         zisk_job_manager.set_aggregation_sink(zisk_aggregation_job_manager.clone());
         snark_job_manager.set_zisk_job_manager(zisk_job_manager.clone());
@@ -498,6 +507,7 @@ mod tests {
             .iter()
             .map(|&commitment| AggregationInput {
                 stream: vec![],
+                protocol_version: ProtocolSemanticVersion::new(0, 31, 0),
                 program_vk: vk_be(TEST_PROGRAM_VK),
                 vadcop_vk: vk_be(TEST_VADCOP_VK),
                 commitment,
@@ -582,11 +592,14 @@ mod tests {
         );
     }
 
-    /// Aggregated + optional (shadow) mode: nothing blocks, the range goes
-    /// downstream Airbender-only, and the aggregation state for the
-    /// consumed batches is swept.
+    /// Aggregated + optional (shadow) mode: nothing blocks and the range goes
+    /// downstream Airbender-only. The settled range keeps its place in the ZiSK
+    /// lane, so per-batch streams that arrive after settlement still form the
+    /// range, and its proof is still verified — late, and counted as such.
+    /// Sweeping the range at settlement instead would void ZiSK coverage for
+    /// exactly the batches the ZiSK lane lags behind on.
     #[tokio::test]
-    async fn aggregated_optional_mode_sends_airbender_only() {
+    async fn aggregated_optional_mode_sends_airbender_only_and_verifies_late() {
         let (
             snark_job_manager,
             zisk_job_manager,
@@ -594,9 +607,8 @@ mod tests {
             mut rx,
             proving_version,
         ) = aggregated_manager(false, None).await;
-        submit_zisk_stream(&zisk_job_manager, 1).await;
-        submit_zisk_stream(&zisk_job_manager, 2).await;
 
+        // The Airbender range settles while the ZiSK lane still lags.
         snark_job_manager
             .submit_proof(1, 2, proving_version, vec![0xAA; 8], "prover-1".into())
             .await
@@ -607,17 +619,31 @@ mod tests {
             matches!(proof, SnarkProof::Real(_)),
             "optional mode must never send a MultiProof to L1"
         );
-        assert!(
-            !zisk_aggregation_job_manager.has_input(1).await
-                && !zisk_aggregation_job_manager.has_input(2).await,
-            "inputs swept"
-        );
-        assert!(
-            zisk_aggregation_job_manager
-                .pick_next_job("agg-1")
-                .await
-                .is_none(),
-            "no aggregation job for batches already sent"
+
+        // The per-batch streams land afterwards and still form the range.
+        let c1 = submit_zisk_stream(&zisk_job_manager, 1).await;
+        let c2 = submit_zisk_stream(&zisk_job_manager, 2).await;
+        let job = zisk_aggregation_job_manager
+            .pick_next_job("agg-1")
+            .await
+            .expect("the settled range is still offered to an aggregation prover");
+        assert_eq!((job.from_batch, job.to_batch), (1, 2));
+
+        let late_before = ZISK_LANE_METRICS.ranges_verified_after_settlement.get();
+        zisk_aggregation_job_manager
+            .submit_proof(
+                1,
+                2,
+                vec![0x77; ZISK_SNARK_PROOF_BYTES],
+                aggregated_public_values(&[c1, c2]),
+                "agg-1",
+            )
+            .await
+            .expect("the late aggregated proof is verified");
+        assert_eq!(
+            ZISK_LANE_METRICS.ranges_verified_after_settlement.get() - late_before,
+            1,
+            "the verification is measured as late, not lost"
         );
     }
 

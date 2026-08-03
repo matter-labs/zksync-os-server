@@ -38,7 +38,8 @@ pub use bytes::ZiskBatchBytes;
 pub use combine::compose_multiproof;
 pub use commitment::{ZISK_PUBLIC_VALUES_BYTES, expected_zisk_public_input};
 pub use job_manager::{
-    ZiskBatchStatus, ZiskJob, ZiskJobData, ZiskJobManager, ZiskQueueCounts, ZiskSubmitError,
+    MultiProofMode, ZiskBatchStatus, ZiskJob, ZiskJobData, ZiskJobManager, ZiskQueueCounts,
+    ZiskSubmitError, ZiskVkSet,
 };
 pub use metrics::ZISK_LANE_METRICS;
 pub use persistence::ZiskAggregationPersistence;
