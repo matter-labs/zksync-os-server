@@ -277,10 +277,15 @@ impl NodeProvider {
                             continue;
                         }
                     };
-                let header = block_response
-                    .expect("header watcher RPC returned no block for a chain head")
-                    .header()
-                    .clone();
+                // A transient `null` for a chain-head tag is retried like any other poll failure.
+                let Some(block_response) = block_response else {
+                    tracing::warn!(
+                        ?block,
+                        "header watcher poll returned no block; retrying at next tick"
+                    );
+                    continue;
+                };
+                let header = block_response.header().clone();
                 tx.send_if_modified(|current: &mut <Ethereum as Network>::HeaderResponse| {
                     if current.hash() == header.hash() {
                         false
