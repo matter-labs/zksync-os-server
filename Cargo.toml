@@ -48,6 +48,7 @@ members = [
     "lib/alloy_ext",
     "lib/provider",
     "lib/versioned_merkle_tree",
+    "lib/zisk_witness",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -359,6 +360,8 @@ zksync_os_server = { version = "=0.21.0", path = "node/bin" }
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
 
 versioned_merkle_tree = { version = "=0.21.0", path = "lib/versioned_merkle_tree" }
+zksync-os-zisk-lib = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b" }
+zisk_witness = { version = "=0.21.0", path = "lib/zisk_witness" }
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
 overflow-checks = true

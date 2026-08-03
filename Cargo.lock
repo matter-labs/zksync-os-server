@@ -16030,6 +16030,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "zisk_witness"
+version = "0.21.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "blake2",
+ "revm 38.0.0",
+ "serde",
+ "tempfile",
+ "tracing",
+ "versioned_merkle_tree",
+ "zksync-os-revm",
+ "zksync-os-zisk-lib",
+ "zksync_os_batch_types",
+ "zksync_os_contract_interface",
+ "zksync_os_interface",
+ "zksync_os_merkle_tree",
+ "zksync_os_revm_consistency_checker",
+ "zksync_os_storage_api",
+ "zksync_os_types",
+]
+
+[[package]]
 name = "zk_ee"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3#2f65982d788f651c8504c7805eab6b17813226c6"
@@ -16120,6 +16143,23 @@ dependencies = [
  "auto_impl",
  "revm 38.0.0",
  "serde",
+]
+
+[[package]]
+name = "zksync-os-zisk-lib"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os-zisk?rev=c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b#c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b"
+dependencies = [
+ "alloy-consensus 1.7.3",
+ "alloy-eips 1.7.3",
+ "alloy-primitives",
+ "bincode 2.0.1",
+ "blake2",
+ "k256",
+ "revm 38.0.0",
+ "serde",
+ "tiny-keccak",
+ "zksync-os-revm",
 ]
 
 [[package]]

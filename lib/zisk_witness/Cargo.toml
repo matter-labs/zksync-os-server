@@ -1,0 +1,39 @@
+[package]
+name = "zisk_witness"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+zksync_os_types.workspace = true
+zksync_os_storage_api.workspace = true
+zksync_os_interface.workspace = true
+zksync_os_batch_types.workspace = true
+zksync_os_merkle_tree.workspace = true
+zksync_os_contract_interface.workspace = true
+zksync_os_revm_consistency_checker.workspace = true
+versioned_merkle_tree.workspace = true
+
+zksync-os-zisk-lib.workspace = true
+zksync-os-revm.workspace = true
+revm.workspace = true
+
+alloy = { workspace = true, default-features = false, features = [
+    "rlp",
+    "eips",
+    "consensus",
+    "k256",
+    "rand",
+] }
+anyhow.workspace = true
+tracing.workspace = true
+blake2.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true
