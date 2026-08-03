@@ -301,8 +301,10 @@ impl NodeProvider {
     /// `WeakClient` shutdown. That preserves the client's transport/request layers, but it
     /// intentionally bypasses provider-level fillers/layers.
     ///
-    /// The shutdown is not tied to reth-tasks, it is only tied to the Provider. But it should be
-    /// fine because the task does not own any resources. This is similar to how alloy pollers work.
+    /// The shutdown is not tied to reth-tasks, it is only tied to the Provider, similar to how
+    /// alloy pollers work. The task must own the only `watch::Sender`: transient poll failures
+    /// are retried at the next tick, and if the task exits or panics for any other reason, the
+    /// channel closes so subscribers observe the failure instead of a silently frozen stream.
     async fn build_header_watcher(
         &self,
         block: BlockNumberOrTag,
