@@ -24,7 +24,7 @@ concurrency:
 jobs:
   # Prepare the release PR with changelog updates and create github releases
   release-please:
-    uses: matter-labs/zksync-ci-common/.github/workflows/release-please.yaml@905a2a2dffe79187430cc0bc597db2bb0d2f1f9d # release-please-signed-commits
+    uses: matter-labs/zksync-ci-common/.github/workflows/release-please.yaml@d4361aa05b16f3e6253cbd012925369a5514c2b0 # main
     secrets:
       slack_webhook: ${{ secrets.SLACK_WEBHOOK_RELEASES }}  # Slack webhook for release notifications
       # Org-level secret; the App ID comes from the org-level MATTERLABS_BOTS_APP_ID
