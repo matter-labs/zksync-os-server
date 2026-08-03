@@ -268,7 +268,6 @@ impl NodeProvider {
             })
             .await
             .clone();
-        // Match `Sender::subscribe` semantics: a new subscriber has seen the current value.
         rx.mark_unchanged();
         rx
     }
@@ -292,7 +291,6 @@ impl NodeProvider {
             })
             .await
             .clone();
-        // Match `Sender::subscribe` semantics: a new subscriber has seen the current value.
         rx.mark_unchanged();
         rx
     }
