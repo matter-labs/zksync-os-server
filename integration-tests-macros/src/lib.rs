@@ -160,7 +160,7 @@ fn case_fn_name(case: &Path) -> Result<syn::Ident> {
 ///
 /// #[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
 /// async fn case_metadata_is_expected(case: TestCase) -> anyhow::Result<()> {
-///     assert!(!case.protocol_version.is_empty());
+///     assert!(!case.protocol_version().is_empty());
 ///     Ok(())
 /// }
 /// ```

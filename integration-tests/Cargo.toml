@@ -24,12 +24,15 @@ zksync_os_rpc_api.workspace = true
 zksync_os_merkle_tree_api.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
+execution_utils.workspace = true
 zksync_os_network.workspace = true
 zksync_os_replay_archive.workspace = true
 zksync_os_rocksdb.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_integration_tests_macros.workspace = true
 zksync_os_verify_storage_proof = { path = "../tools/verify-storage-proof" }
+zksync-os-zisk-lib.workspace = true
+zisk_prover_lane.workspace = true
 
 reth-tasks.workspace = true
 
@@ -48,6 +51,7 @@ backon.workspace = true
 futures.workspace = true
 serde.workspace = true
 regex = "1.11.1"
+base64.workspace = true
 smart-config.workspace = true
 serde_yaml.workspace = true
 

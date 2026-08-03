@@ -10,3 +10,5 @@ mod pubsub;
 mod simulate;
 mod storage_proof;
 mod transactions;
+mod zisk_disabled_is_upstream;
+mod zisk_pipeline_test;
