@@ -260,16 +260,13 @@ impl NodeProvider {
     pub async fn latest_header_watcher(
         &self,
     ) -> watch::Receiver<<Ethereum as Network>::HeaderResponse> {
-        let mut rx = self
-            .latest_header_watcher
+        self.latest_header_watcher
             .get_or_init(|| async {
                 self.build_header_watcher(BlockNumberOrTag::Latest, self.latest_poll_interval)
                     .await
             })
             .await
-            .clone();
-        rx.mark_unchanged();
-        rx
+            .clone()
     }
 
     /// Returns a shared watcher for the finalized block header via
@@ -283,16 +280,13 @@ impl NodeProvider {
         } else {
             BlockNumberOrTag::Latest
         };
-        let mut rx = self
-            .finalized_header_watcher
+        self.finalized_header_watcher
             .get_or_init(|| async {
                 self.build_header_watcher(finalized, self.finalized_poll_interval)
                     .await
             })
             .await
-            .clone();
-        rx.mark_unchanged();
-        rx
+            .clone()
     }
 
     /// Builds a provider-owned header watcher backed by a raw RPC client request.
