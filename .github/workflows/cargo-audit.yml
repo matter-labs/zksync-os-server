@@ -5,6 +5,8 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - '.github/workflows/cargo-audit.yml'
+      - 'deny.toml'
   schedule:
     # Run every Monday-Friday at 8:30 AM UTC.
     - cron: "30 8 * * 1-5"
@@ -41,7 +43,10 @@ jobs:
           # 'RUSTSEC-2023-0071': Marvin timing sidechannel in `rsa` private-key operations. Production code only
           # performs public-key RSA-OAEP encryption (wrapping the age file key to the GCP KMS public key);
           # private-key decryption happens inside GCP KMS, never locally. No patched version exists yet.
-          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0194,RUSTSEC-2026-0195,RUSTSEC-2023-0071'
+          # 'RUSTSEC-2026-0235': out-of-bounds read in `rkyv` < 0.8.17 when validating untrusted archives.
+          # `rkyv` 0.7.46 is only in Cargo.lock as an unused optional dependency of `rust_decimal` (via
+          # `byte-unit` <- `openraft`); no feature combination in this workspace enables it, so it is never compiled.
+          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0194,RUSTSEC-2026-0195,RUSTSEC-2023-0071,RUSTSEC-2026-0235'
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
