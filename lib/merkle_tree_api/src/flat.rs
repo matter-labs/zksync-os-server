@@ -140,15 +140,19 @@ impl BatchTreeProof {
         leaf_count_before_update: u64,
     ) -> impl Iterator<Item = ((u8, u64), B256)> {
         let mut sibling_hashes = vec![];
-        Self::zip_leaves(
-            &Blake2Hasher,
-            tree_depth,
-            leaf_count_before_update,
-            self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
-            self.hashes.iter(),
-            Some(&mut sibling_hashes),
-        )
-        .expect("invalid batch tree proof");
+
+        // `zip_leaves` will error if `sorted_leaves` are empty, which can be handled correctly in this context.
+        if !self.sorted_leaves.is_empty() {
+            Self::zip_leaves(
+                &Blake2Hasher,
+                tree_depth,
+                leaf_count_before_update,
+                self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
+                self.hashes.iter(),
+                Some(&mut sibling_hashes),
+            )
+            .expect("invalid batch tree proof");
+        }
 
         sibling_hashes
             .into_iter()

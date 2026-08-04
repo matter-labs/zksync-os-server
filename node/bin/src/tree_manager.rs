@@ -115,16 +115,9 @@ impl PipelineComponent for TreeManager {
                 .iter()
                 .map(|block| block.tree.written_keys.len())
                 .sum::<usize>();
-            let total_reads = tree_blocks
-                .iter()
-                .map(|block| block.tree.read_keys.len())
-                .sum::<usize>();
             TREE_METRICS
                 .amortized_entry_time
                 .observe(range_time / total_writes.max(1) as u32);
-            TREE_METRICS
-                .amortized_entry_time_with_reads
-                .observe(range_time / (total_reads + total_writes).max(1) as u32);
 
             last_processed_block = self
                 .tree
@@ -133,6 +126,9 @@ impl PipelineComponent for TreeManager {
             assert_eq!(last_processed_block, last_block_number);
 
             // Forward each block downstream.
+            //
+            // **IMPORTANT.** Since downstream components (e.g., the proof input generator) read tree data,
+            // it is vital that the tree is fully persisted before block data is sent downstream.
             for tree_block in tree_blocks {
                 output.send_and_record(tree_block, &state_reporter)?;
             }
@@ -230,10 +226,8 @@ impl TreeManager {
                 (entry, write.key)
             })
             .unzip();
-        let read_keys: Vec<_> = read_keys.into_iter().collect();
         let block_number = block_output.header.number;
         let write_count = written_keys.len();
-        let read_count = read_keys.len();
 
         let (root_hash, leaf_count) =
             patched_tree.root_info(block_number - 1)?.with_context(|| {
@@ -243,15 +237,17 @@ impl TreeManager {
             root_hash,
             leaf_count,
         };
-        let (tree_output, update_proof) =
-            patched_tree.extend_with_proof(&tree_entries, &read_keys)?;
+        // We intentionally do not query a proof for *read* keys here. (Instead, it will be queried in the proof input generator
+        // on the main node.) This makes tree updates faster, and makes it possible to parallelize I/O for proof input generation
+        // for different blocks. At the same time, we *do* query a proof for writes; it is free in terms of I/O compared
+        // to updating a tree without a proof, and while it is possible to query an update proof afterward, it'd need
+        // to cover some corner cases which are more naturally handled synchronously (e.g., getting a Merkle path for the last leaf
+        // if there are inserts).
+        let (tree_output, update_proof) = patched_tree.extend_with_proof(&tree_entries, &[])?;
 
         tracing::debug!(
             block_number = block_number,
             written_keys.len = written_keys.len(),
-            read_keys.len = read_keys.len(),
-            proof.sorted_leaves.len = update_proof.sorted_leaves.len(),
-            proof.hashes.len = update_proof.hashes.len(),
             input = ?tree_input,
             output = ?tree_output,
             "Processed tree update"
@@ -261,26 +257,15 @@ impl TreeManager {
         TREE_METRICS
             .entry_time
             .observe(block_time / (write_count.max(1) as u32));
-        TREE_METRICS
-            .entry_time_with_reads
-            .observe(block_time / ((write_count + read_count).max(1) as u32));
         TREE_METRICS.unique_leafs.set(tree_output.leaf_count);
         TREE_METRICS.processing_range.observe(write_count);
-        TREE_METRICS.block_number.set(block_number);
-        TREE_METRICS.processing_read_range.observe(read_count);
-        TREE_METRICS
-            .update_proof_sorted_leaves
-            .observe(update_proof.sorted_leaves.len());
-        TREE_METRICS
-            .update_proof_hashes
-            .observe(update_proof.hashes.len());
         TREE_METRICS.block_number.set(block_number);
 
         let tree_data = BlockMerkleTreeData {
             input: tree_input,
             output: tree_output,
             proof: update_proof,
-            read_keys,
+            read_keys: read_keys.into_iter().collect(),
             written_keys,
         };
         Ok(TreeBlock {
@@ -296,48 +281,33 @@ const BLOCK_RANGE_SIZE: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
 
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "tree")]
-pub struct TreeMetrics {
+struct TreeMetrics {
     /// Merkle tree update latency per written entry. Does not include flushing block contents to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub entry_time: Histogram<Duration>,
+    entry_time: Histogram<Duration>,
     /// Merkle tree update latency per written entry. May be amortized across multiple blocks. Includes flushing to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub amortized_entry_time: Histogram<Duration>,
-    /// Merkle tree update latency per read / written entry. Does not include flushing block contents to disk.
-    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub entry_time_with_reads: Histogram<Duration>,
-    /// Merkle tree update latency per read / written entry. May be amortized across multiple blocks. Includes flushing to disk.
-    #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub amortized_entry_time_with_reads: Histogram<Duration>,
+    amortized_entry_time: Histogram<Duration>,
     /// Latency to process a single block in the tree. Does not include flushing block contents to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub block_time: Histogram<Duration>,
+    block_time: Histogram<Duration>,
     /// Latency to process a single block in the tree. May be amortized across multiple blocks. Includes flushing to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub amortized_block_time: Histogram<Duration>,
+    amortized_block_time: Histogram<Duration>,
     /// Latency to process a range of blocks in the tree (including flushing).
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub range_time: Histogram<Duration>,
+    range_time: Histogram<Duration>,
     /// Latency to flush tree updates to disk.
     #[metrics(unit = Unit::Seconds, buckets = LATENCIES_FAST)]
-    pub flush_time: Histogram<Duration>,
+    flush_time: Histogram<Duration>,
     /// Number of unique leaves in the Merkle tree.
-    pub unique_leafs: Gauge<u64>,
+    unique_leafs: Gauge<u64>,
     /// Number of distinct tree entries written per block.
     #[metrics(buckets = BLOCK_RANGE_SIZE)]
-    pub processing_range: Histogram<usize>,
-    /// Number of distinct tree entries read (but not written) per block.
-    #[metrics(buckets = BLOCK_RANGE_SIZE)]
-    pub processing_read_range: Histogram<usize>,
-    /// Number of sorted leaves included in the batch update proof for a single block.
-    #[metrics(buckets = BLOCK_RANGE_SIZE)]
-    pub update_proof_sorted_leaves: Histogram<usize>,
-    /// Number of intermediate (aka sibling) hashes included in the batch update proof for a single block.
-    #[metrics(buckets = BLOCK_RANGE_SIZE)]
-    pub update_proof_hashes: Histogram<usize>,
+    processing_range: Histogram<usize>,
 
-    pub block_number: Gauge<BlockNumber>,
+    block_number: Gauge<BlockNumber>,
 }
 
 #[vise::register]
-pub(crate) static TREE_METRICS: vise::Global<TreeMetrics> = vise::Global::new();
+static TREE_METRICS: vise::Global<TreeMetrics> = vise::Global::new();

@@ -1,5 +1,6 @@
 use super::PROVER_INPUT_GENERATOR_METRICS;
 use alloy::primitives::B256;
+use anyhow::Context;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::thread;
 use zk_ee::utils::Bytes32;
@@ -8,8 +9,8 @@ use zk_os_basic_system_prev::system_implementation::flat_storage_model::FlatStor
 use zk_os_forward_system::run::{LeafProof, ReadStorage, ReadStorageTree};
 use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_merkle_tree::{
-    Blake2Hasher, HashTree, Leaf, MerkleTree, MerkleTreeProver, RocksDBWrapper, TreeOperation,
-    api::flat,
+    BatchTreeProof, Blake2Hasher, HashTree, Leaf, MerkleTree, MerkleTreeProver, RocksDBWrapper,
+    TreeOperation, api::flat,
 };
 
 const TREE_DEPTH: u8 = 64;
@@ -65,19 +66,64 @@ impl Drop for TreeOutputAdapter {
 }
 
 impl TreeOutputAdapter {
-    pub(super) fn new(tree_data: BlockMerkleTreeData) -> Self {
-        let key_to_index: HashMap<_, _> = tree_data.keys_and_ops().collect();
-        let sibling_hashes = tree_data
+    /// Unites proof data from `tree_data.proof` (a batch proof for `tree_data.written_keys`)
+    /// and `read_proof` (which is a batch proof for `tree_data.read_keys`).
+    pub(super) fn new(tree_data: BlockMerkleTreeData, read_proof: BatchTreeProof) -> Self {
+        assert_eq!(
+            tree_data.proof.operations.len(),
+            tree_data.written_keys.len()
+        );
+        assert!(tree_data.proof.read_operations.is_empty());
+        assert_eq!(read_proof.read_operations.len(), tree_data.read_keys.len());
+        assert!(read_proof.operations.is_empty());
+
+        let written = tree_data
+            .written_keys
+            .iter()
+            .copied()
+            .zip(tree_data.proof.operations.iter().copied());
+        let read = tree_data
+            .read_keys
+            .iter()
+            .copied()
+            .zip(read_proof.read_operations.iter().copied());
+        let key_to_op: HashMap<_, _> = written.chain(read).collect();
+
+        // Some sibling hashes may be duplicated in `proof` and `read_proof`, but since we collect
+        // them in a `HashMap`, this is fine.
+        let sibling_hashes: HashMap<_, _> = tree_data
             .proof
             .sibling_hashes(TREE_DEPTH, tree_data.input.leaf_count)
+            .chain(read_proof.sibling_hashes(TREE_DEPTH, tree_data.input.leaf_count))
             .map(|(location, hash)| (location, hash.0.into()))
             .collect();
 
+        let mut sorted_leaves = tree_data.proof.sorted_leaves;
+        let mut read_sorted_leaves = read_proof.sorted_leaves;
+        // Some leaves may be repeated in `sorted_leaves` and `read_sorted_leaves`, which is fine since we unite them
+        // in a `BTreeMap`.
+        sorted_leaves.append(&mut read_sorted_leaves);
+
+        // Report joint proof metrics.
+        PROVER_INPUT_GENERATOR_METRICS
+            .batch_proof_sorted_leaves
+            .observe(sorted_leaves.len());
+        PROVER_INPUT_GENERATOR_METRICS
+            .batch_proof_hashes
+            .observe(sibling_hashes.len());
+        tracing::debug!(
+            written_keys.len = tree_data.written_keys.len(),
+            read_keys.len = tree_data.read_keys.len(),
+            sorted_leaves.len = sorted_leaves.len(),
+            sibling_hashes.len = sibling_hashes.len(),
+            "created joint batch proof for state update"
+        );
+
         Self {
-            queried_proofs: HashSet::with_capacity(tree_data.proof.sorted_leaves.len()),
+            queried_proofs: HashSet::with_capacity(sorted_leaves.len()),
             leaf_count_before_update: tree_data.input.leaf_count,
-            sorted_leaves: tree_data.proof.sorted_leaves,
-            key_to_op: key_to_index,
+            sorted_leaves,
+            key_to_op,
             sibling_hashes,
         }
     }
@@ -178,6 +224,14 @@ impl VersionedMerkleTree {
             cached_missing_key_to_prev_index: HashMap::new(),
             cached_proofs: HashMap::new(),
         }
+    }
+
+    pub(super) fn get_proof(&self, keys: &[B256]) -> anyhow::Result<BatchTreeProof> {
+        let (proof, _) = self
+            .inner
+            .prove(self.version, keys)?
+            .with_context(|| format!("missing tree version {}", self.version))?;
+        Ok(proof)
     }
 
     fn read(&mut self, key: B256) -> Option<B256> {
