@@ -474,6 +474,11 @@ pub struct ProviderConfig {
     /// Backoff used between retry attempts.
     #[config(default_t = Duration::from_millis(1000))]
     pub retry_backoff: Duration,
+
+    /// Per-attempt timeout for every L1 RPC request. Must comfortably exceed the slowest
+    /// legitimate request (e.g. `eth_getLogs` over `l1_watcher.max_blocks_to_process` blocks).
+    #[config(default_t = 30 * TimeUnit::Seconds)]
+    pub request_timeout: Duration,
 }
 
 impl ProviderConfig {
