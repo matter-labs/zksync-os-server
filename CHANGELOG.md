@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.21.0](https://github.com/matter-labs/zksync-os-server/compare/v0.20.12...v0.21.0) (2026-08-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **network:** drop support for zks v1-v4 ([#1482](https://github.com/matter-labs/zksync-os-server/issues/1482))
+
+### Features
+
+* Expose protocol version filtering for prover ([#1480](https://github.com/matter-labs/zksync-os-server/issues/1480)) ([b660c2e](https://github.com/matter-labs/zksync-os-server/commit/b660c2e3e7f1fcccf2912c0fb00b85cf91b7e7e7))
+* **mempool:** validate intrinsic native resources for l2 txs ([#1217](https://github.com/matter-labs/zksync-os-server/issues/1217)) ([e8efe74](https://github.com/matter-labs/zksync-os-server/commit/e8efe74df283cfe58fcb484f2703d1cebb2aeee2))
+* **network:** drop support for zks v1-v4 ([#1482](https://github.com/matter-labs/zksync-os-server/issues/1482)) ([f97cd67](https://github.com/matter-labs/zksync-os-server/commit/f97cd67aa370166ba94e21e34a4424f6df0a2cf9))
+* **replay_archive:** native gcs archive support ([#1426](https://github.com/matter-labs/zksync-os-server/issues/1426)) ([2338202](https://github.com/matter-labs/zksync-os-server/commit/233820206e23356f5206fb10c195f9b907f1f5cf))
+* **rpc:** opt-in parallel execution of JSON-RPC batch entries ([#1475](https://github.com/matter-labs/zksync-os-server/issues/1475)) ([17b45c6](https://github.com/matter-labs/zksync-os-server/commit/17b45c6b1fa8c6d9dda28f1bfdd102bd72bc35f4))
+* **sequencer:** rate limiter on gas/s ([#1474](https://github.com/matter-labs/zksync-os-server/issues/1474)) ([dc88a9d](https://github.com/matter-labs/zksync-os-server/commit/dc88a9d246b1f2f1e499cc18e6c524c76f48d4d0))
+
+
+### Bug Fixes
+
+* **provider:** fail hung L1 RPC requests with a retryable timeout ([#1498](https://github.com/matter-labs/zksync-os-server/issues/1498)) ([8a52df5](https://github.com/matter-labs/zksync-os-server/commit/8a52df58cf60d1881b46a43a737364181a4b9962))
+* **provider:** retry header watcher poll when RPC returns no block ([#1492](https://github.com/matter-labs/zksync-os-server/issues/1492)) ([0034170](https://github.com/matter-labs/zksync-os-server/commit/003417016188dcc35ccb9530de41ee23ca4f0843))
+* **provider:** survive transient RPC errors in header watchers ([#1490](https://github.com/matter-labs/zksync-os-server/issues/1490)) ([a6849b8](https://github.com/matter-labs/zksync-os-server/commit/a6849b8856a6abd5cec0e01b78ef6edbb31667d2))
+* **sequencer:** improve default config values ([#1486](https://github.com/matter-labs/zksync-os-server/issues/1486)) ([57f7ad5](https://github.com/matter-labs/zksync-os-server/commit/57f7ad547d1dbfadb483243c7e661578570dc37a))
+
 ## [0.20.12](https://github.com/matter-labs/zksync-os-server/compare/v0.20.11...v0.20.12) (2026-07-20)
 
 
