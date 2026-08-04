@@ -16507,7 +16507,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "tracing-subscriber 0.3.22",
  "vise",
  "zksync_os_api",
  "zksync_os_base_token_adjuster",
