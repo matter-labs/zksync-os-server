@@ -3,9 +3,13 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tokio::sync::{Notify, RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use zksync_os_types::{L1PriorityEnvelope, L1TxSerialId, ZkTransaction};
+
+/// How often `pop_wait` warns while blocked on a priority transaction missing from the pool.
+const EMPTY_POOL_WARN_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct L1Subpool {
@@ -57,6 +61,7 @@ impl L1Subpool {
     }
 
     async fn pop_wait(&self) -> Arc<L1PriorityEnvelope> {
+        let started_at = tokio::time::Instant::now();
         loop {
             let notified = self.notify.notified();
             {
@@ -65,7 +70,17 @@ impl L1Subpool {
                     return pending_tx;
                 }
             }
-            notified.await;
+            // A long wait means the L1 watcher stopped delivering priority transactions
+            // and the calling replay/execution pipeline is blocked on it.
+            if tokio::time::timeout(EMPTY_POOL_WARN_INTERVAL, notified)
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    waited = ?started_at.elapsed(),
+                    "L1 subpool has no pending priority transaction; blocked waiting for the L1 watcher to deliver it"
+                );
+            }
         }
     }
 
