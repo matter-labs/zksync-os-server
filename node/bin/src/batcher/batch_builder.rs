@@ -8,7 +8,22 @@ use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, read_multichain_root};
 use zksync_os_types::{BlockOutput, ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
 
+use crate::batcher::zisk_batch::SecondProofSystemConfig;
+use crate::zisk_bytes::{ZiskBatchBytes, ZiskBlockBytes};
+use zisk_prover_lane::shadow_execute_zisk_batch;
+
 /// Takes a vector of blocks and produces a batch envelope.
+///
+/// Returns the envelope plus the assembled per-batch second proof-system
+/// bytes. The bytes are `Some` only when the second proof system is enabled
+/// and assembly succeeds; the caller routes them out-of-band (opening a ZiSK
+/// job on the job manager), keeping the shared `ProverInput` free of ZiSK data.
+///
+/// The second proof-system inputs travel only on the enabled path.
+/// `second_proof` is `Some` only when the feature is on. `zisk_blocks` carries
+/// the per-block bytes in block order; it is `None` when the feature is off or
+/// when a block's ZiSK input degraded. The batch-boundary tree views are built
+/// inside `zisk_witness::assemble_batch` from the tree handle on `second_proof`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     blocks: &[(
@@ -24,7 +39,9 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     pubdata_mode: PubdataMode,
     sl_chain_id: u64,
     read_state: &ReadState,
-) -> anyhow::Result<BatchForSigning<ProverInput>> {
+    second_proof: Option<&SecondProofSystemConfig>,
+    zisk_blocks: Option<Vec<ZiskBlockBytes>>,
+) -> anyhow::Result<(BatchForSigning<ProverInput>, Option<ZiskBatchBytes>)> {
     let block_number_from = blocks.first().unwrap().1.block_context.block_number;
     let block_number_to = blocks.last().unwrap().1.block_context.block_number;
     let last_block_hash = blocks.last().unwrap().0.header.hash();
@@ -72,7 +89,61 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let proving_version =
         ProvingVersion::try_from(blocks.first().unwrap().1.protocol_version.clone())?;
     // execution version should be the same for all the blocks, it is ensured by the seal criteria
+    // Airbender batch witness (primary proof system).
     let batch_prover_input = compute_batch_prover_input(blocks, proving_version, pubdata_mode)?;
+
+    // Assemble the second proof-system input only when it is enabled and every
+    // per-block input is present. This call is fail-open. An assembly error
+    // degrades this batch's ZiSK data to `None` and is logged. A failure in
+    // the secondary lane must never stop the primary Airbender batch from
+    // sealing. The per-block guard keeps the same contract (see
+    // `guard_zisk_build`). A Fake batch carries no witness, so there is
+    // nothing to assemble. The batch-boundary tree views, after-state
+    // preimages and referenced bytecodes are all built inside
+    // `zisk_witness::assemble_batch`.
+    let zisk_batch_data: Option<ZiskBatchBytes> = match (second_proof, zisk_blocks) {
+        (Some(second_proof), Some(zisk_blocks))
+            if !matches!(batch_prover_input, ProverInput::Fake) =>
+        {
+            let assembled = zisk_witness::assemble_batch(
+                blocks,
+                &zisk_blocks,
+                read_state,
+                &second_proof.merkle_tree,
+                pubdata_mode,
+                multichain_root,
+                sl_chain_id,
+                &batch_info,
+                &blob_sidecar,
+                second_proof.chain_config,
+            );
+            match assembled {
+                Ok(data) => Some(ZiskBatchBytes(data)),
+                Err(error) => {
+                    tracing::warn!(
+                        "ZiSK batch assembly failed: {error:#}; degrading this batch's ZiSK data \
+                         to None (primary Airbender lane unaffected)"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    if let (Some(second_proof), Some(zisk_data)) = (second_proof, &zisk_batch_data)
+        && let Some(shadow) = second_proof.shadow
+    {
+        shadow_execute_zisk_batch(
+            zisk_data.as_slice(),
+            &prev_batch_info.state_commitment,
+            &batch_info,
+            chain_id,
+            second_proof.chain_config,
+            shadow.halt_on_mismatch,
+            blocks,
+        )?;
+    }
 
     // Sanity check: all blocks in the batch should have the same protocol version
     for (_, replay_record, _, _) in blocks.iter().skip(1) {
@@ -130,7 +201,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     )
     .with_stage(BatchExecutionStage::BatchSealed);
 
-    Ok(batch_envelope)
+    Ok((batch_envelope, zisk_batch_data))
 }
 
 fn compute_batch_prover_input(

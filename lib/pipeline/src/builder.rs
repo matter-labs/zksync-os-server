@@ -49,6 +49,13 @@ impl Pipeline<()> {
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
             "pipeline",
             |shutdown| async move {
+                // Keep the sender alive so `recv()` blocks (instead of returning
+                // `None`) when a segment is aborted before it can deregister.
+                // Without this, Rust 2024 edition closure capture rules would drop
+                // the sender when `spawn()` returns because the async block never
+                // references it directly.
+                let _sender_keepalive = self.shutdown_sender;
+
                 // Hold shutdown open until every spawned segment deregisters.
                 let _guard = shutdown.await;
 

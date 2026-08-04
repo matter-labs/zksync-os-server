@@ -271,6 +271,8 @@ pub enum SnarkProof {
     // Fake proof for testing purposes
     Fake,
     Real(RealSnarkProof),
+    /// Multi-proof: Airbender SNARK + ZiSK SNARK verified together on-chain.
+    MultiProof(MultiProofSnarkProof),
 }
 
 /// ZiSK SNARK proof size: 24 BN254 points × 32 bytes = 768 bytes.
@@ -326,6 +328,7 @@ impl SnarkProof {
                 proving_execution_version,
                 ..
             }) => Some(*proving_execution_version),
+            SnarkProof::MultiProof(two) => Some(two.proving_execution_version),
             _ => None,
         }
     }
@@ -333,6 +336,7 @@ impl SnarkProof {
     pub fn proof(&self) -> Option<&[u8]> {
         match self {
             SnarkProof::Real(real) => Some(real.proof()),
+            SnarkProof::MultiProof(two) => Some(&two.airbender_proof),
             SnarkProof::Fake => None,
         }
     }

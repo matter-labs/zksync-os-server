@@ -1,7 +1,9 @@
 use self::tree_adapter::TreeOutputAdapter;
 use self::tree_adapter::VersionedMerkleTree;
 use crate::prover_block::ProverBlock;
-use anyhow::Result;
+use crate::zisk_bytes::ZiskBlockBytes;
+use alloy::primitives::B256;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::FuturesOrdered;
@@ -18,9 +20,9 @@ use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, TreeBlock};
-use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
+use zksync_os_types::{BlockOutput, ProvingVersion, PubdataMode, ZksyncOsEncode};
 
-mod tree_adapter;
+pub(crate) mod tree_adapter;
 
 /// This component generates prover input from batch replay data.
 ///
@@ -36,6 +38,9 @@ pub struct ProverInputGenerator<ReadState> {
     pub merkle_tree: MerkleTree<RocksDBWrapper>,
     /// When true, skip all computation and emit `ProverInput::Fake` for every block.
     pub disabled: bool,
+    /// When true, generate second proof system (ZiSK) input alongside the
+    /// airbender witness. The two run in parallel — airbender is always primary.
+    pub enable_second_proof_system: bool,
 }
 
 #[async_trait]
@@ -79,6 +84,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                         record: replay_record,
                         prover_input: ProverInput::Fake,
                         tree_output: tree.output,
+                        zisk_block_data: None,
                     },
                     &state_reporter,
                 )?;
@@ -165,22 +171,50 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             replay_record.transactions.len(),
         );
         let versioned_tree = VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1);
+        let enable_second_proof = self.enable_second_proof_system;
+        // Pointwise pre-state tree view for the ZiSK input builder (it
+        // extracts per-slot merkle proofs, which the streamed
+        // BlockMerkleTreeData does not carry). It reuses the native lane's
+        // versioned-tree adapter, so every proof is authenticated with the
+        // same plumbing. The witness is pre-state-only; the guest recomputes
+        // the post-state root itself. Build it only for the second proof
+        // system; the native lane never reads it.
+        let zisk_tree_before = enable_second_proof
+            .then(|| VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1));
 
         let mut handle = tokio::task::spawn_blocking(move || {
             let tree_output = tree.output;
-            let prover_input = ProverInput::Real(compute_prover_input(
+            // Native execution's exact touched-key sets, used to verify the
+            // ZiSK witness discovery is complete (a gap fails generation
+            // loudly instead of surfacing at proving time). Collected only for
+            // the second proof system; empty otherwise.
+            let native_touched_keys: Vec<B256> = if enable_second_proof {
+                tree.read_keys
+                    .iter()
+                    .chain(tree.written_keys.iter())
+                    .copied()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let (prover_input, zisk_block_data) = compute_prover_input(
                 &replay_record,
                 read_state,
                 tree,
                 versioned_tree,
+                zisk_tree_before,
+                &native_touched_keys,
+                &block_output,
                 da_commitment_scheme,
                 enable_logging,
-            ));
+                enable_second_proof,
+            );
             ProverBlock {
                 output: block_output,
                 record: replay_record,
                 prover_input,
                 tree_output,
+                zisk_block_data,
             }
         });
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
@@ -203,14 +237,51 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
     }
 }
 
+/// Run the ZiSK (second-proof) input builder under the fail-open contract.
+///
+/// ZiSK input generation runs inline in the same `spawn_blocking` task as the
+/// primary Airbender witness. An error there degrades this block's ZiSK data to
+/// `None`, so the `ProverBlock` keeps its Airbender witness and block production
+/// continues. Every degradation is logged and counted
+/// (`zisk_input_generation_failures`), so the lost shadow coverage is
+/// observable.
+fn guard_zisk_build<T>(block_number: u64, build: impl FnOnce() -> anyhow::Result<T>) -> Option<T> {
+    match build() {
+        Ok(value) => Some(value),
+        Err(error) => {
+            PROVER_INPUT_GENERATOR_METRICS
+                .zisk_input_generation_failures
+                .inc();
+            tracing::error!(
+                block_number,
+                "ZiSK input generation failed: {error:#}; degrading this batch's ZiSK data to \
+                 None (primary Airbender lane unaffected)"
+            );
+            None
+        }
+    }
+}
+
+/// Computes the primary airbender witness for a block, and, when the second
+/// proof system is enabled, the per-block ZiSK bytes alongside it.
+///
+/// The returned `ProverInput` is always the upstream shape
+/// (`Real(witness)` or `Fake`). The ZiSK bytes travel out-of-band as the
+/// second tuple element (`None` when the feature is off), so the shared
+/// `ProverInput` never carries them.
+#[allow(clippy::too_many_arguments)]
 fn compute_prover_input(
     replay_record: &ReplayRecord,
-    state_handle: impl ReadStateHistory,
+    state_handle: impl ReadStateHistory + Clone,
     tree_view: BlockMerkleTreeData,
     versioned_tree: VersionedMerkleTree,
+    zisk_tree_before: Option<VersionedMerkleTree>,
+    native_touched_keys: &[B256],
+    block_output: &BlockOutput,
     da_commitment_scheme: DACommitmentScheme,
     enable_logging: bool,
-) -> Vec<u32> {
+    enable_second_proof: bool,
+) -> (ProverInput, Option<ZiskBlockBytes>) {
     let block_number = replay_record.block_context.block_number;
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
     let transactions = replay_record
@@ -223,7 +294,9 @@ fn compute_prover_input(
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
     let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
         .expect("invalid protocol version");
-    let prover_input = match proving_version {
+
+    // Always generate airbender witness (primary proof system)
+    let witness = match proving_version {
         ProvingVersion::V1
         | ProvingVersion::V2
         | ProvingVersion::V3
@@ -243,15 +316,12 @@ fn compute_prover_input(
                 root: tree_view.input.root_hash.0.into(),
                 next_free_slot: tree_view.input.leaf_count,
             };
-
             let list_source = TxListSource { transactions };
-
             let bin_bytes = if enable_logging {
                 zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_LOGGING_ENABLED
             } else {
                 zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_APP
             };
-
             let da_commitment_scheme = (da_commitment_scheme as u8)
                 .try_into()
                 .expect("Failed to convert DA commitment scheme");
@@ -281,15 +351,12 @@ fn compute_prover_input(
                 root: tree_view.input.root_hash.0.into(),
                 next_free_slot: tree_view.input.leaf_count,
             };
-
             let list_source = TxListSource { transactions };
-
             let bin_bytes = if enable_logging {
                 zksync_os_multivm::apps::v7::SINGLEBLOCK_BATCH_LOGGING_ENABLED
             } else {
                 zksync_os_multivm::apps::v7::SINGLEBLOCK_BATCH_APP
             };
-
             let da_commitment_scheme = (da_commitment_scheme as u8)
                 .try_into()
                 .expect("Failed to convert DA commitment scheme");
@@ -308,15 +375,63 @@ fn compute_prover_input(
             .expect("proof gen failed")
         }
     };
+
+    // Optionally generate ZiSK prover input alongside airbender witness.
+    // The ZiSK lane is secondary: its input generation runs INLINE in the same
+    // `spawn_blocking` task as the primary Airbender witness, so it must never
+    // abort that task. A bad/edge block (malformed upgrade calldata, an
+    // out-of-spec preimage length) degrades only this batch's ZiSK data to
+    // `None` — logged and counted — while the primary lane and block production
+    // continue. See `guard_zisk_build`.
+    let zisk_data = if enable_second_proof {
+        PROVER_INPUT_GENERATOR_METRICS
+            .zisk_input_generation_attempts
+            .inc();
+        tracing::debug!(
+            block_number,
+            "Generating ZiSK prover input alongside airbender witness"
+        );
+        let zisk_tree_before = zisk_tree_before
+            .expect("zisk_tree_before must be present when the second proof system is enabled");
+        guard_zisk_build(block_number, || {
+            let block_data = zisk_witness::build_block_witness(
+                block_output,
+                replay_record,
+                zisk_tree_before,
+                native_touched_keys,
+                &state_handle,
+            )?;
+            // Serialize with the guest's wire config (bincode 2.x, standard)
+            // so the batcher decodes the same bytes. See `wire::encode`.
+            let encoded = zksync_os_zisk_lib::wire::encode(&block_data)
+                .context("encode the ZiSK block data")?;
+            Ok(ZiskBlockBytes(encoded))
+        })
+    } else {
+        None
+    };
+
+    let prover_input = ProverInput::Real(witness);
     let latency = prover_input_generation_latency.observe();
-
-    tracing::info!(
-        block_number,
-        "Completed prover input computation in {:?}.",
-        latency
-    );
-
-    prover_input
+    if enable_second_proof {
+        let zisk_size = zisk_data.as_ref().map(|d| d.as_slice().len()).unwrap_or(0);
+        tracing::info!(
+            block_number,
+            zisk_data_bytes = zisk_size,
+            "Completed prover input computation in {:?}. Airbender witness: {} words, ZiSK data: {} bytes",
+            latency,
+            prover_input.unwrap_real().len(),
+            zisk_size,
+        );
+    } else {
+        // Off path: match the upstream completion log exactly.
+        tracing::info!(
+            block_number,
+            "Completed prover input computation in {:?}.",
+            latency
+        );
+    }
+    (prover_input, zisk_data)
 }
 
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
@@ -326,8 +441,46 @@ const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 struct ProverInputGeneratorMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
     prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
+    /// Per-block ZiSK (second-proof) input builds attempted. Incremented once
+    /// per block only when the second proof system is enabled, so it stays 0
+    /// when the feature is off — the disabled-equals-upstream signal.
+    zisk_input_generation_attempts: vise::Counter,
+    /// ZiSK (second-proof) input generation failed or panicked for a block and
+    /// its ZiSK data was degraded to `None`. The primary Airbender lane is
+    /// unaffected; a nonzero value means the shadow ZiSK lane skipped coverage
+    /// for some batches (bad/edge input — investigate).
+    zisk_input_generation_failures: vise::Counter,
 }
 
 #[vise::register]
 static PROVER_INPUT_GENERATOR_METRICS: vise::Global<ProverInputGeneratorMetrics> =
     vise::Global::new();
+
+/// Total per-block ZiSK input builds attempted by this process. Zero proves
+/// the second proof-system lane was never entered. Test-support accessor for
+/// the disabled-equals-upstream check.
+pub fn zisk_input_generation_attempts() -> u64 {
+    PROVER_INPUT_GENERATOR_METRICS
+        .zisk_input_generation_attempts
+        .get()
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::guard_zisk_build;
+
+    /// A bad input degrades this block's ZiSK data to `None` and leaves the
+    /// primary lane to carry the block.
+    #[test]
+    fn err_degrades_to_none() {
+        let out: Option<u32> = guard_zisk_build(42, || Err(anyhow::anyhow!("bad input")));
+        assert_eq!(out, None);
+    }
+
+    /// The happy path passes the built value through unchanged.
+    #[test]
+    fn ok_passes_through() {
+        let out = guard_zisk_build(42, || Ok(vec![1u8, 2, 3]));
+        assert_eq!(out, Some(vec![1u8, 2, 3]));
+    }
+}

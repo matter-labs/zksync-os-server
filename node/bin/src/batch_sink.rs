@@ -105,7 +105,9 @@ impl<T: Send + 'static> PipelineComponent for NoOpSink<T> {
         while input.recv().await.is_some() {
             // No-op: just receive and discard
         }
-        anyhow::bail!("Input channel closed");
+        // Input closing is the normal end of the pipeline on shutdown; an
+        // error here panics the critical task and races graceful teardown.
+        Ok(())
     }
 }
 

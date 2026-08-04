@@ -1,3 +1,4 @@
+use crate::zisk_bytes::ZiskBlockBytes;
 use zksync_os_batch_types::batcher_model::ProverInput;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_pipeline::HasBlockRangeEnd;
@@ -10,6 +11,11 @@ pub struct ProverBlock {
     pub record: ReplayRecord,
     pub prover_input: ProverInput,
     pub tree_output: TreeBatchOutput,
+    /// Second proof-system per-block input. Node-internal side channel that
+    /// keeps the ZiSK bytes off the shared `ProverInput`. Present only when the
+    /// second proof system is enabled and the build succeeded; `None`
+    /// otherwise.
+    pub zisk_block_data: Option<ZiskBlockBytes>,
 }
 
 impl HasBlockRangeEnd for ProverBlock {

@@ -17,6 +17,10 @@ mod priority_tree_pipeline_step;
 pub mod prover_api;
 mod prover_block;
 mod prover_input_generator;
+mod zisk_bytes;
+/// Total per-block ZiSK input builds attempted by this process. Stays 0 when
+/// the second proof system is off; used by the disabled-equals-upstream test.
+pub use prover_input_generator::zisk_input_generation_attempts;
 mod provider;
 mod state_initializer;
 pub mod tree_manager;
@@ -438,7 +442,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.general_config.force_starting_block_number,
         ?node_startup_state,
         starting_block,
-        blocks_to_replay = node_startup_state.block_replay_storage_last_block + 1 - starting_block,
+        blocks_to_replay =
+            (node_startup_state.block_replay_storage_last_block + 1).saturating_sub(starting_block),
         "Node state on startup"
     );
 
@@ -1204,9 +1209,110 @@ async fn run_main_node_pipeline(
     }
 
     tracing::info!("Initializing ProofStorage");
-    let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
-        .await
-        .expect("Failed to initialize ProofStorage");
+    let proof_storage = ProofStorage::new(
+        config.prover_api_config.proof_storage.clone(),
+        config.prover_input_generator_config.second_proof_system,
+    )
+    .await
+    .expect("Failed to initialize ProofStorage");
+
+    // The ZiSK job manager is driven by the batcher (which opens a per-batch
+    // ZiSK job at seal, so proving starts immediately and independently of the
+    // Airbender FRI/SNARK lane) and by the SNARK step (the rendezvous that
+    // composes the MultiProof once both proofs are in). It owns the sealed ZiSK
+    // input's lifecycle: an active job while proving, a bounded backlog when the
+    // queue is full, and the bytes the debug peek endpoint serves. Present only
+    // when the second proof system is enabled.
+    let zisk_job_manager = if config.prover_input_generator_config.second_proof_system {
+        tracing::info!("ZiSK proof generation enabled");
+        Some(Arc::new(zisk_prover_lane::ZiskJobManager::new(
+            config.prover_api_config.snark_job_timeout,
+            config.prover_api_config.zisk_program_vk,
+            config.prover_api_config.zisk_vadcop_vk,
+            chain_id,
+            crate::batcher::zisk_batch::ZiskChainConfig {
+                fri_proof_verification_enabled: config
+                    .genesis_config
+                    .fri_proof_verification_enabled,
+                max_tx_gas_limit: config.genesis_config.max_tx_gas_limit,
+            },
+            config.prover_api_config.zisk_proof_verification_enabled,
+        )))
+    } else {
+        None
+    };
+
+    // ZiSK aggregation stage. The ZiSK lane always aggregates when the second
+    // proof system is on: the daemon submits per-batch vadcop_final streams,
+    // this manager collapses each Airbender SNARK range of them into one
+    // /ZiSK-AGG job, and the accepted aggregated range proof pairs with the
+    // Airbender range SNARK in the MultiProof rendezvous. A range covers one or
+    // more batches, so a single ZiSK verification key (the aggregator's) covers
+    // any range width on L1, including a range of one batch. The stage is inert
+    // when the second proof system is off (no ZiSK job manager exists).
+    let zisk_aggregation_job_manager = zisk_job_manager.as_ref().map(|zisk_job_manager| {
+        let agg_config = &config.prover_api_config.zisk_aggregation;
+        // A range covers exactly one Airbender SNARK job, so the range width
+        // is `max_fris_per_snark` (single source of truth, no separate knob).
+        let range_size = config.prover_api_config.max_fris_per_snark;
+        let agg = Arc::new(zisk_prover_lane::ZiskAggregationJobManager::new(
+            range_size,
+            agg_config.job_timeout,
+            agg_config.program_vk,
+            config.prover_api_config.zisk_vadcop_vk,
+            config.prover_api_config.zisk_proof_verification_enabled,
+        ));
+        zisk_job_manager.set_aggregation_sink(agg.clone());
+        tracing::info!(
+            range_size,
+            aggregator_program_vk = ?agg_config.program_vk,
+            "ZiSK aggregation stage active (per-batch vadcop_final streams, range proofs on L1)"
+        );
+        agg
+    });
+
+    // Durable persistence for the ZiSK aggregation lane, through the same
+    // ProofStorage the Airbender lane uses. The ZiSK sections exist only when
+    // the second proof system is enabled, so the default configuration writes
+    // no ZiSK files. Reload the aggregation inputs and range proofs left by a
+    // previous run, so a restart resumes the aggregation lane with its GPU work
+    // intact instead of discarding it and re-proving.
+    if zisk_job_manager.is_some() {
+        // Drop artifacts for batches already settled on L1 before the reload, so
+        // stale proofs are not resurrected into the managers.
+        let last_proved_batch = node_state_on_startup.l1_state.last_proved_batch;
+        if let Err(e) = proof_storage.prune_zisk_up_to(last_proved_batch).await {
+            tracing::warn!("failed to prune stale persisted ZiSK proofs: {e}");
+        }
+
+        if let Some(agg) = zisk_aggregation_job_manager.as_ref() {
+            agg.set_proof_storage(Arc::new(proof_storage.clone()));
+            match proof_storage.load_zisk_aggregation_inputs().await {
+                Ok(inputs) => {
+                    let count = inputs.len();
+                    for (batch_number, input) in inputs {
+                        agg.restore_input(batch_number, input).await;
+                    }
+                    if count > 0 {
+                        tracing::info!(count, "reloaded ZiSK aggregation inputs from disk");
+                    }
+                }
+                Err(e) => tracing::warn!("failed to reload ZiSK aggregation inputs: {e}"),
+            }
+            match proof_storage.load_zisk_aggregated_proofs().await {
+                Ok(proofs) => {
+                    let count = proofs.len();
+                    for ((from, to), proof) in proofs {
+                        agg.restore_completed(from, to, proof).await;
+                    }
+                    if count > 0 {
+                        tracing::info!(count, "reloaded aggregated ZiSK range proofs from disk");
+                    }
+                }
+                Err(e) => tracing::warn!("failed to reload aggregated ZiSK range proofs: {e}"),
+            }
+        }
+    }
 
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         proof_storage.clone(),
@@ -1215,12 +1321,35 @@ async fn run_main_node_pipeline(
         config.prover_api_config.max_assigned_batch_range,
     );
 
-    let (snark_proving_step, snark_job_manager) = SnarkProvingPipelineStep::new(
+    let (snark_proving_step, snark_job_manager) = SnarkProvingPipelineStep::new_with_zisk(
         config.prover_api_config.max_fris_per_snark,
         node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.snark_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
+        zisk_job_manager.clone(),
+        zisk_aggregation_job_manager.clone(),
+        config.prover_input_generator_config.multi_proof_verifier,
+        config.prover_api_config.multi_proof_wait_timeout,
     );
+
+    // Halt-on-mismatch (config, not deploy): a ZiSK commitment mismatch is a
+    // security event — one proof system is wrong. When armed, the mismatch
+    // fires this critical task, which panics to bring the node down (the
+    // same mechanism as the consistency checker's revert-on-divergence).
+    if config
+        .prover_input_generator_config
+        .halt_on_zisk_commitment_mismatch
+        && let Some(ref zisk_job_manager) = zisk_job_manager
+    {
+        let (halt_tx, halt_rx) = tokio::sync::oneshot::channel::<String>();
+        zisk_job_manager.set_halt_on_mismatch(halt_tx);
+        runtime.spawn_critical_task("zisk mismatch halt", async move {
+            if let Ok(msg) = halt_rx.await {
+                panic!("halting block production: {msg}");
+            }
+            // Sender dropped without firing (normal shutdown) — exit quietly.
+        });
+    }
 
     let prover_api_port = if config.prover_api_config.enabled {
         let prover_listener = prebound_prover_api_listener
@@ -1233,6 +1362,8 @@ async fn run_main_node_pipeline(
             prover_server::run(
                 fri_job_manager.clone(),
                 snark_job_manager.clone(),
+                zisk_job_manager.clone(),
+                zisk_aggregation_job_manager.clone(),
                 proof_storage.clone(),
                 prover_listener,
                 shutdown,
@@ -1248,7 +1379,11 @@ async fn run_main_node_pipeline(
     }
 
     if config.prover_api_config.fake_snark_provers.enabled {
-        run_fake_snark_provers(&config.prover_api_config, runtime, snark_job_manager);
+        run_fake_snark_provers(
+            &config.prover_api_config,
+            runtime,
+            snark_job_manager.clone(),
+        );
     }
 
     if !config.prover_input_generator_config.enable_input_generation {
@@ -1268,6 +1403,32 @@ async fn run_main_node_pipeline(
     let execute_sender_config: zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> =
         config.l1_sender_config.clone().into();
 
+    // Second proof-system settings for the batcher seal path. `Some` only when
+    // the second proof system is enabled (the ZiSK job manager exists then).
+    // The batcher opens the ZiSK job directly from the sealed batch, so the job
+    // manager handle lives here — not on the FRI lane.
+    let second_proof_system_config = zisk_job_manager.as_ref().map(|zisk_job_manager| {
+        crate::batcher::zisk_batch::SecondProofSystemConfig {
+            chain_config: crate::batcher::zisk_batch::ZiskChainConfig {
+                fri_proof_verification_enabled: config
+                    .genesis_config
+                    .fri_proof_verification_enabled,
+                max_tx_gas_limit: config.genesis_config.max_tx_gas_limit,
+            },
+            zisk_job_manager: zisk_job_manager.clone(),
+            last_proved_batch: node_state_on_startup.l1_state.last_proved_batch,
+            merkle_tree: tree.clone(),
+            shadow: config
+                .prover_input_generator_config
+                .zisk_shadow_execution
+                .then_some(crate::batcher::zisk_batch::ShadowConfig {
+                    halt_on_mismatch: config
+                        .prover_input_generator_config
+                        .halt_on_zisk_commitment_mismatch,
+                }),
+        }
+    });
+
     let pipeline = pipeline
         .pipe(ProverInputGenerator {
             enable_logging: config.prover_input_generator_config.logging_enabled,
@@ -1276,9 +1437,10 @@ async fn run_main_node_pipeline(
                 .maximum_in_flight_blocks,
             read_state: state.clone(),
             pubdata_mode,
-            merkle_tree: tree,
+            merkle_tree: tree.clone(),
             runtime: runtime.clone(),
             disabled: !config.prover_input_generator_config.enable_input_generation,
+            enable_second_proof_system: config.prover_input_generator_config.second_proof_system,
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
@@ -1297,6 +1459,7 @@ async fn run_main_node_pipeline(
             sidecar_sender,
             committed_batch_provider: committed_batch_provider.clone(),
             read_state: state.clone(),
+            second_proof: second_proof_system_config,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.clone().into(),
@@ -1435,8 +1598,10 @@ async fn run_en_pipeline(
         .pipe(TreeManager {
             tree: tree.clone(),
             runtime: runtime.clone(),
-        })
-        .pipe_if(
+        });
+
+    let snapshot_rx = {
+        let pipeline = pipeline.pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationResponder::new(
                 chain_id,
@@ -1450,10 +1615,10 @@ async fn run_en_pipeline(
             ),
             NoOpSink::new(),
         );
-
-    let components = pipeline.components();
-    pipeline.spawn();
-    let snapshot_rx = PipelineTracker::spawn(runtime, components);
+        let components = pipeline.components();
+        pipeline.spawn();
+        PipelineTracker::spawn(runtime, components)
+    };
 
     if config.general_config.run_priority_tree {
         let priority_tree_manager = PriorityTreeManager::new(

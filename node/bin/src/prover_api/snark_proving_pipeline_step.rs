@@ -33,14 +33,73 @@ impl SnarkProvingPipelineStep {
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> (Self, Arc<SnarkJobManager>) {
+        Self::new_with_zisk(
+            max_fris_per_snark,
+            last_proved_batch_number,
+            assignment_timeout,
+            max_assigned_batch_range,
+            None,
+            None,
+            false,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_zisk(
+        max_fris_per_snark: usize,
+        last_proved_batch_number: u64,
+        assignment_timeout: Duration,
+        max_assigned_batch_range: usize,
+        zisk_job_manager: Option<Arc<zisk_prover_lane::ZiskJobManager>>,
+        zisk_aggregation_job_manager: Option<Arc<zisk_prover_lane::ZiskAggregationJobManager>>,
+        require_multi_proof: bool,
+        multi_proof_wait_timeout: Option<Duration>,
+    ) -> (Self, Arc<SnarkJobManager>) {
         let (proof_commands_sender, proof_commands_receiver) = mpsc::channel::<ProofCommand>(1);
 
-        let snark_job_manager = Arc::new(SnarkJobManager::new(
+        let mut snark_job_manager = SnarkJobManager::new(
             proof_commands_sender,
             max_fris_per_snark,
             assignment_timeout,
             max_assigned_batch_range,
-        ));
+        );
+
+        if let Some(zisk_job_manager) = zisk_job_manager {
+            // Periodic gauge refresh: queue/backlog ages must advance while the
+            // lane is idle — a stalled pipeline is exactly what they alert on.
+            {
+                let zisk_job_manager = zisk_job_manager.clone();
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(Duration::from_secs(15));
+                    loop {
+                        tick.tick().await;
+                        zisk_job_manager.refresh_gauges().await;
+                    }
+                });
+            }
+            snark_job_manager.set_zisk_job_manager(zisk_job_manager);
+            let aggregated = zisk_aggregation_job_manager.is_some();
+            if let Some(zisk_aggregation_job_manager) = zisk_aggregation_job_manager {
+                snark_job_manager.set_zisk_aggregation_job_manager(zisk_aggregation_job_manager);
+            }
+            if require_multi_proof {
+                snark_job_manager.set_require_multi_proof(true);
+                snark_job_manager.set_multi_proof_wait_timeout(multi_proof_wait_timeout);
+                tracing::info!(
+                    wait_timeout = ?multi_proof_wait_timeout,
+                    aggregated,
+                    "ZiSK job manager enabled (multi-proof REQUIRED)"
+                );
+            } else {
+                tracing::info!(
+                    aggregated,
+                    "ZiSK job manager enabled (multi-proof optional)"
+                );
+            }
+        }
+
+        let snark_job_manager = Arc::new(snark_job_manager);
 
         let result = Self {
             last_proved_batch_number,

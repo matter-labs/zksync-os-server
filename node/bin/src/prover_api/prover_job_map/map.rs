@@ -251,6 +251,15 @@ impl<T: Clone> ProverJobMap<T> {
             .map(|entry| entry.batch_envelope.batch.clone())
     }
 
+    /// How long the job for `batch_number` has been in the map, if present.
+    pub async fn get_job_age(&self, batch_number: u64) -> Option<std::time::Duration> {
+        let jobs = self
+            .lock_with_tracking(JobMapMethod::GetJobBatchMetadata)
+            .await;
+        jobs.get(&batch_number)
+            .map(|entry| entry.metadata.added_at.elapsed())
+    }
+
     /// If a job is present for given batch_number, returns (vk, prover_input)
     pub async fn get_prover_input(&self, batch_number: u64) -> Option<(&'static str, T)> {
         let jobs = self.lock_with_tracking(JobMapMethod::GetProverInput).await;
@@ -482,10 +491,7 @@ mod tests {
     use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataMode};
 
     fn create_test_batch_envelope(batch_number: u64) -> SignedBatchEnvelope<Vec<u8>> {
-        create_test_batch_envelope_with_protocol_version(
-            batch_number,
-            ProtocolSemanticVersion::legacy_genesis_version(),
-        )
+        crate::prover_api::test_util::create_test_batch_envelope(batch_number, vec![1, 2, 3])
     }
 
     fn create_test_batch_envelope_with_protocol_version(

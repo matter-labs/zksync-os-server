@@ -567,8 +567,16 @@ impl L1UpgradeTxWatcher {
             }
             Err(e) => {
                 // Transport errors (503, timeout, etc.) should propagate.
-                // Contract-level reverts (function not found) are expected on pre-v31 CTMs.
-                if matches!(e, alloy::contract::Error::TransportError(_)) {
+                // Contract-level reverts (function not found) are expected on
+                // pre-v31 CTMs — and providers surface them as JSON-RPC
+                // *error responses* (e.g. anvil's `execution reverted` with
+                // empty data), which alloy also wraps as `TransportError`.
+                // Only propagate transport errors that are NOT an RPC error
+                // response; a revert-shaped response takes the fallback.
+                if matches!(
+                    &e,
+                    alloy::contract::Error::TransportError(te) if te.as_error_resp().is_none()
+                ) {
                     return Err(e.into());
                 }
                 tracing::info!(

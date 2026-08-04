@@ -1,7 +1,9 @@
 use crate::batcher::batch_deadline_policy::deadline_from_block_timestamp;
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
+use crate::batcher::zisk_batch::SecondProofSystemConfig;
 use crate::config::BatcherConfig;
 use crate::prover_block::ProverBlock;
+use crate::zisk_bytes::{ZiskBatchBytes, ZiskBlockBytes};
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::Address;
 use async_trait::async_trait;
@@ -11,7 +13,7 @@ use tokio::time::{Instant, Sleep};
 use tracing;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_batch_types::batcher_model::{
-    BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
+    BatchEnvelope, BatchForSigning, BatchMetadata, MissingSignature, ProverInput,
 };
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
@@ -25,6 +27,7 @@ pub mod batch_builder;
 mod batch_deadline_policy;
 mod seal_criteria;
 pub mod util;
+pub mod zisk_batch;
 
 /// Set of fields to define batcher's behavior on startup (when to replay, when to produce, etc.)
 pub struct BatcherStartupConfig {
@@ -51,6 +54,10 @@ pub struct Batcher<ReadState> {
     pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
+    /// Second proof-system settings on the seal path. `Some` enables ZiSK
+    /// tree-view construction, batch assembly, and shadow execution. `None`
+    /// disables the whole path, so the batcher behaves like upstream.
+    pub second_proof: Option<SecondProofSystemConfig>,
 }
 
 #[async_trait]
@@ -192,11 +199,14 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 "Batch da_input",
             );
 
-            if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
-                self.sidecar_sender
-                    .send(sidecar)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
+            if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone()
+                && self.sidecar_sender.send(sidecar).await.is_err()
+            {
+                // The sidecar consumer is not a pipeline component and drops
+                // on shutdown while a seal can still be in flight; erroring
+                // here panics a critical task mid-teardown.
+                tracing::info!("sidecar channel closed; stopping batcher");
+                return Ok(());
             }
             output.send_and_record(batch_envelope, &state_reporter)?;
         }
@@ -218,6 +228,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
         let batch_number = prev_batch_info.batch_number + 1;
         let mut blocks = vec![];
+        // Per-block second proof-system bytes, collected only when the feature
+        // is on. A block whose ZiSK build degraded drops the whole batch's ZiSK
+        // data to None (the assembly needs every block's input).
+        let mut zisk_blocks: Option<Vec<ZiskBlockBytes>> =
+            self.second_proof.is_some().then(Vec::new);
         let mut accumulator = BatchInfoAccumulator::new(
             self.batcher_config.tx_per_batch_limit,
             self.pubdata_limit_bytes,
@@ -250,7 +265,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             break;
                         }
                         Some(false) => {
-                            let Some(ProverBlock { output: block_output, record: replay_record, prover_input, tree_output }) = block_receiver.pop_buffer() else {
+                            let Some(ProverBlock { output: block_output, record: replay_record, prover_input, tree_output, zisk_block_data: block_zisk_data }) = block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
@@ -300,6 +315,17 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                                 tree_output,
                                 prover_input,
                             ));
+                            if self.second_proof.is_some() {
+                                match block_zisk_data {
+                                    Some(bytes) => {
+                                        if let Some(acc) = zisk_blocks.as_mut() {
+                                            acc.push(bytes);
+                                        }
+                                    }
+                                    // A degraded block degrades the whole batch.
+                                    None => zisk_blocks = None,
+                                }
+                            }
                         }
                         None => {
                             tracing::info!("inbound channel closed");
@@ -317,7 +343,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         let protocol_version = &blocks.first().as_ref().unwrap().1.protocol_version;
 
         /* ---------- seal the batch ---------- */
-        let batch_envelope = batch_builder::seal_batch(
+        let (batch_envelope, zisk_batch_data) = batch_builder::seal_batch(
             &blocks,
             prev_batch_info.clone(),
             batch_number,
@@ -328,7 +354,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 .adapt_for_protocol_version(protocol_version),
             self.sl_chain_id,
             &self.read_state,
+            self.second_proof.as_ref(),
+            zisk_blocks,
         )?;
+        self.open_zisk_job(&batch_envelope.batch, zisk_batch_data)
+            .await;
         Ok(Some(batch_envelope))
     }
 
@@ -349,6 +379,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         );
 
         let mut blocks = vec![];
+        // Per-block second proof-system bytes, collected only when the feature
+        // is on. A degraded block drops the whole batch's ZiSK data to None.
+        let mut zisk_blocks: Option<Vec<ZiskBlockBytes>> =
+            self.second_proof.is_some().then(Vec::new);
 
         let expected_block_count = existing_batch.block_count();
         // Collect all blocks in this batch
@@ -359,6 +393,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 record: replay_record,
                 prover_input,
                 tree_output,
+                zisk_block_data: block_zisk_data,
             }) = block_receiver.recv().await
             else {
                 tracing::info!("inbound channel closed");
@@ -381,6 +416,17 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             );
 
             blocks.push((block_output, replay_record, tree_output, prover_input));
+            if self.second_proof.is_some() {
+                match block_zisk_data {
+                    Some(bytes) => {
+                        if let Some(acc) = zisk_blocks.as_mut() {
+                            acc.push(bytes);
+                        }
+                    }
+                    // A degraded block degrades the whole batch.
+                    None => zisk_blocks = None,
+                }
+            }
         }
         let last_block_number = blocks.last().unwrap().0.header.number;
         assert_eq!(
@@ -390,7 +436,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         );
 
         // Rebuild the batch from blocks
-        let rebuilt_batch = batch_builder::seal_batch(
+        let (rebuilt_batch, zisk_batch_data) = batch_builder::seal_batch(
             &blocks,
             prev_batch_info.clone(),
             batch_number,
@@ -400,7 +446,11 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             self.pubdata_mode,
             self.sl_chain_id,
             &self.read_state,
+            self.second_proof.as_ref(),
+            zisk_blocks,
         )?;
+        self.open_zisk_job(&rebuilt_batch.batch, zisk_batch_data)
+            .await;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
         if self.batcher_config.assert_rebuilt_batch_hashes {
@@ -422,5 +472,50 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         }
 
         Ok(Some(rebuilt_batch))
+    }
+
+    /// Open the ZiSK proving job for a sealed batch, straight from the batcher
+    /// and independent of the Airbender FRI lane.
+    ///
+    /// A no-op when the feature is off or when assembly produced nothing.
+    ///
+    /// Opens the per-batch job on `ZiskJobManager` from the sealed batch's
+    /// metadata. `add_job` never blocks the seal: a full active queue is plain
+    /// backpressure — the lane parks the input in its bounded backlog and
+    /// promotes it when a slot frees, so the input is never lost in-process. The
+    /// job needs only seal-time state (the commitment preimages and the
+    /// proving-version VK on `BatchMetadata`), so opening it at seal — earlier
+    /// than the old FRI-job-time creation — is sound.
+    async fn open_zisk_job(
+        &self,
+        batch_metadata: &BatchMetadata,
+        zisk_batch_data: Option<ZiskBatchBytes>,
+    ) {
+        let (Some(second_proof), Some(bytes)) = (self.second_proof.as_ref(), zisk_batch_data)
+        else {
+            return;
+        };
+        let batch_number = batch_metadata.batch_info.batch_number;
+        // Already-proved batches (recreated during startup catch-up) need no
+        // ZiSK work; skip them exactly as the Airbender FRI lane did.
+        if batch_number <= second_proof.last_proved_batch {
+            return;
+        }
+        tracing::info!(
+            batch_number,
+            zisk_bytes = bytes.len(),
+            "opening ZiSK proving job from the sealed batch"
+        );
+        second_proof
+            .zisk_job_manager
+            .add_job(
+                batch_number,
+                zisk_prover_lane::ZiskJobData {
+                    zisk_data: bytes.into_vec(),
+                    batch_metadata: batch_metadata.clone(),
+                    added_at: std::time::Instant::now(),
+                },
+            )
+            .await;
     }
 }

@@ -3,7 +3,9 @@ use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use alloy::sol_types::SolCall;
 use std::collections::HashMap;
 use std::fmt::Display;
-use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope, SnarkProof};
+use zksync_os_batch_types::batcher_model::{
+    FriProof, SignedBatchEnvelope, SnarkProof, ZISK_SNARK_PROOF_BYTES,
+};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
@@ -12,11 +14,23 @@ use zksync_os_contract_interface::models::StoredBatchInfo;
 const OHBENDER_PROOF_TYPE: u32 = 2;
 const FAKE_PROOF_TYPE: u32 = 3;
 const FAKE_PROOF_MAGIC_VALUE: u32 = 13;
+const MULTI_PROOF_TYPE: u32 = 5;
 
 #[derive(Debug)]
 pub struct ProofCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     proof: SnarkProof,
+}
+
+/// Errors from proof calldata encoding.
+#[derive(Debug, thiserror::Error)]
+pub enum ProofEncodingError {
+    #[error("invalid ZiSK proof size: {got} bytes, expected {expected}")]
+    InvalidZiskProofSize { got: usize, expected: usize },
+    #[error("Airbender proof length ({len}) is not a multiple of 32")]
+    AirbenderProofNotAligned { len: usize },
+    #[error("unsupported execution version: {version}")]
+    UnsupportedExecutionVersion { version: u32 },
 }
 
 impl ProofCommand {
@@ -26,6 +40,11 @@ impl ProofCommand {
             "ProofCommand must contain at least one batch"
         );
         Self { batches, proof }
+    }
+
+    /// Decompose into parts. Used for error recovery when downstream send fails.
+    pub fn into_parts(self) -> (Vec<SignedBatchEnvelope<FriProof>>, SnarkProof) {
+        (self.batches, self.proof)
     }
 }
 
@@ -126,6 +145,11 @@ impl ProofCommand {
         result.unwrap()
     }
     fn to_calldata_suffix(&self) -> Vec<u8> {
+        self.try_to_calldata_suffix()
+            .expect("proof calldata encoding failed: this is a critical pipeline bug")
+    }
+
+    fn try_to_calldata_suffix(&self) -> Result<Vec<u8>, ProofEncodingError> {
         let previous_batch_info = &self
             .batches
             .first()
@@ -137,17 +161,24 @@ impl ProofCommand {
             .iter()
             .map(|batch| batch.batch.batch_info.clone().into_stored())
             .collect();
-        // todo: awful and temporary
-        let verifier_version = match self.proof.proving_execution_version() {
-            // Use default verifier for fake proofs.
-            None => 0,
-            Some(4) => 4,
-            Some(5) => 5,
-            Some(6) => 6,
-            Some(7) => 0,
-            Some(execution_version) => panic!(
-                "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
-            ),
+        // A MultiProof routes its execution version straight through. The
+        // on-chain MultiProofVerifier resolves the sub-verifiers from that
+        // version, so the mapping below applies to the other proof kinds only.
+        let verifier_version = if let SnarkProof::MultiProof(multi_proof) = &self.proof {
+            multi_proof.proving_execution_version
+        } else {
+            // todo: awful and temporary
+            match self.proof.proving_execution_version() {
+                // Use default verifier for fake proofs.
+                None => 0,
+                Some(4) => 4,
+                Some(5) => 5,
+                Some(6) => 6,
+                Some(7) => 0,
+                Some(version) => {
+                    return Err(ProofEncodingError::UnsupportedExecutionVersion { version });
+                }
+            }
         };
 
         // todo: remove tostring
@@ -189,6 +220,46 @@ impl ProofCommand {
                 .chain(proof)
                 .collect()
             }
+            SnarkProof::MultiProof(multi_proof) => {
+                // Validate proof sizes; these are invariants of the ZiSK Plonk verifier.
+                if multi_proof.zisk_proof.len() != ZISK_SNARK_PROOF_BYTES {
+                    return Err(ProofEncodingError::InvalidZiskProofSize {
+                        got: multi_proof.zisk_proof.len(),
+                        expected: ZISK_SNARK_PROOF_BYTES,
+                    });
+                }
+                if multi_proof.airbender_proof.len() % 32 != 0 {
+                    return Err(ProofEncodingError::AirbenderProofNotAligned {
+                        len: multi_proof.airbender_proof.len(),
+                    });
+                }
+
+                // The type-5 payload carries the SNARK words only. The on-chain
+                // MultiProofVerifier reconstructs the ZiSK public values from its
+                // pinned VKs and the batch public inputs. The aggregation manager
+                // validates the binding digest off-chain before submission.
+                let to_u256_chunks = |bytes: &[u8]| -> Vec<U256> {
+                    bytes
+                        .chunks_exact(32)
+                        .map(|c| {
+                            let arr: [u8; 32] = c.try_into().unwrap();
+                            U256::from_be_bytes(arr)
+                        })
+                        .collect()
+                };
+
+                let airbender_chunks = to_u256_chunks(&multi_proof.airbender_proof);
+                let zisk_proof_chunks = to_u256_chunks(&multi_proof.zisk_proof);
+
+                let mut proof_vec = vec![
+                    U256::from(MULTI_PROOF_TYPE | (verifier_version << 8)),
+                    U256::from(0),                      // previous hash
+                    U256::from(airbender_chunks.len()), // N
+                ];
+                proof_vec.extend(airbender_chunks);
+                proof_vec.extend(zisk_proof_chunks);
+                proof_vec
+            }
         };
 
         let proof_payload = proofPayloadCall {
@@ -205,6 +276,62 @@ impl ProofCommand {
 
         let mut proof_data = vec![SUPPORTED_ENCODING_VERSION];
         proof_payload.abi_encode_raw(&mut proof_data);
-        proof_data
+        Ok(proof_data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zksync_os_batch_types::batcher_model::MultiProofSnarkProof;
+
+    #[test]
+    fn test_multi_proof_serde_roundtrip() {
+        let multi_proof = MultiProofSnarkProof {
+            airbender_proof: vec![0xAB; 64],
+            zisk_proof: vec![0xCD; 768],
+            proving_execution_version: 6,
+        };
+        let snark = SnarkProof::MultiProof(multi_proof);
+        let json = serde_json::to_string(&snark).unwrap();
+        let decoded: SnarkProof = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.proving_execution_version(), Some(6));
+        assert_eq!(decoded.proof().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn test_multi_proof_proving_version() {
+        let snark = SnarkProof::MultiProof(MultiProofSnarkProof {
+            airbender_proof: vec![],
+            zisk_proof: vec![],
+            proving_execution_version: 6,
+        });
+        assert_eq!(snark.proving_execution_version(), Some(6));
+
+        // airbender_proof is returned from proof()
+        let snark2 = SnarkProof::MultiProof(MultiProofSnarkProof {
+            airbender_proof: vec![1, 2, 3],
+            zisk_proof: vec![4, 5, 6],
+            proving_execution_version: 5,
+        });
+        assert_eq!(snark2.proof(), Some(&[1u8, 2, 3][..]));
+        assert_eq!(snark2.proving_execution_version(), Some(5));
+    }
+
+    #[test]
+    fn test_backward_compat_existing_variants() {
+        // Fake proof still works
+        let fake = SnarkProof::Fake;
+        assert_eq!(fake.proving_execution_version(), None);
+        assert!(fake.proof().is_none());
+
+        // Real proof still works
+        let real = SnarkProof::Real(zksync_os_batch_types::batcher_model::RealSnarkProof::V2 {
+            proof: vec![0xAA; 32],
+            proving_execution_version: 6,
+        });
+        assert_eq!(real.proving_execution_version(), Some(6));
+        assert_eq!(real.proof().unwrap().len(), 32);
     }
 }
