@@ -173,9 +173,10 @@ mod v8_verifier {
 
     /// `end_params` of the zksync-os v0.4.0 multiblock batch program
     /// (md5 `3e19df8c36564939950e0a079061ad1b`, see the V8 entry in zksync-airbender-prover),
-    /// computed with airbender-4e8701d5 `compute_setup_for_machine_configuration`. Every V8 FRI
-    /// proof must carry a recursion chain rooted in this program. Must be regenerated together
-    /// with `V8_VK_HASH` whenever the V8 app binary or the airbender pin changes.
+    /// computed with the airbender `end_params` tool (`tools/cli`) at the pinned rev 3f8f8e54.
+    /// Every V8 FRI proof must carry a recursion chain rooted in this program. Must be
+    /// regenerated together with `V8_VK_HASH` whenever the V8 app binary or the airbender pin
+    /// changes.
     const V8_APP_END_PARAMS: [u32; 8] = [
         1510846430, 1744612090, 2760194167, 3978834012, 486556384, 3101620856, 1174490972,
         1285720748,
@@ -322,8 +323,8 @@ mod tests {
         assert_eq!(
             v8_verifier::unified_level_data().expected_chain,
             [
-                2721407417, 2860472886, 3043765511, 1327281483, 2160704972, 1672973714, 2309068179,
-                1614881354,
+                2698634994, 793754047, 1704261768, 3231849372, 3068104797, 4119816215, 1066594081,
+                3138670031,
             ],
         );
     }

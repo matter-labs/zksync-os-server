@@ -70,11 +70,11 @@ impl ProvingVersion {
     const V7_VK_HASH: &'static str =
         "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
 
-    /// verification key hash generated from zksync-os v0.4.0, zksync-airbender 4e8701d5
-    /// (combined recursion layers) and zkos-wrapper 0a833652; matches the V8 entry in
-    /// zksync-airbender-prover
+    /// verification key hash generated from zksync-os v0.4.0, zksync-airbender 3f8f8e54
+    /// (`dev` merge of #340, combined recursion layers) and zkos-wrapper 877c1c4b (`dev`
+    /// merge of #75); matches the V8 entry in zksync-airbender-prover
     const V8_VK_HASH: &'static str =
-        "0x2215af6cf294eed41e66f7052ab776fd0f0222b08841523fc85e442a1ce0e085";
+        "0x3e7784b0fdb09035a677ae80568d34fdb1f1ec6ac65bba5192cd977a4f0e7609";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
