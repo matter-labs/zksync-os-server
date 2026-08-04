@@ -30,9 +30,9 @@ impl<S> RetryService<S> {
             }
             TransportError::Transport(TransportErrorKind::Custom(e)) => {
                 let msg = e.to_string();
-                // Internal `reqwest` error that can occur when node experiences intermittent
-                // networking issues.
-                msg.contains("error sending request")
+                // Intermittent `reqwest` networking error, or our timeout layer firing —
+                // a hung request on a dead connection succeeds on retry over a fresh one.
+                msg.contains("error sending request") || msg.contains(super::timeout::TIMED_OUT_MSG)
             }
             TransportError::ErrorResp(e) => {
                 // Internal error as observed on Infura
