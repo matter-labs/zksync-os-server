@@ -15,6 +15,19 @@ ignore = [
     # never locally. Local `RsaPrivateKey` usage is test-only. No patched
     # version exists yet (tracked in RustCrypto/RSA#19).
     "RUSTSEC-2023-0071",
+    # Unmaintained (NOT vulnerable) transitive proc-macro / derive / serialization
+    # helpers with no maintained drop-in replacement. These are advisory
+    # *maintenance* signals, not security vulnerabilities, and they affect the
+    # upstream workspace as well — only `custom_derive` is added by the ZiSK
+    # feature (via the guest dependency tree). Revisit if a maintained successor
+    # lands or any of these gets flagged as an actual vulnerability.
+    "RUSTSEC-2025-0141", # bincode unmaintained — 2.x is the wire-format lib (latest); 1.3.3 pulled transitively
+    "RUSTSEC-2025-0058", # custom_derive unmaintained — transitive via the ZiSK guest dependency tree
+    "RUSTSEC-2024-0388", # derivative unmaintained — transitive proc-macro helper, no drop-in
+    "RUSTSEC-2024-0436", # paste unmaintained — ubiquitous transitive proc-macro helper, no drop-in
+    "RUSTSEC-2026-0173", # proc-macro-error2 unmaintained — transitive (fork of the also-unmaintained proc-macro-error)
+    "RUSTSEC-2026-0105", # core2 unmaintained — transitive via multihash -> libp2p-identity -> discv5 -> reth (upstream tree)
+    "RUSTSEC-2024-0384", # instant unmaintained — transitive in the upstream tree; both advisories fire on a pristine upstream main lockfile
 ]
 
 [bans]
