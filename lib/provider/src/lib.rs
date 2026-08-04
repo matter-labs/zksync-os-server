@@ -190,7 +190,9 @@ fn eth_config_reports_eip7594(config: &serde_json::Value) -> Option<bool> {
 /// at most once. Each address gets its own [`OnceCell`] so concurrent lookups for the same address
 /// run the binary search exactly once and the rest await its result.
 type DeploymentBlockCache = Arc<Mutex<HashMap<Address, Arc<OnceCell<u64>>>>>;
-type HeaderWatcher = Arc<OnceCell<watch::Sender<<Ethereum as Network>::HeaderResponse>>>;
+// Holds a `Receiver` (not the `Sender`) so the poller task owns the only sender: if the task
+// ever dies, the channel closes and subscribers observe it instead of waiting forever.
+type HeaderWatcher = Arc<OnceCell<watch::Receiver<<Ethereum as Network>::HeaderResponse>>>;
 
 /// A version of `DynProvider` that exposes `wallet()` and `wallet_mut()` as defined in
 /// `EthWalletProvider`. Also uses `Box` instead of `Arc` to make sure the wallets are mutable.
@@ -264,7 +266,7 @@ impl NodeProvider {
                     .await
             })
             .await
-            .subscribe()
+            .clone()
     }
 
     /// Returns a shared watcher for the finalized block header via
@@ -284,7 +286,7 @@ impl NodeProvider {
                     .await
             })
             .await
-            .subscribe()
+            .clone()
     }
 
     /// Builds a provider-owned header watcher backed by a raw RPC client request.
@@ -293,27 +295,30 @@ impl NodeProvider {
     /// `WeakClient` shutdown. That preserves the client's transport/request layers, but it
     /// intentionally bypasses provider-level fillers/layers.
     ///
-    /// The shutdown is not tied to reth-tasks, it is only tied to the Provider. But it should be
-    /// fine because the task does not own any resources. This is similar to how alloy pollers work.
+    /// The shutdown is not tied to reth-tasks, it is only tied to the Provider, similar to how
+    /// alloy pollers work. The task must own the only `watch::Sender`: transient poll failures
+    /// are retried at the next tick, and if the task exits or panics for any other reason, the
+    /// channel closes so subscribers observe the failure instead of a silently frozen stream.
     async fn build_header_watcher(
         &self,
         block: BlockNumberOrTag,
         poll_interval: Duration,
-    ) -> watch::Sender<<Ethereum as Network>::HeaderResponse> {
+    ) -> watch::Receiver<<Ethereum as Network>::HeaderResponse> {
         let initial_block: Option<<Ethereum as Network>::BlockResponse> = self
             .client()
             .request("eth_getBlockByNumber", (block, false))
             .await
             .unwrap_or_else(|err| panic!("failed to initialize {block:?} header watcher: {err}"));
-        let (tx, _) = watch::channel(
+        let (tx, rx) = watch::channel(
             initial_block
                 .expect("header watcher RPC returned no block for a chain head")
                 .header()
                 .clone(),
         );
         let weak_client = self.weak_client();
-        let tx_task = tx.clone();
 
+        // The task owns the only sender: if it exits or panics, subscribers see the channel
+        // close rather than a silently frozen stream.
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(poll_interval);
             loop {
@@ -322,17 +327,30 @@ impl NodeProvider {
                     return;
                 };
 
-                let block: Option<<Ethereum as Network>::BlockResponse> = client
-                    .request("eth_getBlockByNumber", (block, false))
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("failed to poll {block:?} header watcher: {err}");
-                    });
-                let header = block
-                    .expect("header watcher RPC returned no block for a chain head")
-                    .header()
-                    .clone();
-                tx_task.send_if_modified(|current: &mut <Ethereum as Network>::HeaderResponse| {
+                // Transient RPC failures (the L1 endpoint hiccuping) must not kill the watcher:
+                // the next tick is the retry.
+                let block_response: Option<<Ethereum as Network>::BlockResponse> =
+                    match client.request("eth_getBlockByNumber", (block, false)).await {
+                        Ok(response) => response,
+                        Err(err) => {
+                            tracing::warn!(
+                                %err,
+                                ?block,
+                                "header watcher poll failed; retrying at next tick"
+                            );
+                            continue;
+                        }
+                    };
+                // A transient `null` for a chain-head tag is retried like any other poll failure.
+                let Some(block_response) = block_response else {
+                    tracing::warn!(
+                        ?block,
+                        "header watcher poll returned no block; retrying at next tick"
+                    );
+                    continue;
+                };
+                let header = block_response.header().clone();
+                tx.send_if_modified(|current: &mut <Ethereum as Network>::HeaderResponse| {
                     if current.hash() == header.hash() {
                         false
                     } else {
@@ -343,7 +361,7 @@ impl NodeProvider {
             }
         });
 
-        tx
+        rx
     }
 
     /// Returns the optional features the underlying provider was detected to support.

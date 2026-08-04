@@ -1,6 +1,7 @@
 use alloy::primitives::{B256, keccak256};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::cell::OnceCell;
 use std::collections::HashSet;
 use std::mem;
@@ -9,7 +10,7 @@ use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zksync_os_interface::traits::ReadStorage;
 use zksync_os_storage_api::BlockContext;
-use zksync_os_types::{BlockOutput, ZkTransaction};
+use zksync_os_types::{BlockOutput, Eip2718, ZkTransaction};
 
 /// [`ReadStorage`] wrapper that tracks read storage slots.
 #[derive(Debug)]
@@ -77,9 +78,11 @@ pub(crate) fn hash_block_output(block_output: &BlockOutput) -> B256 {
     keccak256(preimage)
 }
 
+#[serde_as]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlockDump {
     pub ctx: BlockContext,
+    #[serde_as(as = "Vec<Eip2718>")]
     pub txs: Vec<ZkTransaction>,
     pub error: String,
 }

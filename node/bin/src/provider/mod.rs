@@ -1,6 +1,7 @@
 mod latency;
 mod metrics;
 mod retry;
+mod timeout;
 
 use crate::config::ProviderConfig;
 use alloy::network::EthereumWallet;
@@ -27,6 +28,8 @@ pub(crate) async fn build_node_provider(
 ) -> NodeProvider {
     let max_retries = config.max_retries;
     let retry_backoff = config.retry_backoff;
+    let request_timeout = config.request_timeout;
+    // Timeout is the innermost layer so that each retry attempt gets its own timeout.
     let provider_layers = ServiceBuilder::new()
         .layer_fn(move |inner| latency::LatencyService { inner, provider })
         .layer_fn(move |inner| retry::RetryService {
@@ -34,6 +37,10 @@ pub(crate) async fn build_node_provider(
             provider,
             max_retries,
             backoff: retry_backoff,
+        })
+        .layer_fn(move |inner| timeout::TimeoutService {
+            inner,
+            timeout: request_timeout,
         });
 
     let client = RpcClient::builder()

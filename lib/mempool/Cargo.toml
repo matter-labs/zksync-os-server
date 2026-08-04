@@ -19,6 +19,7 @@ zksync_os_l1_watcher.workspace = true
 zksync_os_genesis.workspace = true
 
 zksync_os_interface = { workspace = true }
+zk_os_api.workspace = true
 
 reth-transaction-pool = { workspace = true }
 reth-ethereum-primitives = { workspace = true }
@@ -26,6 +27,8 @@ reth-primitives-traits = { workspace = true }
 reth-execution-types = { workspace = true }
 reth-evm-ethereum = { workspace = true }
 reth-chainspec = { workspace = true }
+reth-eth-wire-types = { workspace = true }
+reth-storage-api = { workspace = true }
 reth-tasks = { workspace = true }
 
 alloy = { workspace = true, default-features = false, features = ["consensus", "sol-types", "eips", "providers", "rpc-types", "network", "contract"] }
@@ -34,6 +37,8 @@ anyhow.workspace = true
 auto_impl.workspace = true
 futures.workspace = true
 num.workspace = true
+rand.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true

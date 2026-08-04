@@ -474,6 +474,11 @@ pub struct ProviderConfig {
     /// Backoff used between retry attempts.
     #[config(default_t = Duration::from_millis(1000))]
     pub retry_backoff: Duration,
+
+    /// Per-attempt timeout for every L1 RPC request. Must comfortably exceed the slowest
+    /// legitimate request (e.g. `eth_getLogs` over `l1_watcher.max_blocks_to_process` blocks).
+    #[config(default_t = 30 * TimeUnit::Seconds)]
+    pub request_timeout: Duration,
 }
 
 impl ProviderConfig {
@@ -1032,6 +1037,19 @@ pub struct RpcConfig {
     #[config(default_t = 24)]
     pub max_response_size: u32,
 
+    /// Limits the work admitted by one JSON-RPC batch. The server rejects larger batches before
+    /// dispatching any entry, so one request cannot create an unbounded work queue.
+    #[config(default_t = 1000)]
+    pub max_batch_size: u32,
+
+    /// Allows entries in one JSON-RPC batch to run concurrently, with a per-batch limit.
+    ///
+    /// Responses stay in request order, but execution does not. For example, a transaction and a
+    /// read that depends on it may race when sent in the same batch. Keep this disabled for clients
+    /// that rely on sequential batch execution.
+    #[config(default_t = false)]
+    pub parallel_batches: bool,
+
     /// Maximum number of blocks that could be scanned per filter
     #[config(default_t = 10_000)]
     pub max_blocks_per_filter: u64,
@@ -1070,6 +1088,11 @@ pub struct RpcConfig {
     /// Rate limits for incoming JSON-RPC requests.
     #[config(nest)]
     pub rate_limits: RpcRateLimitsConfig,
+
+    /// Rate limiter for incoming L2 transactions based on executed gas throughput.
+    /// Disabled by default; set `enabled = true` to turn it on.
+    #[config(nest, default)]
+    pub tx_gas_rate_limit: TxGasRateLimitConfig,
 
     /// List of disabled methods.
     /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
@@ -1112,6 +1135,86 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
                 m_methods,
                 custom_methods,
             },
+        }
+    }
+}
+
+/// Rate limiter for incoming L2 transactions, gating admission based on the sequencer's
+/// *total* recent execution throughput — L1 priority / upgrade / interop txs all count
+/// toward it too, even though only L2 admission is ever actually gated. Only effective on
+/// the main node.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+#[config(validate(
+    Self::check_credit_windows,
+    "max_credit_seconds must be positive, other windows non-negative, and reopen_credit_seconds must not exceed max_credit_seconds"
+))]
+pub struct TxGasRateLimitConfig {
+    /// Whether the gas rate limiter is enabled. Only effective on the main node.
+    #[config(default_t = false)]
+    pub enabled: bool,
+
+    /// Target sustained executed-gas throughput, in gas per second.
+    #[config(default_t = NonZeroU64::new(72_000_000).unwrap())]
+    pub gas_per_second: NonZeroU64,
+
+    /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`. Sized to
+    /// absorb realistic bursty traffic without tripping, while staying under the
+    /// backpressure mechanism's own block-diff horizon.
+    #[config(default_t = 30.0)]
+    pub max_credit_seconds: f64,
+
+    /// Credit required to resume acceptance after the bank was exhausted, in seconds'
+    /// worth of `gas_per_second`.
+    #[config(default_t = 1.0)]
+    pub reopen_credit_seconds: f64,
+
+    /// Max remembered deficit, in seconds' worth of `gas_per_second`. Capacity consumed
+    /// above target while closing is repaid before reopening; `0` clamps the bank at zero.
+    #[config(default_t = 2.0)]
+    pub deficit_floor_seconds: f64,
+
+    /// Senders whose transactions are never rate-limited.
+    #[config(default, with = Delimited::new(","))]
+    pub exempt_senders: HashSet<Address>,
+}
+
+impl TxGasRateLimitConfig {
+    fn check_credit_windows(&self) -> Result<(), ErrorWithOrigin> {
+        let windows = [
+            self.max_credit_seconds,
+            self.reopen_credit_seconds,
+            self.deficit_floor_seconds,
+        ];
+        if windows.iter().any(|w| !w.is_finite() || *w < 0.0) {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit seconds windows must be finite and non-negative",
+            ));
+        }
+        // A zero-capacity bank pins the level at <= 0 and makes the gate flap on
+        // every submission.
+        if self.max_credit_seconds == 0.0 {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit.max_credit_seconds must be positive",
+            ));
+        }
+        // A reopen threshold above capacity is unreachable: once closed, the gate
+        // would never reopen.
+        if self.reopen_credit_seconds > self.max_credit_seconds {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit.reopen_credit_seconds must not exceed max_credit_seconds",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_lib(self) -> zksync_os_mempool::TxGasRateLimitConfig {
+        zksync_os_mempool::TxGasRateLimitConfig {
+            gas_per_second: self.gas_per_second.get(),
+            max_credit_seconds: self.max_credit_seconds,
+            reopen_credit_seconds: self.reopen_credit_seconds,
+            deficit_floor_seconds: self.deficit_floor_seconds,
+            exempt_senders: self.exempt_senders,
         }
     }
 }
@@ -1483,6 +1586,14 @@ pub enum ReplayArchiveConfig {
         #[config(nest, default)]
         encryption: ReplayArchiveEncryptionConfig,
     },
+    /// GCS backend using Application Default Credentials. This supports GKE Workload Identity,
+    /// external workload identity federation, and local ADC.
+    Gcs {
+        /// Name of the GCS bucket.
+        bucket_base_url: String,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
 }
 
 /// Replay archive encryption applied before data is written to cold storage.
@@ -1494,6 +1605,15 @@ pub enum ReplayArchiveEncryptionConfig {
     AgeX25519 {
         /// age X25519 recipient public key. The node only needs this public key.
         recipient: String,
+    },
+    /// GCP KMS encryption using Application Default Credentials. This supports GKE Workload
+    /// Identity, external workload identity federation, and local ADC.
+    GcpKms {
+        /// KMS key version, full resource name
+        /// `projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}`.
+        /// Purpose `ASYMMETRIC_DECRYPT` with an `RSA_DECRYPT_OAEP_*_SHA256` algorithm. The node only
+        /// reads the public key to encrypt locally, so it needs no decrypt permission.
+        kms_key_version: String,
     },
 }
 
@@ -1526,6 +1646,22 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                 },
                 encryption: encryption.into(),
             },
+            #[cfg(feature = "gcp")]
+            ReplayArchiveConfig::Gcs {
+                bucket_base_url,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::Gcs {
+                config: zksync_os_replay_archive::GcsReplayArchiveConfig {
+                    bucket_base_url,
+                    auth_mode: zksync_os_replay_archive::GcsReplayArchiveAuthMode::Authenticated,
+                },
+                encryption: encryption.into(),
+            },
+            #[cfg(not(feature = "gcp"))]
+            ReplayArchiveConfig::Gcs { .. } => panic!(
+                "this build was compiled without the `gcp` feature; rebuild with \
+                 `--features gcp` to use the GCS replay archive backend"
+            ),
         }
     }
 }
@@ -1541,6 +1677,19 @@ impl From<ReplayArchiveEncryptionConfig>
             ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
             }
+            #[cfg(feature = "gcp")]
+            ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
+                    config: zksync_os_replay_archive::GcpKmsConfig {
+                        key_version: kms_key_version,
+                    },
+                }
+            }
+            #[cfg(not(feature = "gcp"))]
+            ReplayArchiveEncryptionConfig::GcpKms { .. } => panic!(
+                "this build was compiled without the `gcp` feature; rebuild with \
+                 `--features gcp` to use the GCP KMS replay archive encryption"
+            ),
         }
     }
 }
@@ -1871,6 +2020,8 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_connections: c.max_connections,
             max_request_size: c.max_request_size,
             max_response_size: c.max_response_size,
+            max_batch_size: c.max_batch_size,
+            parallel_batches: c.parallel_batches,
             max_blocks_per_filter: c.max_blocks_per_filter,
             max_logs_per_response: c.max_logs_per_response,
             l2_signer_blacklist: c.l2_signer_blacklist,
@@ -2239,10 +2390,7 @@ mod tests {
                 assert_eq!(root_path, PathBuf::from("/tmp/replay-archive"));
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
-            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
-                panic!("expected file system replay archive config")
-            }
+            _ => panic!("expected file system replay archive config"),
         }
     }
 
@@ -2276,9 +2424,26 @@ mod tests {
                 assert_eq!(region.as_deref(), Some("us-east-2"));
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop | ReplayArchiveConfig::FileSystem { .. } => {
-                panic!("expected S3 replay archive config")
+            _ => panic!("expected S3 replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcs_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "Gcs"),
+            ("REPLAY_ARCHIVE_BUCKET_BASE_URL", "replay-archive"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::Gcs {
+                bucket_base_url,
+                encryption,
+            } => {
+                assert_eq!(bucket_base_url, "replay-archive");
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
+            _ => panic!("expected GCS replay archive config"),
         }
     }
 
@@ -2296,14 +2461,35 @@ mod tests {
                 ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                     assert_eq!(recipient, "age1recipient");
                 }
-                ReplayArchiveEncryptionConfig::Noop => {
-                    panic!("expected age X25519 replay archive encryption")
-                }
+                _ => panic!("expected age X25519 replay archive encryption"),
             },
-            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
-            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
-                panic!("expected file system replay archive config")
-            }
+            _ => panic!("expected file system replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcp_kms_encryption() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
+            ("REPLAY_ARCHIVE_ROOT_PATH", "/tmp/replay-archive"),
+            ("REPLAY_ARCHIVE_ENCRYPTION_TYPE", "GcpKms"),
+            (
+                "REPLAY_ARCHIVE_ENCRYPTION_KMS_KEY_VERSION",
+                "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+            ),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::FileSystem { encryption, .. } => match encryption {
+                ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                    assert_eq!(
+                        kms_key_version,
+                        "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"
+                    );
+                }
+                _ => panic!("expected GCP KMS replay archive encryption"),
+            },
+            _ => panic!("expected file system replay archive config"),
         }
     }
 
