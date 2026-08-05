@@ -18,13 +18,11 @@ fn parse_git_reference(package_id: &PackageId) -> anyhow::Result<String> {
     Ok(reference.to_string())
 }
 
-// TODO: the `antonio/compat-nightly-*` rev references (pinned heads of the bot-fork compat
-//       branches) are temporary - repin to the proper zksync-os release tags once they are cut.
+// The `*-interface-v0.1.4` tags are toolchain rebuilds without published app binaries;
+// binaries are downloaded from the original releases they rebuild.
 fn binary_source_config(reference: &str) -> Option<BinarySourceConfig> {
     match reference {
-        "v0.2.10-interface-v0.1.3"
-        | "antonio/compat-nightly-2026-02-10-v0.2.10-interface-v0.1.3"
-        | "0c99261a748f" => {
+        "v0.2.10-interface-v0.1.4" => {
             // TEMPORARY HACK for V6!!!
             // We've updated interface and rust toolchain for corresponding zksync-os version and it caused a change in binaries.
             // We need to use original V6 binaries from zksync-os v0.2.5.
@@ -34,9 +32,7 @@ fn binary_source_config(reference: &str) -> Option<BinarySourceConfig> {
                 download_tag: "v0.2.5",
             })
         }
-        "v0.3.1-interface-v0.1.3"
-        | "antonio/compat-nightly-2026-02-10-v0.3.1-interface-v0.1.3"
-        | "49095d336c99" => Some(BinarySourceConfig {
+        "v0.3.1-interface-v0.1.4" => Some(BinarySourceConfig {
             proving_version: "V7",
             download_tag: "v0.3.1-interface-v0.1.3",
         }),
