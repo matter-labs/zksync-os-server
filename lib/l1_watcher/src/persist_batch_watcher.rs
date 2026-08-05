@@ -29,6 +29,58 @@ pub struct L1PersistBatchWatcher<BatchStorage> {
     committed_batches: HashMap<u64, DiscoveredCommittedBatch>,
     last_processed_commit_batch: u64,
     last_persisted_batch_on_start: u64,
+    /// Commit data prefetched for the current polling window, keyed by commit log identity.
+    prefetched: HashMap<LogKey, DiscoveredCommittedBatch>,
+}
+
+/// Identifies a log within its settlement layer: (L1 block number, log index).
+type LogKey = (u64, u64);
+
+/// Max concurrent L1 fetches when prefetching a window's commit data.
+const PREFETCH_CONCURRENCY: usize = 32;
+
+fn log_key(log: &Log) -> Result<LogKey, L1WatcherError> {
+    let block_number = log.block_number.ok_or_else(|| {
+        L1WatcherError::Other(anyhow::anyhow!("indexed log without block number"))
+    })?;
+    let log_index = log
+        .log_index
+        .ok_or_else(|| L1WatcherError::Other(anyhow::anyhow!("indexed log without log index")))?;
+    Ok((block_number, log_index))
+}
+
+/// Fetches the full committed-batch data for one commit event from the settlement layer.
+async fn fetch_discovered_batch(
+    provider: NodeProvider,
+    report: ReportCommittedBatchRangeZKsyncOS,
+    log: Log,
+) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
+    let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
+    let l1_block_number = log.block_number.expect("indexed log without block number");
+    let zk_chain = ZkChain::new(log.address(), provider);
+    let batch_info =
+        util::fetch_committed_batch_data(&zk_chain, tx_hash, l1_block_number, report.batchNumber)
+            .await?
+            .into_stored();
+
+    Ok(DiscoveredCommittedBatch {
+        batch_info,
+        block_range: report.firstBlockNumber..=report.lastBlockNumber,
+    })
+}
+
+/// Extracts the decoded commit-range reports from a window's logs, keyed by log identity.
+fn commit_reports(
+    events: &[Log],
+) -> Result<Vec<(LogKey, ReportCommittedBatchRangeZKsyncOS, Log)>, L1WatcherError> {
+    events
+        .iter()
+        .filter(|log| log.topics()[0] == ReportCommittedBatchRangeZKsyncOS::SIGNATURE_HASH)
+        .map(|log| {
+            let report = ReportCommittedBatchRangeZKsyncOS::decode_log(&log.inner)?.data;
+            Ok((log_key(log)?, report, log.clone()))
+        })
+        .collect()
 }
 
 impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
@@ -70,6 +122,7 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
                 committed_batches: HashMap::new(),
                 last_processed_commit_batch: last_persisted_batch,
                 last_persisted_batch_on_start: last_persisted_batch,
+                prefetched: HashMap::new(),
             };
             Ok((start_block, processor))
         };
@@ -78,27 +131,16 @@ impl<BatchStorage: WriteBatch> L1PersistBatchWatcher<BatchStorage> {
     }
 
     async fn parse_committed_batch(
-        &self,
+        &mut self,
         provider: &NodeProvider,
         report: ReportCommittedBatchRangeZKsyncOS,
         log: Log,
     ) -> Result<DiscoveredCommittedBatch, L1WatcherError> {
-        let tx_hash = log.transaction_hash.expect("indexed log without tx hash");
-        let l1_block_number = log.block_number.expect("indexed log without block number");
-        let zk_chain = ZkChain::new(log.address(), provider.clone());
-        let batch_info = util::fetch_committed_batch_data(
-            &zk_chain,
-            tx_hash,
-            l1_block_number,
-            report.batchNumber,
-        )
-        .await?
-        .into_stored();
-
-        Ok(DiscoveredCommittedBatch {
-            batch_info,
-            block_range: report.firstBlockNumber..=report.lastBlockNumber,
-        })
+        // Misses (logs outside the prefetched window) fall back to a direct fetch.
+        if let Some(batch) = self.prefetched.remove(&log_key(&log)?) {
+            return Ok(batch);
+        }
+        fetch_discovered_batch(provider.clone(), report, log).await
     }
 
     async fn process_commit(
@@ -186,6 +228,26 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
         logs
     }
 
+    async fn prefetch_events(
+        &mut self,
+        provider: &NodeProvider,
+        events: &[Log],
+    ) -> Result<(), L1WatcherError> {
+        // Drop leftovers from the previous window.
+        self.prefetched.clear();
+        let reports = commit_reports(events)?;
+        self.prefetched = util::prefetch_bounded(
+            reports,
+            PREFETCH_CONCURRENCY,
+            |(key, report, log)| async move {
+                let batch = fetch_discovered_batch(provider.clone(), report, log).await?;
+                Ok((key, batch))
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn process_raw_event(
         &mut self,
         provider: &NodeProvider,
@@ -233,5 +295,56 @@ impl<BatchStorage: WriteBatch> ProcessRawEvents for L1PersistBatchWatcher<BatchS
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::{Address, B256, U256};
+    use alloy::sol_types::SolEvent;
+
+    fn rpc_log(data: alloy::primitives::LogData, block_number: u64, log_index: u64) -> Log {
+        Log {
+            inner: alloy::primitives::Log {
+                address: Address::repeat_byte(0xAA),
+                data,
+            },
+            block_hash: Some(B256::repeat_byte(1)),
+            block_number: Some(block_number),
+            block_timestamp: None,
+            transaction_hash: Some(B256::repeat_byte(2)),
+            transaction_index: Some(0),
+            log_index: Some(log_index),
+            removed: false,
+        }
+    }
+
+    #[test]
+    fn commit_reports_selects_only_commit_events_keyed_by_log_identity() {
+        let commit = ReportCommittedBatchRangeZKsyncOS {
+            batchNumber: 7,
+            firstBlockNumber: 100,
+            lastBlockNumber: 110,
+        };
+        let execute = BlockExecution {
+            batchNumber: U256::from(7),
+            batchHash: B256::repeat_byte(3),
+            commitment: B256::repeat_byte(4),
+        };
+        let logs = vec![
+            rpc_log(commit.encode_log_data(), 5, 2),
+            rpc_log(execute.encode_log_data(), 5, 3),
+        ];
+
+        let reports = commit_reports(&logs).unwrap();
+
+        assert_eq!(reports.len(), 1);
+        let (key, report, log) = &reports[0];
+        assert_eq!(*key, (5, 2));
+        assert_eq!(report.batchNumber, 7);
+        assert_eq!(report.firstBlockNumber, 100);
+        assert_eq!(report.lastBlockNumber, 110);
+        assert_eq!(log.log_index, Some(2));
     }
 }

@@ -219,6 +219,10 @@ impl<P: ProcessRawEvents> L1Watcher<P> {
             METRICS.events_loaded[&self.processor.name()].inc_by(events.len() as u64);
             METRICS.most_recently_scanned_l1_block[&self.processor.name()].set(to_block);
 
+            self.processor
+                .prefetch_events(&self.provider, &events)
+                .await?;
+
             for event in events {
                 self.processor
                     .process_raw_event(&self.provider, event)
