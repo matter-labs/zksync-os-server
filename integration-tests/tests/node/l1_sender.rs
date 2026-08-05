@@ -1,6 +1,7 @@
 //! L1 sender behavior under load and adverse L1 conditions: pipelined-vs-stop-and-wait
 //! throughput, base/priority fee spikes, inclusion stalls, restarts mid-window,
-//! forced resubmission and L1 connection loss.
+//! forced resubmission, L1 connection loss and an L1 RPC lacking
+//! `eth_getTransactionBySenderAndNonce`.
 
 use alloy::consensus::Transaction as ConsensusTransaction;
 use alloy::network::TransactionBuilder;
@@ -8,14 +9,16 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
 use alloy::providers::ext::AnvilApi;
 use alloy::rpc::types::TransactionRequest;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
 use zksync_os_integration_tests::l1_helpers::{fetch_l1_state, wait_for_l1_state};
 use zksync_os_integration_tests::test_config::make_full_pipeline_config;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
-use zksync_os_provider::NodeProvider;
+use zksync_os_provider::{EthWalletProvider, NodeProvider};
 use zksync_os_server::config::Config;
 
 /// Seals a batch roughly every two L2 transactions (and every 2s by timeout), so a burst of
@@ -99,6 +102,32 @@ async fn wait_for_pooled_commits(
         );
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+/// Waits until no configured operator account has transactions pooled on L1.
+async fn wait_for_operators_to_settle(l1: &NodeProvider, config: &Config) -> anyhow::Result<()> {
+    let operator_keys = [
+        &config.l1_sender_config.operator_commit_sk,
+        &config.l1_sender_config.operator_prove_sk,
+        &config.l1_sender_config.operator_execute_sk,
+    ];
+    let deadline = Instant::now() + DEFAULT_TIMEOUT;
+    for key in operator_keys.into_iter().flatten() {
+        let address = key.address().await?;
+        loop {
+            let (latest, pending) = operator_nonces(l1, address).await?;
+            if pending == latest {
+                break;
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "timed out waiting for operator {address} to settle; {} txs still pooled",
+                pending - latest,
+            );
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    }
+    Ok(())
 }
 
 /// The core throughput claim: with everything else equal, the pipelined sender drains a batch
@@ -553,5 +582,200 @@ async fn l1_connection_blip_is_absorbed(env: TestEnvironment) -> anyhow::Result<
         !tester.has_crashed(),
         "node crashed on a short L1 connection blip that transport retries should absorb",
     );
+    Ok(())
+}
+
+/// A JSON-RPC proxy in front of anvil that rejects a single method with the JSON-RPC
+/// "method not found" error (-32601) and transparently forwards everything else — emulating an
+/// L1 provider that does not implement the method (e.g. the geth family, which lacks
+/// `eth_getTransactionBySenderAndNonce`).
+struct MethodNotFoundL1Proxy {
+    url: String,
+}
+
+impl MethodNotFoundL1Proxy {
+    async fn start(target_url: &str, missing_method: &'static str) -> anyhow::Result<Self> {
+        let target = target_url.to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}", listener.local_addr()?);
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let client = client.clone();
+                let target = target.clone();
+                tokio::spawn(async move {
+                    let _ = Self::serve_connection(stream, client, target, missing_method).await;
+                });
+            }
+        });
+        Ok(Self { url })
+    }
+
+    async fn serve_connection(
+        stream: tokio::net::TcpStream,
+        client: reqwest::Client,
+        target: String,
+        missing_method: &str,
+    ) -> anyhow::Result<()> {
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = tokio::io::BufReader::new(read_half);
+        loop {
+            // Minimal HTTP/1.1 handling suffices: alloy's HTTP transport always POSTs a
+            // single JSON-RPC object with an explicit Content-Length.
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).await? == 0 {
+                return Ok(()); // connection closed between keep-alive requests
+            }
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                anyhow::ensure!(
+                    reader.read_line(&mut header).await? > 0,
+                    "truncated request"
+                );
+                let header = header.trim();
+                if header.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse()?;
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            reader.read_exact(&mut body).await?;
+
+            let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let (status, response_body) =
+                if request.get("method").and_then(Value::as_str) == Some(missing_method) {
+                    let error = json!({
+                        "jsonrpc": "2.0",
+                        "id": request.get("id").cloned().unwrap_or(Value::Null),
+                        "error": {
+                            "code": -32601,
+                            "message": format!(
+                                "the method {missing_method} does not exist/is not available"
+                            ),
+                        },
+                    });
+                    (reqwest::StatusCode::OK, serde_json::to_vec(&error)?)
+                } else {
+                    let response = client
+                        .post(&target)
+                        .header("content-type", "application/json")
+                        .body(body)
+                        .send()
+                        .await?;
+                    (response.status(), response.bytes().await?.to_vec())
+                };
+            let head = format!(
+                "HTTP/1.1 {} {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or("OK"),
+                response_body.len(),
+            );
+            write_half.write_all(head.as_bytes()).await?;
+            write_half.write_all(&response_body).await?;
+        }
+    }
+}
+
+/// An L1 RPC without `eth_getTransactionBySenderAndNonce` (geth family) cannot pair a previous
+/// session's in-flight transactions with queued commands. Restarted with an unsettled operator
+/// account, the pipelined sender must fall back to waiting for the account to settle —
+/// submitting nothing in the meantime — and resume sending once the leftover transaction mines.
+///
+/// The leftover in-flight transaction is a plain transfer from the commit operator rather than
+/// a real commit: startup L1-state discovery waits for pool-driven *contract-state* changes to
+/// land before the node boots (see `restart_mid_window_settles_in_flight_batches_exactly_once`),
+/// so a pooled commit cannot survive into the sender's recovery under anvil, while a transfer —
+/// which leaves contract state untouched — can.
+#[test_multisetup([CURRENT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn missing_sender_nonce_rpc_stalls_sender_until_in_flight_txs_settle(
+    env: TestEnvironment,
+) -> anyhow::Result<()> {
+    let proxy =
+        MethodNotFoundL1Proxy::start(env.l1_rpc_url(), "eth_getTransactionBySenderAndNonce")
+            .await?;
+    let mut config = env.default_config().await?;
+    fast_batches_config(&mut config);
+    let tester = env.launch_with_l1_rpc(config, proxy.url.clone()).await?;
+    let l1 = tester.l1_provider().clone();
+    let operator = commit_operator_address(tester.config()).await?;
+
+    let initial = fetch_l1_state(&tester).await?.last_committed_batch;
+    send_l2_txs(&tester, 4).await?;
+    wait_for_l1_state(&tester, "baseline commits", |state| {
+        state.last_committed_batch > initial
+    })
+    .await?;
+
+    let committed_before_restart = fetch_l1_state(&tester).await?.last_committed_batch;
+    let stopped = tester.stop().await?;
+    // Every operator account must be settled before mining stops: a leftover pooled
+    // commit/prove/execute tx would keep startup L1-state discovery from completing.
+    wait_for_operators_to_settle(&l1, stopped.config()).await?;
+    stop_l1_mining(&l1).await?;
+
+    // Leave a pooled transfer from the commit operator: the restarted sender sees
+    // pending > latest but cannot inspect the transaction through the filtered RPC.
+    let mut operator_l1 = l1.clone();
+    stopped
+        .config()
+        .l1_sender_config
+        .operator_commit_sk
+        .as_ref()
+        .expect("test config carries a commit operator key")
+        .register_with_wallet(operator_l1.wallet_mut())
+        .await?;
+    // Deliberately not awaiting a receipt — mining is stopped, so there is none.
+    let _pooled_transfer = operator_l1
+        .send_transaction(
+            TransactionRequest::default()
+                .with_from(operator)
+                .with_to(Address::random())
+                .with_value(U256::from(1u64)),
+        )
+        .await?;
+    let (latest_nonce, pending_nonce) = operator_nonces(&l1, operator).await?;
+    assert_eq!(
+        pending_nonce,
+        latest_nonce + 1,
+        "the transfer must be pooled"
+    );
+
+    let restarted = stopped.start().await?;
+
+    // New L2 traffic seals new batches (2s batch timeout), so commit commands are queued
+    // while the sender is still waiting out the unsettled account.
+    send_l2_txs(&restarted, 4).await?;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    for _ in 0..10 {
+        let nonces = operator_nonces(&l1, operator).await?;
+        assert_eq!(
+            nonces,
+            (latest_nonce, pending_nonce),
+            "the sender must not submit anything while the account has an unpairable \
+             in-flight transaction",
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(
+        !restarted.has_crashed(),
+        "node crashed while waiting for the operator account to settle",
+    );
+
+    // Once the stray transfer mines, the sender settles and drains the queued commits.
+    resume_l1_mining(&l1).await?;
+    wait_for_l1_state(&restarted, "commits resumed after settling", |state| {
+        state.last_committed_batch >= committed_before_restart + 2
+    })
+    .await?;
+    assert!(!restarted.has_crashed());
     Ok(())
 }

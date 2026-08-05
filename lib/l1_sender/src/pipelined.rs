@@ -849,7 +849,9 @@ where
                      restart with `force_transaction_resubmission.enabled = true` to replace \
                      them.",
                 );
-                let settled_nonce = self.wait_for_account_quiescence(operator_address).await?;
+                let settled_nonce = self
+                    .wait_for_in_flight_txs_to_settle(operator_address)
+                    .await?;
                 return Ok(Some(PipelinedStart {
                     seeds: vec![],
                     next_nonce: settled_nonce,
@@ -1004,7 +1006,10 @@ where
     /// Polls until the operator account has no pending transactions (pending nonce == latest
     /// nonce). Used when in-flight transactions exist but cannot be paired with queued
     /// commands because the provider lacks `eth_getTransactionBySenderAndNonce`.
-    async fn wait_for_account_quiescence(&self, operator_address: Address) -> anyhow::Result<u64> {
+    async fn wait_for_in_flight_txs_to_settle(
+        &self,
+        operator_address: Address,
+    ) -> anyhow::Result<u64> {
         let timeout = self.config.transaction_timeout;
         let poll_interval = self.config.poll_interval;
         let started_at = Instant::now();
@@ -1018,13 +1023,17 @@ where
                 .provider
                 .get_transaction_count(operator_address)
                 .await
-                .context("get latest transaction count while waiting for quiescence")?;
+                .context(
+                    "get latest transaction count while waiting for in-flight txs to settle",
+                )?;
             let pending_nonce = self
                 .provider
                 .get_transaction_count(operator_address)
                 .pending()
                 .await
-                .context("get pending transaction count while waiting for quiescence")?;
+                .context(
+                    "get pending transaction count while waiting for in-flight txs to settle",
+                )?;
             if pending_nonce <= latest_nonce {
                 return Ok(latest_nonce);
             }
