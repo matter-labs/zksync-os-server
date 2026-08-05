@@ -16,7 +16,7 @@ server-side patches for other repos.
      server-side pins.
    Full cleanup needs the airbender compat branches mirrored into `matter-labs/zksync-airbender`
    (branch + tag), the zksync-os compat branches repointed at those upstream refs, and the
-   `*-interface-v0.1.4` tags re-cut on the updated heads — or the lanes dropped when V6/V7
+   `*-interface-v0.1.3-2026-02-10` tags re-cut on the updated heads — or the lanes dropped when V6/V7
    proving support ends.
 2. The V8 lane consumes `matter-labs/zksync-os:draft-0.4.0` (branch, not a tagged release).
    Switch to the release tag once it is cut.
@@ -33,10 +33,9 @@ server-side patches for other repos.
 ## Resolved
 
 - Pre-V8 `zksync-os` lanes now consume `matter-labs/zksync-os` tags
-  (`v0.0.29-interface-v0.1.4`, `v0.1.2-interface-v0.1.4`, `v0.2.10[-simulation-only]-interface-v0.1.4`,
-  `v0.3.1-interface-v0.1.4`): nightly-2026-02-10 rebuilds of the corresponding
-  `*-interface-v0.1.3` releases, mirrored from the bot-fork compat branches
-  (same commits, no content change).
+  (`v0.0.29`/`v0.1.2`/`v0.2.10[-simulation-only]`/`v0.3.1` `-interface-v0.1.3-2026-02-10`):
+  nightly-2026-02-10 rebuilds of the corresponding `*-interface-v0.1.3` releases, mirrored
+  from the bot-fork compat branches (same commits, no content change).
 - The V8 airbender / zkos-wrapper lineage is merged and tagged upstream: server pins
   `zksync-airbender` tag `v0.6.0-rc.1` (3f8f8e54, combined recursion layers); the V8 VK is
   generated with it and `zkos-wrapper` `v0.6.0-rc.1`, matching the V8 entry in
