@@ -76,30 +76,44 @@ impl NodeStateOnStartup {
              state would re-sequence committed block numbers and diverge from L1."
         )
         .unwrap();
-        writeln!(
-            msg,
-            "Restore the WAL from the replay archive (node must stay stopped):\n\
-             1. replay_archive_recovery download {source} --output-root <dir>\n\
-             2. replay_archive_recovery recover-rocksdb --input-root <dir> \\\n\
-             \x20      --replay-db-path {db} \\\n\
-             \x20      --anchor-block-number {anchor} --anchor-block-hash <hash>{decrypt}\n\
-             \x20  (`--replay-db-path` must point at an empty/absent dir - move the stale \
-             `{wal_name}` away first)",
-            source = replay_archive_source_args(&config.replay_archive_config),
-            db = replay_db_path.display(),
-            anchor = self.last_l1_committed_block,
-            decrypt = replay_archive_decrypt_args(&config.replay_archive_config),
-            wal_name = BLOCK_REPLAY_WAL_DB_NAME,
-        )
-        .unwrap();
-        writeln!(
-            msg,
-            "Anchor hash for block {anchor} is not known locally - take it from a healthy \
-             replica (`eth_getBlockByNumber`) or from the archive object listing under prefix \
-             `{anchor}/`.",
-            anchor = self.last_l1_committed_block,
-        )
-        .unwrap();
+        if matches!(config.replay_archive_config, ReplayArchiveConfig::Noop) {
+            writeln!(
+                msg,
+                "No replay archive is configured on this node (`replay_archive.type=Noop`), so \
+                 recovery commands cannot be suggested. Either restore from a replay archive of \
+                 another node in this chain (run `replay_archive_recovery` with that node's \
+                 bucket and decryption key against {db}), or copy a complete `{wal_name}` \
+                 directory from a healthy node.",
+                db = replay_db_path.display(),
+                wal_name = BLOCK_REPLAY_WAL_DB_NAME,
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                msg,
+                "Restore the WAL from the replay archive (node must stay stopped):\n\
+                 1. replay_archive_recovery download {source} --output-root <dir>\n\
+                 2. replay_archive_recovery recover-rocksdb --input-root <dir> \\\n\
+                 \x20      --replay-db-path {db} \\\n\
+                 \x20      --anchor-block-number {anchor} --anchor-block-hash <hash>{decrypt}\n\
+                 \x20  (`--replay-db-path` must point at an empty/absent dir - move the stale \
+                 `{wal_name}` away first)",
+                source = replay_archive_source_args(&config.replay_archive_config),
+                db = replay_db_path.display(),
+                anchor = self.last_l1_committed_block,
+                decrypt = replay_archive_decrypt_args(&config.replay_archive_config),
+                wal_name = BLOCK_REPLAY_WAL_DB_NAME,
+            )
+            .unwrap();
+            writeln!(
+                msg,
+                "Anchor hash for block {anchor} is not known locally - take it from a healthy \
+                 replica (`eth_getBlockByNumber`) or from the archive object listing under prefix \
+                 `{anchor}/`.",
+                anchor = self.last_l1_committed_block,
+            )
+            .unwrap();
+        }
 
         if config.general_config.allow_wal_behind_l1 {
             tracing::warn!(
@@ -116,11 +130,7 @@ impl NodeStateOnStartup {
 
 fn replay_archive_source_args(config: &ReplayArchiveConfig) -> String {
     match config {
-        ReplayArchiveConfig::Noop => {
-            "<archive source args - replay archive is NOT configured on this node, \
-             take the bucket/root from the node that archives>"
-                .to_string()
-        }
+        ReplayArchiveConfig::Noop => unreachable!("Noop is handled before command generation"),
         ReplayArchiveConfig::FileSystem { root_path, .. } => {
             format!("--archive-root {}", root_path.display())
         }
