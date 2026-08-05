@@ -36,17 +36,13 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # 'RUSTSEC-2025-0055' todo: waiting for ark-relations to release a patch https://github.com/arkworks-rs/snark/issues/413
-          # 'RUSTSEC-2026-0194', 'RUSTSEC-2026-0195': quick-xml < 0.41 DoS advisories, pulled in transitively via
-          # `inferno` (flamegraph generation) and `plist` -> `os_info` -> `sentry-contexts` (local OS metadata for
-          # Sentry). Neither path parses untrusted/remote XML. No released version of `inferno` or `plist` depends
-          # on quick-xml >=0.41 yet, so this cannot be resolved by updating. Revisit once upstream bumps land.
           # 'RUSTSEC-2023-0071': Marvin timing sidechannel in `rsa` private-key operations. Production code only
           # performs public-key RSA-OAEP encryption (wrapping the age file key to the GCP KMS public key);
           # private-key decryption happens inside GCP KMS, never locally. No patched version exists yet.
           # 'RUSTSEC-2026-0235': out-of-bounds read in `rkyv` < 0.8.17 when validating untrusted archives.
           # `rkyv` 0.7.46 is only in Cargo.lock as an unused optional dependency of `rust_decimal` (via
           # `byte-unit` <- `openraft`); no feature combination in this workspace enables it, so it is never compiled.
-          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0194,RUSTSEC-2026-0195,RUSTSEC-2023-0071,RUSTSEC-2026-0235'
+          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2023-0071,RUSTSEC-2026-0235'
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
