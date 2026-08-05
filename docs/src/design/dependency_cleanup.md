@@ -29,9 +29,9 @@ server-side patches for other repos.
 
 ## Resolved
 
-- The V8 airbender / zkos-wrapper lineage is merged upstream: server pins
-  `matter-labs/zksync-airbender@3f8f8e54` (`dev` merge of #340, combined recursion layers);
-  the V8 VK is generated with it and `zkos-wrapper@877c1c4b` (`dev` merge of #75), matching
-  the V8 entry in zksync-airbender-prover. Still raw revs, not releases — repin when tags exist.
+- The V8 airbender / zkos-wrapper lineage is merged and tagged upstream: server pins
+  `zksync-airbender` tag `v0.6.0-rc.1` (3f8f8e54, combined recursion layers); the V8 VK is
+  generated with it and `zkos-wrapper` `v0.6.0-rc.1`, matching the V8 entry in
+  zksync-airbender-prover. Bump to the final v0.6.0 release when cut.
 - `airbender-platform` v0.2.3 is released and contains the host bigint delegation fix
   (`2418efaafd96139723b51c6ba51ae48ffce5e06c`, #76).

@@ -183,15 +183,15 @@ zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github
 ], default-features = false }
 zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
 zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
-# Airbender crates for verifying V8 FRI proofs submitted by external provers. The rev must match
-# the one the V8 VK was generated with (see `V8_VK_HASH` provenance in lib/types);
-# 3f8f8e54 = `dev` merge of matter-labs/zksync-airbender#340 (combined recursion layers),
-# the same rev zksync-airbender-prover pins for V8.
-execution_utils_0_4_0 = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender", rev = "3f8f8e54", features = [
+# Airbender crates for verifying V8 FRI proofs submitted by external provers. The tag must match
+# the version the V8 VK was generated with (see `V8_VK_HASH` provenance in lib/types);
+# v0.6.0-rc.1 = 3f8f8e54, the `dev` merge of matter-labs/zksync-airbender#340 (combined
+# recursion layers) that zksync-airbender-prover pins for V8.
+execution_utils_0_4_0 = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1", features = [
     "verifier_binaries",
 ] }
-riscv_transpiler_0_4_0 = { package = "riscv_transpiler", git = "https://github.com/matter-labs/zksync-airbender", rev = "3f8f8e54" }
-verifier_common_0_4_0 = { package = "verifier_common", git = "https://github.com/matter-labs/zksync-airbender", rev = "3f8f8e54" }
+riscv_transpiler_0_4_0 = { package = "riscv_transpiler", git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1" }
+verifier_common_0_4_0 = { package = "verifier_common", git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1" }
 
 # Other dependencies.
 
