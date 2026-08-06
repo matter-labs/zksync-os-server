@@ -46,6 +46,9 @@ impl ProtocolSemanticVersion {
     /// For 30.0 -> 30.1 or 30.1 -> 30.1 we don't
     pub const MIN_VERSION_WITH_RELIABLE_UPGRADE_LOGS: Self = Self::new(0, 30, 2);
 
+    /// Activation version for L1-backed interop-root imports and MessageRoot proofs.
+    pub const MIN_VERSION_WITH_L1_INTEROP: Self = Self::new(0, 32, 0);
+
     pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
         Self(semver::Version {
             major,
@@ -72,6 +75,12 @@ impl ProtocolSemanticVersion {
 
     pub fn is_post_v31(&self) -> bool {
         self.minor >= 31
+    }
+
+    /// Whether blocks under this version may consume L1 interop traffic and build MessageRoot
+    /// proofs.
+    pub fn supports_l1_interop(&self) -> bool {
+        self >= &Self::MIN_VERSION_WITH_L1_INTEROP
     }
 
     /// This version was used for all the chains prior to the introduction of protocol upgrades
@@ -243,5 +252,12 @@ mod tests {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
             assert_eq!(version.is_live(), *expected);
         }
+    }
+
+    #[test]
+    fn test_protocol_semantic_version_supports_l1_interop() {
+        assert!(!ProtocolSemanticVersion::new(0, 31, 99).supports_l1_interop());
+        assert!(ProtocolSemanticVersion::new(0, 32, 0).supports_l1_interop());
+        assert!(ProtocolSemanticVersion::new(0, 33, 0).supports_l1_interop());
     }
 }

@@ -60,6 +60,18 @@ alloy::sol! {
     }
 
     #[sol(rpc)]
+    interface IL2InteropCommitmentTree {
+        struct IMTLeaf {
+            uint256 value;
+            uint256 nextIndex;
+            uint256 nextValue;
+        }
+
+        function leafCount() external view returns (uint256);
+        function leafAt(uint256 index) external view returns (IMTLeaf memory);
+    }
+
+    #[sol(rpc)]
     interface IGWAssetTracker {
         function gatewaySettlementFee() external view returns (uint256);
     }
@@ -74,7 +86,7 @@ alloy::sol! {
     // `IMessageRoot.sol`
     #[sol(rpc)]
     interface IMessageRoot {
-        // Event that is being emitted by GW
+        // Emitted whenever MessageRoot advances the shared interop root imported by chains.
         event NewInteropRoot (
             uint256 indexed chainId,
             uint256 indexed blockNumber,
@@ -82,7 +94,7 @@ alloy::sol! {
             bytes32[] sides
         );
 
-        // Event that is being emmited by L1
+        // Emitted when a chain root is appended to the shared tree.
         event AppendedChainRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 indexed chainRoot);
 
         function addInteropRoot (
@@ -97,7 +109,8 @@ alloy::sol! {
 
         function getChainTree(uint256 chainId) public view returns (Bytes32PushTree);
 
-        event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot);
+        // `l1Timestamp` is part of the batch-leaf preimage, so proofs bind the batch to L1 time.
+        event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot, uint256 l1Timestamp);
         function getMerklePathForChain(uint256 _chainId) external view returns (bytes32[] memory);
         mapping(uint256 chainId => uint256 chainIndex) public chainIndex;
     }

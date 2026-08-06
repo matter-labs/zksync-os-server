@@ -978,6 +978,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         combined_acceptance_rx,
         last_constructed_block_ctx_receiver,
         tx_forwarder,
+        l1_provider.clone().erased(),
         rpc_policy_client,
         runtime,
         wait_for_db,
