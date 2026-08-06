@@ -69,14 +69,13 @@ zksync_os_backpressure.workspace = true
 zk_ee_prev.workspace = true
 zk_os_basic_system_prev.workspace = true
 zk_os_forward_system_prev.workspace = true
-
+execution_utils_prev.workspace = true
+full_statement_verifier_prev.workspace = true
 
 zksync_os_interface.workspace = true
 execution_utils.workspace = true
-full_statement_verifier.workspace = true
-execution_utils_0_4_0.workspace = true
-riscv_transpiler_0_4_0.workspace = true
-verifier_common_0_4_0.workspace = true
+riscv_transpiler.workspace = true
+verifier_common.workspace = true
 
 reth-tasks.workspace = true
 reth-network-peers.workspace = true

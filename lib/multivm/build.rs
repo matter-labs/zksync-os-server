@@ -20,6 +20,7 @@ fn parse_git_reference(package_id: &PackageId) -> anyhow::Result<String> {
 
 // The `*-interface-v0.1.3-2026-02-10` tags are toolchain rebuilds without published app
 // binaries; binaries are downloaded from the original releases they rebuild.
+// Remove entries as the corresponding proving lanes leave the support window.
 fn binary_source_config(reference: &str) -> Option<BinarySourceConfig> {
     match reference {
         "v0.3.1-interface-v0.1.3-2026-02-10" => Some(BinarySourceConfig {

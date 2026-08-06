@@ -160,14 +160,42 @@ zk_os_forward_system_prev = { package = "forward_system", git = "https://github.
     "no_print",
 ], default-features = false }
 zk_os_basic_system_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
-#execution_utils_prev = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "" }
-#full_statement_verifier_prev = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender.git", tag = "" }
+# airbender v0.5.2 rebuilt for nightly-2026-02-10: a compat tag, not a release (airbender
+# v0.6.0 removed `risc_v_simulator`, so no upstream release carries this fix). Same tag spec as
+# the v0.3.1 zksync-os lane's internal airbender deps so cargo unifies the sources.
+execution_utils_prev = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.5.2-2026-02-10" }
+full_statement_verifier_prev = { package = "full_statement_verifier", git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.5.2-2026-02-10" }
 
-# Current (as in most recently released) version of zksync-os used to prove and submit new batches. Also includes
-# airbender dependencies that are necessary to verify said proofs on the server end.
+# Current version of zksync-os used to prove and submit new batches (wired as execution version
+# V7 / proving version V8). Also includes airbender dependencies that are necessary to verify
+# said proofs on the server end.
 #
 # When a new version is released this version gets downgraded to the "previous version" section above.
 
+# The server-wide types and pre-v32 execution keep riding v0.3.1 below, so this lane keeps
+# version-suffixed names. dz-airbender-platform-v0.2.3 is draft-0.4.0 plus an
+# airbender-platform v0.2.4 pin bump (matter-labs/zksync-os#733, carries the host bigint
+# delegation fix #76); repoint to draft-0.4.0 once it merges, and to the release tag once
+# it is cut.
+zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "dz-airbender-platform-v0.2.3", features = [
+    "production",
+    "no_print",
+], default-features = false }
+zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", branch = "dz-airbender-platform-v0.2.3" }
+zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "dz-airbender-platform-v0.2.3" }
+# Airbender crates for verifying V8 FRI proofs submitted by external provers. The tag must match
+# the version the V8 VK was generated with (see `V8_VK_HASH` provenance in lib/types);
+# v0.6.0-rc.1 = 3f8f8e54, the `dev` merge of matter-labs/zksync-airbender#340 (combined
+# recursion layers) that zksync-airbender-prover pins for V8. Bump to the final v0.6.0 release
+# when cut.
+execution_utils = { git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1", features = [
+    "verifier_binaries",
+] }
+riscv_transpiler = { git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1" }
+verifier_common = { git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1" }
+
+# zksync-os version backing the server-wide types and pre-v32 execution. Same source as the
+# `_prev` proving lane above; these unsuffixed names outlive V7 proving support.
 zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10", features = [
     "production",
     "no_print",
@@ -176,30 +204,6 @@ zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interf
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
 zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
-# airbender v0.5.2 rebuilt for nightly-2026-02-10; same branch spec as the v0.3.1 zksync-os
-# lane's internal airbender deps so cargo unifies the sources. Drop together with V6/V7
-# proving support (see docs/src/design/dependency_cleanup.md).
-execution_utils = { git = "https://github.com/matter-labs/zksync-airbender", branch = "compat-nightly-2026-02-10-v0.5.2" }
-full_statement_verifier = { git = "https://github.com/matter-labs/zksync-airbender", branch = "compat-nightly-2026-02-10-v0.5.2" }
-
-# zksync-os v0.4.0 lane for the new STF and native batch proving.
-# This stays separate from the current released version because it is wired as distinct
-# execution/proving versions (V7/V8) on the server side.
-zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0", features = [
-    "production",
-    "no_print",
-], default-features = false }
-zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
-zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
-# Airbender crates for verifying V8 FRI proofs submitted by external provers. The tag must match
-# the version the V8 VK was generated with (see `V8_VK_HASH` provenance in lib/types);
-# v0.6.0-rc.1 = 3f8f8e54, the `dev` merge of matter-labs/zksync-airbender#340 (combined
-# recursion layers) that zksync-airbender-prover pins for V8.
-execution_utils_0_4_0 = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1", features = [
-    "verifier_binaries",
-] }
-riscv_transpiler_0_4_0 = { package = "riscv_transpiler", git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1" }
-verifier_common_0_4_0 = { package = "verifier_common", git = "https://github.com/matter-labs/zksync-airbender", tag = "v0.6.0-rc.1" }
 
 # Other dependencies.
 
@@ -375,13 +379,6 @@ zksync_os_server = { version = "=0.21.0", path = "node/bin" }
 #[patch.crates-io]
 #zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
-
-# zksync-os draft-0.4.0 pins airbender-platform at rev 80c0541f6 (pre-v0.2.3); override to
-# v0.2.3 (rev db2767d) for the host bigint delegation fix (#76) until the upstream pin moves.
-# Cargo forbids same-source [patch] entries, so the v0.2.3 commit is reached through the bot
-# fork (same object network on GitHub).
-[patch."https://github.com/matter-labs/airbender-platform"]
-airbender-crypto = { git = "https://github.com/antoniolocascio-bot/airbender-platform", rev = "db2767d9ba871bb556ad8a2c8b4d39717f36cd47" }
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu

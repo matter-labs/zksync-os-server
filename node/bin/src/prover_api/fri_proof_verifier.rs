@@ -52,7 +52,7 @@ pub fn expected_public_input_registers(
 /// Verifies a pre-V8 (airbender 0.5.2 lane) FRI proof against the expected public input.
 pub fn verify_fri_proof(
     expected_hash_u32s: [u32; 8],
-    proof: execution_utils::ProgramProof,
+    proof: execution_utils_prev::ProgramProof,
     batch_number: u64,
 ) -> Result<(), SubmitError> {
     // The statement verifier asserts (panics) on malformed proofs; catch it so a bad
@@ -76,14 +76,14 @@ pub fn verify_fri_proof(
 /// Verifies a V8 FRI proof (zksync-os 0.4.0 / airbender unrolled prover stack).
 ///
 /// V8 provers submit an `UnrolledProgramProof` recursed up to the *unified* layer. The unified
-/// recursion program is app-independent and embedded in `execution_utils_0_4_0`, so verification
+/// recursion program is app-independent and embedded in `execution_utils`, so verification
 /// needs no app binary: we run the native unified-layer statement verifier to trustlessly extract
 /// the final register values, check that the proof's recursion chain is rooted in the V8 batch
 /// program (registers `[8..16]`), and compare registers `[..8]` against the expected batch
 /// public input hash.
 pub fn verify_fri_proof_v8(
     expected_hash_u32s: [u32; 8],
-    proof: &execution_utils_0_4_0::unrolled::UnrolledProgramProof,
+    proof: &execution_utils::unrolled::UnrolledProgramProof,
     batch_number: u64,
 ) -> Result<(), SubmitError> {
     // Cheap consistency check of the carried chain fields (mirrors the airbender CLI's
@@ -150,24 +150,24 @@ fn check_public_input(
 }
 
 /// V8 unified-layer verification internals: the pinned airbender verifier (see
-/// `execution_utils_0_4_0` in the root `Cargo.toml`) plus the expected recursion chain that
+/// `execution_utils` in the root `Cargo.toml`) plus the expected recursion chain that
 /// binds proofs to the V8 batch program.
 mod v8_verifier {
-    use execution_utils_0_4_0::setups::{
+    use execution_utils::setups::{
         CompiledCircuitsSet, binary_u8_to_u32, get_unified_circuit_artifact_for_machine_type,
         pad_bytecode_bytes_for_proving, pad_bytecode_for_proving,
     };
-    use execution_utils_0_4_0::unified_circuit::{
+    use execution_utils::unified_circuit::{
         compute_unified_setup_for_machine_configuration, verify_proof_in_unified_layer,
     };
-    use execution_utils_0_4_0::unrolled::{
+    use execution_utils::unrolled::{
         UnrolledProgramProof, UnrolledProgramSetup, compute_setup_for_machine_configuration,
     };
-    use execution_utils_0_4_0::verifier_binaries::recursion_artifact;
-    use execution_utils_0_4_0::{RecursionArtifact, RecursionLayer};
-    use riscv_transpiler_0_4_0::cycle::IWithoutByteAccessIsaConfigWithDelegation;
-    use verifier_common_0_4_0::SecurityModel;
-    use verifier_common_0_4_0::transcript::Blake2sBufferingTranscript;
+    use execution_utils::verifier_binaries::recursion_artifact;
+    use execution_utils::{RecursionArtifact, RecursionLayer};
+    use riscv_transpiler::cycle::IWithoutByteAccessIsaConfigWithDelegation;
+    use verifier_common::SecurityModel;
+    use verifier_common::transcript::Blake2sBufferingTranscript;
 
     const SECURITY: SecurityModel = SecurityModel::Security80;
 
@@ -281,13 +281,16 @@ fn hash_as_register_values(hash: B256) -> [u32; 8] {
         .expect("Hash should be exactly 32 bytes long")
 }
 
-fn extract_final_register_values(input_program_proof: execution_utils::ProgramProof) -> [u32; 16] {
-    // Once new version of airbender is integrated, these functions should be changed to the ones from execution_utils.
+fn extract_final_register_values(
+    input_program_proof: execution_utils_prev::ProgramProof,
+) -> [u32; 16] {
     let (metadata, proof_list) =
-        execution_utils::ProgramProof::to_metadata_and_proof_list(input_program_proof);
+        execution_utils_prev::ProgramProof::to_metadata_and_proof_list(input_program_proof);
 
-    let oracle_data =
-        execution_utils::generate_oracle_data_from_metadata_and_proof_list(&metadata, &proof_list);
+    let oracle_data = execution_utils_prev::generate_oracle_data_from_metadata_and_proof_list(
+        &metadata,
+        &proof_list,
+    );
     tracing::debug!(
         "Oracle data iterator created with {} items",
         oracle_data.len()
@@ -295,16 +298,17 @@ fn extract_final_register_values(input_program_proof: execution_utils::ProgramPr
 
     let it = oracle_data.into_iter();
 
-    full_statement_verifier::verifier_common::prover::nd_source_std::set_iterator(it);
+    full_statement_verifier_prev::verifier_common::prover::nd_source_std::set_iterator(it);
 
     // Assume that program proof has only recursion proofs.
     tracing::debug!("Running continue recursive");
     assert!(metadata.reduced_proof_count > 0);
 
-    let final_register_values = full_statement_verifier::verify_recursion_layer();
+    let final_register_values = full_statement_verifier_prev::verify_recursion_layer();
 
     assert!(
-        full_statement_verifier::verifier_common::prover::nd_source_std::try_read_word().is_none(),
+        full_statement_verifier_prev::verifier_common::prover::nd_source_std::try_read_word()
+            .is_none(),
         "Expected that all words from CSR were consumed"
     );
     final_register_values
@@ -344,7 +348,7 @@ mod tests {
             serde_json::from_reader(std::fs::File::open(&path).expect("cannot open proof file"))
                 .expect("proof file is not valid JSON");
         // The CLI stores `ProofArtifact { proof: UnrolledProgramProof, .. }`.
-        let proof: execution_utils_0_4_0::unrolled::UnrolledProgramProof =
+        let proof: execution_utils::unrolled::UnrolledProgramProof =
             serde_json::from_value(artifact["proof"].clone())
                 .expect("artifact has no deserializable `proof` field");
 

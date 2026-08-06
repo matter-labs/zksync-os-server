@@ -375,7 +375,7 @@ impl FriJobManager {
                     "Using airbender unified-layer proof verifier for batch {}",
                     batch_number
                 );
-                let program_proof: execution_utils_0_4_0::unrolled::UnrolledProgramProof =
+                let program_proof: execution_utils::unrolled::UnrolledProgramProof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
                         .map_err(|err| {
                             tracing::warn!(batch_number, ?err, "Failed to deserialize V8 proof");
