@@ -62,6 +62,18 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
             CF::DB_NAME,
         );
 
+        let pending_migrations: Vec<_> = migrations[current_version as usize..]
+            .iter()
+            .map(|migration| migration.name())
+            .collect();
+        tracing::info!(
+            db_name = CF::DB_NAME,
+            current_version,
+            latest_version,
+            ?pending_migrations,
+            "checked schema version"
+        );
+
         for migration in &migrations[current_version as usize..] {
             let started_at = std::time::Instant::now();
             tracing::info!(

@@ -670,10 +670,23 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
     /// so that tombstoned space is actually reclaimed instead of waiting for background
     /// compaction to get to it.
     pub fn compact_range_cf(&self, cf: CF) {
-        let cf = self.column_family(cf);
+        let cf_name = cf.name();
+        tracing::info!(
+            db_name = CF::DB_NAME,
+            cf_name,
+            "starting column family compaction"
+        );
+        let started_at = Instant::now();
+        let cf_handle = self.column_family(cf);
         self.inner
             .db
-            .compact_range_cf(cf, None::<&[u8]>, None::<&[u8]>);
+            .compact_range_cf(cf_handle, None::<&[u8]>, None::<&[u8]>);
+        tracing::info!(
+            db_name = CF::DB_NAME,
+            cf_name,
+            elapsed = ?started_at.elapsed(),
+            "column family compaction finished"
+        );
     }
 
     /// Returns size stats for the specified column family.

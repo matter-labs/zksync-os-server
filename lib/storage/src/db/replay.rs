@@ -38,28 +38,29 @@ pub struct BlockReplayStorage {
 
 /// Column families for storage of block replay commands.
 ///
+/// `Context`, `ContextV2` and `ArchivedContext` together replace one former CF that held every
+/// row, canonical or archived, with its full [`BlockContext`] embedded. Canonical (number-keyed)
+/// rows now go to `ContextV2` and archived (hash-keyed) rows to `ArchivedContext`, both stripped
+/// (see [`StoredBlockContextV2`]); nothing writes to `Context` anymore — it only holds rows left
+/// over from before the split, in the old unstripped format.
+///
 /// TODO(RocksDB migration): The four `Starting*` column families below correspond to fields
 /// in [`BlockStartCursors`]. They are stored separately for historical reasons (each was added
 /// independently). A future migration should consolidate them into a single column family
 /// serializing the entire `BlockStartCursors` struct.
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
-    /// Full [`BlockContext`], including the 256 previous block hashes (~8 KiB per block). Holds
-    /// hash-keyed archived rows written before [`Self::ArchivedContext`] existed. Number-keyed
-    /// rows only appear here when written by binaries predating [`Self::ContextV2`]; the
-    /// [`ContractBlockContexts`] migration converts and deletes them. Never written to going
-    /// forward; new archived rows go to [`Self::ArchivedContext`] instead.
+    /// Legacy full [`BlockContext`] rows (~8 KiB each, 256-hash window included), predating the
+    /// `ContextV2`/`ArchivedContext` split. Canonical (number-keyed) rows here are converted and
+    /// deleted by [`ContractBlockContexts`]; archived (hash-keyed) ones are left as they are.
     Context,
-    /// Stripped [`BlockContext`] for canonical rows: everything except the 256 previous block
-    /// hashes, which are derivable data and get reconstructed from [`Self::CanonicalHash`] on
-    /// read (see [`StoredBlockContextV2`]).
+    /// Stripped canonical rows. The 256-hash window is derivable and reconstructed from
+    /// [`Self::CanonicalHash`] on read.
     ContextV2,
-    /// Hash-keyed archived rows (blocks displaced by an override), holding the same
-    /// [`StoredBlockContextV2`] as [`Self::ContextV2`]. Its `parent_hash` field is what makes
-    /// archived rows self-sufficient: the window and `previous_block_timestamp` are reconstructed
-    /// on read by walking `parent_hash` pointers through this CF until reaching a hash still on
-    /// the live canonical chain, then finishing with one `CanonicalHash` lookup (see
-    /// [`BlockReplayStorage::resolve_window_and_previous_timestamp`]). Unlike [`Self::Context`],
+    /// Stripped archived rows (blocks displaced by an override). The window and
+    /// `previous_block_timestamp` are reconstructed on read by walking `parent_hash` pointers
+    /// through this CF to the live canonical chain, then one [`Self::CanonicalHash`] lookup (see
+    /// [`BlockReplayStorage::resolve_window_and_previous_timestamp`]) — unlike [`Self::Context`],
     /// this doesn't depend on `CanonicalHash` staying unchanged, so it's correct on any read, no
     /// matter how long after the override or in how different a process.
     ArchivedContext,
