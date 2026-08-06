@@ -13,6 +13,7 @@ mod eth_fill_transaction_handler;
 mod eth_filter;
 mod eth_impl;
 mod eth_pubsub_impl;
+mod interop_commitment_tree;
 mod metrics;
 mod ots_impl;
 mod result;
@@ -20,8 +21,10 @@ mod rpc_storage;
 mod simulate;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
 mod debug_impl;
+mod imt;
 pub mod js_tracer;
 mod limits;
+mod log_proof_utils;
 mod method_filter_middleware;
 mod monitoring_middleware;
 mod net_impl;
@@ -52,6 +55,7 @@ use crate::unstable_impl::UnstableNamespace;
 use crate::web3_impl::Web3Namespace;
 use crate::zks_impl::ZksNamespace;
 use alloy::primitives::Address;
+use alloy::providers::DynProvider;
 use anyhow::Context;
 use hyper::Method;
 use jsonrpsee::RpcModule;
@@ -89,6 +93,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     tx_forwarder: Option<TxForwarder>,
+    l1_provider: DynProvider,
     policy_client: Option<PolicyClient>,
     runtime: &Runtime,
     wait_for_db: impl Future<Output = ()> + Send + 'static,
@@ -128,6 +133,9 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
             bytecode_supplier_address,
             storage.clone(),
             genesis_input_source,
+            chain_id,
+            l1_provider,
+            eth_call_handler.clone(),
         )
         .into_rpc(),
     )?;
