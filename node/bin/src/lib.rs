@@ -382,6 +382,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
+    node_startup_state.assert_consistency();
+
     if let Some(from_block_number) = rebuild_options.as_ref().map(|o| o.from_block_number)
         && node_role.is_main()
     {
@@ -441,8 +443,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         blocks_to_replay = node_startup_state.block_replay_storage_last_block + 1 - starting_block,
         "Node state on startup"
     );
-
-    node_startup_state.assert_consistency();
 
     // MN sends `VerifyBatch` requests to the network and receives `PeerVerifyBatchResult`s back.
     let (verify_request_tx, verify_request_rx) = tokio::sync::mpsc::channel::<VerifyBatch>(16);
