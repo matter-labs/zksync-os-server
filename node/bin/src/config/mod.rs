@@ -404,14 +404,6 @@ pub struct GeneralConfig {
     #[config(default_t = None)]
     pub force_starting_block_number: Option<u64>,
 
-    /// UNSAFE. By default the main node refuses to start when its local replay WAL is behind the
-    /// last L1-committed block: producing new blocks on top of a stale WAL re-sequences block
-    /// numbers already committed to L1 and diverges the chain. The intended fix is restoring the
-    /// WAL via the replay archive recovery tool. Set to `true` to bypass the check and start
-    /// anyway (divergence).
-    #[config(default_t = false)]
-    pub allow_wal_behind_l1: bool,
-
     /// Path to the directory for persistence (eg RocksDB) - will contain both state and repositories' DBs
     #[config(default_t = DEFAULT_ROCKS_DB_PATH.into())]
     pub rocks_db_path: PathBuf,
