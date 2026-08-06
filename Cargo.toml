@@ -173,16 +173,15 @@ full_statement_verifier_prev = { package = "full_statement_verifier", git = "htt
 # When a new version is released this version gets downgraded to the "previous version" section above.
 
 # The server-wide types and pre-v32 execution keep riding v0.3.1 below, so this lane keeps
-# version-suffixed names. dz-airbender-platform-v0.2.3 is draft-0.4.0 plus an
-# airbender-platform v0.2.4 pin bump (matter-labs/zksync-os#733, carries the host bigint
-# delegation fix #76); repoint to draft-0.4.0 once it merges, and to the release tag once
-# it is cut.
-zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "dz-airbender-platform-v0.2.3", features = [
+# version-suffixed names. draft-0.4.0 is a branch, not a release; switch to the release tag
+# once it is cut. The V8 app binary and VK are generated from the locked rev of this branch —
+# bump them together (see `V8_VK_HASH` provenance in lib/types).
+zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", branch = "dz-airbender-platform-v0.2.3" }
-zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "dz-airbender-platform-v0.2.3" }
+zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
+zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", branch = "draft-0.4.0" }
 # Airbender crates for verifying V8 FRI proofs submitted by external provers. The tag must match
 # the version the V8 VK was generated with (see `V8_VK_HASH` provenance in lib/types);
 # v0.6.0-rc.1 = 3f8f8e54, the `dev` merge of matter-labs/zksync-airbender#340 (combined

@@ -70,9 +70,10 @@ impl ProvingVersion {
     const V7_VK_HASH: &'static str =
         "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
 
-    /// verification key hash generated from zksync-os v0.4.0, zksync-airbender v0.6.0-rc.1
-    /// (3f8f8e54, combined recursion layers) and zkos-wrapper v0.6.0-rc.1; matches the V8
-    /// entry in zksync-airbender-prover
+    /// verification key hash generated from zksync-airbender v0.6.0-rc.1 (3f8f8e54, combined
+    /// recursion layers) and zkos-wrapper v0.6.0-rc.1; matches the V8 entry in
+    /// zksync-airbender-prover. App-independent: the SNARK wraps the unified verifier, so the
+    /// zksync-os app binary is bound via `V8_APP_END_PARAMS`, not this hash.
     const V8_VK_HASH: &'static str =
         "0x3e7784b0fdb09035a677ae80568d34fdb1f1ec6ac65bba5192cd977a4f0e7609";
 
