@@ -837,70 +837,90 @@ impl AnvilL1 {
         std::fs::write(&l1_state_path, &l1_state)
             .context("failed to write L1 state to temporary state file")?;
 
-        // --slots-in-an-epoch defines what blocks are "finalized" in Anvil, last finalized block is `latest - 2 * slots_in_an_epoch`
-        // so we set block time to 0.25s and slots in epoch set to 10 and finalization delays is about 10*0.25s*2=5s which is reasonable for tests.
-        let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
-            anvil
-                .chain_id(L1_CHAIN_ID)
-                .arg("--block-time")
-                .arg("0.25")
-                .arg("--mixed-mining")
-                .arg("--load-state")
-                .arg(l1_state_path)
-                .arg("--slots-in-an-epoch")
-                .arg("10")
-        })?;
-        let address = provider.inner().anvil().endpoint();
+        // Under CI load a freshly started Anvil can wedge (stop answering RPC for 60+s)
+        // right after passing the readiness check; retrying against it is hopeless, so
+        // after a few failed probes we kill it and spawn a fresh one.
+        const SPAWN_ATTEMPTS: usize = 3;
+        let mut last_err = None;
+        for attempt in 1..=SPAWN_ATTEMPTS {
+            // --slots-in-an-epoch defines what blocks are "finalized" in Anvil, last finalized block is `latest - 2 * slots_in_an_epoch`
+            // so we set block time to 0.25s and slots in epoch set to 10 and finalization delays is about 10*0.25s*2=5s which is reasonable for tests.
+            let provider =
+                ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
+                    anvil
+                        .chain_id(L1_CHAIN_ID)
+                        .arg("--block-time")
+                        .arg("0.25")
+                        .arg("--mixed-mining")
+                        .arg("--load-state")
+                        .arg(&l1_state_path)
+                        .arg("--slots-in-an-epoch")
+                        .arg("10")
+                })?;
+            let address = provider.inner().anvil().endpoint();
 
-        // `AnvilInstance`'s Drop never runs if the test process is SIGKILLed or aborts,
-        // which would orphan an anvil that mines (and allocates) forever. The leash kills
-        // it whenever this process dies, no matter how.
-        leash::attach(provider.inner().anvil().child().id(), "anvil")?;
+            // `AnvilInstance`'s Drop never runs if the test process is SIGKILLed or aborts,
+            // which would orphan an anvil that mines (and allocates) forever. The leash kills
+            // it whenever this process dies, no matter how.
+            leash::attach(provider.inner().anvil().child().id(), "anvil")?;
 
-        let wallet = provider.wallet().clone();
+            let wallet = provider.wallet().clone();
 
-        (|| async {
-            // Wait for L1 node to get up and be able to respond.
-            provider.clone().get_chain_id().await?;
-            Ok(())
-        })
-        .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_millis(200))
-                .with_max_times(50),
-        )
-        .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(%err, ?dur, "retrying connection to L1 node");
-        })
-        .await?;
+            (|| async {
+                // Wait for L1 node to get up and be able to respond.
+                provider.clone().get_chain_id().await?;
+                Ok(())
+            })
+            .retry(
+                ConstantBuilder::default()
+                    .with_delay(Duration::from_millis(200))
+                    .with_max_times(50),
+            )
+            .notify(|err: &anyhow::Error, dur: Duration| {
+                tracing::info!(%err, ?dur, "retrying connection to L1 node");
+            })
+            .await?;
 
-        tracing::info!("L1 chain started on {}", address);
+            tracing::info!("L1 chain started on {}", address);
 
-        // `NodeProvider::new` probes Anvil's capabilities over a transport with no request
-        // timeout; an Anvil that wedges right after passing the readiness check above would
-        // otherwise hang the test until nextest's terminate timeout.
-        let provider = (|| async {
-            tokio::time::timeout(Duration::from_secs(10), NodeProvider::new(provider.clone()))
-                .await
-                .context("timed out probing L1 node capabilities")?
-                .context("failed to probe L1 node capabilities")
-        })
-        .retry(
-            ConstantBuilder::default()
-                .with_delay(Duration::from_millis(200))
-                .with_max_times(5),
-        )
-        .notify(|err: &anyhow::Error, dur: Duration| {
-            tracing::info!(%err, ?dur, "retrying L1 node capability probing");
-        })
-        .await?;
+            // `NodeProvider::new` probes Anvil's capabilities over a transport with no request
+            // timeout; an Anvil that wedges right after passing the readiness check above would
+            // otherwise hang the test until nextest's terminate timeout.
+            let probed = (|| async {
+                tokio::time::timeout(Duration::from_secs(10), NodeProvider::new(provider.clone()))
+                    .await
+                    .context("timed out probing L1 node capabilities")?
+                    .context("failed to probe L1 node capabilities")
+            })
+            .retry(
+                ConstantBuilder::default()
+                    .with_delay(Duration::from_millis(200))
+                    .with_max_times(2),
+            )
+            .notify(|err: &anyhow::Error, dur: Duration| {
+                tracing::info!(%err, ?dur, "retrying L1 node capability probing");
+            })
+            .await;
 
-        Ok(Self {
-            address,
-            provider,
-            wallet,
-            _tempdir: Arc::new(tempdir),
-        })
+            match probed {
+                Ok(provider) => {
+                    return Ok(Self {
+                        address,
+                        provider,
+                        wallet,
+                        _tempdir: Arc::new(tempdir),
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!(%err, attempt, "anvil unresponsive to capability probing; respawning");
+                    // Dropping `provider` (the last owner of `AnvilInstance`) kills the wedged anvil.
+                    last_err = Some(err);
+                }
+            }
+        }
+        Err(last_err
+            .expect("SPAWN_ATTEMPTS > 0")
+            .context("L1 node capability probing failed for every spawned anvil"))
     }
 }
 
