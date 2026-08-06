@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, POLL_INTERVAL, ReceiptAssert};
 use zksync_os_integration_tests::l1_helpers::{fetch_l1_state, wait_for_l1_state};
+use zksync_os_integration_tests::provider::ZksyncTestingProvider;
 use zksync_os_integration_tests::test_config::make_full_pipeline_config;
 use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
@@ -716,6 +717,7 @@ async fn missing_sender_nonce_rpc_stalls_sender_until_in_flight_txs_settle(
     .await?;
 
     let committed_before_restart = fetch_l1_state(&tester).await?.last_committed_batch;
+    let l2_tip_before_restart = tester.l2_provider.get_block_number().await?;
     let stopped = tester.stop().await?;
     // Every operator account must be settled before mining stops: a leftover pooled
     // commit/prove/execute tx would keep startup L1-state discovery from completing.
@@ -750,6 +752,12 @@ async fn missing_sender_nonce_rpc_stalls_sender_until_in_flight_txs_settle(
     );
 
     let restarted = stopped.start().await?;
+    // The restarted RPC comes up while WAL replay is still running; new txs are validated
+    // against the mid-replay state (test wallet not yet funded), so wait out the replay.
+    restarted
+        .l2_zk_provider
+        .wait_for_block(l2_tip_before_restart)
+        .await?;
 
     // New L2 traffic seals new batches (2s batch timeout), so commit commands are queued
     // while the sender is still waiting out the unsettled account.
