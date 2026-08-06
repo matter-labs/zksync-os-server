@@ -22,16 +22,6 @@ fn parse_git_reference(package_id: &PackageId) -> anyhow::Result<String> {
 // binaries; binaries are downloaded from the original releases they rebuild.
 fn binary_source_config(reference: &str) -> Option<BinarySourceConfig> {
     match reference {
-        "v0.2.10-interface-v0.1.3-2026-02-10" => {
-            // TEMPORARY HACK for V6!!!
-            // We've updated interface and rust toolchain for corresponding zksync-os version and it caused a change in binaries.
-            // We need to use original V6 binaries from zksync-os v0.2.5.
-            // Should be removed as soon as we can get rig of proving V6.
-            Some(BinarySourceConfig {
-                proving_version: "V6",
-                download_tag: "v0.2.5",
-            })
-        }
         "v0.3.1-interface-v0.1.3-2026-02-10" => Some(BinarySourceConfig {
             proving_version: "V7",
             download_tag: "v0.3.1-interface-v0.1.3",

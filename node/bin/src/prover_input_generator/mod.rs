@@ -259,52 +259,15 @@ fn compute_prover_input(
         | ProvingVersion::V2
         | ProvingVersion::V3
         | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("computing prover input for batch with prover version v1-v5 is not supported");
+        | ProvingVersion::V5
+        | ProvingVersion::V6 => {
+            panic!("computing prover input for batch with prover version v1-v6 is not supported");
         }
-        ProvingVersion::V6 => {
+        ProvingVersion::V7 => {
             use zk_ee_prev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
             use zk_os_forward_system_prev::run::{
-                StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
-            };
-
-            let initial_storage_commitment = StorageCommitment {
-                root: tree_view.input.root_hash.0.into(),
-                next_free_slot: tree_view.input.leaf_count,
-            };
-
-            let list_source = TxListSource { transactions };
-
-            let bin_bytes = if enable_logging {
-                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_LOGGING_ENABLED
-            } else {
-                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_APP
-            };
-
-            let da_commitment_scheme = (da_commitment_scheme as u8)
-                .try_into()
-                .expect("Failed to convert DA commitment scheme");
-            generate_proof_input_from_bytes(
-                bin_bytes,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
-                ProofData {
-                    state_root_view: initial_storage_commitment,
-                    last_block_timestamp: replay_record.previous_block_timestamp,
-                },
-                da_commitment_scheme,
-                LaneTreeAdapter::new(tree_view, versioned_tree),
-                state_view,
-                list_source,
-            )
-            .expect("proof gen failed")
-        }
-        ProvingVersion::V7 => {
-            use zk_ee::{
-                common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
-            };
-            use zk_os_forward_system::run::{
                 StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 

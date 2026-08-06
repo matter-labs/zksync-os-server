@@ -21,9 +21,8 @@ server-side patches for other repos.
    only because Cargo forbids `[patch]` entries pointing at the patched source itself; the rev is
    the upstream v0.2.3 release commit. Drop the section once `draft-0.4.0` (or its release) pins
    airbender-platform v0.2.3+.
-4. `lib/multivm/build.rs` maps the compat tags to the original releases' app binaries
-   (including the V6 remap to `v0.2.5`). Remove entries as the corresponding proving lanes
-   leave the support window.
+4. `lib/multivm/build.rs` maps the v0.3.1 compat tag to the original release's app binaries.
+   Remove when V7 proving leaves the support window.
 
 ## Resolved
 

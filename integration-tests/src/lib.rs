@@ -916,16 +916,12 @@ impl AnvilL1 {
 async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
     let protocol_version = tester.chain_layout.protocol_version();
     let app_bin_path = match protocol_version {
-        PROTOCOL_VERSION => utils::materialize_multiblock_batch_bin(
-            &tester.tempdir.path().join("app_bins"),
-            "v6",
-            zksync_os_multivm::apps::v6::MULTIBLOCK_BATCH,
-        ),
         PROTOCOL_VERSION_V31_0 => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
             "v7",
             zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH,
         ),
+        // V6 (protocol v30.x) proving support was dropped when the 0.4.0 lane became current.
         _ => panic!("unsupported protocol version for prover tests"),
     };
     let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
@@ -982,7 +978,6 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
 #[cfg(feature = "prover-tests")]
 fn prover_release_for_protocol(protocol_version: &str) -> &'static str {
     match protocol_version {
-        PROTOCOL_VERSION => "v0.7.1",
         PROTOCOL_VERSION_V31_0 => "v0.8.0",
         _ => {
             panic!("unsupported protocol version `{protocol_version}` for prover binary selection")

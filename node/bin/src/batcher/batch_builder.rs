@@ -227,8 +227,7 @@ fn compute_batch_prover_input(
     pubdata_mode: PubdataMode,
     native_batch_run: Option<NativeBatchRunOutput>,
 ) -> anyhow::Result<(ProverInput, Option<BatchPigMeasurement>)> {
-    use zk_os_forward_system::run::generate_batch_proof_input;
-    use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_prev;
+    use zk_os_forward_system_prev::run::generate_batch_proof_input;
 
     // Pre-V8 batch PIG stitches together the per-block prover inputs, so a single fake block
     // input forces the whole batch to a fake input. V8's real input comes from the native
@@ -246,10 +245,11 @@ fn compute_batch_prover_input(
         | ProvingVersion::V2
         | ProvingVersion::V3
         | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("sealing batch with prover version v1-v5 is not supported");
+        | ProvingVersion::V5
+        | ProvingVersion::V6 => {
+            panic!("sealing batch with prover version v1-v6 is not supported");
         }
-        ProvingVersion::V6 | ProvingVersion::V7 => {
+        ProvingVersion::V7 => {
             // TODO: in the long-term we should generate proof input per batch
             let started_at = std::time::Instant::now();
             let block_inputs = blocks
@@ -261,23 +261,13 @@ fn compute_batch_prover_input(
                 .map(|block| block.output.expect_pubdata_bytes())
                 .collect();
             let da_commitment_scheme = pubdata_mode.da_commitment_scheme() as u8;
-            let prover_input = if proving_version == ProvingVersion::V6 {
-                generate_batch_proof_input_prev(
-                    block_inputs,
-                    da_commitment_scheme
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
-                    blocks_pubdata,
-                )
-            } else {
-                generate_batch_proof_input(
-                    block_inputs,
-                    da_commitment_scheme
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
-                    blocks_pubdata,
-                )
-            };
+            let prover_input = generate_batch_proof_input(
+                block_inputs,
+                da_commitment_scheme
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
+                blocks_pubdata,
+            );
             let prover_input_words = prover_input.len();
             (
                 ProverInput::Real(prover_input),

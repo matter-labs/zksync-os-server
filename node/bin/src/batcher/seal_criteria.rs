@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
+use zk_ee_prev::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{BlockOutput, ProtocolSemanticVersion, SystemTxType, ZkTxType};
