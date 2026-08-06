@@ -2680,7 +2680,7 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "arrayvec",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
@@ -2698,7 +2698,7 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "arrayvec",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
@@ -2718,7 +2718,7 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "arrayvec",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
@@ -2736,7 +2736,7 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "arrayvec",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
@@ -2754,7 +2754,7 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "arrayvec",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
@@ -2792,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -2814,7 +2814,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -2839,7 +2839,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -2865,7 +2865,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -2887,7 +2887,7 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "arrayvec",
  "cc-traits 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
@@ -2954,34 +2954,23 @@ dependencies = [
 [[package]]
 name = "bigint_with_control"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "bigint_with_control"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "bigint_with_control"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -2997,11 +2986,11 @@ dependencies = [
 [[package]]
 name = "bigint_with_control_verifier"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -3146,34 +3135,23 @@ dependencies = [
 [[package]]
 name = "blake2_with_compression"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "blake2_with_compression"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "blake2_with_compression"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -3189,11 +3167,11 @@ dependencies = [
 [[package]]
 name = "blake2_with_compression_verifier"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -3207,7 +3185,7 @@ dependencies = [
 [[package]]
 name = "blake2s_u32"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
  "unroll",
 ]
@@ -3215,7 +3193,7 @@ dependencies = [
 [[package]]
 name = "blake2s_u32"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "unroll",
 ]
@@ -3224,14 +3202,6 @@ dependencies = [
 name = "blake2s_u32"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5#73d69b5346b3c2350fa104a56ec4df78840cea99"
-dependencies = [
- "unroll",
-]
-
-[[package]]
-name = "blake2s_u32"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "unroll",
 ]
@@ -3577,13 +3547,13 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
  "num-bigint",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
 ]
@@ -3591,14 +3561,14 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
  "num-bigint",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
 ]
@@ -3606,7 +3576,7 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "alloy-consensus 1.7.3",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
@@ -3615,7 +3585,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
 ]
@@ -3623,7 +3593,7 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "alloy-consensus 1.7.3",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
@@ -3632,7 +3602,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
 ]
@@ -3640,14 +3610,14 @@ dependencies = [
 [[package]]
 name = "callable_oracles"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
  "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
  "c-kzg",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
  "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
 ]
@@ -3756,7 +3726,7 @@ dependencies = [
 [[package]]
 name = "cc-traits"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 
 [[package]]
 name = "cc-traits"
@@ -3880,31 +3850,21 @@ dependencies = [
 [[package]]
 name = "circuit_common"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "fft 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "fft 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "circuit_common"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "fft 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "circuit_common"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "fft 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "fft 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -4386,7 +4346,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -4413,7 +4373,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -4440,7 +4400,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -4467,7 +4427,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -4494,7 +4454,7 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -4575,17 +4535,17 @@ dependencies = [
 [[package]]
 name = "cs"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
  "arrayvec",
  "assert_matches",
  "bincode 1.3.3",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "derivative",
  "divrem",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "itertools 0.14.0",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "proc-macro2",
  "quote",
  "rayon",
@@ -4601,17 +4561,17 @@ dependencies = [
 [[package]]
 name = "cs"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "arrayvec",
  "assert_matches",
  "bincode 1.3.3",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "derivative",
  "divrem",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "itertools 0.14.0",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "proc-macro2",
  "quote",
  "rayon",
@@ -4632,32 +4592,6 @@ dependencies = [
  "common_constants 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
  "serde",
-]
-
-[[package]]
-name = "cs"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "arrayvec",
- "assert_matches",
- "bincode 1.3.3",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "derivative",
- "divrem",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "itertools 0.14.0",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "proc-macro2",
- "quote",
- "rayon",
- "seq-macro",
- "serde",
- "serde_json",
- "smallvec",
- "super-seq-macro",
- "syn 2.0.117",
- "type-map",
 ]
 
 [[package]]
@@ -4718,27 +4652,27 @@ dependencies = [
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 
 [[package]]
 name = "cycle_marker"
 version = "0.0.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 
 [[package]]
 name = "cycle_marker"
@@ -5414,7 +5348,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5440,7 +5374,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "arrayvec",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
@@ -5456,7 +5390,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "arrayvec",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
@@ -5472,7 +5406,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "arrayvec",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
@@ -5488,7 +5422,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "arrayvec",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
@@ -5504,7 +5438,7 @@ dependencies = [
 [[package]]
 name = "evm_interpreter"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "arrayvec",
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
@@ -5547,7 +5481,7 @@ dependencies = [
  "serde",
  "serde_json",
  "setups 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.6.0-rc.1)",
- "sha3 0.10.8",
+ "sha3 0.11.0",
  "trace_and_split 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.6.0-rc.1)",
  "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.6.0-rc.1)",
 ]
@@ -5555,39 +5489,26 @@ dependencies = [
 [[package]]
 name = "execution_utils"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "trace_and_split 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "trace_and_split 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "execution_utils"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "clap",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "trace_and_split 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "execution_utils"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "clap",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "trace_and_split 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "trace_and_split 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -5666,43 +5587,29 @@ dependencies = [
 [[package]]
 name = "fft"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "itertools 0.14.0",
  "rayon",
  "seq-macro",
- "trace_holder 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "trace_holder 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "fft"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "itertools 0.14.0",
  "rayon",
  "seq-macro",
- "trace_holder 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "trace_holder 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "fft"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "itertools 0.14.0",
- "rayon",
- "seq-macro",
- "trace_holder 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -5724,7 +5631,7 @@ dependencies = [
 [[package]]
 name = "field"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
  "rand 0.9.5",
  "seq-macro",
@@ -5734,7 +5641,7 @@ dependencies = [
 [[package]]
 name = "field"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "rand 0.9.5",
  "seq-macro",
@@ -5745,16 +5652,6 @@ dependencies = [
 name = "field"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5#73d69b5346b3c2350fa104a56ec4df78840cea99"
-dependencies = [
- "rand 0.9.5",
- "seq-macro",
- "serde",
-]
-
-[[package]]
-name = "field"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "rand 0.9.5",
  "seq-macro",
@@ -5775,47 +5672,35 @@ dependencies = [
 [[package]]
 name = "final_reduced_risc_v_machine"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "final_reduced_risc_v_machine"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "final_reduced_risc_v_machine"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
 name = "final_reduced_risc_v_machine_verifier"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -5993,7 +5878,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "alloy",
  "arrayvec",
@@ -6017,7 +5902,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "alloy",
  "arrayvec",
@@ -6042,7 +5927,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "alloy",
  "arrayvec",
@@ -6067,7 +5952,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "alloy",
  "arrayvec",
@@ -6092,7 +5977,7 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "alloy",
  "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
@@ -6179,15 +6064,15 @@ dependencies = [
 [[package]]
 name = "full_statement_verifier"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "bigint_with_control_verifier 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "blake2_with_compression_verifier 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "bigint_with_control_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "blake2_with_compression_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "final_reduced_risc_v_machine_verifier",
  "reduced_risc_v_log_23_machine_verifier",
  "reduced_risc_v_machine_verifier",
  "risc_v_cycles_verifier",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -7311,7 +7196,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "system-configuration 0.6.1",
  "tokio",
  "tower-service",
@@ -8316,7 +8201,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.53.5",
 ]
 
 [[package]]
@@ -8555,37 +8440,25 @@ dependencies = [
 [[package]]
 name = "machine_without_signed_mul_div"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "machine_without_signed_mul_div"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "machine_without_signed_mul_div"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -8748,27 +8621,27 @@ dependencies = [
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 
 [[package]]
 name = "modexp"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 
 [[package]]
 name = "modexp"
@@ -8964,17 +8837,12 @@ source = "git+https://github.com/matter-labs/zksync-airbender?tag=v0.6.0-rc.1#3f
 [[package]]
 name = "non_determinism_source"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 
 [[package]]
 name = "non_determinism_source"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-
-[[package]]
-name = "non_determinism_source"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 
 [[package]]
 name = "nonmax"
@@ -9232,7 +9100,9 @@ version = "0.36.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62948e14d923ea95ea2c7c86c71013138b66525b86bdc08d2dcc262bdb497b87"
 dependencies = [
+ "flate2",
  "memchr",
+ "ruzstd 0.7.3",
 ]
 
 [[package]]
@@ -9486,45 +9356,45 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
 ]
 
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
 ]
 
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
 ]
 
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
 ]
 
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
 ]
 
@@ -9914,10 +9784,10 @@ dependencies = [
 [[package]]
 name = "poseidon2"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "non_determinism_source 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "rand 0.9.5",
  "unroll",
 ]
@@ -9925,21 +9795,10 @@ dependencies = [
 [[package]]
 name = "poseidon2"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "rand 0.9.5",
- "unroll",
-]
-
-[[package]]
-name = "poseidon2"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "non_determinism_source 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "rand 0.9.5",
  "unroll",
 ]
@@ -10217,85 +10076,57 @@ dependencies = [
 [[package]]
 name = "prover"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
  "bit-set",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "fft 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "fft 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "itertools 0.14.0",
  "lib-rv32-asm",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "non_determinism_source 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "proc-macro2",
  "quote",
  "rayon",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "seq-macro",
  "serde",
  "serde_json",
  "syn 2.0.117",
- "trace_holder 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "transcript 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "trace_holder 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "transcript 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "prover"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "bit-set",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "fft 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "fft 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "itertools 0.14.0",
  "lib-rv32-asm",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "non_determinism_source 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "proc-macro2",
  "quote",
  "rayon",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "seq-macro",
  "serde",
  "serde_json",
  "syn 2.0.117",
- "trace_holder 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "transcript 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "trace_holder 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "transcript 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "prover"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "bit-set",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "fft 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "itertools 0.14.0",
- "lib-rv32-asm",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "proc-macro2",
- "quote",
- "rayon",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "seq-macro",
- "serde",
- "serde_json",
- "syn 2.0.117",
- "trace_holder 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "transcript 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -10318,32 +10149,32 @@ dependencies = [
 [[package]]
 name = "prover_examples"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
  "bincode 1.3.3",
  "itertools 0.14.0",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "risc_v_cycles 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_cycles 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "setups 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "trace_and_split 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "setups 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "trace_and_split 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "transpose",
 ]
 
 [[package]]
 name = "prover_examples"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "bincode 1.3.3",
  "itertools 0.14.0",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "risc_v_cycles 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "risc_v_cycles 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "setups 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "trace_and_split 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "setups 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "trace_and_split 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "transpose",
 ]
 
@@ -10428,7 +10259,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -10466,9 +10297,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10666,93 +10497,69 @@ source = "git+https://github.com/matter-labs/zksync-airbender?tag=v0.6.0-rc.1#3f
 [[package]]
 name = "reduced_risc_v_log_23_machine"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "reduced_risc_v_log_23_machine"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "reduced_risc_v_log_23_machine"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
 name = "reduced_risc_v_log_23_machine_verifier"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
 name = "reduced_risc_v_machine"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "reduced_risc_v_machine"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "reduced_risc_v_machine"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
 name = "reduced_risc_v_machine_verifier"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -12644,62 +12451,50 @@ dependencies = [
 [[package]]
 name = "risc_v_cycles"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "risc_v_cycles"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "circuit_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "risc_v_cycles"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "circuit_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "verifier_generator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_generator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
 name = "risc_v_cycles_verifier"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
 name = "risc_v_simulator"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
  "addr2line 0.22.0",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "inferno",
  "memmap2",
- "object 0.35.0",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "object 0.36.7",
+ "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "rand 0.9.5",
  "ringbuffer",
  "ruint",
@@ -12709,35 +12504,16 @@ dependencies = [
 [[package]]
 name = "risc_v_simulator"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "addr2line 0.22.0",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "inferno",
  "memmap2",
  "object 0.37.3",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "rand 0.9.5",
- "ringbuffer",
- "ruint",
- "serde",
-]
-
-[[package]]
-name = "risc_v_simulator"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "addr2line 0.22.0",
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "inferno",
- "memmap2",
- "object 0.37.3",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "rand 0.9.5",
  "ringbuffer",
  "ruint",
@@ -12770,7 +12546,7 @@ dependencies = [
  "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.6.0-rc.1)",
  "dynasmrt",
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.6.0-rc.1)",
- "keccak 0.1.6",
+ "keccak 0.2.0",
  "riscv-decode",
  "ruint",
  "seq-macro",
@@ -12790,7 +12566,7 @@ dependencies = [
  "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
  "dynasmrt",
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5)",
- "keccak 0.1.6",
+ "keccak 0.2.0",
  "riscv-decode",
  "ruint",
  "seq-macro",
@@ -13054,7 +12830,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -13122,7 +12898,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13190,6 +12966,15 @@ checksum = "5174a470eeb535a721ae9fdd6e291c2411a906b96592182d05217591d5c5cf7b"
 dependencies = [
  "byteorder",
  "derive_more 0.99.20",
+ "twox-hash 1.6.3",
+]
+
+[[package]]
+name = "ruzstd"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
+dependencies = [
  "twox-hash 1.6.3",
 ]
 
@@ -13815,7 +13600,7 @@ dependencies = [
  "serde",
  "serde-big-array",
  "serde_json",
- "sha3 0.10.8",
+ "sha3 0.11.0",
  "shift_binary_csr",
  "syn 2.0.117",
  "unified_reduced_machine",
@@ -13824,64 +13609,43 @@ dependencies = [
 [[package]]
 name = "setups"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "bigint_with_control 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "blake2_with_compression 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "final_reduced_risc_v_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "machine_without_signed_mul_div 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "bigint_with_control 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "blake2_with_compression 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "final_reduced_risc_v_machine 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "machine_without_signed_mul_div 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "proc-macro2",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "quote",
- "reduced_risc_v_log_23_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "reduced_risc_v_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "risc_v_cycles 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "reduced_risc_v_log_23_machine 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "reduced_risc_v_machine 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_cycles 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
  "syn 2.0.117",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "setups"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "bigint_with_control 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "blake2_with_compression 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "final_reduced_risc_v_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "machine_without_signed_mul_div 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "bigint_with_control 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "blake2_with_compression 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "final_reduced_risc_v_machine 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "machine_without_signed_mul_div 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "proc-macro2",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "quote",
- "reduced_risc_v_log_23_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "reduced_risc_v_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "risc_v_cycles 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "reduced_risc_v_log_23_machine 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "reduced_risc_v_machine 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "risc_v_cycles 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
  "syn 2.0.117",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "setups"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "bigint_with_control 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "blake2_with_compression 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "final_reduced_risc_v_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "machine_without_signed_mul_div 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "proc-macro2",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "quote",
- "reduced_risc_v_log_23_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "reduced_risc_v_machine 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "risc_v_cycles 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "syn 2.0.117",
- "verifier_common 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "verifier_common 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -14237,7 +14001,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
@@ -14246,7 +14010,7 @@ dependencies = [
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
@@ -14255,7 +14019,7 @@ dependencies = [
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
@@ -14264,7 +14028,7 @@ dependencies = [
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
@@ -14273,7 +14037,7 @@ dependencies = [
 [[package]]
 name = "storage_models"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
 ]
@@ -14472,7 +14236,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "arrayvec",
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
@@ -14486,7 +14250,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "arrayvec",
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
@@ -14500,7 +14264,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "arrayvec",
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
@@ -14514,7 +14278,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "arrayvec",
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
@@ -14528,7 +14292,7 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "arrayvec",
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
@@ -14601,7 +14365,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -15111,37 +14875,25 @@ dependencies = [
 [[package]]
 name = "trace_and_split"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
  "serde_json",
- "setups 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "setups 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "trace_and_split"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
  "serde_json",
- "setups 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "trace_and_split"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "serde_json",
- "setups 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "setups 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -15156,28 +14908,19 @@ dependencies = [
 [[package]]
 name = "trace_holder"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "trace_holder"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "trace_holder"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -15384,31 +15127,21 @@ dependencies = [
 [[package]]
 name = "transcript"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "transcript"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
-]
-
-[[package]]
-name = "transcript"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "unroll",
- "worker 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -15883,48 +15616,32 @@ dependencies = [
 [[package]]
 name = "verifier_common"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "non_determinism_source 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "serde",
- "transcript 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "transcript 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "unroll",
 ]
 
 [[package]]
 name = "verifier_common"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "non_determinism_source 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "serde",
- "transcript 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "unroll",
-]
-
-[[package]]
-name = "verifier_common"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "blake2s_u32 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "cs 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "field 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "non_determinism_source 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "poseidon2 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
- "serde",
- "transcript 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "transcript 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "unroll",
 ]
 
@@ -15944,11 +15661,11 @@ dependencies = [
 [[package]]
 name = "verifier_generator"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
  "quote",
  "serde",
  "serde_json",
@@ -15958,25 +15675,11 @@ dependencies = [
 [[package]]
 name = "verifier_generator"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "quote",
- "serde",
- "serde_json",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "verifier_generator"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
-dependencies = [
- "proc-macro-error2",
- "proc-macro2",
- "prover 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "quote",
  "serde",
  "serde_json",
@@ -16323,7 +16026,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -16976,7 +16679,7 @@ dependencies = [
 [[package]]
 name = "worker"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3#22efe193608e0a6573f869af2580c11715847ba9"
 dependencies = [
  "num_cpus",
  "rayon",
@@ -16985,7 +16688,7 @@ dependencies = [
 [[package]]
 name = "worker"
 version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
+source = "git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "num_cpus",
  "rayon",
@@ -16995,15 +16698,6 @@ dependencies = [
 name = "worker"
 version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-airbender?rev=73d69b5#73d69b5346b3c2350fa104a56ec4df78840cea99"
-dependencies = [
- "num_cpus",
- "rayon",
-]
-
-[[package]]
-name = "worker"
-version = "0.1.0"
-source = "git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b#a69df6c0178bcb17e38465e8462b37c4f26a917e"
 dependencies = [
  "num_cpus",
  "rayon",
@@ -17204,7 +16898,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
@@ -17221,7 +16915,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
@@ -17238,7 +16932,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
@@ -17255,7 +16949,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
@@ -17271,7 +16965,7 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.0",
@@ -17326,7 +17020,7 @@ dependencies = [
 [[package]]
 name = "zksync_os_api"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "alloy",
  "alloy-sol-types",
@@ -18160,56 +17854,56 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#e0549959e2fe28c9656de8f9c1b9ce90fe9a2b94"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10#97e0cade3fde3d85f21ae144923762a8a371b7c2"
 dependencies = [
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.29-interface-v0.1.3-2026-02-10)",
- "execution_utils 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover_examples 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#19d4bbcf2d8d7b682c3eace1b045dd288f3cec00"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10#2cdaef45aa02929a72e63304b46be9a3b2144f86"
 dependencies = [
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
- "execution_utils 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover_examples 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#0c99261a748fcabb8ac5f489b27dcb62ca6cbaaa"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#2dec6e906876996ac06589b8ac9ec1c7fe01d2c3"
 dependencies = [
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
- "execution_utils 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover_examples 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#3d2977d0a5a6cd407ef56ff61afc1f868a543231"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#c0a97003f011586c98e5dd72d5b0e77ea1b09a3f"
 dependencies = [
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
- "execution_utils 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "prover_examples 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.4.3)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.4.3)",
 ]
 
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#49095d336c991427f074afefbf50ff7c53a15007"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10#9e7f4ec8bcfd196d94fafa4caf35aff37dd95b21"
 dependencies = [
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
- "execution_utils 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "prover_examples 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
- "risc_v_simulator 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?branch=antonio%2Fcompat-nightly-2026-02-10-v0.5.2)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
 ]
 
 [[package]]
@@ -18262,11 +17956,11 @@ dependencies = [
  "blake2",
  "clap",
  "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.6.0-rc.1)",
- "execution_utils 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "flate2",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3-2026-02-10)",
- "full_statement_verifier 0.1.0 (git+https://github.com/antoniolocascio-bot/zksync-airbender.git?rev=a69df6c0178b)",
+ "full_statement_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?branch=compat-nightly-2026-02-10-v0.5.2)",
  "futures",
  "http 1.3.1",
  "jsonrpsee",

@@ -7,17 +7,12 @@ server-side patches for other repos.
 
 ## Remaining temporary state
 
-1. Pre-V8 lanes still reach `antoniolocascio-bot/zksync-airbender` compat branches
-   (airbender rebuilt for `nightly-2026-02-10`):
-   - directly: `execution_utils` / `full_statement_verifier` pin rev `a69df6c` (head of
-     `antonio/compat-nightly-2026-02-10-v0.5.2`);
-   - transitively: the zksync-os compat tags' own manifests pin the `...-v0.4.3` and
-     `...-v0.5.2` compat branches, so those sources appear in `Cargo.lock` regardless of
-     server-side pins.
-   Full cleanup needs the airbender compat branches mirrored into `matter-labs/zksync-airbender`
-   (branch + tag), the zksync-os compat branches repointed at those upstream refs, and the
-   `*-interface-v0.1.3-2026-02-10` tags re-cut on the updated heads — or the lanes dropped when V6/V7
-   proving support ends.
+1. Pre-V8 lanes ride the `matter-labs/zksync-airbender` compat branches
+   (`compat-nightly-2026-02-10-v0.4.3` / `-v0.5.2` — airbender rebuilt for
+   `nightly-2026-02-10`): directly via `execution_utils` / `full_statement_verifier`, and
+   transitively via the zksync-os compat tags' own manifests. These are frozen branch refs,
+   not releases; they get deleted together with V6/V7 proving support (airbender 0.6.0
+   removed `risc_v_simulator`, so the old lanes cannot be ported forward).
 2. The V8 lane consumes `matter-labs/zksync-os:draft-0.4.0` (branch, not a tagged release).
    Switch to the release tag once it is cut.
 3. `[patch."https://github.com/matter-labs/airbender-platform"]` overrides `airbender-crypto`
@@ -32,6 +27,11 @@ server-side patches for other repos.
 
 ## Resolved
 
+- No `antoniolocascio-bot` sources remain in `Cargo.lock` except the `airbender-crypto`
+  patch above: the airbender compat branches are mirrored into `matter-labs/zksync-airbender`,
+  the zksync-os compat branches consume them, and the server's direct pre-V8 airbender pins
+  use the same `compat-nightly-2026-02-10-v0.5.2` branch spec as the v0.3.1 lane so cargo
+  unifies the sources.
 - Pre-V8 `zksync-os` lanes now consume `matter-labs/zksync-os` tags
   (`v0.0.29`/`v0.1.2`/`v0.2.10[-simulation-only]`/`v0.3.1` `-interface-v0.1.3-2026-02-10`):
   nightly-2026-02-10 rebuilds of the corresponding `*-interface-v0.1.3` releases, mirrored
