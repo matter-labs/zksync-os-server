@@ -2,6 +2,7 @@ use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Sealed, U256};
 use anyhow::Context as _;
 use std::convert::TryInto;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vise::Unit;
 use vise::{Buckets, Histogram, Metrics};
@@ -34,15 +35,41 @@ pub struct BlockReplayStorage {
     db: RocksDB<BlockReplayColumnFamily>,
     /// Shared by all blocks; stripped rows don't persist it (see [`StoredBlockContextV2`]).
     chain_id: u64,
+    /// The most recently archived row, kept only long enough to derive the next override's
+    /// window via a shift-and-append (the same operation used to build any new block's window)
+    /// if it turns out to continue the same wave. Cleared on any plain append, so a stale entry
+    /// can never be mistaken for an adjacent, unrelated override. This is what makes the embedded
+    /// window of an archived row (see [`BlockReplayColumnFamily::Context`]) correct forever after
+    /// it's written, however long ago or from however different a process it's later read —
+    /// `previous_block_timestamp` is a separate matter, see [`Self::previous_timestamp_from_canonical`].
+    ///
+    /// This is an in-memory optimization, not a durability mechanism: a restart between two
+    /// overrides of the same wave loses it, and the second override then reconstructs live
+    /// against `CanonicalHash`, which is wrong for exactly the position an earlier override in
+    /// the wave already repointed — corrupting that row's window too, not just its
+    /// `previous_block_timestamp`. Accepted because overrides are very rare, multi-block waves
+    /// rarer still, and a restart landing in the middle of one rarer still than that.
+    last_archived: Arc<Mutex<Option<LastArchived>>>,
+}
+
+/// See [`BlockReplayStorage::last_archived`].
+#[derive(Debug, Clone, Copy)]
+struct LastArchived {
+    block_number: BlockNumber,
+    hash: BlockHash,
+    window: BlockHashes,
+    timestamp: u64,
 }
 
 /// Column families for storage of block replay commands.
 ///
-/// `Context`, `ContextV2` and `ArchivedContext` together replace one former CF that held every
-/// row, canonical or archived, with its full [`BlockContext`] embedded. Canonical (number-keyed)
-/// rows now go to `ContextV2` and archived (hash-keyed) rows to `ArchivedContext`, both stripped
-/// (see [`StoredBlockContextV2`]); nothing writes to `Context` anymore — it only holds rows left
-/// over from before the split, in the old unstripped format.
+/// `Context` and `ContextV2` together replace one former CF that held every row, canonical or
+/// archived, with its full [`BlockContext`] embedded (256-hash window included). Canonical
+/// (number-keyed) rows now go to `ContextV2`, stripped of that window (see
+/// [`StoredBlockContextV2`]) since it's reconstructible from [`Self::CanonicalHash`]. Archived
+/// (hash-keyed) rows stay in `Context`, fully embedded: stripping them too would need durable
+/// tracking of in-progress override waves to stay correct (see
+/// [`BlockReplayStorage::last_archived`]), which isn't worth it for how rarely overrides happen.
 ///
 /// TODO(RocksDB migration): The four `Starting*` column families below correspond to fields
 /// in [`BlockStartCursors`]. They are stored separately for historical reasons (each was added
@@ -50,20 +77,14 @@ pub struct BlockReplayStorage {
 /// serializing the entire `BlockStartCursors` struct.
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
-    /// Legacy full [`BlockContext`] rows (~8 KiB each, 256-hash window included), predating the
-    /// `ContextV2`/`ArchivedContext` split. Canonical (number-keyed) rows here are converted and
-    /// deleted by [`ContractBlockContexts`]; archived (hash-keyed) ones are left as they are.
+    /// Full [`BlockContext`] rows (~8 KiB each, 256-hash window included). Holds every archived
+    /// (hash-keyed) row — the only place they're ever stored — plus canonical (number-keyed) rows
+    /// written before [`Self::ContextV2`] existed, or by a binary predating it during a rollback;
+    /// [`ContractBlockContexts`] converts and deletes the latter.
     Context,
     /// Stripped canonical rows. The 256-hash window is derivable and reconstructed from
     /// [`Self::CanonicalHash`] on read.
     ContextV2,
-    /// Stripped archived rows (blocks displaced by an override). The window and
-    /// `previous_block_timestamp` are reconstructed on read by walking `parent_hash` pointers
-    /// through this CF to the live canonical chain, then one [`Self::CanonicalHash`] lookup (see
-    /// [`BlockReplayStorage::resolve_window_and_previous_timestamp`]) — unlike [`Self::Context`],
-    /// this doesn't depend on `CanonicalHash` staying unchanged, so it's correct on any read, no
-    /// matter how long after the override or in how different a process.
-    ArchivedContext,
     StartingL1SerialId,
     Txs,
     NodeVersion,
@@ -84,7 +105,6 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
     const ALL: &'static [Self] = &[
         BlockReplayColumnFamily::Context,
         BlockReplayColumnFamily::ContextV2,
-        BlockReplayColumnFamily::ArchivedContext,
         BlockReplayColumnFamily::StartingL1SerialId,
         BlockReplayColumnFamily::Txs,
         BlockReplayColumnFamily::NodeVersion,
@@ -102,7 +122,6 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         match self {
             BlockReplayColumnFamily::Context => "context",
             BlockReplayColumnFamily::ContextV2 => "context_v2",
-            BlockReplayColumnFamily::ArchivedContext => "archived_context",
             BlockReplayColumnFamily::StartingL1SerialId => "last_processed_l1_tx_id",
             BlockReplayColumnFamily::Txs => "txs",
             BlockReplayColumnFamily::NodeVersion => "node_version",
@@ -132,6 +151,7 @@ impl BlockReplayStorage {
         let this = Self {
             db,
             chain_id: genesis.chain_id(),
+            last_archived: Arc::new(Mutex::new(None)),
         };
         let inserted_genesis = if this.latest_record_checked().is_none() {
             let genesis_tx = genesis.genesis_upgrade_tx().await;
@@ -169,7 +189,11 @@ impl BlockReplayStorage {
             .with_sync_writes()
             .run_migrations(MIGRATIONS)
             .expect("replay WAL schema migration failed");
-        Self { db, chain_id }
+        Self {
+            db,
+            chain_id,
+            last_archived: Arc::new(Mutex::new(None)),
+        }
     }
 
     fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, kind: WriteKind) {
@@ -192,21 +216,17 @@ impl BlockReplayStorage {
             .expect("Failed to serialize record.transactions");
         let node_version_value = record.node_version.to_string().as_bytes().to_vec();
 
-        // Stripped either way: the 256-hash window is never persisted. Canonical rows are
-        // indexed in `CanonicalHash` for fast reconstruction; archived rows keep their own
-        // `parent_hash` (part of the stripped struct) and are reconstructed on read by walking
-        // those pointers (see `resolve_window_and_previous_timestamp`) — correct regardless of
-        // what happens to `CanonicalHash` afterwards.
-        let stripped_context_value = bincode::encode_to_vec(
-            StoredBlockContextV2::strip(record.block_context),
-            bincode::config::standard(),
-        )
-        .expect("Failed to serialize stripped record.context");
-
         // Batch writes: replay entry, latest pointer and canonical hash mapping
         let mut batch: WriteBatch<'_, BlockReplayColumnFamily> = self.db.new_write_batch();
         match kind {
             WriteKind::Canonical => {
+                // Stripped: the 256-hash window is never persisted for canonical rows, it's
+                // reconstructed on read from `CanonicalHash`, which this write keeps current.
+                let stripped_context_value = bincode::encode_to_vec(
+                    StoredBlockContextV2::strip(record.block_context),
+                    bincode::config::standard(),
+                )
+                .expect("Failed to serialize stripped record.context");
                 batch.put_cf(
                     BlockReplayColumnFamily::ContextV2,
                     &db_key,
@@ -219,11 +239,14 @@ impl BlockReplayStorage {
                 );
             }
             WriteKind::Archived => {
-                batch.put_cf(
-                    BlockReplayColumnFamily::ArchivedContext,
-                    &db_key,
-                    &stripped_context_value,
-                );
+                // Full embed: an archived row has no `CanonicalHash` entry of its own to
+                // reconstruct the window from (see `BlockReplayColumnFamily::Context`).
+                let context_value = bincode::serde::encode_to_vec(
+                    record.block_context,
+                    bincode::config::standard(),
+                )
+                .expect("Failed to serialize record.context");
+                batch.put_cf(BlockReplayColumnFamily::Context, &db_key, &context_value);
             }
         }
         if self
@@ -370,17 +393,6 @@ impl BlockReplayStorage {
             })
     }
 
-    fn get_archived(&self, key: &[u8]) -> Option<StoredBlockContextV2> {
-        self.db
-            .get_cf(BlockReplayColumnFamily::ArchivedContext, key)
-            .expect("Cannot read from DB")
-            .map(|bytes| {
-                bincode::decode_from_slice(&bytes, bincode::config::standard())
-                    .expect("Failed to deserialize archived context")
-                    .0
-            })
-    }
-
     fn get_legacy_context(&self, key: &[u8]) -> Option<BlockContext> {
         self.db
             .get_cf(BlockReplayColumnFamily::Context, key)
@@ -392,70 +404,9 @@ impl BlockReplayStorage {
             })
     }
 
-    /// Reconstructs the 256-hash window and `previous_block_timestamp` for a row whose immediate
-    /// parent is `parent_hash`, by walking `parent_hash` pointers through `ArchivedContext` until
-    /// reaching a hash that isn't itself archived — one still on the live canonical chain, from
-    /// which point `CanonicalHash` is guaranteed unmutated (overrides only ever touch a wave's own
-    /// consecutive range) — then filling the rest of the window with one batched lookup.
-    fn resolve_window_and_previous_timestamp(
-        &self,
-        block_number: BlockNumber,
-        parent_hash: BlockHash,
-    ) -> (BlockHashes, u64) {
-        if block_number == 0 {
-            return (BlockHashes::default(), 0);
-        }
-        let mut hashes = [U256::ZERO; 256];
-        let first = block_number.saturating_sub(256);
-        let total = (block_number - first) as usize;
-        let mut current_hash = parent_hash;
-        let mut previous_block_timestamp = 0;
-        for step in 0..total {
-            hashes[255 - step] = U256::from_be_bytes(current_hash.0);
-            match self.get_archived(current_hash.0.as_slice()) {
-                Some(archived) => {
-                    if step == 0 {
-                        previous_block_timestamp = archived.timestamp;
-                    }
-                    if step + 1 == total {
-                        break;
-                    }
-                    current_hash = archived.parent_hash;
-                }
-                None => {
-                    // `current_hash` is still part of the live canonical chain.
-                    let this_number = block_number - 1 - step as u64;
-                    if step == 0 {
-                        previous_block_timestamp = self
-                            .get_block_timestamp(this_number)
-                            .expect("current canonical row must have a timestamp");
-                    }
-                    if this_number > first {
-                        let keys = (first..this_number)
-                            .map(|number| number.to_be_bytes())
-                            .collect::<Vec<_>>();
-                        let results = self
-                            .db
-                            .multi_get_cf(BlockReplayColumnFamily::CanonicalHash, keys.iter());
-                        for (number, result) in (first..this_number).zip(results) {
-                            let index = (number + 256 - block_number) as usize;
-                            hashes[index] =
-                                match result.expect("Failed to read from CanonicalHash DB") {
-                                    Some(bytes) => U256::from_be_slice(&bytes),
-                                    None => panic!("no CanonicalHash entry for block {number}"),
-                                };
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        (BlockHashes(hashes), previous_block_timestamp)
-    }
-
-    /// Resolves a context by key, and the `previous_block_timestamp` to go with it. Checks
-    /// `ContextV2` (canonical), then `ArchivedContext` (a row archived by this or an earlier
-    /// binary), then `Context` (a row predating one of the two stripped formats).
+    /// Resolves a context by key, and the `previous_block_timestamp` to go with it. `ContextV2`
+    /// (stripped, canonical) is tried first; everything else — a legacy pre-`ContextV2` canonical
+    /// row, or an archived row, which is always full — is served straight from `Context`.
     fn resolve_context(
         &self,
         block_number: BlockNumber,
@@ -471,21 +422,9 @@ impl BlockReplayStorage {
                 self.previous_timestamp_from_canonical(block_number),
             ));
         }
-        if let Some(archived) = self.get_archived(key) {
-            let (block_hashes, previous_block_timestamp) =
-                self.resolve_window_and_previous_timestamp(block_number, archived.parent_hash);
-            return Some((
-                archived.into_context(self.chain_id, block_hashes),
-                previous_block_timestamp,
-            ));
-        }
-        // No stripped row: either a canonical row written before `ContextV2` existed (or by an
-        // older binary during a rollback), or an archived row written before `ArchivedContext`
-        // existed. Both are served as stored: for the former the embedded hashes are just as
-        // correct, and for the latter they are authoritative — but `previous_block_timestamp` is
-        // derived from the current canonical neighbor either way, which is only exactly right
-        // for the former (a pre-existing quirk for this legacy archived-row shape; new archived
-        // rows resolve it durably above).
+        // `previous_block_timestamp` is derived from the current canonical neighbor, which is
+        // only exactly right for a canonical row — for an archived one it's a pre-existing quirk:
+        // correct unless that neighbor was itself later overridden.
         let context = self.get_legacy_context(key)?;
         Some((
             context,
@@ -505,9 +444,12 @@ impl BlockReplayStorage {
             })
     }
 
-    /// `previous_block_timestamp` for a row whose parent is the current canonical chain: correct
-    /// for canonical rows and legacy (pre-`ArchivedContext`) archived rows, but not for a row
-    /// displaced earlier in an in-progress override wave (see `resolve_window_and_previous_timestamp`).
+    /// `previous_block_timestamp` derived from the current canonical chain at `block_number`'s
+    /// parent slot. Correct for a canonical row. For an archived one it's a best-effort value:
+    /// `previous_block_timestamp` isn't persisted for any row, so a read of an archived row always
+    /// recomputes it live, which is wrong once that parent slot has itself been overridden —
+    /// regardless of `last_archived`, which only ever affects what gets written into an archived
+    /// row's `block_context`, not what a later read of `previous_block_timestamp` returns.
     fn previous_timestamp_from_canonical(&self, block_number: BlockNumber) -> u64 {
         if block_number == 0 {
             0
@@ -549,20 +491,28 @@ impl ReadReplay for BlockReplayStorage {
 
 impl BlockReplayStorage {
     /// Like [`ReadReplay::get_replay_record`], but resolves the hash window and
-    /// `previous_block_timestamp` from this row's own `parent_hash` instead of the live canonical
-    /// chain. Used when archiving a row that is about to be overridden: if an earlier override in
-    /// the same wave already replaced this row's parent, the live chain no longer has the parent
-    /// this row was actually executed against — but the row's own `parent_hash` is unaffected by
-    /// that, since it was fixed when this row was (last) written.
-    fn get_replay_record_with_original_parent(
+    /// `previous_block_timestamp` from `last_archived` — if it holds `block_number - 1`'s
+    /// original data — instead of the live canonical chain. Used when archiving a row that is
+    /// about to be overridden: if an earlier override in the same wave already replaced this
+    /// row's parent, the live chain no longer has the parent this row was actually executed
+    /// against, but `last_archived` does.
+    fn get_replay_record_for_archival(
         &self,
         block_number: BlockNumber,
+        last_archived: &Option<LastArchived>,
     ) -> Option<ReplayRecord> {
         let key = block_number.to_be_bytes();
         let (block_context, previous_block_timestamp) =
             if let Some(stored) = self.get_stored_context_v2(&key) {
-                let (block_hashes, previous_block_timestamp) =
-                    self.resolve_window_and_previous_timestamp(block_number, stored.parent_hash);
+                let (block_hashes, previous_block_timestamp) = match last_archived {
+                    Some(previous) if previous.block_number + 1 == block_number => {
+                        (previous.window.push(previous.hash), previous.timestamp)
+                    }
+                    _ => (
+                        self.read_block_hashes(block_number),
+                        self.previous_timestamp_from_canonical(block_number),
+                    ),
+                };
                 (
                     stored.into_context(self.chain_id, block_hashes),
                     previous_block_timestamp,
@@ -779,8 +729,9 @@ impl WriteReplay for BlockReplayStorage {
 
         if block_context.block_number <= current_latest_record {
             let block_number = block_context.block_number;
+            let mut last_archived = self.last_archived.lock().unwrap();
             let old_record = self
-                .get_replay_record_with_original_parent(block_number)
+                .get_replay_record_for_archival(block_number, &last_archived)
                 .expect("Old record must exist");
             if &old_record != block_record {
                 let old_record_hash = self.get_canonical_block_hash(block_number);
@@ -790,11 +741,23 @@ impl WriteReplay for BlockReplayStorage {
                     old_record_hash_hex,
                     "Overriding existing block replay record",
                 );
+                let window = old_record.block_context.block_hashes;
+                let timestamp = old_record.block_context.timestamp;
                 self.write_replay_unchecked(
                     Sealed::new_unchecked(old_record, old_record_hash),
                     WriteKind::Archived,
                 );
+                *last_archived = Some(LastArchived {
+                    block_number,
+                    hash: old_record_hash,
+                    window,
+                    timestamp,
+                });
             }
+        } else {
+            // A plain append ends any override wave in progress: without this, a stale entry
+            // could be mistaken later for an adjacent but unrelated override.
+            *self.last_archived.lock().unwrap() = None;
         }
 
         self.write_replay_unchecked(sealed_record, WriteKind::Canonical);
@@ -958,19 +921,10 @@ impl Migration<BlockReplayColumnFamily> for ContractBlockContexts {
     }
 }
 
-/// [`BlockContext`] as persisted in the `ContextV2` and `ArchivedContext` CFs: without the 256
-/// previous block hashes, and without the chain id (shared by all blocks, known from
-/// configuration / L1, not persisted at all — supplied by [`BlockReplayStorage`]'s in-memory
-/// `chain_id` field on read). In their place, this row's own immediate parent hash — fixed when
-/// the row was (last) written, independent of whatever `CanonicalHash` currently says.
-///
-/// For a canonical row, this is redundant with `CanonicalHash[block_number - 1]` in the common
-/// case, but it's what lets an override archive the row it's about to replace correctly without
-/// tracking any override-wave state: block `N`'s current row always has the parent hash it was
-/// actually built on, even if `N - 1`'s own canonical entry has since moved on to a different
-/// chain. For an archived row, it's the only copy of that fact, and lets the window and
-/// `previous_block_timestamp` be reconstructed later by walking a chain of these (see
-/// [`BlockReplayStorage::resolve_window_and_previous_timestamp`]).
+/// [`BlockContext`] as persisted in the `ContextV2` CF: without the 256 previous block hashes
+/// (reconstructed on read from `CanonicalHash`, see [`BlockReplayStorage::read_block_hashes`])
+/// and without the chain id (shared by all blocks, known from configuration / L1, not persisted
+/// at all — supplied by [`BlockReplayStorage`]'s in-memory `chain_id` field on read).
 ///
 /// The exhaustive destructuring in the conversions below keeps this struct in sync with
 /// [`BlockContext`]: a field added there fails compilation here, prompting a decision on whether
@@ -994,8 +948,6 @@ struct StoredBlockContextV2 {
     execution_version: u32,
     #[bincode(with_serde)]
     blob_fee: U256,
-    #[bincode(with_serde)]
-    parent_hash: BlockHash,
 }
 
 impl StoredBlockContextV2 {
@@ -1003,7 +955,7 @@ impl StoredBlockContextV2 {
         let BlockContext {
             chain_id: _,
             block_number,
-            block_hashes,
+            block_hashes: _,
             timestamp,
             eip1559_basefee,
             pubdata_price,
@@ -1027,7 +979,6 @@ impl StoredBlockContextV2 {
             mix_hash,
             execution_version,
             blob_fee,
-            parent_hash: BlockHash::from(block_hashes.0[255]),
         }
     }
 
@@ -1044,7 +995,6 @@ impl StoredBlockContextV2 {
             mix_hash,
             execution_version,
             blob_fee,
-            parent_hash: _,
         } = self;
         BlockContext {
             chain_id,
@@ -1409,28 +1359,38 @@ mod tests {
         let (old3, old4) = (&chain[3], &chain[4]);
         let (new3, new4) = override_blocks_3_and_4(&storage, &chain).await;
 
-        // The archived copies are byte-correct: old block 4's window ends with old block 3's
-        // hash (not the replacement's), and its `previous_block_timestamp` is old block 3's
-        // timestamp (not new block 3's) — both resolved by walking `parent_hash` pointers
-        // through `ArchivedContext`, not by any in-memory wave state.
-        assert_eq!(
-            storage.get_replay_record_by_key(4, Some(old4.hash().0.to_vec())),
-            Some(old4.as_ref().clone())
-        );
+        // Old block 3's archived copy is fully correct: its own parent (block 2) was never
+        // touched.
         assert_eq!(
             storage.get_replay_record_by_key(3, Some(old3.hash().0.to_vec())),
             Some(old3.as_ref().clone())
         );
+
+        // Old block 4's `block_context` — in particular its window, which ends with old block
+        // 3's hash, not the replacement's — is byte-correct too: `last_archived` still held old
+        // block 3's original data when block 4 was archived right after, in the same process.
+        // `previous_block_timestamp` isn't part of that fix (see `previous_timestamp_from_canonical`):
+        // it's re-derived live on every read, so it reflects new block 3, not old block 3.
+        let archived_old4 = storage
+            .get_replay_record_by_key(4, Some(old4.hash().0.to_vec()))
+            .unwrap();
+        assert_eq!(archived_old4.block_context, old4.block_context);
+        assert_eq!(
+            archived_old4.previous_block_timestamp,
+            new3.block_context.timestamp
+        );
+
         // The new canonical rows reconstruct against the repointed index.
         assert_eq!(storage.get_replay_record(3), Some(new3));
         assert_eq!(storage.get_replay_record(4), Some(new4));
     }
 
     #[tokio::test]
-    async fn override_wave_survives_reopening_storage_mid_wave() {
-        // Each row's own `parent_hash` is what it was built on, full stop — nothing needs to be
-        // remembered in memory across writes, not even within a single wave. Reopening storage
-        // between overriding block 3 and block 4 must not change block 4's archival outcome.
+    async fn override_wave_across_restart_has_known_imprecision() {
+        // `last_archived` lives in memory only: a restart between overriding block 3 and block 4
+        // loses it, so block 4's archival falls back to a live reconstruction against
+        // `CanonicalHash[3]` — which by then points at new block 3, not the old one this row was
+        // actually built on. This test documents that accepted gap, not a desired outcome.
         let dir = tempfile::tempdir().unwrap();
         let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
         let chain = make_chain(5);
@@ -1458,49 +1418,25 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            storage.get_replay_record_by_key(4, Some(old4.hash().0.to_vec())),
-            Some(old4.as_ref().clone())
-        );
+        // The new canonical chain is unaffected: it's written explicitly, never derived from
+        // `last_archived`.
         assert_eq!(storage.get_replay_record(4), Some(new4));
-    }
 
-    #[tokio::test]
-    async fn archived_rows_read_correctly_after_wave_state_is_gone() {
-        // The whole point of resolving archived rows by walking `parent_hash` pointers instead
-        // of an in-memory wave cache: they must read back correctly even after that cache is
-        // long gone — e.g. a fresh process, reading via `en_replay_record_overrides` well after
-        // the override happened.
-        let dir = tempfile::tempdir().unwrap();
-        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
-        let chain = make_chain(5);
-        for sealed in &chain {
-            storage.write(sealed.clone(), false).await.unwrap();
-        }
-        let (old3, old4) = (&chain[3], &chain[4]);
-        let (_, new4) = override_blocks_3_and_4(&storage, &chain).await;
-
-        // A plain append ends the wave, clearing any in-memory state.
-        let mut new5 = new4.clone();
-        new5.block_context.block_number = 5;
-        new5.block_context.block_hashes = new4.block_context.block_hashes.push(fake_hash(104));
-        new5.previous_block_timestamp = new4.block_context.timestamp;
-        storage
-            .write(Sealed::new_unchecked(new5, fake_hash(5)), false)
-            .await
+        // Old block 4's archived copy now has the wrong tail hash too — on top of the
+        // `previous_block_timestamp` quirk every archived row already has regardless of any
+        // restart (see `previous_timestamp_from_canonical`), losing `last_archived` mid-wave also
+        // corrupts the one thing it otherwise guarantees: the embedded window itself.
+        let archived_old4 = storage
+            .get_replay_record_by_key(4, Some(old4.hash().0.to_vec()))
             .unwrap();
-
-        // Reopening drops any remaining in-memory state outright.
-        drop(storage);
-        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
-
+        assert_ne!(archived_old4.block_context, old4.block_context);
         assert_eq!(
-            storage.get_replay_record_by_key(4, Some(old4.hash().0.to_vec())),
-            Some(old4.as_ref().clone())
+            archived_old4.block_context.block_hashes.0[255],
+            U256::from_be_bytes(new3_hash.0)
         );
         assert_eq!(
-            storage.get_replay_record_by_key(3, Some(old3.hash().0.to_vec())),
-            Some(old3.as_ref().clone())
+            archived_old4.previous_block_timestamp,
+            new3.block_context.timestamp
         );
     }
 }
