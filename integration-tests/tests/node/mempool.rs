@@ -7,9 +7,7 @@ use alloy::signers::local::PrivateKeySigner;
 use futures::FutureExt;
 use std::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::{
-    CURRENT_TO_L1, NEXT_TO_L1, TestEnvironment, Tester, test_multisetup,
-};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
 use zksync_os_provider::EthWalletProvider;
 use zksync_os_server::config::FeeConfig;
 
@@ -120,7 +118,7 @@ async fn sensitive_to_balance_changes(mut tester: Tester) -> anyhow::Result<()> 
 /// post-v31 (check on); post-v31 this also exercises the `basefee > max_fee_per_gas`
 /// short-circuit in the validator that lets such txs into the pool instead of rejecting
 /// at ingress.
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn low_fee_tx_does_not_hang_block_executor(env: TestEnvironment) -> anyhow::Result<()> {
     // Use a deterministic base fee so the "low fee" value is unambiguous.
     let known_base_fee: u128 = 100_000_000; // 100M wei = 0.1 gwei
@@ -250,7 +248,7 @@ fn intrinsic_native_test_fee_config() -> FeeConfig {
 
 /// Negative case: post-v31, a tx whose `gas_limit` covers the EVM intrinsic gas (100_000) but
 /// not the intrinsic native cost is rejected at mempool ingress with `intrinsic gas too low`.
-#[test_multisetup([NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();
@@ -286,7 +284,7 @@ async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> an
 
 /// Positive case: post-v31, a tx with enough gas_limit to cover the intrinsic native cost
 /// passes the new validator and is mined successfully.
-#[test_multisetup([NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn intrinsic_native_check_accepts_well_funded_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();

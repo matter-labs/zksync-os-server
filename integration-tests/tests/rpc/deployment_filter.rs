@@ -8,7 +8,7 @@ use anyhow::Result;
 use tokio::time::{Duration, timeout};
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::EventEmitter;
-use zksync_os_integration_tests::{DeploymentFilterConfig, NEXT_TO_L1, Tester};
+use zksync_os_integration_tests::{CURRENT_TO_L1, DeploymentFilterConfig, Tester};
 use zksync_os_provider::EthWalletProvider;
 
 /// The default rich wallet address (derived from the well-known test private key).
@@ -22,7 +22,7 @@ async fn setup() -> Result<(Tester, PrivateKeySigner)> {
         enabled: true,
         allowed_deployers: vec![authorized],
     };
-    let env = NEXT_TO_L1.environment().await?;
+    let env = CURRENT_TO_L1.environment().await?;
     let mut config = env.default_config().await?;
     config.sequencer_config.tx_validator.deployment_filter = filter_config;
     let mut tester = env.launch(config).await?;

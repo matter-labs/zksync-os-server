@@ -24,7 +24,7 @@ env:
   RELEASE_PROFILE: 'maxperf'
   SERVER_LOGFILE: zksync-os-server.log.txt
   FOUNDRY_VERSION: 'v1.5.1'
-  PROTOCOL_VERSION: 'v30.2'
+  PROTOCOL_VERSION: 'v31.0'
   LOCAL_CHAINS_DIR: 'local-chains'
 
 defaults:

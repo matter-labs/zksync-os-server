@@ -33,9 +33,9 @@ use zksync_os_provider::NodeProvider;
 use zksync_os_server::ServerPorts;
 use zksync_os_server::config::Config;
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 #[cfg(feature = "prover-tests")]
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
-use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
@@ -74,19 +74,14 @@ impl TestCase {
         }
     }
 
-    pub const fn next_to_l1() -> Self {
-        Self {
-            protocol_version: NEXT_PROTOCOL_VERSION,
-        }
-    }
-
     pub async fn environment(self) -> anyhow::Result<TestEnvironment> {
         TestEnvironment::from_case(self).await
     }
 }
 
+// A NEXT_TO_L1 lane (fresh chain at `NEXT_PROTOCOL_VERSION`) needs local-chain fixtures for
+// v32.0; reintroduce it once they are generated. Until then v32 is covered via in-test upgrades.
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
-pub const NEXT_TO_L1: TestCase = TestCase::next_to_l1();
 
 /// Set of private keys for batch verification participants.
 pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
@@ -95,8 +90,8 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 ];
 /// Shutdown completes in <5 seconds when there is no CPU starvation. But because prover input
 /// generator runs its CPU-bound task on a blocking thread it can significantly slow down graceful
-/// shutdown. We put 60s here until zksync-os v0.4.0 which will get rid of RISC-V simulator and
-/// allow async/abortable prover input generation.
+/// shutdown. Keep 60s until V7 proving support is dropped (V8 generates prover input natively
+/// at batch seal, without the blocking RISC-V simulator).
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {

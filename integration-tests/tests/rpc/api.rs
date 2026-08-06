@@ -13,9 +13,7 @@ use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::Counter::CounterInstance;
 use zksync_os_integration_tests::contracts::{Counter, EventEmitter};
-use zksync_os_integration_tests::{
-    CURRENT_TO_L1, NEXT_TO_L1, TestEnvironment, Tester, test_multisetup,
-};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
 use zksync_os_provider::NodeProvider;
 use zksync_os_rpc_api::types::BatchStorageProof;
 use zksync_os_server::config::FeeConfig;
@@ -147,7 +145,7 @@ async fn get_gas_price_uses_configured_scale_factor(env: TestEnvironment) -> any
     Ok(())
 }
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn send_raw_transaction_sync(tester: Tester) -> anyhow::Result<()> {
     // Test that the node supports `eth_sendRawTransactionSync`
     let alice = tester.l2_wallet.default_signer().address();

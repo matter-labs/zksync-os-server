@@ -178,7 +178,7 @@ async fn node_stop_and_restart_preserves_state() -> anyhow::Result<()> {
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn node_recovers_from_l1_batch_revert_after_restart_v30() -> anyhow::Result<()> {
+async fn node_recovers_from_l1_batch_revert_after_restart() -> anyhow::Result<()> {
     let env = CURRENT_TO_L1.environment().await?;
     let mut config = env.default_config().await?;
     make_commit_only_config(&mut config);

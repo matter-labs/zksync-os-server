@@ -12,11 +12,11 @@ use zksync_os_contract_interface::IMailbox::NewPriorityRequest;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::TestERC20::TestERC20Instance;
 use zksync_os_integration_tests::contracts::{IL2AssetRouter, L1AssetRouter, TestERC20};
-use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_L1, Tester, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 use zksync_os_provider::NodeProvider;
 use zksync_os_types::{L2ToL1Log, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, ZkTxType};
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn erc20_deposit(tester: Tester) -> anyhow::Result<()> {
     let alice = tester.l1_wallet().default_signer().address();
 
@@ -58,7 +58,7 @@ async fn erc20_deposit(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn erc20_transfer(tester: Tester) -> anyhow::Result<()> {
     // We use L2 wallet's default signer as Alice because it already has L2 ETH.
     let alice = tester.l2_wallet.default_signer().address();
@@ -102,7 +102,7 @@ async fn erc20_transfer(tester: Tester) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn erc20_withdrawal(tester: Tester) -> anyhow::Result<()> {
     // We use L2 wallet's default signer as Alice because it already has L2 ETH.
     let alice = tester.l2_wallet.default_signer().address();
