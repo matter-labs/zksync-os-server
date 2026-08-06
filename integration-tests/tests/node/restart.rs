@@ -17,7 +17,7 @@ use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
 use zksync_os_integration_tests::test_config::{
     make_commit_only_config, make_full_pipeline_config,
 };
-use zksync_os_integration_tests::wallets::load_operator_private_key;
+use zksync_os_integration_tests::wallets::load_reverter_private_key;
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester, test_multisetup};
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
 use zksync_os_server::INTERNAL_CONFIG_FILE_NAME;
@@ -104,7 +104,7 @@ async fn revert_batches_on_l1(
     let validator_timelock_address = bridgehub.validator_timelock_address().await?;
     let chain_address = *bridgehub.zk_chain().await?.address();
 
-    let operator = PrivateKeySigner::from_str(&load_operator_private_key(chain_layout, chain_id)?)?;
+    let operator = PrivateKeySigner::from_str(&load_reverter_private_key(chain_layout, chain_id)?)?;
     let operator_address = operator.address();
     let mut l1_provider = l1_provider.clone();
     l1_provider.wallet_mut().register_signer(operator);
