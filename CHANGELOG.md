@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.22.0](https://github.com/matter-labs/zksync-os-server/compare/v0.21.0...v0.22.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **l1_sender:** pipelined sending with a bounded in-flight window ([#1485](https://github.com/matter-labs/zksync-os-server/issues/1485))
+
+### Features
+
+* **l1_sender:** pipelined sending with a bounded in-flight window ([#1485](https://github.com/matter-labs/zksync-os-server/issues/1485)) ([83a0dc8](https://github.com/matter-labs/zksync-os-server/commit/83a0dc8ab363ec2fdfd7babf3a00c3f9c560f7f1))
+* **node:** refuse main-node startup when replay WAL is behind L1 ([#1504](https://github.com/matter-labs/zksync-os-server/issues/1504)) ([7b5d906](https://github.com/matter-labs/zksync-os-server/commit/7b5d9060a107ad9adba0fe4419ceb11b45293c39))
+* **rpc:** L1 aggregation-hop proof for L1-settled chains (enable interop on L1) ([#1413](https://github.com/matter-labs/zksync-os-server/issues/1413)) ([5974897](https://github.com/matter-labs/zksync-os-server/commit/597489700bc45d61437e829305c8aa6517548958))
+* zksync-os 0.4.0 ([#1421](https://github.com/matter-labs/zksync-os-server/issues/1421)) ([59bb218](https://github.com/matter-labs/zksync-os-server/commit/59bb218bc7b0bfe84dc3dca90a3df66a6d49069d))
+
+
+### Bug Fixes
+
+* **batch_verification:** bound cache eviction to cached blocks ([#1502](https://github.com/matter-labs/zksync-os-server/issues/1502)) ([418db6e](https://github.com/matter-labs/zksync-os-server/commit/418db6e64f1ee9f7dd2abc497b33f74865c937b9))
+
 ## [0.21.0](https://github.com/matter-labs/zksync-os-server/compare/v0.20.12...v0.21.0) (2026-08-04)
 
 
