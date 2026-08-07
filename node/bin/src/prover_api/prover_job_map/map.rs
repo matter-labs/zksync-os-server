@@ -242,6 +242,25 @@ impl<T: Clone> ProverJobMap<T> {
         }
     }
 
+    /// Clears the assignment of a job so it becomes immediately available for pick-up,
+    /// without waiting for `assignment_timeout` (which is set to many hours for slow
+    /// CPU provers). Only applies if the job is still assigned to `prover_id` -
+    /// a reassignment to another prover is left untouched.
+    pub async fn unassign_job(&self, batch_number: u64, prover_id: &str) {
+        let mut jobs = self.lock_with_tracking(JobMapMethod::UnassignJob).await;
+        if let Some(entry) = jobs.get_mut(&batch_number)
+            && entry.metadata.assigned_to_prover_id.as_deref() == Some(prover_id)
+        {
+            entry.metadata.unassign();
+            tracing::info!(
+                batch_number,
+                prover_id,
+                ?self.prover_stage,
+                "Job unassigned after rejected submission - available for immediate pick-up"
+            );
+        }
+    }
+
     /// If a job is present for a given batch_number, returns the corresponding BatchMetadata
     pub async fn get_job_batch_metadata(&self, batch_number: u64) -> Option<BatchMetadata> {
         let jobs = self

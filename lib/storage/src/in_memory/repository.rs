@@ -190,7 +190,7 @@ impl RepositoryInMemory {
     pub fn remove_block_and_transactions(&self, block_number: BlockNumber, tx_hashes: &[TxHash]) {
         self.block_receipt_repository.remove_by_number(block_number);
         self.transaction_receipt_repository
-            .remove_by_hashes(tx_hashes);
+            .remove_by_hashes(tx_hashes, block_number);
     }
 }
 
@@ -383,9 +383,14 @@ impl TransactionReceiptRepository {
             .map(|tx_hash| *tx_hash)
     }
 
-    pub fn remove_by_hashes(&self, tx_hashes: &[TxHash]) {
+    /// Removes tx data for `tx_hashes`, but only entries still owned by `block_number` -
+    /// defensive against a later block re-inserting an entry under the same hash (the
+    /// re-insert overwrites the entry, and removing it here would lose data the later
+    /// block still needs for persistence).
+    pub fn remove_by_hashes(&self, tx_hashes: &[TxHash], block_number: BlockNumber) {
         for tx_hash in tx_hashes {
-            self.tx_data.remove(tx_hash);
+            self.tx_data
+                .remove_if(tx_hash, |_, data| data.meta.block_number <= block_number);
         }
     }
 
@@ -446,4 +451,78 @@ fn transaction_to_api_data(
     };
 
     StoredTxData { tx, receipt, meta }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::consensus::{Header, Sealable};
+    use zksync_os_interface::types::{ExecutionOutput, ExecutionResult, TxOutput};
+    use zksync_os_types::{BlockPubdata, SystemTxEnvelope};
+
+    fn block_with_tx(number: u64, tx: &ZkTransaction) -> (BlockOutput, Vec<ZkTransaction>) {
+        let tx_output = TxOutput {
+            execution_result: ExecutionResult::Success(ExecutionOutput::Call(vec![])),
+            gas_used: 0,
+            gas_refunded: 0,
+            computational_native_used: 0,
+            native_used: 0,
+            pubdata_used: 0,
+            contract_address: None,
+            logs: vec![],
+            l2_to_l1_logs: vec![],
+            storage_writes: vec![],
+        };
+        let block_output = BlockOutput {
+            header: Header {
+                number,
+                ..Default::default()
+            }
+            .seal_slow(),
+            tx_results: vec![Ok(tx_output)],
+            storage_writes: vec![],
+            account_diffs: vec![],
+            published_preimages: vec![],
+            pubdata: BlockPubdata::Length(0),
+            computational_native_used: 0,
+        };
+        (block_output, vec![tx.clone()])
+    }
+
+    /// The same tx hash can occur in two blocks (the deterministic `SetSLChainId` placeholder
+    /// is injected both on the first block of a fresh chain and on protocol upgrades). When
+    /// both blocks are in memory, persisting the earlier one must not drop the tx data the
+    /// later block still needs.
+    #[test]
+    fn duplicate_tx_hash_survives_earlier_block_removal() {
+        let genesis = Sealed::new_unchecked(
+            alloy::consensus::Block {
+                header: Header::default(),
+                body: alloy::consensus::BlockBody {
+                    transactions: vec![],
+                    ommers: vec![],
+                    withdrawals: None,
+                },
+            },
+            BlockHash::ZERO,
+        );
+        let repository = RepositoryInMemory::new(genesis);
+
+        let tx = ZkTransaction::from(SystemTxEnvelope::set_sl_chain_id(9, u64::MAX));
+        let (first_block, first_txs) = block_with_tx(1, &tx);
+        let (later_block, later_txs) = block_with_tx(2, &tx);
+
+        let (first, _) = repository.populate_in_memory(first_block, first_txs);
+        let (later, _) = repository.populate_in_memory(later_block, later_txs);
+
+        repository.remove_block_and_transactions(1, &first.body.transactions);
+
+        repository
+            .get_block_and_transactions_by_number(2)
+            .expect("later block lost its tx data when the earlier block was persisted");
+
+        // The later block's removal does drop the tx data.
+        repository.remove_block_and_transactions(2, &later.body.transactions);
+        assert!(repository.get_transaction(*tx.hash()).unwrap().is_none());
+    }
 }

@@ -65,9 +65,10 @@ impl ProtocolSemanticVersion {
         if self.major != 0 {
             return false;
         }
-        // Patch versions can always be live, as they don't change the state transition function.
+        // A patch version can change the proving harness, so a version is only live once it
+        // maps to a `ProvingVersion` known to this server release.
         match self.minor {
-            30 | 31 => true,
+            30..=32 => ProvingVersion::try_from(self.clone()).is_ok(),
             // When updating this function, make sure to insert the new non-live version here.
             _ => false,
         }
@@ -244,9 +245,13 @@ mod tests {
             ((0, 29, 5), false),
             ((0, 30, 0), true),
             ((0, 30, 1), true),
-            ((0, 30, 99), true),
+            ((0, 30, 2), true),
+            // Patch versions without a known proving version are not live.
+            ((0, 30, 99), false),
             ((0, 31, 0), true),
-            ((0, 32, 0), false), // When updating this test, make sure to insert the new non-live version here.
+            ((0, 32, 0), true),
+            ((0, 32, 1), false),
+            ((0, 33, 0), false), // When updating this test, make sure to insert the new non-live version here.
         ];
         for ((major, minor, patch), expected) in test_vector.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);

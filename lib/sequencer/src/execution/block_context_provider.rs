@@ -113,7 +113,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .best_transactions_stream(self.next_interop_tx_allowed_after, include_interop_traffic)
             .await
             .context("mempool is closed")?;
-
         let timestamp = (millis_since_epoch() / 1000) as u64;
 
         // Check if we peeked an upgrade transaction info.
@@ -150,25 +149,27 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .try_into()
             .context("Cannot instantiate a block for unsupported execution version")?;
 
-        // Append a SetSLChainId system transaction exactly once: when the protocol
-        // version is v31 (either via upgrade from v30, or on the first block of a
-        // fresh v31 chain). After it fires once, the condition can never trigger again.
-        let (tx_source, expect_sl_chain_id_tx_after_upgrade) = if protocol_version.minor == 31
-            && (previous_record.protocol_version.minor < 31
-                || previous_record.block_context.block_number == 0)
-        {
-            let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
-                self.config.l1_chain_id,
-                // We use `u64::MAX` as a placeholder, since it is not an actual migration
-                u64::MAX,
-            );
-            let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
-                futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
-            ));
-            (tx_source, true)
-        } else {
-            (best_txs.stream, false)
-        };
+        // The SetSLChainId placeholder runs exactly once per chain: on the v30->v31 upgrade
+        // boundary, or on the first block of a fresh post-v31 chain. The batch program reads
+        // the SL chain id from persistent SystemContext storage, so later protocol upgrades
+        // don't need to re-establish it.
+        let first_post_v31_block = previous_record.protocol_version.minor < 31
+            || previous_record.block_context.block_number == 0;
+        let (tx_source, expect_sl_chain_id_tx_after_upgrade) =
+            if protocol_version.is_post_v31() && first_post_v31_block {
+                let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
+                    self.config.l1_chain_id,
+                    // We use `u64::MAX` as a placeholder, since it is not an actual migration
+                    u64::MAX,
+                );
+                let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
+                    futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
+                ));
+                // The appended tx must fit in the block regardless of what triggered the injection.
+                (tx_source, true)
+            } else {
+                (best_txs.stream, false)
+            };
 
         let FeeParams {
             eip1559_basefee,

@@ -246,7 +246,9 @@ pub fn genesis_header() -> Sealed<Header> {
     header.seal_slow()
 }
 
-async fn build_genesis(
+/// Builds the genesis state from a genesis input, without requiring an L1 connection
+/// (unlike [`Genesis::state`], which resolves the protocol version on-chain).
+pub async fn build_genesis(
     genesis_input_source: &dyn GenesisInputSource,
     chain_id: u64,
     protocol_version: &ProtocolSemanticVersion,

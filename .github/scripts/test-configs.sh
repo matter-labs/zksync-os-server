@@ -8,10 +8,9 @@ INTERVAL=${INTERVAL:-3}
 chmod a+x ./zksync-os-server
 
 # name|state|config
+# v30.x configs are gone from this list: V6 proving support was dropped, so fresh v30 chains
+# cannot run with default settings. Re-add multi-chain entries once v31+ fixtures exist.
 CONFIGS=(
-  "v30 default|local-chains/v30.2/l1-state.json|local-chains/v30.2/default/config.yaml"
-  "v30 multi-chain 1|local-chains/v30.2/l1-state.json|local-chains/v30.2/multi_chain/chain_6565.yaml"
-  "v30 multi-chain 2|local-chains/v30.2/l1-state.json|local-chains/v30.2/multi_chain/chain_6566.yaml"
   "v31 default|local-chains/v31.0/l1-state.json|local-chains/v31.0/default/config.yaml"
 )
 

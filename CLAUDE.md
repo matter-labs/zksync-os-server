@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Integration tests**: `cargo nextest run -p zksync_os_integration_tests --profile no-pig` (no live anvil needed — each test manages its own L1/node; `--profile no-pig` disables Prover Input Generation for faster runs)
 
 ### Local Development Setup
-1. Run script: `./run_local.sh ./local-chains/v30.2/default`
+1. Run script: `./run_local.sh ./local-chains/v31.0/default`
 2. To restart chain: `rm -rf db/*` then re-run the script
 
 ## Submitting a PR

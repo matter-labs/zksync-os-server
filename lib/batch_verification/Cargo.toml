@@ -18,6 +18,8 @@ zksync_os_pipeline.workspace = true
 zksync_os_batch_types.workspace = true
 zksync_os_batcher_metrics.workspace = true
 zksync_os_network.workspace = true
+zksync_os_native_pig.workspace = true
+zksync_os_merkle_tree.workspace = true
 
 zksync_os_interface.workspace = true
 
@@ -29,3 +31,12 @@ async-trait.workspace = true
 anyhow.workspace = true
 secrecy.workspace = true
 vise.workspace = true
+
+[dev-dependencies]
+alloy = { workspace = true, default-features = false, features = ["providers", "rpc-client", "transports"] }
+blake2.workspace = true
+semver.workspace = true
+tempfile.workspace = true
+zksync_os_genesis.workspace = true
+zksync_os_merkle_tree_api.workspace = true
+zksync_os_provider.workspace = true

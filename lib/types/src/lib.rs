@@ -48,7 +48,7 @@ mod token_price;
 pub use token_price::{TokenApiRatio, TokenPricesForFees};
 
 mod block_output;
-pub use block_output::BlockOutput;
+pub use block_output::{BlockOutput, BlockPubdata};
 
 mod fee_params;
 pub use fee_params::FeeParams;

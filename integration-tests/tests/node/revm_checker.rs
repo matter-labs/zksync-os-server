@@ -4,7 +4,7 @@ use alloy::providers::Provider;
 use alloy::rpc::types::TransactionRequest;
 use zksync_os_integration_tests::assert_traits::{DEFAULT_TIMEOUT, ReceiptAssert};
 use zksync_os_integration_tests::provider::ZksyncTestingProvider;
-use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_L1, TestEnvironment, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, test_multisetup};
 
 /// ZKsync OS hardcodes PREVRANDAO to `1` (the VM's `prevrandao` cargo feature is off in
 /// production builds), while `block_context.mix_hash` is zeroed by the sequencer. The REVM
@@ -14,7 +14,7 @@ use zksync_os_integration_tests::{CURRENT_TO_L1, NEXT_TO_L1, TestEnvironment, te
 /// Runs such a contract with revert-on-divergence enabled: a divergence panics the node,
 /// which would fail block finalization below. Only protocol v31+ (execution version 6,
 /// AtlasV3) exercised the buggy path, so the NEXT setup is the load-bearing one.
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn prevrandao_does_not_trip_revm_consistency_checker(
     env: TestEnvironment,
 ) -> anyhow::Result<()> {

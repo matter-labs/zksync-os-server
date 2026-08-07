@@ -18,7 +18,7 @@ use zksync_os_integration_tests::rpc_recorder::RpcRecordConfig;
 use zksync_os_integration_tests::test_config::{
     make_commit_only_config, make_full_pipeline_config,
 };
-use zksync_os_integration_tests::wallets::load_operator_private_key;
+use zksync_os_integration_tests::wallets::load_reverter_private_key;
 use zksync_os_integration_tests::{
     CURRENT_TO_L1, StoppedTester, TestEnvironment, Tester, test_multisetup,
 };
@@ -137,7 +137,7 @@ fn make_reverter_config(stopped: &StoppedTester) -> anyhow::Result<SignerConfig>
         .genesis_config
         .chain_id
         .context("chain_id missing from config")?;
-    let operator_sk = load_operator_private_key(stopped.chain_layout(), chain_id)?;
+    let operator_sk = load_reverter_private_key(stopped.chain_layout(), chain_id)?;
     Ok(SignerConfig::Local(
         PrivateKeySigner::from_str(&operator_sk)?
             .credential()

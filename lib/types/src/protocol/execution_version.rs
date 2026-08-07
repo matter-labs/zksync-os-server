@@ -18,8 +18,10 @@ pub enum ExecutionVersion {
     V4 = 4,
     /// v0.2.x release branch of zksync-os
     V5 = 5,
-    /// Currently used as a dev version until release is done
+    /// v0.3.x release branch of zksync-os
     V6 = 6,
+    /// v0.4.x release branch of zksync-os
+    V7 = 7,
 }
 
 impl TryFrom<&ProtocolSemanticVersion> for ExecutionVersion {
@@ -37,7 +39,8 @@ impl TryFrom<&ProtocolSemanticVersion> for ExecutionVersion {
             29 => Ok(ExecutionVersion::V4),
             30 => Ok(ExecutionVersion::V5),
             31 => Ok(ExecutionVersion::V6),
-            32 => Ok(ExecutionVersion::V6),
+            32 => Ok(ExecutionVersion::V7),
+            33 => Ok(ExecutionVersion::V7),
             _ => Err(ExecutionVersionError::UnsupportedVersion(version.clone())),
         }
     }
@@ -65,8 +68,9 @@ mod tests {
             ((0, 30, 1), ExecutionVersion::V5),
             ((0, 31, 0), ExecutionVersion::V6),
             ((0, 31, 1), ExecutionVersion::V6),
-            ((0, 32, 0), ExecutionVersion::V6),
-            ((0, 32, 1), ExecutionVersion::V6),
+            ((0, 32, 0), ExecutionVersion::V7),
+            ((0, 32, 1), ExecutionVersion::V7),
+            ((0, 33, 0), ExecutionVersion::V7),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -76,7 +80,7 @@ mod tests {
             assert_eq!(&exec_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 33, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 34, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);

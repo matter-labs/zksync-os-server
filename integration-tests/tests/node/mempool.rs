@@ -7,9 +7,7 @@ use alloy::signers::local::PrivateKeySigner;
 use futures::FutureExt;
 use std::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
-use zksync_os_integration_tests::{
-    CURRENT_TO_L1, NEXT_TO_L1, TestEnvironment, Tester, test_multisetup,
-};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, Tester, test_multisetup};
 use zksync_os_provider::EthWalletProvider;
 use zksync_os_server::config::FeeConfig;
 
@@ -116,11 +114,10 @@ async fn sensitive_to_balance_changes(mut tester: Tester) -> anyhow::Result<()> 
 }
 
 /// A transaction with maxFeePerGas below the chain's base fee must not stall
-/// block production for other senders. Run both pre-v31 (intrinsic native check off) and
-/// post-v31 (check on); post-v31 this also exercises the `basefee > max_fee_per_gas`
-/// short-circuit in the validator that lets such txs into the pool instead of rejecting
-/// at ingress.
-#[test_multisetup([CURRENT_TO_L1, NEXT_TO_L1])]
+/// block production for other senders. This also exercises the `basefee > max_fee_per_gas`
+/// short-circuit in the post-v31 intrinsic-native validator that lets such txs into the pool
+/// instead of rejecting at ingress.
+#[test_multisetup([CURRENT_TO_L1])]
 async fn low_fee_tx_does_not_hang_block_executor(env: TestEnvironment) -> anyhow::Result<()> {
     // Use a deterministic base fee so the "low fee" value is unambiguous.
     let known_base_fee: u128 = 100_000_000; // 100M wei = 0.1 gwei
@@ -250,7 +247,7 @@ fn intrinsic_native_test_fee_config() -> FeeConfig {
 
 /// Negative case: post-v31, a tx whose `gas_limit` covers the EVM intrinsic gas (100_000) but
 /// not the intrinsic native cost is rejected at mempool ingress with `intrinsic gas too low`.
-#[test_multisetup([NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();
@@ -286,7 +283,7 @@ async fn intrinsic_native_check_rejects_underpaid_tx(env: TestEnvironment) -> an
 
 /// Positive case: post-v31, a tx with enough gas_limit to cover the intrinsic native cost
 /// passes the new validator and is mined successfully.
-#[test_multisetup([NEXT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1])]
 async fn intrinsic_native_check_accepts_well_funded_tx(env: TestEnvironment) -> anyhow::Result<()> {
     let mut config = env.default_config().await?;
     config.fee_config = intrinsic_native_test_fee_config();
@@ -315,36 +312,6 @@ async fn intrinsic_native_check_accepts_well_funded_tx(env: TestEnvironment) -> 
         .await?
         .expect_successful_receipt()
         .await?;
-
-    Ok(())
-}
-
-/// Gating: pre-v31 the intrinsic-native check is bypassed. The same low-gas tx that the
-/// negative test rejects post-v31 must be accepted at mempool ingress here.
-#[test_multisetup([CURRENT_TO_L1])]
-async fn intrinsic_native_check_disabled_pre_v31(env: TestEnvironment) -> anyhow::Result<()> {
-    let mut config = env.default_config().await?;
-    config.fee_config = intrinsic_native_test_fee_config();
-    let tester = env.launch(config).await?;
-    let alice = tester.l2_wallet.default_signer().address();
-    let chain_id = tester.l2_provider.get_chain_id().await?;
-    let nonce = tester.l2_provider.get_transaction_count(alice).await?;
-    let max_fee_per_gas: u128 = 1_000_000_000;
-
-    let tx = TransactionRequest::default()
-        .with_to(Address::random())
-        .with_value(U256::from(1))
-        .with_nonce(nonce)
-        .with_gas_limit(21_000)
-        .with_max_fee_per_gas(max_fee_per_gas)
-        .with_max_priority_fee_per_gas(0)
-        .with_chain_id(chain_id);
-    let envelope = tx.build(&tester.l2_wallet).await?;
-    let encoded = envelope.encoded_2718();
-
-    // Submission must succeed: the check is gated off pre-v31, so the mempool accepts this
-    // tx even though the gas budget would not satisfy the native intrinsic cost.
-    let _ = tester.l2_provider.send_raw_transaction(&encoded).await?;
 
     Ok(())
 }

@@ -4,6 +4,10 @@
 //! These metrics are the primary signal for diagnosing worker thread starvation — where
 //! synchronous code running on async worker threads starves other tasks without necessarily
 //! saturating CPU (e.g. blocking storage reads block the thread but do no compute).
+//!
+//! Requires `--cfg tokio_unstable` (set workspace-wide in `.cargo/config.toml`; build steps
+//! that override `RUSTFLAGS` must re-add it): the blocking-pool and poll-duration metrics
+//! only exist in tokio under that cfg.
 
 use std::sync::Mutex;
 

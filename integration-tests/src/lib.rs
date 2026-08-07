@@ -33,9 +33,9 @@ use zksync_os_provider::NodeProvider;
 use zksync_os_server::ServerPorts;
 use zksync_os_server::config::Config;
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 #[cfg(feature = "prover-tests")]
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
-use zksync_os_server::default_protocol_version::{NEXT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
@@ -74,19 +74,14 @@ impl TestCase {
         }
     }
 
-    pub const fn next_to_l1() -> Self {
-        Self {
-            protocol_version: NEXT_PROTOCOL_VERSION,
-        }
-    }
-
     pub async fn environment(self) -> anyhow::Result<TestEnvironment> {
         TestEnvironment::from_case(self).await
     }
 }
 
+// A NEXT_TO_L1 lane (fresh chain at `NEXT_PROTOCOL_VERSION`) needs local-chain fixtures for
+// v32.0; reintroduce it once they are generated. Until then v32 is covered via in-test upgrades.
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
-pub const NEXT_TO_L1: TestCase = TestCase::next_to_l1();
 
 /// Set of private keys for batch verification participants.
 pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
@@ -95,8 +90,8 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 ];
 /// Shutdown completes in <5 seconds when there is no CPU starvation. But because prover input
 /// generator runs its CPU-bound task on a blocking thread it can significantly slow down graceful
-/// shutdown. We put 60s here until zksync-os v0.4.0 which will get rid of RISC-V simulator and
-/// allow async/abortable prover input generation.
+/// shutdown. Keep 60s until V7 proving support is dropped (V8 generates prover input natively
+/// at batch seal, without the blocking RISC-V simulator).
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
@@ -285,6 +280,14 @@ pub struct SupportingNode {
 impl Tester {
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// URL of the node's prover API, if the prover server is enabled.
+    /// Stable across [`Tester::stop`] / restart (HTTP ports are preserved).
+    pub fn prover_api_url(&self) -> Option<String> {
+        self.bound_ports
+            .prover_api
+            .map(|port| format!("http://localhost:{port}"))
     }
 
     fn apply_external_node_defaults(&self, config: &mut Config) {
@@ -961,16 +964,12 @@ impl AnvilL1 {
 async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
     let protocol_version = tester.chain_layout.protocol_version();
     let app_bin_path = match protocol_version {
-        PROTOCOL_VERSION => utils::materialize_multiblock_batch_bin(
-            &tester.tempdir.path().join("app_bins"),
-            "v6",
-            zksync_os_multivm::apps::v6::MULTIBLOCK_BATCH,
-        ),
         PROTOCOL_VERSION_V31_0 => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
             "v7",
             zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH,
         ),
+        // V6 (protocol v30.x) proving support was dropped when the 0.4.0 lane became current.
         _ => panic!("unsupported protocol version for prover tests"),
     };
     let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
@@ -1027,7 +1026,6 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
 #[cfg(feature = "prover-tests")]
 fn prover_release_for_protocol(protocol_version: &str) -> &'static str {
     match protocol_version {
-        PROTOCOL_VERSION => "v0.7.1",
         PROTOCOL_VERSION_V31_0 => "v0.8.0",
         _ => {
             panic!("unsupported protocol version `{protocol_version}` for prover binary selection")

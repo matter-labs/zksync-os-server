@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use tokio::time::Duration;
 use zksync_os_integration_tests::assert_traits::ReceiptAssert;
 use zksync_os_integration_tests::contracts::{TracingPrimary, TracingSecondary};
-use zksync_os_integration_tests::{NEXT_TO_L1, PolicyServiceConfig, Tester};
+use zksync_os_integration_tests::{CURRENT_TO_L1, PolicyServiceConfig, Tester};
 use zksync_os_tx_validators::deployment_filter::FORCE_DEPLOYER_ADDRESS;
 use zksync_os_types::BOOTLOADER_FORMAL_ADDRESS;
 
@@ -30,7 +30,7 @@ fn policy_service(server: &MockServer) -> PolicyServiceConfig {
 
 /// Env with the policy-service client configured (requires protocol >= v31).
 async fn setup(server: &MockServer) -> Result<Tester> {
-    let env = NEXT_TO_L1.environment().await?;
+    let env = CURRENT_TO_L1.environment().await?;
     let mut config = env.default_config().await?;
     config.sequencer_config.tx_validator.policy_service = policy_service(server);
     env.launch(config).await

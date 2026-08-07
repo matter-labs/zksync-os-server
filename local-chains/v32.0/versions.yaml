@@ -1,0 +1,12 @@
+general:
+  zksync_os_version: "0.32.0"
+  verification_key: "TBD"
+
+era-contracts:
+  sha: "62a58d61c46a4681b3da85421081df51d9d086fb"
+
+zksync-os-integration-tests:
+  sha: "16c6a83b4f634609958f347c56549ba19bf9df9b"
+
+zksync-os-server:
+  sha: "c8cd48d2d9d407978491872b1fd7e1e4b9612897"

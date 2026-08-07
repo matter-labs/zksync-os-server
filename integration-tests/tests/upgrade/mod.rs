@@ -4,7 +4,7 @@ use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
 use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, UpgradeTester};
-use zksync_os_integration_tests::{NEXT_TO_L1, Tester};
+use zksync_os_integration_tests::{CURRENT_TO_L1, Tester};
 
 /// Executes the simplest patch protocol upgrade:
 /// - no contracts are deployed
@@ -43,9 +43,10 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Performs V30->V31 protocol upgrade which also does a force deployment.
+/// Performs V31->V32 protocol upgrade with a force deployment, exercising the legacy path
+/// where the node already knows the bytecode preimage from a prior L2 deployment.
 #[test_log::test(tokio::test)]
-async fn upgrade_to_v31_with_deployments() -> anyhow::Result<()> {
+async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
 
@@ -147,7 +148,7 @@ async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
     .into_iter()
     .collect();
 
-    let tester = NEXT_TO_L1.environment().await?.launch_default().await?;
+    let tester = CURRENT_TO_L1.environment().await?.launch_default().await?;
     let upgrade_tester = UpgradeTester::for_default_upgrade(&tester).await?;
 
     // Publish the raw runtime bytecode from the force-deployment payload to the

@@ -16,6 +16,7 @@ use zksync_os_batch_types::batcher_model::{
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
 use zksync_os_l1_watcher::CommittedBatchProvider;
+use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::ReadStateHistory;
@@ -51,6 +52,7 @@ pub struct Batcher<ReadState> {
     pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
+    pub merkle_tree: MerkleTree<RocksDBWrapper>,
 }
 
 #[async_trait]
@@ -260,15 +262,15 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                                     "a single block exceeds batch seal limits; sealing it as its own batch"
                                 );
                             }
-                            let Some(ProverBlock { output: block_output, record: replay_record, prover_input, tree_output }) = block_receiver.pop_buffer() else {
+                            let Some(block) = block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
 
-                            let block_number = replay_record.block_context.block_number;
+                            let block_number = block.record.block_context.block_number;
 
                             state_reporter.record_picked(
                                 block_number,
-                                Some(replay_record.block_context.timestamp),
+                                Some(block.record.block_context.timestamp),
                                 None,
                             );
 
@@ -283,7 +285,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             // that restarts do not shift the reference block forward to the
                             // catch-up frontier.
                             let first_block_timestamp = first_block_timestamp
-                                .get_or_insert(replay_record.block_context.timestamp);
+                                .get_or_insert(block.record.block_context.timestamp);
 
                             // Arm the timer only once catch-up replay is complete. The deadline
                             // itself is derived from first_block_timestamp — not from the block
@@ -302,14 +304,9 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             }
 
                             // ---------- accumulate batch data ----------
-                            accumulator.add(&block_output, &replay_record);
+                            accumulator.add(&block.output, &block.record);
 
-                            blocks.push((
-                                block_output,
-                                replay_record,
-                                tree_output,
-                                prover_input,
-                            ));
+                            blocks.push(block);
 
                             if seal_after_adding {
                                 break;
@@ -328,22 +325,48 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
             .observe(blocks.len() as u64);
         accumulator.report_accumulated_resources_to_metrics();
 
-        let protocol_version = &blocks.first().as_ref().unwrap().1.protocol_version;
+        let protocol_version = &blocks.first().unwrap().record.protocol_version;
+        // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
+        let pubdata_mode = self
+            .pubdata_mode
+            .adapt_for_protocol_version(protocol_version);
 
         /* ---------- seal the batch ---------- */
-        let batch_envelope = batch_builder::seal_batch(
-            &blocks,
-            prev_batch_info.clone(),
-            batch_number,
-            self.chain_id,
-            self.chain_address,
-            // we need to adapt pubdata mode depending on protocol version, to ensure automatic DA mode change during v30 upgrade
-            self.pubdata_mode
-                .adapt_for_protocol_version(protocol_version),
-            self.sl_chain_id,
-            &self.read_state,
-        )?;
+        let batch_envelope = self
+            .seal_batch_blocking(blocks, prev_batch_info.clone(), batch_number, pubdata_mode)
+            .await?;
         Ok(Some(batch_envelope))
+    }
+
+    /// Runs [`batch_builder::seal_batch`] on a blocking thread: sealing runs batch PIG
+    /// (for V8 - a full native re-execution of the batch), which must not stall the
+    /// async runtime.
+    async fn seal_batch_blocking(
+        &self,
+        blocks: Vec<ProverBlock>,
+        prev_batch_info: StoredBatchInfo,
+        batch_number: u64,
+        pubdata_mode: PubdataMode,
+    ) -> anyhow::Result<BatchForSigning<ProverInput>> {
+        let chain_id = self.chain_id;
+        let chain_address = self.chain_address;
+        let sl_chain_id = self.sl_chain_id;
+        let read_state = self.read_state.clone();
+        let merkle_tree = self.merkle_tree.clone();
+        tokio::task::spawn_blocking(move || {
+            batch_builder::seal_batch(
+                &blocks,
+                prev_batch_info,
+                batch_number,
+                chain_id,
+                chain_address,
+                pubdata_mode,
+                sl_chain_id,
+                &read_state,
+                &merkle_tree,
+            )
+        })
+        .await?
     }
 
     async fn recreate_existing_batch(
@@ -368,13 +391,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         // Collect all blocks in this batch
         while blocks.len() < expected_block_count as usize {
             state_reporter.enter_state(GenericComponentState::Idle);
-            let Some(ProverBlock {
-                output: block_output,
-                record: replay_record,
-                prover_input,
-                tree_output,
-            }) = block_receiver.recv().await
-            else {
+            let Some(block) = block_receiver.recv().await else {
                 tracing::info!("inbound channel closed");
                 return Ok(None);
             };
@@ -382,39 +399,37 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
 
             tracing::debug!(
                 batch_number,
-                block_number = replay_record.block_context.block_number,
+                block_number = block.record.block_context.block_number,
                 "Adding block to recreated batch"
             );
 
             // Mirrors the record_picked call in create_batch; needed here too because
             // recreate_existing_batch is a separate code path for already-committed batches.
             state_reporter.record_picked(
-                replay_record.block_context.block_number,
-                Some(replay_record.block_context.timestamp),
+                block.record.block_context.block_number,
+                Some(block.record.block_context.timestamp),
                 None,
             );
 
-            blocks.push((block_output, replay_record, tree_output, prover_input));
+            blocks.push(block);
         }
-        let last_block_number = blocks.last().unwrap().0.header.number;
+        let last_block_number = blocks.last().unwrap().output.header.number;
         assert_eq!(
             last_block_number,
             existing_batch.last_block_number(),
             "Block number mismatch in last block of a rebuilt batch"
         );
 
-        // Rebuild the batch from blocks
-        let rebuilt_batch = batch_builder::seal_batch(
-            &blocks,
-            prev_batch_info.clone(),
-            batch_number,
-            self.chain_id,
-            self.chain_address,
-            // Assume pubdata mode does not change
-            self.pubdata_mode,
-            self.sl_chain_id,
-            &self.read_state,
-        )?;
+        // Rebuild the batch from blocks.
+        // Assume pubdata mode does not change
+        let rebuilt_batch = self
+            .seal_batch_blocking(
+                blocks,
+                prev_batch_info.clone(),
+                batch_number,
+                self.pubdata_mode,
+            )
+            .await?;
 
         // Verify that the rebuilt batch matches the stored batch by comparing hashes
         if self.batcher_config.assert_rebuilt_batch_hashes {
