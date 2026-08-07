@@ -142,6 +142,11 @@ impl TestEnvironment {
         })
     }
 
+    /// Anvil's direct RPC endpoint, e.g. to put a fault-injecting proxy in front of it.
+    pub fn l1_rpc_url(&self) -> &str {
+        &self.l1.address
+    }
+
     pub async fn default_config(&self) -> anyhow::Result<Config> {
         let mut config = build_node_config(&self.l1, self.chain_layout, false).await?;
         Tester::bind_runtime_config(
@@ -155,6 +160,34 @@ impl TestEnvironment {
     pub async fn launch_default(self) -> anyhow::Result<Tester> {
         let config = self.default_config().await?;
         self.launch(config).await
+    }
+
+    /// Launches the node with its L1 RPC routed through `l1_rpc_url` (e.g. a fault-injecting
+    /// proxy in front of anvil) instead of anvil's direct endpoint. Test-side helpers
+    /// (`Tester::l1_provider()` etc.) still talk to anvil directly.
+    pub async fn launch_with_l1_rpc(
+        self,
+        mut config: Config,
+        l1_rpc_url: String,
+    ) -> anyhow::Result<Tester> {
+        if !prover_input_generation_enabled() {
+            disable_prover_input_generation(&mut config);
+        }
+        Tester::bind_runtime_config(
+            &self.l1,
+            self.prepared_runtime.tempdir.as_ref(),
+            &mut config,
+        );
+        config.l1_provider_config.rpc_url = l1_rpc_url;
+        Tester::launch_node_inner(
+            self.l1,
+            config,
+            self.prepared_runtime.tempdir,
+            self.chain_layout,
+            None,
+            true,
+        )
+        .await
     }
 
     pub async fn launch(self, mut config: Config) -> anyhow::Result<Tester> {

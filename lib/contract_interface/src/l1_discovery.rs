@@ -286,10 +286,13 @@ async fn wait_to_finalize<T: Debug + PartialEq, Fut: Future<Output = crate::Resu
     f: impl Fn(BlockId) -> Fut,
 ) -> anyhow::Result<(u64, T)> {
     /// Ethereum blocks are mined every ~12 seconds on average, but we wait in 1-second intervals
-    /// optimistically to save time on startup.
+    /// optimistically to save time on startup. The budget must cover several block intervals:
+    /// the L1 sender routinely leaves in-flight transactions in the mempool on shutdown, so a
+    /// restart legitimately waits for them to mine (≥1 block each on mainnet, longer under fee
+    /// pressure or an overloaded CI host).
     const RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
         .with_delay(Duration::from_secs(1))
-        .with_max_times(10);
+        .with_max_times(90);
 
     let pending_value = f(BlockId::pending())
         .await

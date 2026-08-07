@@ -497,13 +497,15 @@ async fn rebuild_after_l1_revert_starts_successfully(env: TestEnvironment) -> an
     // Confirm the node is alive and accepting new L2 transactions after rebuild.
     send_throwaway_tx(&restarted).await?;
 
-    // Verify the server commits a new batch on L1 with the same number as the reverted one.
-    // After the revert, last_committed_batch on L1 is 0; reaching committed_state.last_committed_batch
-    // again proves the node rebuilt and committed a distinct batch with the same number.
+    // Verify the server commits a new batch on L1 with the same number as a reverted one.
+    // After the revert, last_committed_batch on L1 is 0, so any nonzero value proves a
+    // distinct batch 1 was committed. The pre-revert batch COUNT is not a valid target: the
+    // rebuild re-batches the replayed blocks with fresh deadline timing, so the same blocks
+    // can legitimately pack into fewer batches than the original run committed.
     wait_for_l1_state(
         &restarted,
         "server commits a new batch on L1 after rebuild",
-        |state| state.last_committed_batch >= committed_state.last_committed_batch,
+        |state| state.last_committed_batch >= 1,
     )
     .await?;
 

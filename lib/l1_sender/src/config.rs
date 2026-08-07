@@ -25,9 +25,18 @@ pub struct L1SenderConfig<Input> {
     pub force_transaction_resubmission: bool,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
+    /// In pipelined mode this is the in-flight window size: the max number of
+    /// submitted-but-not-yet-mined L1 transactions. Must not exceed the L1 node's
+    /// per-account pool cap (16 for both geth's blobpool and reth's default account slots).
     pub command_limit: usize,
 
-    /// How often to poll L1 for new blocks.
+    /// When true (default), transactions are submitted through a bounded in-flight window and
+    /// confirmations are tracked by a separate task, so submission never waits for inclusion.
+    /// When false, commands are processed in synchronous cycles instead: drain up to
+    /// `command_limit` commands, send, wait for all receipts + confirmations, repeat.
+    pub pipelining_enabled: bool,
+
+    /// Receipt/inclusion polling cadence.
     pub poll_interval: Duration,
 
     /// Maximum time to wait for a transaction to be included on L1.

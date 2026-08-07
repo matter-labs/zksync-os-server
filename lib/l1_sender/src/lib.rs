@@ -2,6 +2,7 @@ pub mod commands;
 pub mod config;
 mod metrics;
 pub mod pipeline_component;
+mod pipelined;
 pub mod upgrade_gatekeeper;
 
 use crate::commands::{L1SenderCommand, SendToL1};
@@ -26,6 +27,7 @@ use alloy::transports::TransportError;
 use anyhow::Context as _;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
@@ -74,10 +76,104 @@ const L1_GAS_LIMIT_FALLBACK: u64 = 15_000_000;
 const L1_SIM_GAS_LIMIT: u64 = 30_000_000;
 
 #[derive(Debug, Clone, Copy)]
-struct FeeParams {
+pub(crate) struct FeeParams {
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
     max_fee_per_blob_gas: u128,
+}
+
+impl FeeParams {
+    /// Per-field maximum of two fee sets. Used to apply a replacement-fee floor on top of
+    /// the regularly resolved fees.
+    pub(crate) fn max(self, other: FeeParams) -> FeeParams {
+        FeeParams {
+            max_fee_per_gas: self.max_fee_per_gas.max(other.max_fee_per_gas),
+            max_priority_fee_per_gas: self
+                .max_priority_fee_per_gas
+                .max(other.max_priority_fee_per_gas),
+            max_fee_per_blob_gas: self.max_fee_per_blob_gas.max(other.max_fee_per_blob_gas),
+        }
+    }
+
+    /// Fee floor for replacing this transaction in the pool. Geth and reth require a 100%
+    /// bump on tip, fee cap AND blob fee cap to replace a blob transaction, but only a 10%
+    /// bump for regular transactions.
+    pub(crate) fn replacement_floor(self, carries_blobs: bool) -> FeeParams {
+        if carries_blobs {
+            self.doubled()
+        } else {
+            let bump = |fee: u128| fee.saturating_add(fee.div_ceil(10));
+            FeeParams {
+                max_fee_per_gas: bump(self.max_fee_per_gas),
+                max_priority_fee_per_gas: bump(self.max_priority_fee_per_gas),
+                max_fee_per_blob_gas: self.max_fee_per_blob_gas,
+            }
+        }
+    }
+
+    /// See [`Self::replacement_floor`] — the blob replacement bump.
+    pub(crate) fn doubled(self) -> FeeParams {
+        FeeParams {
+            max_fee_per_gas: self.max_fee_per_gas.saturating_mul(2),
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas.saturating_mul(2),
+            max_fee_per_blob_gas: self.max_fee_per_blob_gas.saturating_mul(2),
+        }
+    }
+}
+
+/// A blob sidecar converted once into the wire format the chain accepts.
+///
+/// The EIP-7594 conversion computes 128 KZG cell proofs per blob (~200ms of CPU each), so it
+/// must happen exactly once per command — the result is shared between gas simulation, the
+/// send path, and in-flight simulation prefixes.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedSidecar {
+    variant: BlobTransactionSidecarVariant,
+    blob_count: u64,
+}
+
+impl PreparedSidecar {
+    /// Converts `sidecar` into the format the chain's active fork accepts. The EIP-7594 cell
+    /// proof computation is CPU-heavy, so it runs on the blocking pool.
+    pub(crate) async fn prepare(
+        sidecar: alloy::consensus::BlobTransactionSidecar,
+        use_eip7594: bool,
+    ) -> anyhow::Result<Self> {
+        let blob_count = sidecar.blobs.len() as u64;
+        let variant = if use_eip7594 {
+            let converted = tokio::task::spawn_blocking(move || {
+                sidecar.try_into_7594(EnvKzgSettings::Default.get())
+            })
+            .await
+            .context("EIP-7594 sidecar conversion task panicked")??;
+            BlobTransactionSidecarVariant::Eip7594(converted)
+        } else {
+            BlobTransactionSidecarVariant::Eip4844(sidecar)
+        };
+        Ok(Self {
+            variant,
+            blob_count,
+        })
+    }
+
+    pub(crate) fn blob_count(&self) -> u64 {
+        self.blob_count
+    }
+}
+
+/// An in-flight (submitted, not yet observed mined) transaction mirrored into `eth_simulateV1`
+/// payloads so that gas estimates for chained commands (batch N+1 requires batch N committed)
+/// stay exact while predecessors are still in the mempool. On providers whose simulation base
+/// already includes pool transactions the prefix call simply reverts without applying state,
+/// which leaves the chained state intact either way; prefix results are always discarded.
+pub(crate) struct SimPrefixEntry {
+    pub(crate) nonce: u64,
+    pub(crate) calldata: Bytes,
+    pub(crate) sidecar: Option<Arc<PreparedSidecar>>,
+    pub(crate) fee_params: FeeParams,
+    /// Gas limit the transaction was sent with; reused when the transaction is evicted from
+    /// the pool and must be resent at the same nonce.
+    pub(crate) gas_limit: u64,
 }
 
 fn build_l1_simulation_request(
@@ -86,9 +182,8 @@ fn build_l1_simulation_request(
     input: Bytes,
     nonce: u64,
     fee_params: FeeParams,
-    blob_sidecar: Option<alloy::consensus::BlobTransactionSidecar>,
-    use_eip7594_sidecar: bool,
-) -> anyhow::Result<TransactionRequest> {
+    prepared_sidecar: Option<&PreparedSidecar>,
+) -> TransactionRequest {
     // Mirror submission fees so providers (e.g. anvil) that parse the request
     // as a typed tx accept it.
     let mut req = TransactionRequest::default()
@@ -100,28 +195,21 @@ fn build_l1_simulation_request(
         .with_nonce(nonce)
         .with_gas_limit(L1_SIM_GAS_LIMIT);
 
-    if let Some(blob_sidecar) = blob_sidecar {
+    if let Some(prepared_sidecar) = prepared_sidecar {
         req.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
-        if use_eip7594_sidecar {
-            req.set_blob_sidecar(BlobTransactionSidecarVariant::Eip7594(
-                blob_sidecar.try_into_7594(EnvKzgSettings::Default.get())?,
-            ));
-        } else {
-            req.set_blob_sidecar(BlobTransactionSidecarVariant::Eip4844(blob_sidecar));
-        }
+        req.set_blob_sidecar(prepared_sidecar.variant.clone());
         // Anvil routes blob requests through the EIP-4844 arm only when
         // `type=3` is set explicitly; otherwise it returns -32602.
         req.transaction_type = Some(3);
     }
 
-    Ok(req)
+    req
 }
 
 /// Process responsible for sending transactions to L1.
 /// Handles one type of l1 command (e.g. Commit or Prove).
-/// Loads up to `command_limit` commands from the channel and sends them to L1 in parallel.
-/// Waits for all transactions to be mined, sends them to the output channel
-/// and then starts with the next `command_limit` commands.
+/// Keeps up to `command_limit` transactions in flight, forwarding each command to the output
+/// channel once its transaction is confirmed — see `pipelined` for the send machinery.
 ///
 /// Important: the same provider (sender address) must not be used outside this process.
 ///     Otherwise, there will be a nonce conflict and a failed L1 transaction
@@ -147,11 +235,6 @@ where
         outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
         state_reporter: ComponentStateReporter,
     ) -> anyhow::Result<()> {
-        let command_name = Input::COMPONENT_ID.as_str();
-        let fee_config = self.config.fee_config;
-        let force_transaction_resubmission = self.config.force_transaction_resubmission;
-
-        let mut cmd_buffer = Vec::with_capacity(self.config.command_limit);
         // Process all potential passthrough commands first
         if self
             .process_prepending_passthrough_commands(&mut inbound, &outbound, &state_reporter)
@@ -161,6 +244,40 @@ where
             tracing::info!("inbound channel closed");
             return Ok(());
         }
+
+        // The KZG trusted setup loads lazily on first use (~seconds); warm it up off the hot
+        // path so the first blob-carrying send doesn't stall the async executor.
+        if self.provider.capabilities().supports_eip7594 {
+            tokio::task::spawn_blocking(|| {
+                let _ = EnvKzgSettings::Default.get();
+            })
+            .await
+            .context("KZG trusted setup preload task panicked")?;
+        }
+
+        // Both send paths are large state machines; boxing keeps them out of this future
+        // (and of the component future moved by value at pipeline spawn), whose size is
+        // stack-critical — see the stack-overflow note in `pipelined.rs`.
+        if self.config.pipelining_enabled {
+            Box::pin(self.run_pipelined(inbound, outbound, state_reporter)).await
+        } else {
+            Box::pin(self.run_stop_and_wait(inbound, outbound, state_reporter)).await
+        }
+    }
+
+    /// Fallback send path (`pipelining_enabled = false`): drain up to `command_limit`
+    /// commands, send them, wait for all receipts + confirmations, repeat.
+    async fn run_stop_and_wait(
+        &self,
+        mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
+        outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
+        state_reporter: ComponentStateReporter,
+    ) -> anyhow::Result<()> {
+        let command_name = Input::COMPONENT_ID.as_str();
+        let fee_config = self.config.fee_config;
+        let force_transaction_resubmission = self.config.force_transaction_resubmission;
+
+        let mut cmd_buffer = Vec::with_capacity(self.config.command_limit);
 
         // On startup, either recover submitted transactions from a previous session or, when
         // explicitly requested, skip recovery so the normal send path replaces them.
@@ -253,8 +370,16 @@ where
             let fee_params = self
                 .resolve_fee_params(fee_config, force_transaction_resubmission)
                 .await?;
+            let prepared_sidecars = self.prepare_sidecars(&commands).await?;
             let gas_limits = self
-                .estimate_gas_limits(&commands, operator_address, fee_params, base_nonce)
+                .estimate_gas_limits(
+                    &[],
+                    &commands,
+                    &prepared_sidecars,
+                    operator_address,
+                    fee_params,
+                    base_nonce,
+                )
                 .await?;
             tracing::info!(
                 command_name,
@@ -263,101 +388,39 @@ where
                 "estimated gas limits via eth_simulateV1",
             );
 
-            // Only blob-carrying commands (commit path) need the blob base fee, so fetch
-            // it once per cycle instead of paying an RPC round-trip per command.
-            let blob_base_fee = if commands.iter().any(|cmd| cmd.blob_sidecar().is_some()) {
-                let fee = self.provider.get_blob_base_fee().await?;
-                L1_SENDER_METRICS.report_blob_base_fee(fee)?;
-                Some(fee)
-            } else {
-                None
-            };
+            let blob_base_fee = self
+                .fetch_blob_base_fee_if_needed(&prepared_sidecars)
+                .await?;
 
             // It's important to preserve the order of commands -
             // so that we send them downstream also in order.
             // This holds true because l1 transactions are included in the order of sender nonce.
             // Keep this in mind if changing sending logic (that is, if adding `buffer` we'd need to set nonce manually)
-            let pending_txs: Vec<PendingTx<Input>> =
-            futures::stream::iter(commands.into_iter().zip(gas_limits).enumerate())
-                .then(|(nonce_offset, (mut cmd, gas_limit))| {
-                    let range = range.clone();
-                    async move {
-                    let mut tx_request = TransactionRequest::default()
-                        .with_from(operator_address)
-                        .with_nonce(base_nonce + nonce_offset as u64)
-                        .with_max_fee_per_gas(fee_params.max_fee_per_gas)
-                        .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
-                        .with_gas_limit(gas_limit)
-                        .with_to(self.to_address)
-                        .with_input(cmd.solidity_call(&operator_address));
+            let pending_txs: Vec<PendingTx<Input>> = futures::stream::iter(
+                commands
+                    .into_iter()
+                    .zip(gas_limits)
+                    .zip(prepared_sidecars)
+                    .enumerate(),
+            )
+            .then(|(nonce_offset, ((mut cmd, gas_limit), prepared_sidecar))| {
+                let range = range.clone();
+                async move {
+                    let tx_request = self.build_tx_request(
+                        cmd.solidity_call(&operator_address),
+                        operator_address,
+                        base_nonce + nonce_offset as u64,
+                        gas_limit,
+                        fee_params,
+                        prepared_sidecar.as_deref(),
+                        blob_base_fee,
+                    );
 
-                    let mut blob_gas_limit = 0;
-                    if let Some(blob_sidecar) = cmd.blob_sidecar() {
-                        blob_gas_limit = blob_sidecar.blobs.len() as u64 * DATA_GAS_PER_BLOB;
-                        let fee_per_blob_gas = blob_base_fee
-                            .context("blob base fee not prefetched for a cycle with blob sidecars")?;
-                        let max_fee_per_blob_gas = fee_params.max_fee_per_blob_gas;
+                    // Notify CommitWatcher before the transaction can possibly land on L1:
+                    // this batch number is being submitted by this session.
+                    self.note_submitted_batches(&cmd);
 
-                        if fee_per_blob_gas > max_fee_per_blob_gas {
-                            tracing::warn!(
-                                max_fee_per_blob_gas,
-                                fee_per_blob_gas,
-                                "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
-                            );
-                        }
-                        tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
-
-                        // Send the EIP-7594 blob format when the chain's active fork accepts it
-                        // (probed via `eth_config`, falling back to a chain-id heuristic — see
-                        // `ProviderCapabilities::supports_eip7594`). Pre-Fusaka chains and Anvil
-                        // get the legacy EIP-4844 format
-                        // (see https://github.com/foundry-rs/foundry/issues/12222).
-                        if self.provider.capabilities().supports_eip7594 {
-                            tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip7594(
-                                blob_sidecar.try_into_7594(EnvKzgSettings::Default.get())?,
-                            ));
-                        } else {
-                            tx_request.set_blob_sidecar(BlobTransactionSidecarVariant::Eip4844(blob_sidecar));
-                        }
-                    };
-
-                    let execution_balance_required = tx_request.max_fee_per_gas.unwrap_or_default()
-                        * u128::from(tx_request.gas.unwrap_or_default());
-                    let blob_balance_required = tx_request
-                        .max_fee_per_blob_gas
-                        .unwrap_or_default()
-                        * u128::from(blob_gas_limit);
-                    let balance_required = execution_balance_required
-                        .saturating_add(blob_balance_required)
-                        .min(u128::from(u64::MAX)) as u64;
-
-                    L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()]
-                        .set(balance_required);
-
-                    // A nonce-class rejection is a definitive refusal (tx not admitted), typically a
-                    // transient pool/state view inconsistency around a block import. The nonce is
-                    // fixed for this cycle, so re-sending it unchanged after a backoff self-heals.
-                    let mut send_attempt = 1;
-                    let pending_tx = loop {
-                        match self.provider.send_transaction(tx_request.clone()).await {
-                            Ok(pending_tx) => break pending_tx,
-                            Err(err)
-                                if is_nonce_error(&err)
-                                    && send_attempt < self.config.nonce_error_max_attempts =>
-                            {
-                                tracing::warn!(
-                                    command_name,
-                                    range,
-                                    send_attempt,
-                                    %err,
-                                    "L1 node rejected the transaction with a nonce error; retrying"
-                                );
-                                tokio::time::sleep(self.config.nonce_error_retry_backoff).await;
-                                send_attempt += 1;
-                            }
-                            Err(err) => return Err(err.into()),
-                        }
-                    };
+                    let pending_tx = self.send_tx_with_retries(tx_request, &range).await?;
                     let submitted_at = Instant::now();
                     let tx_hash = *pending_tx.tx_hash();
                     let receipt_fut = self.wait_for_confirmed_receipt(tx_hash);
@@ -365,36 +428,322 @@ where
                         "{command_name}: L1 transaction submitted for {range}. Hash: {tx_hash:?} Waiting for inclusion...",
                     );
 
-                    // Notify CommitWatcher: this batch number has been submitted to L1.
-                    if let Some(sender) = &self.commit_submitted_tx {
-                        let batch_number = cmd
-                            .as_ref()
-                            .last()
-                            .expect("commands is non-empty after recv_many")
-                            .batch_number();
-                        sender.send_if_modified(|current| {
-                            if batch_number > *current {
-                                *current = batch_number;
-                                true
-                            } else {
-                                false
-                            }
-                        });
-                    }
-
                     cmd.as_mut()
                         .iter_mut()
                         .for_each(|envelope| envelope.set_stage(Input::SENT_STAGE));
                     anyhow::Ok((receipt_fut, cmd, submitted_at))
-                    }
-                })
-                // We could buffer the stream here to enable sending multiple batches of transactions in parallel,
-                // but this is not necessary for now - we wait for them to be included in parallel
-                .try_collect::<Vec<_>>()
-                .await?;
+                }
+            })
+            // Transactions are sent sequentially and only waited on in parallel.
+            .try_collect::<Vec<_>>()
+            .await?;
             tracing::info!(command_name, range, "sent to L1, waiting for inclusion");
             self.wait_for_txs_and_forward(pending_txs, &state_reporter, &outbound)
                 .await?;
+        }
+    }
+
+    /// Converts every blob-carrying command's sidecar into the chain's accepted wire format
+    /// exactly once. The result is shared between gas simulation, the send path and
+    /// in-flight simulation prefixes; the EIP-7594 conversion computes KZG cell proofs and
+    /// must never run twice for the same sidecar.
+    pub(crate) async fn prepare_sidecars(
+        &self,
+        commands: &[Input],
+    ) -> anyhow::Result<Vec<Option<Arc<PreparedSidecar>>>> {
+        let use_eip7594 = self.provider.capabilities().supports_eip7594;
+        futures::future::try_join_all(commands.iter().map(|cmd| async move {
+            match cmd.blob_sidecar() {
+                Some(sidecar) => Ok(Some(Arc::new(
+                    PreparedSidecar::prepare(sidecar, use_eip7594).await?,
+                ))),
+                None => Ok(None),
+            }
+        }))
+        .await
+    }
+
+    /// Only blob-carrying commands (commit path) need the blob base fee, so fetch it once per
+    /// send wave instead of paying an RPC round-trip per command. Used for monitoring only —
+    /// the submitted cap always comes from the configured fee params.
+    pub(crate) async fn fetch_blob_base_fee_if_needed(
+        &self,
+        prepared_sidecars: &[Option<Arc<PreparedSidecar>>],
+    ) -> anyhow::Result<Option<u128>> {
+        if prepared_sidecars.iter().any(|sidecar| sidecar.is_some()) {
+            let fee = self.provider.get_blob_base_fee().await?;
+            L1_SENDER_METRICS.report_blob_base_fee(fee)?;
+            Ok(Some(fee))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Builds a submission-ready transaction request and reports the balance-required metric.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_tx_request(
+        &self,
+        calldata: Bytes,
+        operator_address: Address,
+        nonce: u64,
+        gas_limit: u64,
+        fee_params: FeeParams,
+        prepared_sidecar: Option<&PreparedSidecar>,
+        blob_base_fee: Option<u128>,
+    ) -> TransactionRequest {
+        let mut tx_request = TransactionRequest::default()
+            .with_from(operator_address)
+            .with_nonce(nonce)
+            .with_max_fee_per_gas(fee_params.max_fee_per_gas)
+            .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
+            .with_gas_limit(gas_limit)
+            .with_to(self.to_address)
+            .with_input(calldata);
+
+        let mut blob_gas_limit = 0;
+        if let Some(prepared_sidecar) = prepared_sidecar {
+            blob_gas_limit = prepared_sidecar.blob_count() * DATA_GAS_PER_BLOB;
+            let max_fee_per_blob_gas = fee_params.max_fee_per_blob_gas;
+            if let Some(fee_per_blob_gas) = blob_base_fee
+                && fee_per_blob_gas > max_fee_per_blob_gas
+            {
+                tracing::warn!(
+                    max_fee_per_blob_gas,
+                    fee_per_blob_gas,
+                    "L1 sender's configured maxFeePerBlobGas is lower than the one estimated from network"
+                );
+            }
+            tx_request.set_max_fee_per_blob_gas(max_fee_per_blob_gas);
+            // The sidecar already carries the EIP-7594 or EIP-4844 format matching the chain's
+            // active fork (probed via `eth_config`, falling back to a chain-id heuristic — see
+            // `ProviderCapabilities::supports_eip7594` and
+            // https://github.com/foundry-rs/foundry/issues/12222).
+            tx_request.set_blob_sidecar(prepared_sidecar.variant.clone());
+        }
+
+        let execution_balance_required =
+            tx_request.max_fee_per_gas.unwrap_or_default() * u128::from(gas_limit);
+        let blob_balance_required =
+            tx_request.max_fee_per_blob_gas.unwrap_or_default() * u128::from(blob_gas_limit);
+        let balance_required = execution_balance_required
+            .saturating_add(blob_balance_required)
+            .min(u128::from(u64::MAX)) as u64;
+        L1_SENDER_METRICS.balance_required_for_tx[&Input::COMPONENT_ID.as_str()]
+            .set(balance_required);
+
+        tx_request
+    }
+
+    /// Notifies the CommitWatcher which batch numbers this session has submitted (or is about
+    /// to submit) to L1, so a commit event for them is not mistaken for a leftover transaction
+    /// from a crashed session.
+    pub(crate) fn note_submitted_batches(&self, cmd: &Input) {
+        if let Some(sender) = &self.commit_submitted_tx {
+            let batch_number = cmd
+                .as_ref()
+                .last()
+                .expect("every command contains at least one envelope")
+                .batch_number();
+            sender.send_if_modified(|current| {
+                if batch_number > *current {
+                    *current = batch_number;
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+    }
+
+    /// Submits a transaction, retrying rejections that are known to be transient:
+    ///
+    /// * nonce-class rejections — a definitive refusal (tx not admitted), typically a transient
+    ///   pool/state view inconsistency around a block import. The nonce is fixed, so re-sending
+    ///   unchanged after a backoff self-heals.
+    /// * pool-capacity rejections — the per-account or global pool limit is hit, e.g. when an
+    ///   L1 reorg briefly returns already-mined transactions to the pool while our in-flight
+    ///   window is full. Clears as blocks mine, so a longer retry budget applies.
+    /// * fee-too-low rejections — the L1 fee market moved above our configured caps. The caps
+    ///   are a deliberate operator bound, so the sender waits indefinitely (warning on the
+    ///   transaction-timeout cadence) instead of crash-looping for the duration of a fee spike;
+    ///   upstream backpressure engages while it waits.
+    ///
+    /// Everything else (including transport errors, where the tx may or may not have been
+    /// admitted) propagates as fatal: restart + in-flight recovery is the only safe way to
+    /// resolve the ambiguity without risking local nonce divergence.
+    pub(crate) async fn send_tx_with_retries(
+        &self,
+        mut tx_request: TransactionRequest,
+        range: &str,
+    ) -> anyhow::Result<alloy::providers::PendingTransactionBuilder<alloy::network::Ethereum>> {
+        let command_name = Input::COMPONENT_ID.as_str();
+        let started_at = Instant::now();
+        let mut nonce_error_attempt = 1;
+        let mut pool_capacity_attempt = 1;
+        let mut next_fee_warning_at = self.config.transaction_timeout;
+        loop {
+            match self.provider.send_transaction(tx_request.clone()).await {
+                Ok(pending_tx) => return Ok(pending_tx),
+                Err(err) if is_nonce_error(&err) || is_already_known_error(&err) => {
+                    // The transport layer retries dropped connections, so a send whose
+                    // response was lost may have been accepted (and mined) on the first
+                    // attempt — the retry then reports "nonce too low"/"already known" even
+                    // though our transaction landed. Adopt it if it is on chain or in the
+                    // pool at our nonce.
+                    if let Some(pending_tx) = self.find_landed_tx(&tx_request).await {
+                        tracing::info!(
+                            command_name,
+                            range,
+                            tx_hash = ?pending_tx.tx_hash(),
+                            "transaction already landed at its nonce (transport-level retry \
+                             double-send); adopting it"
+                        );
+                        return Ok(pending_tx);
+                    }
+                    if !is_nonce_error(&err)
+                        || nonce_error_attempt >= self.config.nonce_error_max_attempts
+                    {
+                        return Err(err.into());
+                    }
+                    tracing::warn!(
+                        command_name,
+                        range,
+                        nonce_error_attempt,
+                        %err,
+                        "L1 node rejected the transaction with a nonce error; retrying"
+                    );
+                    tokio::time::sleep(self.config.nonce_error_retry_backoff).await;
+                    nonce_error_attempt += 1;
+                }
+                Err(err)
+                    if is_pool_capacity_error(&err)
+                        && pool_capacity_attempt < POOL_CAPACITY_ERROR_MAX_ATTEMPTS =>
+                {
+                    tracing::warn!(
+                        command_name,
+                        range,
+                        pool_capacity_attempt,
+                        %err,
+                        "L1 node rejected the transaction because the tx pool is at capacity; \
+                         waiting for L1 to mine before retrying"
+                    );
+                    tokio::time::sleep(self.config.nonce_error_retry_backoff).await;
+                    pool_capacity_attempt += 1;
+                }
+                Err(err) if is_replacement_underpriced_error(&err) => {
+                    // Notably hit when `force_transaction_resubmission` is re-run against
+                    // transactions a previous force run already priced at the configured
+                    // replacement fees — those fees are absolute, so no further bump happens.
+                    return Err(anyhow::Error::from(err).context(
+                        "replacement fees did not outbid the transaction already pooled at \
+                         this nonce; if this repeats, raise the \
+                         `force_transaction_resubmission` multipliers or the fee caps",
+                    ));
+                }
+                Err(err) if is_fee_too_low_error(&err) => {
+                    let elapsed = started_at.elapsed();
+                    if !self.config.transaction_timeout.is_zero() && elapsed >= next_fee_warning_at
+                    {
+                        next_fee_warning_at += self.config.transaction_timeout;
+                        tracing::warn!(
+                            command_name,
+                            range,
+                            waited_secs = elapsed.as_secs_f64(),
+                            %err,
+                            "L1 fee market is above the configured fee caps; the sender is \
+                             stalled until fees drop back under the caps (or the caps are \
+                             raised in `l1_sender` config)"
+                        );
+                    } else {
+                        tracing::info!(
+                            command_name,
+                            range,
+                            %err,
+                            "transaction priced below the current L1 fee market; retrying"
+                        );
+                    }
+                    tokio::time::sleep(self.config.nonce_error_retry_backoff).await;
+                    // Re-resolve fees before retrying: the market may have moved permanently
+                    // past this wave's estimate while still being below the configured caps —
+                    // retrying the stale estimate would stall until the market came back down.
+                    match self
+                        .resolve_fee_params(
+                            self.config.fee_config,
+                            self.config.force_transaction_resubmission,
+                        )
+                        .await
+                    {
+                        Ok(fresh) => {
+                            // Fees only ratchet up: EIP-1559 replacement rules reject
+                            // lowering, and the original fees may carry a replacement floor.
+                            let raised = FeeParams {
+                                max_fee_per_gas: tx_request
+                                    .max_fee_per_gas
+                                    .unwrap_or_default()
+                                    .max(fresh.max_fee_per_gas),
+                                max_priority_fee_per_gas: tx_request
+                                    .max_priority_fee_per_gas
+                                    .unwrap_or_default()
+                                    .max(fresh.max_priority_fee_per_gas),
+                                max_fee_per_blob_gas: tx_request
+                                    .max_fee_per_blob_gas
+                                    .unwrap_or_default()
+                                    .max(fresh.max_fee_per_blob_gas),
+                            };
+                            tx_request.max_fee_per_gas = Some(raised.max_fee_per_gas);
+                            tx_request.max_priority_fee_per_gas =
+                                Some(raised.max_priority_fee_per_gas);
+                            if tx_request.max_fee_per_blob_gas.is_some() {
+                                tx_request.max_fee_per_blob_gas = Some(raised.max_fee_per_blob_gas);
+                            }
+                        }
+                        Err(err) => {
+                            // Estimation hiccups must not kill the wait loop; the next
+                            // iteration retries with the current fees.
+                            tracing::warn!(
+                                command_name,
+                                range,
+                                %err,
+                                "failed to refresh fee estimate while waiting out the fee \
+                                 market; retrying with current fees"
+                            );
+                        }
+                    }
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    /// Checks whether a transaction with this request's calldata already sits at its nonce —
+    /// on chain or in the pool — and returns a pending-transaction handle for it if so. Used
+    /// to disambiguate nonce/already-known send rejections. Returns `None` (never an error)
+    /// when the provider cannot answer; the caller falls back to its retry policy.
+    async fn find_landed_tx(
+        &self,
+        tx_request: &TransactionRequest,
+    ) -> Option<alloy::providers::PendingTransactionBuilder<alloy::network::Ethereum>> {
+        let from = tx_request.from?;
+        let nonce = tx_request.nonce?;
+        match self
+            .provider
+            .get_transaction_by_sender_nonce(from, nonce)
+            .await
+        {
+            Ok(Some(tx)) if Some(ConsensusTransaction::input(&tx)) == tx_request.input.input() => {
+                Some(alloy::providers::PendingTransactionBuilder::new(
+                    self.provider.root().clone(),
+                    tx.tx_hash(),
+                ))
+            }
+            Ok(_) => None,
+            Err(err) => {
+                tracing::debug!(
+                    %err,
+                    "could not probe for a landed transaction at the send nonce"
+                );
+                None
+            }
         }
     }
 
@@ -450,13 +799,13 @@ where
         Ok(())
     }
 
-    fn wait_for_confirmed_receipt(&self, tx_hash: B256) -> TransactionReceiptFuture {
+    pub(crate) fn wait_for_confirmed_receipt(&self, tx_hash: B256) -> TransactionReceiptFuture {
         let provider = self.provider.clone();
         let required_confirmations = self.config.required_confirmations;
         let timeout = self.config.transaction_timeout;
+        let poll_interval = self.config.poll_interval;
         async move {
             let started_at = Instant::now();
-            let poll_interval = provider.client().poll_interval();
             let mut next_warning_at = if timeout.is_zero() {
                 None
             } else {
@@ -691,13 +1040,20 @@ where
         }
     }
 
-    async fn resolve_fee_params(
+    pub(crate) async fn resolve_fee_params(
         &self,
         fee_config: L1SenderFeeConfig,
         force_transaction_resubmission: bool,
     ) -> anyhow::Result<FeeParams> {
         if force_transaction_resubmission {
-            return Ok(fee_config.replacement_fee_params());
+            let params = fee_config.replacement_fee_params();
+            // Blob-capable senders need a 100% bump to replace pooled blob transactions;
+            // the configured multipliers only have to satisfy the regular 10% bump rule.
+            return Ok(if Input::MAY_SEND_BLOBS {
+                params.max(fee_config.configured_fee_params().doubled())
+            } else {
+                params
+            });
         }
 
         let configured_params = fee_config.configured_fee_params();
@@ -718,15 +1074,38 @@ where
     /// cumulative block-gas-limit constraints can't reject the batch, while writes from
     /// earlier blocks remain visible to later ones (spec-mandated overlay propagation).
     /// Falls back to [`L1_GAS_LIMIT_FALLBACK`] per tx on any simulate failure.
-    async fn estimate_gas_limits(
+    ///
+    /// `in_flight_prefix` mirrors already-submitted-but-unmined transactions ahead of
+    /// `commands` in the payload so chained calls (batch N+1 requires batch N committed) see
+    /// the right state on providers whose simulation base excludes pool transactions. On
+    /// providers whose base already includes them, the prefix call reverts without applying
+    /// state — harmless either way (see [`SimPrefixEntry`]); prefix results are discarded.
+    pub(crate) async fn estimate_gas_limits(
         &self,
+        in_flight_prefix: &[SimPrefixEntry],
         commands: &[Input],
+        prepared_sidecars: &[Option<Arc<PreparedSidecar>>],
         operator_address: Address,
         fee_params: FeeParams,
         // Sequential nonces start here — anvil's EIP-4844 parsing requires `nonce` and
         // `gas_limit` even with `validation=false`. Matches the send nonces.
         starting_nonce: u64,
     ) -> anyhow::Result<Vec<u64>> {
+        // eth_simulateV1 caps a payload at 256 blocks; with default configs
+        // prefix+commands is ≤ 32, so hitting this means a misconfiguration — degrade to
+        // un-prefixed estimation rather than fail.
+        let in_flight_prefix = if in_flight_prefix.len() + commands.len() > 256 {
+            tracing::warn!(
+                prefix_len = in_flight_prefix.len(),
+                commands_len = commands.len(),
+                "in-flight prefix + commands exceed the eth_simulateV1 256-block cap; \
+                 estimating without the in-flight prefix",
+            );
+            &[]
+        } else {
+            in_flight_prefix
+        };
+
         // Some L1 providers check sender balance even with `validation=false`; override
         // to bypass.
         let balance_override = StateOverridesBuilder::default()
@@ -739,30 +1118,36 @@ where
             )
             .build();
 
-        // Mirror the submission path: EIP-7594 if the chain's active fork accepts it, EIP-4844
-        // otherwise. Only consumed by `build_l1_simulation_request` when a command actually
-        // carries a blob sidecar.
-        let use_eip7594_sidecar = self.provider.capabilities().supports_eip7594;
-
-        let block_state_calls = commands
-            .iter()
-            .enumerate()
-            .map(|(i, cmd)| {
-                let req = build_l1_simulation_request(
-                    operator_address,
-                    self.to_address,
-                    cmd.solidity_call(&operator_address),
-                    starting_nonce + i as u64,
-                    fee_params,
-                    cmd.blob_sidecar(),
-                    use_eip7594_sidecar,
-                )?;
+        let prefix_blocks = in_flight_prefix.iter().map(|entry| {
+            build_l1_simulation_request(
+                operator_address,
+                self.to_address,
+                entry.calldata.clone(),
+                entry.nonce,
+                entry.fee_params,
+                entry.sidecar.as_deref(),
+            )
+        });
+        let command_blocks = commands.iter().enumerate().map(|(i, cmd)| {
+            build_l1_simulation_request(
+                operator_address,
+                self.to_address,
+                cmd.solidity_call(&operator_address),
+                starting_nonce + i as u64,
+                fee_params,
+                prepared_sidecars[i].as_deref(),
+            )
+        });
+        let block_state_calls = prefix_blocks
+            .chain(command_blocks)
+            .map(|req| {
                 let mut sim_block = SimBlock::default().call(req);
                 sim_block.state_overrides = Some(balance_override.clone());
-                anyhow::Ok(sim_block)
+                sim_block
             })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
 
+        let expected_blocks = block_state_calls.len();
         let payload = SimulatePayload {
             block_state_calls,
             ..Default::default()
@@ -771,11 +1156,11 @@ where
         // Top-level failures fall back across the batch; per-call reverts fall back only
         // for that tx.
         let blocks = match self.provider.simulate(&payload).pending().await {
-            Ok(blocks) if blocks.len() == commands.len() => blocks,
+            Ok(blocks) if blocks.len() == expected_blocks => blocks,
             Ok(blocks) => {
                 tracing::warn!(
                     returned = blocks.len(),
-                    expected = commands.len(),
+                    expected = expected_blocks,
                     "eth_simulateV1 returned mismatched block count, falling back to {L1_GAS_LIMIT_FALLBACK} per tx",
                 );
                 return Ok(vec![L1_GAS_LIMIT_FALLBACK; commands.len()]);
@@ -791,6 +1176,9 @@ where
 
         let gas_limits = blocks
             .iter()
+            // A prefix call reverting is expected on providers whose simulation base already
+            // includes pool transactions; only the trailing per-command results matter.
+            .skip(in_flight_prefix.len())
             .enumerate()
             .map(|(i, block)| match block.calls.first() {
                 Some(call) if call.status => call.gas_used.saturating_mul(2),
@@ -910,7 +1298,7 @@ where
         Ok(())
     }
 
-    async fn validate_tx_receipt(
+    pub(crate) async fn validate_tx_receipt(
         &self,
         command: &Input,
         receipt: TransactionReceipt,
@@ -977,6 +1365,80 @@ fn is_nonce_error(err: &TransportError) -> bool {
             message.contains("nonce too low")
                 || message.contains("nonce too high")
                 || message.contains("nonce gap")
+        }
+        _ => false,
+    }
+}
+
+/// Replacement-underpriced `eth_sendRawTransaction` rejections: the fee bump over the
+/// transaction already pooled at this nonce is below the node's price-bump requirement.
+/// Waiting never fixes an insufficient bump, so this class is fatal — restart recovery
+/// reprices from the pooled transaction's actual fees.
+fn is_replacement_underpriced_error(err: &TransportError) -> bool {
+    match err {
+        TransportError::ErrorResp(payload) => {
+            let message = payload.message.to_lowercase();
+            message.contains("replacement") && message.contains("underpriced")
+        }
+        _ => false,
+    }
+}
+
+/// `eth_sendRawTransaction` rejections reporting that the exact same transaction is already
+/// in the pool — the signature of a transport-level send retry whose first attempt was
+/// accepted but whose response was lost.
+fn is_already_known_error(err: &TransportError) -> bool {
+    match err {
+        TransportError::ErrorResp(payload) => {
+            let message = payload.message.to_lowercase();
+            message.contains("already known")
+                || message.contains("already imported")
+                || message.contains("already in the pool")
+        }
+        _ => false,
+    }
+}
+
+/// Max submission attempts when the L1 node rejects a transaction because the tx pool is at
+/// capacity. Sized to outlast several L1 slots — pool capacity frees as blocks mine, e.g.
+/// after a reorg briefly returns already-mined transactions to the pool while the in-flight
+/// window is full.
+const POOL_CAPACITY_ERROR_MAX_ATTEMPTS: usize = 30;
+
+/// Fee-class `eth_sendRawTransaction` rejections: the transaction is priced below what the
+/// node currently accepts (base fee above our configured cap, or the pool's dynamic price
+/// floor rose). The fee caps are a deliberate operator bound, so the sender must WAIT for the
+/// market to come back under them — stalling (and letting backpressure engage) rather than
+/// crash-looping through restarts for the duration of a fee spike.
+///
+/// Replacement underpricing is deliberately NOT in this class: waiting never fixes an RBF
+/// bump that is too small, so it stays fatal.
+fn is_fee_too_low_error(err: &TransportError) -> bool {
+    match err {
+        TransportError::ErrorResp(payload) => {
+            let message = payload.message.to_lowercase();
+            message.contains("less than block base fee")
+                || message.contains("less than blob base fee")
+                || (message.contains("underpriced") && !message.contains("replacement"))
+        }
+        _ => false,
+    }
+}
+
+/// Pool-capacity-class `eth_sendRawTransaction` rejections: the sender's per-account slot
+/// limit (geth blobpool `maxTxsPerAccount`, reth `max-account-slots`) or the global pool
+/// capacity is exhausted. Unlike nonce errors these clear as L1 mines blocks, so they get a
+/// longer retry budget ([`POOL_CAPACITY_ERROR_MAX_ATTEMPTS`]).
+fn is_pool_capacity_error(err: &TransportError) -> bool {
+    match err {
+        TransportError::ErrorResp(payload) => {
+            let message = payload.message.to_lowercase();
+            message.contains("account limit exceeded")
+                || message.contains("account slots")
+                || message.contains("txpool is full")
+                || message.contains("pool is full")
+                || message.contains("in-flight transaction limit")
+                || message.contains("too many pending transactions")
         }
         _ => false,
     }
@@ -1090,6 +1552,32 @@ mod tests {
     }
 
     #[test]
+    fn already_known_classification() {
+        use alloy::rpc::json_rpc::ErrorPayload;
+        use alloy::transports::TransportErrorKind;
+
+        let resp = |message: &str| {
+            TransportError::ErrorResp(ErrorPayload {
+                code: -32000,
+                message: message.to_string().into(),
+                data: None,
+            })
+        };
+
+        // geth: "already known"; reth: "transaction already imported"; anvil: "already
+        // imported". All signal a transport-retry double-send of the same raw transaction.
+        assert!(is_already_known_error(&resp("already known")));
+        assert!(is_already_known_error(&resp(
+            "transaction already imported"
+        )));
+        assert!(is_already_known_error(&resp("ALREADY known")));
+        assert!(!is_already_known_error(&resp("nonce too low")));
+        assert!(!is_already_known_error(&TransportErrorKind::custom_str(
+            "error sending request"
+        )));
+    }
+
+    #[test]
     fn blob_simulation_request_is_buildable_only_with_sidecar() {
         let operator_address = Address::with_last_byte(1);
         let to_address = Address::with_last_byte(2);
@@ -1122,19 +1610,91 @@ mod tests {
             "unexpected old request error: {old_err}",
         );
 
+        let prepared = PreparedSidecar {
+            blob_count: blob_sidecar.blobs.len() as u64,
+            variant: BlobTransactionSidecarVariant::Eip4844(blob_sidecar),
+        };
         let fixed_request = build_l1_simulation_request(
             operator_address,
             to_address,
             input,
             nonce,
             fee_params,
-            Some(blob_sidecar),
-            false,
-        )
-        .expect("sidecar-backed blob simulation request should be constructed");
+            Some(&prepared),
+        );
         fixed_request
             .build_typed_simulate_transaction()
             .expect("sidecar-backed blob simulation request should be buildable");
+    }
+
+    #[test]
+    fn pool_capacity_error_classification() {
+        use alloy::rpc::json_rpc::ErrorPayload;
+        use alloy::transports::TransportErrorKind;
+
+        let resp = |message: &str| {
+            TransportError::ErrorResp(ErrorPayload {
+                code: -32000,
+                message: message.to_string().into(),
+                data: None,
+            })
+        };
+
+        // geth blobpool per-account cap and legacy-pool global capacity.
+        assert!(is_pool_capacity_error(&resp(
+            "account limit exceeded: pooled 16 txs"
+        )));
+        assert!(is_pool_capacity_error(&resp("txpool is full")));
+        // reth per-account slot cap phrasing.
+        assert!(is_pool_capacity_error(&resp(
+            "rejected due to account slots limit"
+        )));
+        assert!(is_pool_capacity_error(&resp(
+            "Too many pending transactions for sender"
+        )));
+
+        // Not capacity-class: nonce errors, replacement pricing, transport failures.
+        assert!(!is_pool_capacity_error(&resp("nonce too high")));
+        assert!(!is_pool_capacity_error(&resp(
+            "replacement transaction underpriced"
+        )));
+        assert!(!is_pool_capacity_error(&resp("already known")));
+        assert!(!is_pool_capacity_error(&TransportErrorKind::custom_str(
+            "error sending request"
+        )));
+    }
+
+    #[test]
+    fn fee_too_low_error_classification() {
+        use alloy::rpc::json_rpc::ErrorPayload;
+        use alloy::transports::TransportErrorKind;
+
+        let resp = |message: &str| {
+            TransportError::ErrorResp(ErrorPayload {
+                code: -32003,
+                message: message.to_string().into(),
+                data: None,
+            })
+        };
+
+        // anvil rejects submissions priced under the next block's base fee outright; geth
+        // rejects under the pool's (dynamic) price floor with "transaction underpriced".
+        assert!(is_fee_too_low_error(&resp(
+            "max fee per gas less than block base fee"
+        )));
+        assert!(is_fee_too_low_error(&resp(
+            "max fee per blob gas less than blob base fee"
+        )));
+        assert!(is_fee_too_low_error(&resp("transaction underpriced")));
+
+        // An RBF bump that is too small never resolves by waiting — must stay fatal.
+        assert!(!is_fee_too_low_error(&resp(
+            "replacement transaction underpriced"
+        )));
+        assert!(!is_fee_too_low_error(&resp("nonce too low")));
+        assert!(!is_fee_too_low_error(&TransportErrorKind::custom_str(
+            "error sending request"
+        )));
     }
 
     /// `max_fee_per_gas` and `max_fee_per_blob_gas` are static caps set by
