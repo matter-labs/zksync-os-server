@@ -16,7 +16,6 @@ zksync_os_interface.workspace = true
 zksync_os_storage_api.workspace = true
 zk_os_forward_system_0_1_2.workspace = true
 zk_os_forward_system_0_0_28.workspace = true
-zk_os_forward_system_0_2_8.workspace = true
 zk_os_forward_system_0_2_10.workspace = true
 zk_os_forward_system.workspace = true
 zk_os_forward_system_0_4_0.workspace = true

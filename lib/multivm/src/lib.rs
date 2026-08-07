@@ -5,8 +5,7 @@
 use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV6;
 use zk_os_forward_system_0_0_28::run::RunBlockForward as RunBlockForwardV3;
 use zk_os_forward_system_0_1_2::run::RunBlockForward as RunBlockForwardV4;
-use zk_os_forward_system_0_2_8::run::RunBlockForward as RunBlockForwardV5Simulation;
-use zk_os_forward_system_0_2_10::run::RunBlockForward as RunBlockForwardV5Running;
+use zk_os_forward_system_0_2_10::run::RunBlockForward as RunBlockForwardV5;
 use zk_os_forward_system_0_4_0::run::RunBlockForward as RunBlockForwardV7;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
@@ -108,13 +107,7 @@ pub fn run_block<
                 .map(|o| into_legacy_block_output!(o))
         }
         ExecutionVersion::V5 => {
-            // We use two different versions of zksync-os for execution and simulation:
-            // * v0.2.5 is used to forward-run and prove blocks
-            // * v0.2.6-simulation-only is used for simulation
-            //
-            // This is needed so that `eth_estimateGas` can work with 0-balance accounts. The fix was
-            // not a part of v0.2.5 and unfortunately cannot be included without changing `app.bin`.
-            let object = RunBlockForwardV5Running {};
+            let object = RunBlockForwardV5 {};
             object
                 .run_block(
                     (),
@@ -219,13 +212,7 @@ pub fn simulate_tx<
                 .map_err(|err| anyhow::anyhow!(err))
         }
         ExecutionVersion::V5 => {
-            // We use two different versions of zksync-os for execution and simulation:
-            // * v0.2.5 is used to forward-run and prove blocks
-            // * v0.2.6-simulation-only is used for simulation
-            //
-            // This is needed so that `eth_estimateGas` can work with 0-balance accounts. The fix was
-            // not a part of v0.2.5 and unfortunately cannot be included without changing `app.bin`.
-            let object = RunBlockForwardV5Simulation {};
+            let object = RunBlockForwardV5 {};
             object
                 .simulate_tx(
                     (),
