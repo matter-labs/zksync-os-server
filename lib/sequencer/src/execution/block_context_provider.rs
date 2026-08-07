@@ -104,15 +104,13 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         // Create stream:
         // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
         // - L1 transactions first, then L2 transactions.
+        // v32 moves interop roots to L1's MessageRoot. Key this off the version active before the
+        // block so the upgrade block remains upgrade-only and interop traffic starts in the first
+        // block executed entirely under v32.
+        let include_interop_traffic = previous_record.protocol_version.supports_l1_interop();
         let best_txs = self
             .pool
-            .best_transactions_stream(
-                self.next_interop_tx_allowed_after,
-                // Interop system txs only flowed under Gateway settlement; with Gateway removed
-                // this is constantly false. The upcoming L1-based interop will re-enable it.
-                /* include_interop_traffic */
-                false,
-            )
+            .best_transactions_stream(self.next_interop_tx_allowed_after, include_interop_traffic)
             .await
             .context("mempool is closed")?;
         let timestamp = (millis_since_epoch() / 1000) as u64;

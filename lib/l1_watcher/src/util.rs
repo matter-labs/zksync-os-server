@@ -5,12 +5,13 @@ use alloy::providers::Provider;
 use alloy::rpc::types::Filter;
 use alloy::sol_types::SolEvent;
 use backon::{ConstantBuilder, Retryable};
+use std::sync::Arc;
 use std::time::Duration;
 use zksync_os_batch_types::{CommittedBatchInfo, DiscoveredCommittedBatch};
 use zksync_os_contract_interface::IExecutor::ReportCommittedBatchRangeZKsyncOS;
 use zksync_os_contract_interface::calldata::CommitCalldata;
 use zksync_os_contract_interface::models::CommitBatchInfo;
-use zksync_os_contract_interface::{IExecutor, ZkChain};
+use zksync_os_contract_interface::{Bridgehub, IExecutor, MessageRoot, ZkChain};
 use zksync_os_provider::NodeProvider;
 
 /// Retry policy for data that can transiently lag right after a commit is observed on a
@@ -153,6 +154,34 @@ pub async fn find_l1_execute_block_by_batch_number(
             Ok(res >= batch_number)
         },
     )
+    .await
+}
+
+/// Finds the first L1 block where MessageRoot's counter reached `next_interop_root_id`.
+///
+/// The input is the next root the chain has not imported. For example, cursor 42 resolves to the
+/// block that advanced the counter to 42. A zero cursor has no on-chain anchor yet and resolves to
+/// block 0.
+pub async fn find_l1_block_by_interop_root_id(
+    bridgehub: Bridgehub<NodeProvider>,
+    next_interop_root_id: u64,
+) -> anyhow::Result<BlockNumber> {
+    if next_interop_root_id == 0 {
+        return Ok(0);
+    }
+    let message_root_address = bridgehub.message_root_address().await?;
+    let message_root = Arc::new(MessageRoot::new(
+        message_root_address,
+        bridgehub.provider().clone(),
+    ));
+    let deployment_block = message_root.deployment_block().await?;
+    find_l1_block_by_predicate(bridgehub.provider(), deployment_block, move |block| {
+        let message_root = message_root.clone();
+        async move {
+            let res = message_root.interop_root_log_id(block.into()).await?;
+            Ok(res >= next_interop_root_id)
+        }
+    })
     .await
 }
 

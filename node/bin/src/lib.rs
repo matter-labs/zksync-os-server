@@ -206,6 +206,14 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         ProviderKind::L1,
     )
     .await;
+    // Counted BEFORE the L1 state is read: an in-flight commit tx that mines in between is
+    // then reflected in both counts (over-approximating the UnexpectedCommit guard, which is
+    // safe); the reverse order could miss it in both.
+    let in_flight_commit_txs = if node_role.is_main() && config.batcher_config.enabled {
+        in_flight_commit_tx_count(&config, &l1_provider).await
+    } else {
+        0
+    };
     // Genesis and the repository manager are initialized here (before the startup revert) so
     // that the `from_block_hash` guard can read the current local block hash.
     let diamond_proxy_l1 =
@@ -383,6 +391,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         last_l1_executed_block,
     };
 
+    node_startup_state.assert_consistency();
+
     if let Some(from_block_number) = rebuild_options.as_ref().map(|o| o.from_block_number)
         && node_role.is_main()
     {
@@ -442,8 +452,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         blocks_to_replay = node_startup_state.block_replay_storage_last_block + 1 - starting_block,
         "Node state on startup"
     );
-
-    node_startup_state.assert_consistency();
 
     // MN sends `VerifyBatch` requests to the network and receives `PeerVerifyBatchResult`s back.
     let (verify_request_tx, verify_request_rx) = tokio::sync::mpsc::channel::<VerifyBatch>(16);
@@ -565,10 +573,24 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     };
 
     // Channel from L1Sender<CommitCommand> to L1CommitWatcher.
-    // Initialized to startup's last_committed_batch so any commit above that value
-    // which the pipeline didn't submit in this session triggers a restart.
-    let (commit_submitted_tx, commit_submitted_rx) =
-        watch::channel(node_startup_state.l1_state.last_committed_batch);
+    // Initialized to startup's last_committed_batch plus any in-flight commit transactions a
+    // previous session left in the L1 mempool: the watcher starts processing L1 events before
+    // the pipeline's in-flight recovery seeds this watch, so a leftover tx mining in that gap
+    // must not trip the `UnexpectedCommit` guard. Each in-flight commit tx commits exactly one
+    // batch; if one never mines, the guard is merely that much more permissive until the
+    // pipeline overtakes it.
+    let commit_submitted_init = {
+        let base = node_startup_state.l1_state.last_committed_batch;
+        if in_flight_commit_txs > 0 {
+            tracing::info!(
+                base,
+                in_flight_commit_txs,
+                "arming the UnexpectedCommit guard above in-flight commit txs from a previous session"
+            );
+        }
+        base + in_flight_commit_txs
+    };
+    let (commit_submitted_tx, commit_submitted_rx) = watch::channel(commit_submitted_init);
 
     tracing::info!("Initializing L1 Watchers");
     runtime.spawn_critical_task(
@@ -979,6 +1001,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         combined_acceptance_rx,
         last_constructed_block_ctx_receiver,
         tx_forwarder,
+        l1_provider.clone().erased(),
         rpc_policy_client,
         runtime,
         wait_for_db,
@@ -1551,6 +1574,38 @@ fn effective_main_node_pubdata_mode(config: &Config) -> PubdataMode {
         .l1_sender_config
         .pubdata_mode
         .expect("`l1_sender.pubdata_mode` is required on the Main Node")
+}
+
+/// Counts commit transactions a previous session left in the L1 mempool (pending minus latest
+/// nonce of the commit operator). Used to arm the `UnexpectedCommit` guard above them: they may
+/// mine before the pipeline's in-flight recovery seeds the `commit_submitted` watch. Degrades
+/// to 0 (the tightest guard) when the operator key is absent or L1 reads fail — the guard is
+/// an alarm, not a correctness mechanism, so startup must not depend on it.
+async fn in_flight_commit_tx_count(config: &Config, l1_provider: &NodeProvider) -> u64 {
+    let Some(signer) = &config.l1_sender_config.operator_commit_sk else {
+        return 0;
+    };
+    let count = async {
+        let operator_address = signer.address().await?;
+        let latest = l1_provider.get_transaction_count(operator_address).await?;
+        let pending = l1_provider
+            .get_transaction_count(operator_address)
+            .pending()
+            .await?;
+        anyhow::Ok(pending.saturating_sub(latest))
+    }
+    .await;
+    match count {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::warn!(
+                %err,
+                "failed to count in-flight commit txs; arming the UnexpectedCommit guard at the \
+                 committed frontier"
+            );
+            0
+        }
+    }
 }
 
 /// Validates that the `l1_sender.operator_*_sk` keys required for the L1Sender pipeline are

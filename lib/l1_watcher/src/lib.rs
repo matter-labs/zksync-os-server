@@ -18,6 +18,9 @@ pub use revert_watcher::L1RevertWatcher;
 mod upgrade_tx_watcher;
 pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 
+mod interop_watcher;
+pub use interop_watcher::InteropWatcher;
+
 mod watcher;
 pub use watcher::{L1Watcher, StartResolver};
 

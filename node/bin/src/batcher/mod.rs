@@ -247,11 +247,21 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 }) => {
                     state_reporter.enter_state(GenericComponentState::Active);
                     match should_seal {
-                        Some(true) => {
+                        Some(true) if !blocks.is_empty() => {
                             // some of the limits was reached, start sealing the batch
                             break;
                         }
-                        Some(false) => {
+                        Some(seal_after_adding) => {
+                            // `seal_after_adding` means the batch is still empty and the peeked
+                            // block alone exceeds a seal limit. A batch must contain at least
+                            // one block — refusing it would replay the same block forever — so
+                            // accept it as a single-block batch.
+                            if seal_after_adding {
+                                tracing::warn!(
+                                    batch_number,
+                                    "a single block exceeds batch seal limits; sealing it as its own batch"
+                                );
+                            }
                             let Some(block) = block_receiver.pop_buffer() else {
                                 anyhow::bail!("No block received in buffer after peeking")
                             };
@@ -297,6 +307,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                             accumulator.add(&block.output, &block.record);
 
                             blocks.push(block);
+
+                            if seal_after_adding {
+                                break;
+                            }
                         }
                         None => {
                             tracing::info!("inbound channel closed");

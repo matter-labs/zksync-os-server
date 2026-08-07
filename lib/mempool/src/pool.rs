@@ -19,7 +19,9 @@ use tokio::time::Instant;
 use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::AccountDiff;
-use zksync_os_l1_watcher::{L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig, StartResolver};
+use zksync_os_l1_watcher::{
+    InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig, StartResolver,
+};
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
     FeeParams, L1TxSerialId, NodeRole, ProtocolSemanticVersion, SystemTxType, UpgradeInfo,
@@ -43,6 +45,7 @@ pub struct Pool<T> {
 struct Subcomponents {
     upgrade_watcher: Option<StartResolver<ProtocolSemanticVersion, L1UpgradeTxWatcher>>,
     l1_tx_watcher: Option<StartResolver<u64, L1TxWatcher>>,
+    interop_watcher: Option<StartResolver<u64, InteropWatcher>>,
 }
 
 pub struct Config {
@@ -78,6 +81,14 @@ impl<T: L2Subpool> Pool<T> {
         .await
         .context("failed to start L1 upgrade transaction watcher")?;
 
+        let interop_watcher = InteropWatcher::create_watcher(
+            config.l1_watcher_config.clone(),
+            l1_state.bridgehub_l1.clone(),
+            interop_roots_subpool.clone(),
+        )
+        .await
+        .context("failed to create interop roots watcher")?;
+
         let l1_tx_watcher = L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone(),
             l1_state.diamond_proxy_l1.clone(),
@@ -89,6 +100,7 @@ impl<T: L2Subpool> Pool<T> {
         let subcomponents = Subcomponents {
             upgrade_watcher: Some(upgrade_watcher),
             l1_tx_watcher: Some(l1_tx_watcher),
+            interop_watcher: Some(interop_watcher),
         };
 
         Ok(Self {
@@ -142,6 +154,12 @@ impl<T: L2Subpool> Pool<T> {
                 l1_tx_watcher.run(replay.starting_cursors.l1_priority_id),
             );
         }
+        if let Some(interop_watcher) = self.subcomponents.interop_watcher.take() {
+            self.runtime.spawn_critical_task(
+                "L1 interop roots watcher",
+                interop_watcher.run(replay.starting_cursors.interop_root_id),
+            );
+        }
     }
 
     /// Picks the best source of transactions out of currently available ones. If there are none,
@@ -150,8 +168,10 @@ impl<T: L2Subpool> Pool<T> {
     /// Also provides upgrade information is there is one (which is not necessarily accompanied by
     /// an upgrade transaction).
     ///
-    /// `include_interop_traffic` is currently always `false`: interop-root and interop-fee
-    /// system txs have no producer until the upcoming L1-based interop re-enables them.
+    /// `include_interop_traffic` gates both interop-root and interop-fee system transactions; it
+    /// must only be enabled once the active protocol version supports L1-based interop. When it is
+    /// disabled, watched roots stay queued so a protocol upgrade can enable them without restarting
+    /// the watcher.
     ///
     /// Returns `None` if all transaction sources are closed.
     pub async fn best_transactions_stream<'a>(
