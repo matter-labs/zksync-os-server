@@ -267,7 +267,10 @@ impl PendingBatchInfo {
                 )
                     .abi_encode_packed(),
             )),
-            31 | 32 => B256::from(keccak256(
+            // v32 drops the leading chain_id - it is committed through the chain config hash
+            // in the outer public input instead (era-contracts#2323 does the same on-chain).
+            32 => self.v32_batch_output_hash(),
+            31 => B256::from(keccak256(
                 (
                     U256::from(commit_info.chain_id),
                     commit_info.first_block_timestamp,

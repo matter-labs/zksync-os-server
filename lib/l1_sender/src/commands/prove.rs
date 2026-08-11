@@ -92,7 +92,39 @@ impl ProofCommand {
         bytes.extend_from_slice(batch.commitment.as_slice());
         keccak256(&bytes)
     }
-    fn snark_public_input(previous_batch: &StoredBatchInfo, batches: &[StoredBatchInfo]) -> B256 {
+
+    /// `keccak(chainId | 0 | maxTxGasLimit)`, matching era-contracts#2323 and
+    /// `zksync_os_native_pig::v32_chain_config_hash`. Middle word is
+    /// `fri_proof_verification_enabled`, always disabled from L1.
+    fn zksync_os_chain_config_hash(chain_id: u64) -> B256 {
+        // EIP-7825 default cap (2^24), matching L1 and zk_ee.
+        const DEFAULT_MAX_TX_GAS_LIMIT: u64 = 1 << 24;
+        let mut bytes = Vec::with_capacity(32 * 3);
+        bytes.extend_from_slice(&U256::from(chain_id).to_be_bytes::<32>());
+        bytes.extend_from_slice(&U256::ZERO.to_be_bytes::<32>());
+        bytes.extend_from_slice(&U256::from(DEFAULT_MAX_TX_GAS_LIMIT).to_be_bytes::<32>());
+        keccak256(&bytes)
+    }
+
+    /// v32 batch public input: chain config hash folded between the state commitments and the
+    /// batch output hash (`batch.commitment`, chain-id-less for v32).
+    fn get_batch_public_input_v32(
+        prev_batch: &StoredBatchInfo,
+        batch: &StoredBatchInfo,
+        chain_config_hash: &B256,
+    ) -> B256 {
+        let mut bytes = Vec::with_capacity(32 * 4);
+        bytes.extend_from_slice(prev_batch.state_commitment.as_slice());
+        bytes.extend_from_slice(batch.state_commitment.as_slice());
+        bytes.extend_from_slice(chain_config_hash.as_slice());
+        bytes.extend_from_slice(batch.commitment.as_slice());
+        keccak256(&bytes)
+    }
+    fn snark_public_input(
+        previous_batch: &StoredBatchInfo,
+        batches: &[StoredBatchInfo],
+        chain_config_hash: Option<B256>,
+    ) -> B256 {
         let mut hash_map: HashMap<usize, &StoredBatchInfo> = HashMap::new();
         hash_map.insert(previous_batch.batch_number as usize, previous_batch);
         for batch in batches {
@@ -106,24 +138,43 @@ impl ProofCommand {
         for i in start..=end {
             let batch = hash_map.get(&i).expect("Batch not found");
             let prev_batch = hash_map.get(&(i - 1)).expect("Previous batch not found");
-            let public_input = Self::get_batch_public_input(prev_batch, batch);
+            let public_input = match &chain_config_hash {
+                Some(cch) => Self::get_batch_public_input_v32(prev_batch, batch, cch),
+                None => Self::get_batch_public_input(prev_batch, batch),
+            };
             // Snark public input is public_input >> 32.
             let snark_input = Self::shift_b256_right(&public_input);
 
+            // The prover folds the FULL per-batch hashes and truncates once; truncating each
+            // element first (the pre-v32 path) diverges for ranges of 2+ batches.
+            let element = if chain_config_hash.is_some() {
+                public_input
+            } else {
+                snark_input
+            };
             match result {
                 Some(ref mut res) => {
                     // Combine with previous result.
                     let mut combined = [0_u8; 64];
                     combined[..32].copy_from_slice(&res.0);
-                    combined[32..].copy_from_slice(&snark_input.0);
-                    *res = Self::shift_b256_right(&keccak256(combined));
+                    combined[32..].copy_from_slice(&element.0);
+                    *res = if chain_config_hash.is_some() {
+                        keccak256(combined)
+                    } else {
+                        Self::shift_b256_right(&keccak256(combined))
+                    };
                 }
                 None => {
-                    result = Some(snark_input);
+                    result = Some(element);
                 }
             }
         }
-        result.unwrap()
+        let folded = result.unwrap();
+        if chain_config_hash.is_some() {
+            Self::shift_b256_right(&folded)
+        } else {
+            folded
+        }
     }
     fn to_calldata_suffix(&self) -> Vec<u8> {
         let previous_batch_info = &self
@@ -153,7 +204,25 @@ impl ProofCommand {
         };
 
         // todo: remove tostring
-        let public_input = Self::snark_public_input(previous_batch_info, &stored_batch_infos);
+        // v32.0 (proving V8) folds the chain config hash into the batch public input.
+        let chain_config_hash = if self
+            .batches
+            .first()
+            .unwrap()
+            .batch
+            .batch_info
+            .protocol_version
+            .minor
+            >= 32
+        {
+            Some(Self::zksync_os_chain_config_hash(
+                self.batches.first().unwrap().batch.batch_info.commit_info.chain_id,
+            ))
+        } else {
+            None
+        };
+        let public_input =
+            Self::snark_public_input(previous_batch_info, &stored_batch_infos, chain_config_hash);
 
         tracing::info!(">> public input: {}", public_input);
 
