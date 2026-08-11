@@ -1,9 +1,18 @@
 general:
   zksync_os_version: "0.32.0"
-  verification_key: "TBD"
+  # SNARK VK of the v32.0 / proving-V8 lane, generated with
+  #   zkos-wrapper generate-vk --bin multiblock_batch.bin --text multiblock_batch.text \
+  #     --check-aux-params --trusted-setup setup_compact.key
+  # and registered on the chain's ZKsyncOSDualVerifier at verifier version 8 (the version
+  # the server encodes in `_proof[0]` for V8 proofs).
+  verification_key: "0xaebd394c3c249a1a0b20e0992274dd5ad536e59519764fe6105f0cb080156188"
 
 era-contracts:
-  sha: "62a58d61c46a4681b3da85421081df51d9d086fb"
+  # dz-v32-public-init: dz-v32-genesis-protocol-version + era-contracts#2323 (chain config
+  # hash in the batch proof public input, chain-id-less batchOutputHash) + the full-hash
+  # multi-batch fold fix. The previous pin (62a58d61) predates #2323 and cannot verify V8
+  # proofs.
+  sha: "7644cc627307d11419d6b5eb1e55f8e1f7ca6875"
 
 zksync-os-integration-tests:
   sha: "16c6a83b4f634609958f347c56549ba19bf9df9b"
