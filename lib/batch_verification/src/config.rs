@@ -12,6 +12,5 @@ pub struct BatchVerificationConfig {
     pub accepted_signers: Vec<String>,
     pub request_timeout: Duration,
     pub retry_delay: Duration,
-    pub total_timeout: Duration,
     pub signing_key: SecretString,
 }

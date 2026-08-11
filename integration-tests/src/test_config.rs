@@ -54,7 +54,6 @@ pub(crate) async fn build_node_config(
     config.batch_verification_config.accepted_signers = BATCH_VERIFICATION_ADDRESSES.clone();
     config.batch_verification_config.request_timeout = Duration::from_millis(500);
     config.batch_verification_config.retry_delay = Duration::from_secs(1);
-    config.batch_verification_config.total_timeout = Duration::from_secs(300);
     config.batch_verification_config.signing_key = BATCH_VERIFICATION_KEYS[0].into();
     config.status_server_config.enabled = true;
     config.network_config.enabled = true;
