@@ -228,10 +228,9 @@ impl BatchVerificationRunner {
                         );
                         break 'runner Ok(());
                     }
-                    // Signers are external nodes and encoding failures are deterministic: bailing
-                    // out would kill the whole node (RPC included) without fixing either. Park on
-                    // the batch instead - the pipeline watermark stops advancing, so backpressure
-                    // pauses block production while reads keep being served.
+                    // Bailing out would kill the whole node (RPC included) without fixing either. Park on the batch
+                    // instead - the pipeline watermark stops advancing, so backpressure pauses block production
+                    // while reads keep being served.
                     Err(err) => {
                         retry_count += 1;
                         let stuck_secs = start_time.elapsed().as_secs_f64();

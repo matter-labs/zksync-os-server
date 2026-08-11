@@ -73,8 +73,7 @@ Enable and configure the main node / sequencer with these options:
 - `batch_verification_retry_delay`
   Delay between collection attempts when the main node retries.
 
-Signature collection is retried until it succeeds. Unavailable ENs therefore stall the batch
-pipeline, which pauses block production through backpressure. `batch_verification_sequencer_stuck_duration_seconds` metric reports how long the current batch has been waiting for signatures.
+Signature collection is retried until it succeeds. Unavailable ENs therefore stall the batch pipeline, which pauses block production through backpressure. `batch_verification_sequencer_stuck_duration_seconds` metric reports how long the current batch has been waiting for signatures.
 
 ## 2FA EN Configuration
 
