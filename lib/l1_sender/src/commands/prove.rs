@@ -133,49 +133,44 @@ impl ProofCommand {
         let start = batches.first().unwrap().batch_number as usize;
         let end = batches.last().unwrap().batch_number as usize;
 
-        // taken from https://github.com/mm-zk/zksync_tools/blob/cf2c47d61fa8399a030d0b31d4396832f802489b/prove_execute/src/main.rs
-        let mut result: Option<B256> = None;
+        // Pre-v32 folds a rolling chain of truncated hashes; v32 concatenates the full
+        // per-batch hashes and hashes ONCE (a rolling fold coincides for N <= 2 but diverges
+        // from N == 3 on). Single-batch ranges are the bare hash in both.
+        let mut elements: Vec<B256> = Vec::with_capacity(end - start + 1);
         for i in start..=end {
             let batch = hash_map.get(&i).expect("Batch not found");
             let prev_batch = hash_map.get(&(i - 1)).expect("Previous batch not found");
-            let public_input = match &chain_config_hash {
+            elements.push(match &chain_config_hash {
                 Some(cch) => Self::get_batch_public_input_v32(prev_batch, batch, cch),
-                None => Self::get_batch_public_input(prev_batch, batch),
-            };
-            // Snark public input is public_input >> 32.
-            let snark_input = Self::shift_b256_right(&public_input);
-
-            // The prover folds the FULL per-batch hashes and truncates once; truncating each
-            // element first (the pre-v32 path) diverges for ranges of 2+ batches.
-            let element = if chain_config_hash.is_some() {
-                public_input
-            } else {
-                snark_input
-            };
-            match result {
-                Some(ref mut res) => {
-                    // Combine with previous result.
-                    let mut combined = [0_u8; 64];
-                    combined[..32].copy_from_slice(&res.0);
-                    combined[32..].copy_from_slice(&element.0);
-                    *res = if chain_config_hash.is_some() {
-                        keccak256(combined)
-                    } else {
-                        Self::shift_b256_right(&keccak256(combined))
-                    };
-                }
-                None => {
-                    result = Some(element);
-                }
-            }
+                None => Self::shift_b256_right(&Self::get_batch_public_input(prev_batch, batch)),
+            });
         }
-        let folded = result.unwrap();
+
         if chain_config_hash.is_some() {
+            let folded = if elements.len() == 1 {
+                elements[0]
+            } else {
+                keccak256(elements.iter().flat_map(|e| e.0).collect::<Vec<u8>>())
+            };
             Self::shift_b256_right(&folded)
         } else {
-            folded
+            // taken from https://github.com/mm-zk/zksync_tools/blob/cf2c47d61fa8399a030d0b31d4396832f802489b/prove_execute/src/main.rs
+            let mut result: Option<B256> = None;
+            for element in elements {
+                match result {
+                    Some(ref mut res) => {
+                        let mut combined = [0_u8; 64];
+                        combined[..32].copy_from_slice(&res.0);
+                        combined[32..].copy_from_slice(&element.0);
+                        *res = Self::shift_b256_right(&keccak256(combined));
+                    }
+                    None => result = Some(element),
+                }
+            }
+            result.unwrap()
         }
     }
+
     fn to_calldata_suffix(&self) -> Vec<u8> {
         let previous_batch_info = &self
             .batches
