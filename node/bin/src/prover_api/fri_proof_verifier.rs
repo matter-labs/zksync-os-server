@@ -171,15 +171,15 @@ mod v8_verifier {
 
     const SECURITY: SecurityModel = SecurityModel::Security80;
 
-    /// `end_params` of the zksync-os v0.4.0 multiblock batch program, built reproducibly from
-    /// draft-0.4.0 @ 8ef47499 (md5 `8128c18a3b7145366b184e027d0e0f34`), computed with the
-    /// airbender `end_params` tool (`tools/cli`) at the pinned tag v0.6.0-rc.1.
+    /// `end_params` of the `multiblock_batch.bin` shipped in zksync-airbender-prover
+    /// (md5 `3e19df8c36564939950e0a079061ad1b`), from the airbender `end_params` tool
+    /// (`tools/cli`) at tag v0.6.0-rc.1.
     /// Every V8 FRI proof must carry a recursion chain rooted in this program. Must be
     /// regenerated together with `V8_VK_HASH` whenever the V8 app binary or the airbender pin
     /// changes.
     const V8_APP_END_PARAMS: [u32; 8] = [
-        2307768600, 2457250828, 3716327079, 4199813212, 118680239, 3956473405, 1127792062,
-        2161297246,
+        1510846430, 1744612090, 2760194167, 3978834012, 486556384, 3101620856, 1174490972,
+        1285720748,
     ];
 
     pub(super) struct UnifiedLevelData {
