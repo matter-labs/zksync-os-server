@@ -72,10 +72,13 @@ impl ProvingVersion {
 
     /// verification key hash generated from zksync-airbender v0.6.0-rc.1 (3f8f8e54, combined
     /// recursion layers) and zkos-wrapper v0.6.0-rc.1; matches the V8 entry in
-    /// zksync-airbender-prover. App-independent: the SNARK wraps the unified verifier, so the
-    /// zksync-os app binary is bound via `V8_APP_END_PARAMS`, not this hash.
+    /// zksync-airbender-prover (branch dz-v8-vk-level-program-binding).
+    /// App-SPECIFIC: the SNARK wrapper runs with `check_aux_params`, constraining the FRI
+    /// proof's registers 18..=25 to the app program's commitment in-circuit, so the VK now
+    /// binds `multiblock_batch.bin` (md5 3e19df8c36564939950e0a079061ad1b) and must be
+    /// regenerated whenever that binary changes.
     const V8_VK_HASH: &'static str =
-        "0x3e7784b0fdb09035a677ae80568d34fdb1f1ec6ac65bba5192cd977a4f0e7609";
+        "0xaebd394c3c249a1a0b20e0992274dd5ad536e59519764fe6105f0cb080156188";
 
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
