@@ -3,7 +3,9 @@ use alloy::providers::Provider;
 use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
-use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, UpgradeTester};
+use zksync_os_integration_tests::upgrade::{
+    Action, CommitterFacetV32, ExecutorFacetV32, FacetCut, UpgradeTester,
+};
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester};
 
 /// Executes the simplest patch protocol upgrade:
@@ -80,23 +82,38 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
         .with_timestamp(upgrade_timestamp)
         .build();
 
-    // Deploy new CommitterFacet.
+    // Deploy the v32 (atomic contracts) facets: the post-upgrade server speaks v32 — the
+    // chain-id-free batch output hash, the 4-word batch proof public input and the
+    // encoding-v2 execute wire — so the settlement entry points must be the v32 ones.
     let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
-    let committer_facet = CommitterFacetV31::deploy(
+    let committer_facet = CommitterFacetV32::deploy(
         upgrade_tester.tester.l1_provider().clone(),
         U256::from(l1_chain_id),
     )
     .await?;
+    let executor_facet =
+        ExecutorFacetV32::deploy(upgrade_tester.tester.l1_provider().clone()).await?;
 
-    // For simplicity, we only do a replacement for `commitBatchesSharedBridge`.
-    let facet_cut = FacetCut {
-        facet: *committer_facet.address(),
-        action: Action::Replace,
-        isFreezable: true,
-        selectors: vec![FixedBytes(
-            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
-        )],
-    };
+    let facet_cuts = vec![
+        FacetCut {
+            facet: *committer_facet.address(),
+            action: Action::Replace,
+            isFreezable: true,
+            selectors: vec![FixedBytes(
+                CommitterFacetV32::commitBatchesSharedBridgeCall::SELECTOR,
+            )],
+        },
+        FacetCut {
+            facet: *executor_facet.address(),
+            action: Action::Replace,
+            isFreezable: true,
+            selectors: vec![
+                FixedBytes(ExecutorFacetV32::proveBatchesSharedBridgeCall::SELECTOR),
+                FixedBytes(ExecutorFacetV32::executeBatchesSharedBridgeCall::SELECTOR),
+                FixedBytes(ExecutorFacetV32::revertBatchesSharedBridgeCall::SELECTOR),
+            ],
+        },
+    ];
 
     upgrade_tester
         .execute_default_upgrade(
@@ -104,7 +121,7 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
             deadline,
             upgrade_timestamp,
             false,
-            vec![facet_cut],
+            facet_cuts,
         )
         .await?;
 
@@ -170,13 +187,45 @@ async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
         .with_timestamp(upgrade_timestamp)
         .build();
 
+    // The v32 upgrade must install the v32 settlement facets (see
+    // `upgrade_to_v32_with_predeployed_bytecodes`), or the post-upgrade batches cannot
+    // commit/prove/execute against the fixture's v31 diamond.
+    let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
+    let committer_facet = CommitterFacetV32::deploy(
+        upgrade_tester.tester.l1_provider().clone(),
+        U256::from(l1_chain_id),
+    )
+    .await?;
+    let executor_facet =
+        ExecutorFacetV32::deploy(upgrade_tester.tester.l1_provider().clone()).await?;
+    let facet_cuts = vec![
+        FacetCut {
+            facet: *committer_facet.address(),
+            action: Action::Replace,
+            isFreezable: true,
+            selectors: vec![FixedBytes(
+                CommitterFacetV32::commitBatchesSharedBridgeCall::SELECTOR,
+            )],
+        },
+        FacetCut {
+            facet: *executor_facet.address(),
+            action: Action::Replace,
+            isFreezable: true,
+            selectors: vec![
+                FixedBytes(ExecutorFacetV32::proveBatchesSharedBridgeCall::SELECTOR),
+                FixedBytes(ExecutorFacetV32::executeBatchesSharedBridgeCall::SELECTOR),
+                FixedBytes(ExecutorFacetV32::revertBatchesSharedBridgeCall::SELECTOR),
+            ],
+        },
+    ];
+
     upgrade_tester
         .execute_default_upgrade(
             &protocol_upgrade,
             deadline,
             upgrade_timestamp,
             false,
-            vec![],
+            facet_cuts,
         )
         .await?;
 
