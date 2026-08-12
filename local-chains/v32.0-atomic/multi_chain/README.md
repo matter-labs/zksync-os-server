@@ -1,4 +1,4 @@
-# Multiple Chains — Atomic Interop (v31.0, IMT bundle model)
+# Multiple Chains — Atomic Interop (v32.0, IMT bundle model)
 
 Two **L1-settling** ZKsync OS chains sharing one in-memory L1, deployed against the
 **atomic-interop** era-contracts (`atomic-imt-interop`). Unlike the non-atomic
@@ -15,7 +15,7 @@ The atomic genesis predeploys the atomic built-ins the demo needs:
 | `0x1000d`  | `InteropCenter`            |
 | `0x1000e`  | `InteropHandler`           |
 
-`genesis_root = 0x1a1bcd12720224a96cac4b34c9ee0942bf3afe48fcf8932c28476bd47ec84959`.
+`genesis_root = 0xa8de0b9132e9db7fb8245f5bc02a5b8d4c919a6d64bb847e9ae12ae388e16a30`.
 
 ## Chains
 
