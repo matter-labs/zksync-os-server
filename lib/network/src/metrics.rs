@@ -246,6 +246,16 @@ pub struct NetworkActiveSessionMetrics {
     pub(crate) back_pressure_total: Counter,
 }
 
+/// Metrics for the `zks` RLPx subprotocol.
+#[derive(Debug, Metrics)]
+#[metrics(prefix = "network_zks")]
+pub struct ZksProtocolMetrics {
+    /// Handshakes rejected because the peer shares no supported `zks` version (e.g. a peer that
+    /// still runs a release speaking only retired versions). A non-zero rate means outdated
+    /// peers are still dialing this node.
+    pub(crate) unsupported_version_disconnects: Counter,
+}
+
 /// Installs [`ViseRecorder`] as the global recorder for the `metrics` crate.
 ///
 /// This bridges reth-network metrics (which use the `metrics` crate) to the `vise` collector.
@@ -291,6 +301,8 @@ pub(crate) static DISCV5_ADVERTISED_CHAIN_METRICS: vise::Global<Discv5Advertised
 #[vise::register]
 pub(crate) static NETWORK_ACTIVE_SESSION_METRICS: vise::Global<NetworkActiveSessionMetrics> =
     vise::Global::new();
+#[vise::register]
+pub(crate) static ZKS_PROTOCOL_METRICS: vise::Global<ZksProtocolMetrics> = vise::Global::new();
 
 /// A recorder that wraps `vise` metrics into `metrics`-compatible structs.
 pub(crate) struct ViseRecorder;

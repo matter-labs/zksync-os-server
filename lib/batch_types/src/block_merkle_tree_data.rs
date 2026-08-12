@@ -3,7 +3,7 @@ use zksync_os_merkle_tree_api::{BatchTreeProof, TreeBatchOutput, TreeOperation};
 
 /// Data necessary for the Merkle tree to produce a self-contained proof of batch storage update
 /// as a result of block execution. This proof is then used by the proof input generator.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockMerkleTreeData {
     /// Key tree parameters (root hash + number of leaves) **before** block execution.
     pub input: TreeBatchOutput,

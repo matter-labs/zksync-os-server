@@ -55,18 +55,22 @@ impl<Finality: ReadFinality, Data> BlockCache<Finality, Data> {
 
     /// Removes all blocks lower than the given block number
     pub fn remove_lower_then(&mut self, block_number: u64) {
-        if let Some((low, high)) = self.range {
-            for num in low..block_number {
-                self.data.remove(&num);
-            }
-            let new_range = (block_number, high);
-
-            if new_range.0 > new_range.1 {
-                self.range = None;
-            } else {
-                self.range = Some(new_range);
-            }
+        let Some((low, high)) = self.range else {
+            return;
+        };
+        if block_number <= low {
+            return;
         }
+        if block_number > high {
+            // A syncing verifier may be far behind L1 finality. Iterating across that
+            // height gap for an otherwise tiny cache would stall replay ingestion.
+            self.data.clear();
+            self.range = None;
+            return;
+        }
+
+        self.data.retain(|number, _| *number >= block_number);
+        self.range = Some((block_number, high));
     }
 }
 
@@ -145,5 +149,33 @@ mod tests {
         cache.remove_lower_then(6);
         assert!(cache.data.is_empty());
         assert_eq!(cache.range, None);
+    }
+
+    #[test]
+    fn removing_to_a_height_far_above_the_cache_clears_it() {
+        let mut cache = BlockCache::<_, u64>::new(DummyFinality::zero());
+
+        for n in 1u64..=5 {
+            cache.insert(n, n).unwrap();
+        }
+
+        cache.remove_lower_then(1_000_000);
+
+        assert!(cache.data.is_empty());
+        assert_eq!(cache.range, None);
+    }
+
+    #[test]
+    fn removing_below_the_cached_range_does_not_expand_it() {
+        let mut cache = BlockCache::<_, u64>::new(DummyFinality::zero());
+
+        cache.insert(10, 10).unwrap();
+        cache.insert(11, 11).unwrap();
+
+        cache.remove_lower_then(5);
+
+        assert_eq!(cache.range, Some((10, 11)));
+        assert_eq!(cache.get(10), Some(&10));
+        assert_eq!(cache.get(11), Some(&11));
     }
 }

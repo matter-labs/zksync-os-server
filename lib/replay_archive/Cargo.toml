@@ -18,21 +18,45 @@ zksync_os_pipeline.workspace = true
 zksync_os_observability.workspace = true
 
 age.workspace = true
+age-core.workspace = true
 alloy = { workspace = true, default-features = false }
 anyhow.workspace = true
 async-trait.workspace = true
 aws-config.workspace = true
 aws-runtime.workspace = true
 aws-sdk-s3.workspace = true
+bytes.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 futures.workspace = true
+google-cloud-auth = { workspace = true, optional = true }
+google-cloud-gax = { workspace = true, optional = true }
+google-cloud-kms-v1 = { workspace = true, optional = true }
+google-cloud-storage = { workspace = true, optional = true }
+rand_core06 = { workspace = true, optional = true }
 reth-tasks.workspace = true
+rsa = { workspace = true, optional = true }
 serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 tokio-stream.workspace = true
 tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 vise.workspace = true
+
+[features]
+# GCP backends (GCS storage + GCP KMS encryption). Off by default so a local build does not
+# compile and link the Google Cloud SDK; production builds enable it explicitly.
+gcp = [
+    "dep:google-cloud-auth",
+    "dep:google-cloud-gax",
+    "dep:google-cloud-kms-v1",
+    "dep:google-cloud-storage",
+    "dep:rand_core06",
+    "dep:rsa",
+    "dep:sha2",
+]
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

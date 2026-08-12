@@ -1,4 +1,4 @@
-use crate::execution::fee_provider::{FeeParams, FeeProvider};
+use crate::execution::fee_provider::FeeProvider;
 use crate::execution::metrics::EXECUTION_METRICS;
 use crate::model::blocks::{
     BlockCommand, InvalidTxPolicy, PreparedBlockCommand, RebuildCommand, SealPolicy,
@@ -8,17 +8,14 @@ use anyhow::Context as _;
 use futures::StreamExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
-use zksync_os_contract_interface::settlement_layer_intervals::{
-    IntervalSettlementLayer, SettlementLayerIntervals,
-};
 use zksync_os_genesis::genesis_header;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_mempool::{MarkingTxStream, Pool};
 use zksync_os_storage_api::BlockContext;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
-    BlockOutput, BlockStartCursors, ExecutionVersion, SystemTxEnvelope, SystemTxType, ZkEnvelope,
-    ZkTransaction,
+    BlockOutput, BlockStartCursors, ExecutionVersion, FeeParams, SystemTxEnvelope, SystemTxType,
+    ZkEnvelope, ZkTransaction,
 };
 
 /// Component that turns `BlockCommand`s into `PreparedBlockCommand`s.
@@ -37,9 +34,6 @@ pub struct BlockContextProvider<Subpool> {
     config: Config,
     last_block: Option<LastBlock>,
     next_interop_tx_allowed_after: Instant,
-    /// L2 chain id of the chain's currently-active settlement layer. Can change in runtime if there
-    /// is a migration in the process.
-    current_sl_chain_id: u64,
     last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
 }
 
@@ -66,29 +60,16 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         fee_provider: FeeProvider,
         pool: Pool<Subpool>,
         config: Config,
-        intervals: &SettlementLayerIntervals,
         last_constructed_block_ctx_sender: watch::Sender<Option<BlockContext>>,
     ) -> Self {
-        let current_sl_chain_id = match intervals.current_settlement_layer() {
-            IntervalSettlementLayer::L1 => config.l1_chain_id,
-            IntervalSettlementLayer::Gateway(gw_chain_id) => *gw_chain_id,
-        };
         Self {
             fee_provider,
             pool,
             config,
             last_block: None,
             next_interop_tx_allowed_after: Instant::now(),
-            current_sl_chain_id,
             last_constructed_block_ctx_sender,
         }
-    }
-
-    /// `true` when the chain currently settles on a Gateway (i.e. its tracked SL chain id
-    /// differs from L1's).
-    #[allow(dead_code)]
-    fn settles_on_gateway(&self) -> bool {
-        self.current_sl_chain_id != self.config.l1_chain_id
     }
 
     pub fn last_block_number(&self) -> Option<u64> {
@@ -118,27 +99,20 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .take()
             .expect("tried to produce a block without replaying at least one record");
         let fee_params = self.fee_provider.produce_fee_params().await?;
-        self.pool
-            .update_pending_block_fees(fee_params.eip1559_basefee.saturating_to(), None);
+        self.pool.update_pending_block_fees(fee_params, None);
         let block_number = previous_record.block_context.block_number + 1;
         // Create stream:
         // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
         // - L1 transactions first, then L2 transactions.
-        // Include interop traffic (imported interop roots) on every settlement layer. Interop roots
-        // are now built on L1 too (era-contracts `MessageRootBase.addChainBatchRoot`), and the L1
-        // execute path verifies same-chain dependency roots via `MessageRoot.historicalRoot`
-        // (`Executor._verifyDependencyInteropRoots`) — so an L1-settled chain's own L1 interop roots
-        // commit/execute on L1 without hitting `CommitBasedInteropNotSupported` (that guard only fires
-        // for cross-chain dependency roots). NB: a chain that migrated GW→L1 with still-unserved
-        // gateway-sourced roots would need the subpool to filter by current SL chain id; for
-        // L1-native chains the subpool only holds L1 roots.
-        let include_interop_traffic = true;
+        // v32 moves interop roots to L1's MessageRoot. Key this off the version active before the
+        // block so the upgrade block remains upgrade-only and interop traffic starts in the first
+        // block executed entirely under v32.
+        let include_interop_traffic = previous_record.protocol_version.supports_l1_interop();
         let best_txs = self
             .pool
             .best_transactions_stream(self.next_interop_tx_allowed_after, include_interop_traffic)
             .await
             .context("mempool is closed")?;
-
         let timestamp = (millis_since_epoch() / 1000) as u64;
 
         // Check if we peeked an upgrade transaction info.
@@ -175,25 +149,27 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
             .try_into()
             .context("Cannot instantiate a block for unsupported execution version")?;
 
-        // Append a SetSLChainId system transaction exactly once: when the protocol
-        // version is v31 (either via upgrade from v30, or on the first block of a
-        // fresh v31 chain). After it fires once, the condition can never trigger again.
-        let (tx_source, expect_sl_chain_id_tx_after_upgrade) = if protocol_version.minor == 31
-            && (previous_record.protocol_version.minor < 31
-                || previous_record.block_context.block_number == 0)
-        {
-            let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
-                self.current_sl_chain_id,
-                // We use `u64::MAX` as a placeholder, since it is not an actual migration
-                u64::MAX,
-            );
-            let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
-                futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
-            ));
-            (tx_source, true)
-        } else {
-            (best_txs.stream, false)
-        };
+        // The SetSLChainId placeholder runs exactly once per chain: on the v30->v31 upgrade
+        // boundary, or on the first block of a fresh post-v31 chain. The batch program reads
+        // the SL chain id from persistent SystemContext storage, so later protocol upgrades
+        // don't need to re-establish it.
+        let first_post_v31_block = previous_record.protocol_version.minor < 31
+            || previous_record.block_context.block_number == 0;
+        let (tx_source, expect_sl_chain_id_tx_after_upgrade) =
+            if protocol_version.is_post_v31() && first_post_v31_block {
+                let sl_chain_id_tx = SystemTxEnvelope::set_sl_chain_id(
+                    self.config.l1_chain_id,
+                    // We use `u64::MAX` as a placeholder, since it is not an actual migration
+                    u64::MAX,
+                );
+                let tx_source = MarkingTxStream::unmarkable(best_txs.stream.stream.chain(
+                    futures::stream::once(async move { ZkTransaction::from(sl_chain_id_tx) }),
+                ));
+                // The appended tx must fit in the block regardless of what triggered the injection.
+                (tx_source, true)
+            } else {
+                (best_txs.stream, false)
+            };
 
         let FeeParams {
             eip1559_basefee,
@@ -478,24 +454,6 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         if let Some(last_interop_log_id) = outcome.last_interop_log_id {
             self.next_interop_tx_allowed_after = Instant::now() + self.config.service_block_delay;
             next_cursors.interop_root_id = last_interop_log_id + 1;
-        }
-
-        if let Some(last_migration_number) = outcome.last_migration_number {
-            next_cursors.migration_number = last_migration_number + 1;
-        }
-        if let Some(target_sl_chain_id) = outcome.last_sl_chain_id_target {
-            // Subsequent produced blocks will gate interop traffic on the new value (in particular:
-            // stop including interop-root / interop-fee txs once we've migrated back to L1).
-            // Otherwise, we will end up with blocks/batches that must be committed to L1 but
-            // include interop txs which leads to `CommitBasedInteropNotSupported` revert.
-            if self.current_sl_chain_id != target_sl_chain_id {
-                tracing::info!(
-                    previous_sl_chain_id = self.current_sl_chain_id,
-                    new_sl_chain_id = target_sl_chain_id,
-                    "applied SetSLChainId tx; updating runtime settlement layer pointer"
-                );
-                self.current_sl_chain_id = target_sl_chain_id;
-            }
         }
         if let Some(last_interop_fee_number) = outcome.last_interop_fee_number {
             next_cursors.interop_fee_number = last_interop_fee_number + 1;

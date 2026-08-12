@@ -4,11 +4,11 @@ use zksync_os_operator_signer::SignerConfig;
 
 /// Default confirmations required when settling directly on L1.
 pub const DEFAULT_REQUIRED_CONFIRMATIONS_L1: u64 = 3;
-/// Default confirmations required when settling on a Gateway.
-///
-/// Kept low because a Gateway with a single connected chain may not produce enough blocks to reach
-/// the L1 default.
-pub const DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY: u64 = 1;
+/// Default max submission attempts per L1 transaction when the node rejects it with a
+/// nonce-class error.
+pub const DEFAULT_NONCE_ERROR_MAX_ATTEMPTS: usize = 10;
+/// Default backoff between attempts after a nonce-class rejection.
+pub const DEFAULT_NONCE_ERROR_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 
 /// Configuration of L1 sender.
 #[derive(Clone, Debug)]
@@ -25,9 +25,18 @@ pub struct L1SenderConfig<Input> {
     pub force_transaction_resubmission: bool,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
+    /// In pipelined mode this is the in-flight window size: the max number of
+    /// submitted-but-not-yet-mined L1 transactions. Must not exceed the L1 node's
+    /// per-account pool cap (16 for both geth's blobpool and reth's default account slots).
     pub command_limit: usize,
 
-    /// How often to poll L1 for new blocks.
+    /// When true (default), transactions are submitted through a bounded in-flight window and
+    /// confirmations are tracked by a separate task, so submission never waits for inclusion.
+    /// When false, commands are processed in synchronous cycles instead: drain up to
+    /// `command_limit` commands, send, wait for all receipts + confirmations, repeat.
+    pub pipelining_enabled: bool,
+
+    /// Receipt/inclusion polling cadence.
     pub poll_interval: Duration,
 
     /// Maximum time to wait for a transaction to be included on L1.
@@ -35,6 +44,14 @@ pub struct L1SenderConfig<Input> {
 
     /// Settlement-layer blocks (inclusive of the inclusion block) before a transaction is confirmed.
     pub required_confirmations: u64,
+
+    /// Max submission attempts per L1 transaction when the node rejects it with a nonce-class
+    /// error.
+    pub nonce_error_max_attempts: usize,
+
+    /// Backoff before retrying after a nonce-class rejection. Gives the node time to settle
+    /// its pool/state view after a block import; the retry re-sends the same nonce.
+    pub nonce_error_retry_backoff: Duration,
 
     pub phantom_data: PhantomData<Input>,
 }

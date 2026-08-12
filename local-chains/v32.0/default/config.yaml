@@ -1,0 +1,11 @@
+genesis:
+  bridgehub_address: "0x9f19bed0677a9b383a6c1aa47e3d96d4e3187fb2"
+  bytecode_supplier_address: "0xd35d6e6028fb3c7b488bf5cc606e05085211140b"
+  genesis_input_path: "./local-chains/v32.0/genesis.json"
+  chain_id: 506
+
+l1_sender:
+  pubdata_mode: Blobs
+  operator_commit_sk: "0xc78123547577c67de697c0e80911cb913d2be569d182ed2d42bd7cd30851948c"
+  operator_prove_sk: "0x1ed8abac5f8143e0f37cc4da4655cb14c82473c1254da12683956749b0cca5bd"
+  operator_execute_sk: "0x7a2f70531f7ba8a79e74c2be455eb7dfa0526f2e802ab9d7132959f040acafc5"

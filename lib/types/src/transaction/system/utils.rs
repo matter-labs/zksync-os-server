@@ -5,7 +5,8 @@ use alloy::{
 use serde::{Deserialize, Serialize};
 use zksync_os_contract_interface::{
     IInteropCenter::setInteropFeeCall, IMessageRoot::addInteropRootsInBatchCall,
-    ISystemContext::setSettlementLayerChainIdCall, InteropRoot,
+    IMessageRootLegacy::addInteropRootsInBatchCall as addInteropRootsInBatchLegacyCall,
+    ISystemContext::setSettlementLayerChainIdCall, InteropRoot, InteropRootLegacy,
 };
 
 pub const BOOTLOADER_FORMAL_ADDRESS: Address =
@@ -14,6 +15,8 @@ pub const L2_INTEROP_ROOT_STORAGE_ADDRESS: Address =
     address!("0x0000000000000000000000000000000000010008");
 pub const L2_INTEROP_CENTER_ADDRESS: Address =
     address!("0x000000000000000000000000000000000001000d");
+pub const L2_INTEROP_COMMITMENT_TREE_ADDRESS: Address =
+    address!("0x0000000000000000000000000000000000010012");
 pub const SYSTEM_CONTEXT_ADDRESS: Address = address!("0x000000000000000000000000000000000000800b");
 
 pub const SYSTEM_TX_TYPE_ID: u8 = 125;
@@ -41,13 +44,37 @@ pub(crate) enum SystemTxInput {
 impl SystemTxInput {
     pub fn encode_data(&self) -> (Vec<u8>, u64) {
         match self {
-            Self::ImportInteropRoots(roots) => (
-                addInteropRootsInBatchCall {
-                    interopRootsInput: roots.clone(),
-                }
-                .abi_encode(),
-                0,
-            ),
+            Self::ImportInteropRoots(roots) => {
+                // The ABI is self-selected by the roots themselves: roots decoded from the v32
+                // `NewInteropRoot` events carry their (non-zero, contract-enforced) creation
+                // timestamp and are imported through the timestamped v32 entry point; roots from
+                // legacy events decode with `timestamp == 0` and keep the released v31 call,
+                // which is the only form the pre-v32 execution environments parse. One L1 watcher
+                // only ever observes one event form at a time, so a mix means the L1 side was
+                // upgraded mid-flight — refuse rather than guess.
+                let timestamped = roots
+                    .iter()
+                    .filter(|root| !root.timestamp.is_zero())
+                    .count();
+                let calldata = if timestamped == roots.len() {
+                    addInteropRootsInBatchCall {
+                        interopRootsInput: roots.clone(),
+                    }
+                    .abi_encode()
+                } else if timestamped == 0 {
+                    addInteropRootsInBatchLegacyCall {
+                        interopRootsInput: roots.iter().map(InteropRootLegacy::from).collect(),
+                    }
+                    .abi_encode()
+                } else {
+                    panic!(
+                        "cannot mix timestamped and legacy interop roots in one import ({} of {})",
+                        timestamped,
+                        roots.len()
+                    );
+                };
+                (calldata, 0)
+            }
             Self::SetSLChainId(chain_id, salt) => (
                 setSettlementLayerChainIdCall {
                     _newSettlementLayerChainId: U256::from(*chain_id),

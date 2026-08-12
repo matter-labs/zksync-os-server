@@ -1,0 +1,4 @@
+interface:
+  display_name: "Generate ZKsync Local State"
+  short_description: "Build single-chain fixtures with zk-deployer"
+  default_prompt: "Use $generate-zksync-local-state to generate a DB-free local-chain fixture for a specified protocol version and era-contracts revision."

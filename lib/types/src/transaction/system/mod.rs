@@ -12,18 +12,23 @@ use alloy_rlp::{BufMut, Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use zksync_os_contract_interface::IMessageRoot::addInteropRootsInBatchCall;
+use zksync_os_contract_interface::IMessageRootLegacy::addInteropRootsInBatchCall as addInteropRootsInBatchLegacyCall;
 use zksync_os_contract_interface::ISystemContext::setSettlementLayerChainIdCall;
 use zksync_os_contract_interface::InteropRoot;
 
 pub mod tx;
 pub mod utils;
 pub use utils::{
-    L2_INTEROP_ROOT_STORAGE_ADDRESS, SYSTEM_CONTEXT_ADDRESS, SYSTEM_TX_TYPE_ID, SystemTxType,
+    L2_INTEROP_COMMITMENT_TREE_ADDRESS, L2_INTEROP_ROOT_STORAGE_ADDRESS, SYSTEM_CONTEXT_ADDRESS,
+    SYSTEM_TX_TYPE_ID, SystemTxType,
 };
 use zksync_os_contract_interface::IInteropCenter::setInteropFeeCall;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(into = "tx_serde::TransactionSerdeHelper")]
+#[serde(
+    into = "tx_serde::TransactionSerdeHelper",
+    try_from = "tx_serde::TransactionSerdeHelper"
+)]
 pub struct SystemTxEnvelope {
     /// Hash of the transaction
     /// Stored in an envelope and calculated separately from transaction as hash of transaction is not part of transaction itself.
@@ -100,6 +105,15 @@ impl SystemTxEnvelope {
                 let call = addInteropRootsInBatchCall::abi_decode(data)
                     .expect("failed to decode interop roots system transaction");
                 SystemTxInput::ImportInteropRoots(call.interopRootsInput)
+            }
+            // Released v31 form (timestamp-free roots), still produced for pre-v32 blocks and
+            // present in historical blocks replayed by external nodes.
+            addInteropRootsInBatchLegacyCall::SELECTOR => {
+                let call = addInteropRootsInBatchLegacyCall::abi_decode(data)
+                    .expect("failed to decode legacy interop roots system transaction");
+                SystemTxInput::ImportInteropRoots(
+                    call.interopRootsInput.into_iter().map(Into::into).collect(),
+                )
             }
             setSettlementLayerChainIdCall::SELECTOR => {
                 let call = setSettlementLayerChainIdCall::abi_decode(data)
@@ -179,6 +193,11 @@ mod tx_serde {
         pub max_priority_fee_per_gas: u128,
         #[serde(with = "alloy::serde::quantity")]
         pub nonce: u64,
+        /// Uniqueness salt of the system transaction. Not part of the Ethereum JSON-RPC
+        /// transaction shape, but required to reconstruct the transaction (and its hash)
+        /// from JSON.
+        #[serde(with = "alloy::serde::quantity")]
+        pub salt: u64,
         pub value: U256,
         pub input: Bytes,
 
@@ -202,6 +221,7 @@ mod tx_serde {
                 max_fee_per_gas: tx.max_fee_per_gas(),
                 max_priority_fee_per_gas: tx.max_priority_fee_per_gas().unwrap_or(0),
                 nonce: tx.nonce(),
+                salt: tx.inner.salt,
                 value: tx.value(),
                 input: Bytes::from(tx.input().to_vec()),
                 // Put defaults for signature fields
@@ -210,6 +230,33 @@ mod tx_serde {
                 s: U256::ZERO,
                 y_parity: false,
             }
+        }
+    }
+
+    // Deserialize: reconstruct the transaction from its calldata and salt, verifying the
+    // embedded hash so that a record that cannot be reconstructed exactly fails loudly.
+    impl TryFrom<TransactionSerdeHelper> for SystemTxEnvelope {
+        type Error = String;
+
+        fn try_from(helper: TransactionSerdeHelper) -> Result<Self, Self::Error> {
+            let inner = SystemTx {
+                to: helper.to,
+                input: helper.input,
+                salt: helper.salt,
+            };
+            let hash = inner.calculate_hash();
+            if hash != helper.hash {
+                return Err(format!(
+                    "system transaction hash mismatch: transaction with salt {} \
+                     hashes to {hash}, expected {}",
+                    inner.salt, helper.hash
+                ));
+            }
+            Ok(Self {
+                hash,
+                inner,
+                subtype: OnceLock::new(),
+            })
         }
     }
 }
@@ -398,6 +445,7 @@ mod tests {
     /// See https://ethereum.github.io/execution-apis/api-documentation/
     #[test]
     fn interop_roots_tx_serialization() {
+        // A non-zero timestamp selects the v32 (timestamped) import ABI, selector `0xc17a9fbd`.
         let tx = SystemTxEnvelope::import_interop_roots(
             vec![InteropRoot {
                 chainId: Uint::from(1),
@@ -418,6 +466,7 @@ mod tests {
   "maxFeePerGas": "0x0",
   "maxPriorityFeePerGas": "0x0",
   "nonce": "0x0",
+  "salt": "0x0",
   "value": "0x0",
   "input": "0xc17a9fbd000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
   "v": "0x0",
@@ -426,6 +475,46 @@ mod tests {
   "yParity": "0x0"
 }"#
         );
+    }
+
+    #[test]
+    fn legacy_interop_roots_tx_serialization() {
+        // Zero timestamps (roots decoded from released, timestamp-free `NewInteropRoot` events)
+        // keep the released v31 import ABI, selector `0xcca2f7bc` — the only form pre-v32
+        // execution environments parse. Golden values carried over from the pre-v32 test.
+        let tx = SystemTxEnvelope::import_interop_roots(
+            vec![InteropRoot {
+                chainId: Uint::from(1),
+                blockOrBatchNumber: Uint::from(1),
+                timestamp: Uint::ZERO,
+                sides: vec![B256::ZERO],
+            }],
+            0,
+        );
+
+        assert_eq!(
+            serde_json::to_string_pretty(&tx).unwrap(),
+            r#"{
+  "hash": "0x7bc1a669ea68562d2b22fb56757a7f85c69b286d5d4c0e1fb1b09cd8bd340aee",
+  "initiator": "0x0000000000000000000000000000000000008001",
+  "to": "0x0000000000000000000000000000000000010008",
+  "gas": "0x0",
+  "maxFeePerGas": "0x0",
+  "maxPriorityFeePerGas": "0x0",
+  "nonce": "0x0",
+  "salt": "0x0",
+  "value": "0x0",
+  "input": "0xcca2f7bc00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
+  "v": "0x0",
+  "r": "0x0",
+  "s": "0x0",
+  "yParity": "0x0"
+}"#
+        );
+        // Round-trips through the legacy selector back into timestamped form (ts == 0).
+        let roots = tx.interop_roots().expect("import tx carries roots");
+        assert_eq!(roots.len(), 1);
+        assert!(roots[0].timestamp.is_zero());
     }
 
     #[test]
@@ -442,6 +531,7 @@ mod tests {
   "maxFeePerGas": "0x0",
   "maxPriorityFeePerGas": "0x0",
   "nonce": "0x0",
+  "salt": "0x0",
   "value": "0x0",
   "input": "0x040203e60000000000000000000000000000000000000000000000000000000000000001",
   "v": "0x0",
@@ -450,6 +540,68 @@ mod tests {
   "yParity": "0x0"
 }"#
         );
+    }
+
+    /// Replay archive records are JSON round-trips of `ReplayRecord`; system transactions
+    /// must deserialize back to the exact envelope they were serialized from.
+    #[test]
+    fn system_tx_json_round_trips() {
+        let txs = [
+            SystemTxEnvelope::set_sl_chain_id(11155111, 7),
+            SystemTxEnvelope::set_interop_fee(U256::from(42), 3),
+            SystemTxEnvelope::import_interop_roots(
+                vec![InteropRoot {
+                    chainId: Uint::from(1),
+                    blockOrBatchNumber: Uint::from(1),
+                    timestamp: Uint::from(1),
+                    sides: vec![B256::ZERO],
+                }],
+                5,
+            ),
+            // Legacy (timestamp-free) roots round-trip through the v31 import ABI.
+            SystemTxEnvelope::import_interop_roots(
+                vec![InteropRoot {
+                    chainId: Uint::from(1),
+                    blockOrBatchNumber: Uint::from(1),
+                    timestamp: Uint::ZERO,
+                    sides: vec![B256::ZERO],
+                }],
+                5,
+            ),
+        ];
+
+        for tx in txs {
+            let json = serde_json::to_string(&tx).unwrap();
+            let decoded: SystemTxEnvelope = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, tx, "{json}");
+        }
+    }
+
+    /// JSON without the `salt` field (written before the field existed) cannot be
+    /// reconstructed and must fail with a clear error instead of guessing.
+    #[test]
+    fn system_tx_json_rejects_records_without_salt() {
+        let tx = SystemTxEnvelope::set_sl_chain_id(11155111, 7);
+        let mut value = serde_json::to_value(&tx).unwrap();
+        value.as_object_mut().unwrap().remove("salt");
+
+        let err = serde_json::from_value::<SystemTxEnvelope>(value).unwrap_err();
+
+        assert!(err.to_string().contains("salt"), "{err}");
+    }
+
+    /// A record whose salt cannot be reconstructed (legacy record with non-zero salt, or
+    /// corrupted data) must fail loudly instead of producing a transaction with a
+    /// different hash.
+    #[test]
+    fn system_tx_json_rejects_hash_mismatch() {
+        let tx = SystemTxEnvelope::set_sl_chain_id(11155111, 7);
+        let mut value = serde_json::to_value(&tx).unwrap();
+        value["salt"] = serde_json::Value::String("0x0".to_owned());
+
+        let err = serde_json::from_value::<SystemTxEnvelope>(value).unwrap_err();
+
+        assert!(err.to_string().contains("hash"), "{err}");
     }
 
     #[test]
@@ -466,6 +618,7 @@ mod tests {
   "maxFeePerGas": "0x0",
   "maxPriorityFeePerGas": "0x0",
   "nonce": "0x0",
+  "salt": "0x0",
   "value": "0x0",
   "input": "0x08273d8a000000000000000000000000000000000000000000000000000000000000002a",
   "v": "0x0",

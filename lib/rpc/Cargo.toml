@@ -43,6 +43,7 @@ dashmap.workspace = true
 derive_more.workspace = true
 futures.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = ["macros", "client"] }
+rand.workspace = true
 roaring.workspace = true
 ruint.workspace = true
 serde.workspace = true
@@ -51,6 +52,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-metrics.workspace = true
 tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 vise.workspace = true
 tower.workspace = true
@@ -62,6 +64,9 @@ boa_engine.workspace = true
 boa_gc.workspace = true
 
 tikv-jemalloc-ctl = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
 jemalloc = ["dep:tikv-jemalloc-ctl", "tikv-jemalloc-ctl/stats"]

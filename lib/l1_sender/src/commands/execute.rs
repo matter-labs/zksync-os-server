@@ -1,11 +1,11 @@
 use crate::commands::SendToL1;
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::primitives::{Address, B256, Bytes, U256};
 use alloy::sol_types::{SolCall, SolValue};
 use std::fmt::Display;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
-use zksync_os_contract_interface::{IExecutor, InteropRoot};
+use zksync_os_contract_interface::{IExecutor, InteropRoot, InteropRootLegacy};
 
 #[derive(Debug)]
 pub struct ExecuteCommand {
@@ -37,12 +37,12 @@ impl SendToL1 for ExecuteCommand {
 
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ExecuteL1Passthrough;
 
-    fn solidity_call(&self, gateway: bool, operator: &Address) -> Bytes {
+    fn solidity_call(&self, operator: &Address) -> Bytes {
         IExecutor::executeBatchesSharedBridgeCall::new((
             self.batches.first().unwrap().batch.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
             U256::from(self.batches.last().unwrap().batch_number()),
-            self.to_calldata_suffix(gateway, operator).into(),
+            self.to_calldata_suffix(operator).into(),
         ))
         .abi_encode()
         .into()
@@ -80,7 +80,7 @@ impl Display for ExecuteCommand {
 }
 
 impl ExecuteCommand {
-    fn to_calldata_suffix(&self, _gateway: bool, _operator: &Address) -> Vec<u8> {
+    fn to_calldata_suffix(&self, operator: &Address) -> Vec<u8> {
         let stored_batch_infos = self
             .batches
             .iter()
@@ -93,8 +93,6 @@ impl ExecuteCommand {
             .cloned()
             .map(IExecutor::PriorityOpsBatchInfo::from)
             .collect::<Vec<_>>();
-        let interop_roots = self.interop_roots.clone();
-
         let protocol_version_minor = self
             .batches
             .first()
@@ -103,25 +101,53 @@ impl ExecuteCommand {
             .batch_info
             .protocol_version
             .minor;
+        // The released (<= v31) wires carry the timestamp-free legacy interop root shape.
+        let legacy_interop_roots = || {
+            self.interop_roots
+                .iter()
+                .map(|roots| {
+                    roots
+                        .iter()
+                        .map(InteropRootLegacy::from)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
         let (encoding_version, encoded_data): (u8, Vec<u8>) = match protocol_version_minor {
             29 | 30 => (
                 1,
-                (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
+                (stored_batch_infos, priority_ops, legacy_interop_roots()).abi_encode_params(),
             ),
-            // The atomic-interop contracts (chains on this branch still report protocol
-            // version 0.31.x) read `abi.decode(data, (DecodedExecuteData))`: one struct-typed
-            // parameter after the version byte (an extra offset word around the old tuple).
-            // The gateway-only fields of the released v31 flat 8-tuple wire (logs, messages,
-            // multichain roots, IMT roots, settlement fee payer) were dropped from the struct:
-            // only L1 settlement is supported here.
-            31 | 32 => {
+            31 => {
+                // Batch logs / messages / multichain roots are only relayed when executing on a
+                // Gateway; when settling on L1 they are always empty.
+                let logs: Vec<Vec<IExecutor::L2Log>> = Vec::new();
+                let messages: Vec<Vec<Vec<u8>>> = Vec::new();
+                let multichain_roots: Vec<B256> = Vec::new();
+                (
+                    1,
+                    (
+                        stored_batch_infos,
+                        priority_ops,
+                        legacy_interop_roots(),
+                        logs,
+                        messages,
+                        multichain_roots,
+                        operator,
+                    )
+                        .abi_encode_params(),
+                )
+            }
+            // The v32 (atomic-interop) contracts read `abi.decode(data, (DecodedExecuteData))` —
+            // one struct-typed parameter (an extra offset word around the flat tuple) with
+            // timestamped dependency roots and no gateway-relay fields. The breaking re-encoding
+            // carries its own version byte (`BatchDecoder.SUPPORTED_ENCODING_VERSION_EXECUTE`).
+            32 => {
                 let decoded = IExecutor::DecodedExecuteData {
                     batchesData: stored_batch_infos,
                     priorityOpsData: priority_ops,
-                    dependencyRoots: interop_roots,
+                    dependencyRoots: self.interop_roots.clone(),
                 };
-                // The struct wire is a breaking re-encoding of the v31 flat tuple, so it carries
-                // its own version byte (`BatchDecoder.SUPPORTED_ENCODING_VERSION_EXECUTE`).
                 (2, (decoded,).abi_encode_params())
             }
             _ => panic!("Unsupported protocol version: {}", protocol_version_minor),

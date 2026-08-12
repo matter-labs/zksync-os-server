@@ -8,6 +8,9 @@ use alloy::rpc::types::trace::geth::{
     GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, TraceResult,
 };
 use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
+// In client-only mode the `rpc` macro replaces `RpcResult` return types with
+// `Result<_, ClientError>`, leaving this import unused.
+#[cfg(feature = "server")]
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 

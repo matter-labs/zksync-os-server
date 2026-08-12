@@ -1,41 +1,35 @@
-//! Off-chain Indexed Merkle Tree (IMT) engine for atomic-interop inclusion proofs.
+//! Reconstructs atomic-interop Indexed Merkle Tree (IMT) proofs from historical leaf data.
 //!
-//! Faithful Rust port of the off-chain engine used to build `ImtInclusionProof`
-//! (`IAtomicInterop.sol`). It reconstructs a chain's atomic-interop commitment tree from its
-//! index-ordered leaf set (read via `L2InteropCommitmentTree.leafCount()` / `leafAt(i)`) and
-//! reproduces the root and Merkle paths exactly as the on-chain `IndexedMerkleTree` /
-//! `FullMerkle` libraries (`common/libraries/IndexedMerkleTree.sol` +
-//! `common/libraries/FullMerkle.sol`, #2235) do, so a path produced here verifies under the
-//! contract's `verifyInclusion`.
+//! `L2InteropCommitmentTree` exposes its index-ordered leaf preimages, but not historical Merkle
+//! paths. The proof RPC reads those leaves at the requested block and uses this module to replay the
+//! contract's `IndexedMerkleTree` and `FullMerkle` layout.
 //!
-//! This is a byte-for-byte port of the DYNAMIC-height `FullMerkle` tree (NOT the old
-//! fixed-depth-32 model): the tree starts at height 0 and grows by one whenever a leaf is pushed
-//! at index == `1 << height`. `root()` is the node at the current top level and `merkle_path(i)`
-//! has length == the current height. The TypeScript reference implementation is
-//! `l1-contracts/test/anvil-interop/src/helpers/imt-engine-lib.ts`.
+//! The tree has dynamic height. It begins at height 0 and grows when a leaf is pushed at
+//! `index == 1 << height`, so a proof contains one sibling per current level rather than a fixed 32
+//! siblings.
 //!
 //! Hashing must match the contract bit-for-bit:
-//! - leaf hash:  `keccak256(abi.encode(value, nextIndex, nextValue))` — three left-padded 32-byte words
-//! - node hash:  `keccak256(left ++ right)` (`Merkle.sol`'s `efficientHash`)
-//! - empty subtrees use lazily grown `zeros[level]`, with `zeros[0] = leafHash({0,0,0})` and
+//!
+//! - Leaf hash: `keccak256(abi.encode(value, nextIndex, nextValue))`.
+//! - Node hash: `keccak256(left ++ right)`.
+//! - Empty subtrees use lazily grown `zeros[level]`, with `zeros[0] = leafHash({0,0,0})` and
 //!   `zeros[i+1] = efficientHash(zeros[i], zeros[i])`.
-
-// The engine's public API is consumed by the atomic-interop proof RPC; allow until every helper is
-// wired so an unused helper doesn't trip `-D warnings`.
-#![allow(dead_code)]
 
 use alloy::primitives::{B256, U256, keccak256};
 
-/// Indexed-tree leaf, in the on-chain field order.
+/// Leaf preimage stored by the on-chain indexed tree.
+///
+/// Leaves occupy Merkle indices in insertion order. The `next_*` fields separately link them in
+/// value order so the contract can prove that a value is present or bracketed by two leaves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ImtLeaf {
-    pub value: U256,
-    pub next_index: U256,
-    pub next_value: U256,
+pub(crate) struct ImtLeaf {
+    pub(crate) value: U256,
+    pub(crate) next_index: U256,
+    pub(crate) next_value: U256,
 }
 
-/// `keccak256(abi.encode(value, nextIndex, nextValue))`.
-pub fn indexed_leaf_hash(leaf: &ImtLeaf) -> B256 {
+/// Hashes a leaf using the three-word Solidity ABI layout expected by the contract.
+pub(crate) fn indexed_leaf_hash(leaf: &ImtLeaf) -> B256 {
     let mut buf = [0u8; 96];
     buf[0..32].copy_from_slice(&leaf.value.to_be_bytes::<32>());
     buf[32..64].copy_from_slice(&leaf.next_index.to_be_bytes::<32>());
@@ -60,31 +54,21 @@ fn zero_leaf_hash() -> B256 {
     })
 }
 
-/// Dynamic-height Indexed Merkle Tree, a byte-for-byte off-chain port of `FullMerkle` +
-/// `IndexedMerkleTree` (#2235). It replays the EXACT on-chain build sequence (`setup` ->
-/// `pushNewLeaf` per leaf, with `updateLeaf` rehashing the populated path) so that `root()` and
-/// `merkle_path(i)` equal the on-chain `tree.root()` / `tree.merklePath(i)`.
+/// Replays the contract's dynamic `FullMerkle` layout over stored IMT leaf preimages.
 ///
-/// The constructor takes the index-ordered leaf set (index 0 = the `{0,0,0}` sentinel head, exactly
-/// what `setup` seeds). It does NOT re-derive the sorted linked list; the leaves passed in are the
-/// live on-chain leaf preimages, so their `nextIndex`/`nextValue` are already spliced. Only the
-/// FullMerkle node bookkeeping is replayed here.
-///
-/// `FullMerkle` storage mirror:
-///   - `height`             : current tree height (0 for a single-leaf tree),
-///   - `nodes[level][index]`: written node hashes (dynamic arrays, matching `_nodes`),
-///   - `zeros[level]`       : zero-subtree hash at `level` (matching `_zeros`),
-///   - `leaf_number`        : number of leaves pushed so far.
-pub struct IndexedMerkleTree {
+/// Input leaves must be ordered by Merkle index, with the sentinel head at index 0. Their
+/// `next_index` and `next_value` already describe the value-sorted linked list; this type only
+/// rebuilds the Merkle nodes needed for the root and paths.
+pub(crate) struct IndexedMerkleTree {
     /// Index-ordered leaf preimages (leaf 0 = head sentinel).
     leaves: Vec<ImtLeaf>,
-    /// `_nodes[level][index]` — populated node hashes; higher indices are implicitly `zeros[level]`.
+    /// Populated node hashes; higher indices are implicitly `zeros[level]`.
     nodes: Vec<Vec<B256>>,
-    /// `_zeros[level]` — zero-subtree hash per level, grown lazily with the tree.
+    /// Zero-subtree hash per level, grown lazily with the tree.
     zeros: Vec<B256>,
-    /// `_height` — current top level.
+    /// Current top level, matching `FullMerkle._height`.
     height: usize,
-    /// `_leafNumber` — leaves pushed so far.
+    /// Number of leaves replayed, matching `FullMerkle._leafNumber`.
     leaf_number: u64,
 }
 
@@ -94,7 +78,7 @@ impl IndexedMerkleTree {
     /// Panics if `leaves` is empty — a live commitment tree always has at least the `{0,0,0}`
     /// sentinel at index 0 (seeded by `IndexedMerkleTree.setup`), so an empty leaf set is a
     /// programming error in the caller, not a recoverable condition.
-    pub fn new(leaves: Vec<ImtLeaf>) -> Self {
+    pub(crate) fn new(leaves: Vec<ImtLeaf>) -> Self {
         assert!(
             !leaves.is_empty(),
             "IndexedMerkleTree requires at least the sentinel leaf at index 0"
@@ -108,15 +92,14 @@ impl IndexedMerkleTree {
             leaf_number: 0,
         };
 
-        // Mirror IndexedMerkleTree.setup: FullMerkle.setup(zeroLeafHash) seeds zeros[0] + nodes[0]=[zero],
-        // then pushNewLeaf(zeroLeafHash) inserts the sentinel {0,0,0} at index 0.
+        // The on-chain setup first establishes the zero hash, then inserts the pristine sentinel
+        // as leaf 0.
         let zero_leaf = zero_leaf_hash();
         tree.setup(zero_leaf);
         tree.push_new_leaf(zero_leaf);
 
-        // `setup`/`push_new_leaf` above seed index 0 from a pristine {0,0,0} sentinel. In a live tree
-        // the head leaf has been repointed (its nextIndex/nextValue splice to the smallest inserted
-        // value), so re-write index 0 with its actual on-chain preimage before pushing 1..n in order.
+        // Later insertions repoint the sentinel toward the smallest value. Replace the pristine
+        // leaf with the historical preimage before replaying the remaining insertion-order leaves.
         let head_hash = indexed_leaf_hash(&tree.leaves[0]);
         tree.update_leaf(0, head_hash);
         for i in 1..tree.leaves.len() {
@@ -126,8 +109,6 @@ impl IndexedMerkleTree {
 
         tree
     }
-
-    // ── FullMerkle port ─────────────────────────────────────────────────────────────────────
 
     /// `FullMerkle.setup`: push the zero value into `zeros[0]` and seed `nodes[0] = [zero]`.
     fn setup(&mut self, zero: B256) {
@@ -193,12 +174,12 @@ impl IndexedMerkleTree {
     }
 
     /// `FullMerkle.root`: the node at the current top level.
-    pub fn root(&self) -> B256 {
+    pub(crate) fn root(&self) -> B256 {
         self.nodes[self.height][0]
     }
 
     /// `FullMerkle.merklePath`: dynamic-length path (length == current height) for the leaf at `index`.
-    pub fn merkle_path(&self, start_index: u64) -> Vec<B256> {
+    pub(crate) fn merkle_path(&self, start_index: u64) -> Vec<B256> {
         assert!(self.leaf_number != 0, "MerkleNothingToProve");
         let mut max_node_number = self.leaf_number - 1;
         assert!(
@@ -224,14 +205,12 @@ impl IndexedMerkleTree {
         proof
     }
 
-    // ── Public accessors / lookup helpers (consumed by zks_impl.rs) ──────────────────────────
-
-    pub fn leaves(&self) -> &[ImtLeaf] {
+    pub(crate) fn leaves(&self) -> &[ImtLeaf] {
         &self.leaves
     }
 
     /// Index of the leaf holding `value`, or `None` if absent.
-    pub fn find_value_index(&self, value: U256) -> Option<u64> {
+    pub(crate) fn find_value_index(&self, value: U256) -> Option<u64> {
         self.leaves
             .iter()
             .position(|l| l.value == value)
@@ -240,7 +219,7 @@ impl IndexedMerkleTree {
 
     /// Index of the low-nullifier leaf for `value`: `L.value < value` and
     /// (`L.nextValue == 0` or `value < L.nextValue`).
-    pub fn find_low_nullifier_index(&self, value: U256) -> Option<u64> {
+    pub(crate) fn find_low_nullifier_index(&self, value: U256) -> Option<u64> {
         self.leaves
             .iter()
             .position(|l| l.value < value && (l.next_value.is_zero() || value < l.next_value))
@@ -248,9 +227,10 @@ impl IndexedMerkleTree {
     }
 }
 
-/// Recompute a root from a leaf hash + its Merkle path — mirrors `Merkle.calculateRootMemory`.
-/// Useful for asserting a produced path verifies before returning it.
-pub fn calculate_root(path: &[B256], index: u64, leaf_hash: B256) -> B256 {
+/// Walks a leaf-to-root path in the same order as the on-chain verifier.
+///
+/// The proof RPC uses this as a defensive check before returning a reconstructed path.
+pub(crate) fn calculate_root(path: &[B256], index: u64, leaf_hash: B256) -> B256 {
     let mut current = leaf_hash;
     let mut idx = index;
     for sibling in path {
@@ -276,27 +256,23 @@ mod tests {
         }
     }
 
-    /// Under the dynamic-height FullMerkle model a tree with only the `{0,0,0}` head leaf has
-    /// height 0, so its root is simply that leaf's hash (`zeros[0]`), NOT a fixed top-level zero.
+    // A sentinel-only tree has height 0, so its root is the sentinel leaf hash and its path is
+    // empty.
     #[test]
     fn seed_only_tree_root_is_leaf_hash() {
         let tree = IndexedMerkleTree::new(vec![leaf(0, 0, 0)]);
         assert_eq!(tree.root(), zero_leaf_hash());
-        // Height 0 => an empty Merkle path.
         assert!(tree.merkle_path(0).is_empty());
     }
 
-    /// Every leaf's produced Merkle path must recompute the tree root (path/verify round-trip),
-    /// exactly as the on-chain `verifyInclusion` walks it. Under dynamic height the path length is
-    /// the current tree height, not a fixed depth.
+    // Every generated path should round-trip through the same leaf-to-root walk used on-chain.
     #[test]
     fn merkle_paths_recompute_root() {
         // Head + two inserted leaves (linked-list order is irrelevant to the Merkle structure).
         let leaves = vec![leaf(0, 1, 5), leaf(5, 2, 9), leaf(9, 0, 0)];
         let tree = IndexedMerkleTree::new(leaves.clone());
         let root = tree.root();
-        // 3 leaves => height 2 (leaf pushed at index 2 grows height from 1 to 2 only at index 4;
-        // 3 leaves occupy indices 0..2, so height is 2).
+        // Pushing leaf index 2 reaches `1 << 1` and grows the tree to height 2.
         for (i, l) in leaves.iter().enumerate() {
             let path = tree.merkle_path(i as u64);
             assert_eq!(path.len(), tree.height);
@@ -308,8 +284,7 @@ mod tests {
         }
     }
 
-    /// A tree that exactly fills a power-of-two leaf count (index of last leaf == (1<<h)-1) and one
-    /// that has just triggered a height bump both self-verify — guards the height-growth branch.
+    // Crossing a power-of-two leaf index grows the tree and must preserve every existing path.
     #[test]
     fn height_growth_paths_recompute_root() {
         // 5 leaves: pushing index 4 (== 1<<2) grows height from 2 to 3.

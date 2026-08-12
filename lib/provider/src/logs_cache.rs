@@ -237,7 +237,13 @@ impl LogsCache {
         let mut recent = self.recent.write().await;
         if recent.synced_with_hash != latest_hash && recent.capacity > 0 {
             let target_head = latest_snapshot.number;
-            let floor = target_head.saturating_sub(recent.capacity as u64 - 1);
+            // On a cold cache, start from the current head instead of backfilling `capacity`
+            // historical blocks
+            let floor = if recent.first_block.is_none() {
+                target_head
+            } else {
+                target_head.saturating_sub(recent.capacity as u64 - 1)
+            };
             self.update_block(
                 provider,
                 &mut recent,

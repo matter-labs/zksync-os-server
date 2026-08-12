@@ -17,15 +17,28 @@ const FAKE_PROOF_MAGIC_VALUE: u32 = 13;
 pub struct ProofCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     proof: SnarkProof,
+    /// keccak commitment to the runtime chain config — the third word of the v32 batch proof
+    /// public input (`Executor._getBatchProofPublicInputZKsyncOS`), where the chain id moved out
+    /// of the batch output. `None` for pre-v32 batches, whose executor folds three words only.
+    /// Computed by the caller from the chain id (see `zksync_os_native_pig::v32_chain_config_hash`).
+    chain_config_hash: Option<B256>,
 }
 
 impl ProofCommand {
-    pub fn new(batches: Vec<SignedBatchEnvelope<FriProof>>, proof: SnarkProof) -> Self {
+    pub fn new(
+        batches: Vec<SignedBatchEnvelope<FriProof>>,
+        proof: SnarkProof,
+        chain_config_hash: Option<B256>,
+    ) -> Self {
         assert!(
             !batches.is_empty(),
             "ProofCommand must contain at least one batch"
         );
-        Self { batches, proof }
+        Self {
+            batches,
+            proof,
+            chain_config_hash,
+        }
     }
 }
 
@@ -36,7 +49,7 @@ impl SendToL1 for ProofCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1Passthrough;
 
-    fn solidity_call(&self, _gateway: bool, _operator: &Address) -> Bytes {
+    fn solidity_call(&self, _operator: &Address) -> Bytes {
         proveBatchesSharedBridgeCall::new((
             self.batches.first().unwrap().batch.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
@@ -85,14 +98,27 @@ impl ProofCommand {
         B256::from_slice(&bytes)
     }
 
-    fn get_batch_public_input(prev_batch: &StoredBatchInfo, batch: &StoredBatchInfo) -> B256 {
-        let mut bytes = Vec::with_capacity(32 * 3);
+    fn get_batch_public_input(
+        prev_batch: &StoredBatchInfo,
+        batch: &StoredBatchInfo,
+        chain_config_hash: Option<&B256>,
+    ) -> B256 {
+        // v32 (`Executor._getBatchProofPublicInputZKsyncOS`) folds the chain config hash between
+        // the state commitments and the batch commitment; earlier executors fold three words.
+        let mut bytes = Vec::with_capacity(32 * 4);
         bytes.extend_from_slice(prev_batch.state_commitment.as_slice());
         bytes.extend_from_slice(batch.state_commitment.as_slice());
+        if let Some(chain_config_hash) = chain_config_hash {
+            bytes.extend_from_slice(chain_config_hash.as_slice());
+        }
         bytes.extend_from_slice(batch.commitment.as_slice());
         keccak256(&bytes)
     }
-    fn snark_public_input(previous_batch: &StoredBatchInfo, batches: &[StoredBatchInfo]) -> B256 {
+    fn snark_public_input(
+        previous_batch: &StoredBatchInfo,
+        batches: &[StoredBatchInfo],
+        chain_config_hash: Option<&B256>,
+    ) -> B256 {
         let mut hash_map: HashMap<usize, &StoredBatchInfo> = HashMap::new();
         hash_map.insert(previous_batch.batch_number as usize, previous_batch);
         for batch in batches {
@@ -106,7 +132,7 @@ impl ProofCommand {
         for i in start..=end {
             let batch = hash_map.get(&i).expect("Batch not found");
             let prev_batch = hash_map.get(&(i - 1)).expect("Previous batch not found");
-            let public_input = Self::get_batch_public_input(prev_batch, batch);
+            let public_input = Self::get_batch_public_input(prev_batch, batch, chain_config_hash);
             // Snark public input is public_input >> 32.
             let snark_input = Self::shift_b256_right(&public_input);
 
@@ -145,13 +171,19 @@ impl ProofCommand {
             Some(5) => 5,
             Some(6) => 6,
             Some(7) => 0,
+            // Switch to 0 once the L1 default verifier becomes the V8 one (as done for V7).
+            Some(8) => 8,
             Some(execution_version) => panic!(
                 "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
             ),
         };
 
         // todo: remove tostring
-        let public_input = Self::snark_public_input(previous_batch_info, &stored_batch_infos);
+        let public_input = Self::snark_public_input(
+            previous_batch_info,
+            &stored_batch_infos,
+            self.chain_config_hash.as_ref(),
+        );
 
         tracing::info!(">> public input: {}", public_input);
 

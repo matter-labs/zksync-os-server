@@ -1,0 +1,25 @@
+general:
+  protocol_version: "v31.0"
+  variant: "atomic-interop (IMT bundle model)"
+  genesis_root: "0x38643169753309ba1959843595e64188f871d11808e55b2759a73db1ac86afb0"
+
+# This preset's genesis.json + l1-state.json.gz + per-chain configs all come from ONE
+# consistent atomic deploy of two L1-settling chains (6565, 6566). Regenerate them
+# together via generate-atomic-multichain.sh — never swap genesis without the matching L1 state.
+
+era-contracts:
+  # StanislavBreadfulAI/era-contracts fork — the same commit the atomic-interop integration tests
+  # build their contracts from (execute encoding version 2, timestamped interop roots, the
+  # `salt`/`provesAgainstBeginRoot` struct fields). Re-point at matter-labs once the branch lands.
+  branch: "ad-atomic-interop-integration"
+  sha: "c67894b970a0dac6fe9144d8ebf4b0806e15a9af"
+
+zksync-os-integration-tests:
+  # Provides the zk-deployer CLI (bootstrap + apply + server-config) used to generate the artifacts.
+  branch: "atomic-interop-work"
+  sha: "a3edd70"
+
+zksync-os-server:
+  # The atomic server (this repo): serves zks_getImtInclusionProof / zks_getImtLowNullifierIndex
+  # and zks_getL2ToL1LogProof(messageRoot) used to build the per-leg atomic finality proofs.
+  branch: "ad-atomic-interop-timestamps"

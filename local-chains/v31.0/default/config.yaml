@@ -1,11 +1,11 @@
 genesis:
-  bridgehub_address: '0x69c3388f45f7f944300141ff5735d59f15e4c9f0'
-  bytecode_supplier_address: '0xa96c213b3a2db7d69eb4fd786b8e8d410860c06d'
-  genesis_input_path: ./local-chains/v31.0/genesis.json
-  chain_id: 6565
+  bridgehub_address: "0x70fe0ddb82adf1fe9ae7afe3047e1cbf6db7cfd1"
+  bytecode_supplier_address: "0xabab98ff0241f2414ce36378e5f2383c07488200"
+  genesis_input_path: "./local-chains/v31.0/genesis.json"
+  chain_id: 506
+
 l1_sender:
   pubdata_mode: Blobs
-  operator_commit_sk: '0x62364ecc1a0007cc3ba165e57000a5d890f2d69d9e9b4a1e9e86af646c1f9b25'
-  operator_prove_sk: '0xcfa9ab3c4cf0c6e4d207cf84cb95bbf87885174182f91b9c947b2c7a6b89439d'
-  operator_execute_sk: '0xf292a0f460be19ab73c57c33d4a979ddf6cf4385c86d12158b393ece98ad4d30'
-
+  operator_commit_sk: "0xc78123547577c67de697c0e80911cb913d2be569d182ed2d42bd7cd30851948c"
+  operator_prove_sk: "0x1ed8abac5f8143e0f37cc4da4655cb14c82473c1254da12683956749b0cca5bd"
+  operator_execute_sk: "0x7a2f70531f7ba8a79e74c2be455eb7dfa0526f2e802ab9d7132959f040acafc5"

@@ -8,7 +8,6 @@ pub enum PubdataMode {
     Blobs = 0,
     Calldata = 1,
     Validium = 2,
-    RelayedL2Calldata = 3,
 }
 
 impl PubdataMode {
@@ -26,7 +25,6 @@ impl PubdataMode {
             Self::Blobs => Self::Calldata,
             Self::Calldata => Self::Calldata,
             Self::Validium => Self::Validium,
-            Self::RelayedL2Calldata => Self::RelayedL2Calldata,
         }
     }
 
@@ -35,7 +33,6 @@ impl PubdataMode {
             0 => Some(PubdataMode::Blobs),
             1 => Some(PubdataMode::Calldata),
             2 => Some(PubdataMode::Validium),
-            3 => Some(PubdataMode::RelayedL2Calldata),
             _ => None,
         }
     }
@@ -51,9 +48,6 @@ impl PubdataMode {
                 zksync_os_contract_interface::models::DACommitmentScheme::BlobsAndPubdataKeccak256
             }
             Self::Validium => zksync_os_contract_interface::models::DACommitmentScheme::EmptyNoDA,
-            Self::RelayedL2Calldata => {
-                zksync_os_contract_interface::models::DACommitmentScheme::BlobsAndPubdataKeccak256
-            }
         }
     }
 }

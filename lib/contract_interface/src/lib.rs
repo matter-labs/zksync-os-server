@@ -2,7 +2,6 @@ pub mod calldata;
 pub mod l1_discovery;
 mod metrics;
 pub mod models;
-pub mod settlement_layer_intervals;
 
 use crate::IBridgehub::{
     IBridgehubInstance, L2TransactionRequestDirect, L2TransactionRequestTwoBridgesOuter,
@@ -39,7 +38,10 @@ alloy::sol! {
         bytes reservedDynamic;
     }
 
-    // `Messaging.sol`
+    // `Messaging.sol` (v32+): interop roots carry the root's settlement-layer creation
+    // timestamp end-to-end — it is folded into the batch's dependency-roots rolling hash and
+    // double-checked against the settlement layer's record at batch execution
+    // (`ExecutorFacet._verifyDependencyInteropRoots`).
     #[derive(Debug)]
     struct InteropRoot {
         uint256 chainId;
@@ -48,9 +50,17 @@ alloy::sol! {
         bytes32[] sides;
     }
 
+    // The released v31 wire shape of an interop root (no timestamp). Only used to encode/decode
+    // the v31 forms of `addInteropRootsInBatch` and the execute-batches calldata; everything
+    // in-process carries the timestamped struct (legacy sources decode with `timestamp == 0`).
+    #[derive(Debug)]
+    struct InteropRootLegacy {
+        uint256 chainId;
+        uint256 blockOrBatchNumber;
+        bytes32[] sides;
+    }
+
     interface ServerNotifier {
-        event MigrateToGateway(uint256 indexed chainId, uint256 migrationNumber);
-        event MigrateFromGateway(uint256 indexed chainId, uint256 migrationNumber);
         event UpgradeTimestampUpdated(uint256 indexed chainId, uint256 indexed protocolVersion, uint256 upgradeTimestamp);
     }
 
@@ -61,6 +71,18 @@ alloy::sol! {
     interface IInteropCenter {
         function setInteropFee(uint256 _interopFee);
         function interopProtocolFee() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface IL2InteropCommitmentTree {
+        struct IMTLeaf {
+            uint256 value;
+            uint256 nextIndex;
+            uint256 nextValue;
+        }
+
+        function leafCount() external view returns (uint256);
+        function leafAt(uint256 index) external view returns (IMTLeaf memory);
     }
 
     #[sol(rpc)]
@@ -78,7 +100,8 @@ alloy::sol! {
     // `IMessageRoot.sol`
     #[sol(rpc)]
     interface IMessageRoot {
-        // Event that is being emitted by GW
+        // Emitted whenever MessageRoot advances the shared interop root imported by chains.
+        // v32+ form: carries the root's creation timestamp.
         event NewInteropRoot (
             uint256 indexed chainId,
             uint256 indexed blockNumber,
@@ -87,7 +110,7 @@ alloy::sol! {
             bytes32[] sides
         );
 
-        // Event that is being emmited by L1
+        // Emitted when a chain root is appended to the shared tree.
         event AppendedChainRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 indexed chainRoot);
 
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
@@ -96,9 +119,24 @@ alloy::sol! {
 
         function getChainTree(uint256 chainId) public view returns (Bytes32PushTree);
 
+        // `l1Timestamp` is part of the batch-leaf preimage, so proofs bind the batch to L1 time.
         event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot, uint256 l1Timestamp);
         function getMerklePathForChain(uint256 _chainId) external view returns (bytes32[] memory);
         mapping(uint256 chainId => uint256 chainIndex) public chainIndex;
+    }
+
+    // The released (v31) MessageRoot wire forms, still emitted/consumed on deployments that
+    // predate the timestamped interop roots. The interop watcher listens for both event forms;
+    // v31 blocks encode the import system tx with the legacy call (selector `0xcca2f7bc`).
+    interface IMessageRootLegacy {
+        event NewInteropRoot (
+            uint256 indexed chainId,
+            uint256 indexed blockNumber,
+            uint256 indexed logId,
+            bytes32[] sides
+        );
+
+        function addInteropRootsInBatch(InteropRootLegacy[] calldata interopRootsInput);
     }
 
     // `ZKChainStorage.sol`
@@ -167,30 +205,6 @@ alloy::sol! {
             uint256 _l2GasLimit,
             uint256 _l2GasPerPubdataByteLimit
         ) external view returns (uint256);
-    }
-
-    #[sol(rpc)]
-    interface IChainAssetHandler {
-        struct MigrationInterval {
-            uint256 migrateToGWBatchNumber;
-            uint256 migrateFromGWBatchNumber;
-            uint256 settlementLayerBatchLowerBound;
-            uint256 settlementLayerBatchUpperBound;
-            uint256 settlementLayerChainId;
-            bool isActive;
-        }
-
-        function migrationNumber(uint256 _chainId) external view returns (uint256);
-        event MigrationFinalized(
-            uint256 indexed chainId,
-            uint256 migrationNumber,
-            bytes32 indexed assetId,
-            address indexed zkChain
-        );
-        function migrationInterval(
-            uint256 _chainId,
-            uint256 _migrationNumber
-        ) external view returns (MigrationInterval memory interval);
     }
 
     // `IChainTypeManager.sol`
@@ -381,16 +395,10 @@ alloy::sol! {
            bytes32 value;
        }
 
-        /// A batch's interop commitment tree (IMT) root snapshots at its boundaries, as committed
-        /// by the bootloader into the chain batch root (leaves 2 and 3 of ChainBatchRootTree).
-        struct BatchImtRoots {
-            bytes32 rootBegin;
-            bytes32 rootEnd;
-        }
-
-        /// `BatchDecoder.DecodedExecuteData` — the execute-batches wire struct of the
-        /// atomic-interop contracts (protocol v0.31.x on that branch, v32+ once released):
-        /// the payload after the version byte is `abi.encode` of this struct.
+        /// `BatchDecoder.DecodedExecuteData` — the execute-batches wire struct of the v32
+        /// (atomic-interop) contracts: the payload after the version byte is `abi.encode` of this
+        /// one struct-typed parameter. The gateway-only fields of the v31 flat tuple (logs,
+        /// messages, multichain roots, operator) were dropped upstream — L1 settlement only.
         struct DecodedExecuteData {
             StoredBatchInfo[] batchesData;
             PriorityOpsBatchInfo[] priorityOpsData;
@@ -672,30 +680,6 @@ impl<P: Provider + Clone> Bridgehub<P> {
     pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
         self.instance.getAllZKChainChainIDs().call().await
     }
-
-    pub async fn whitelisted_settlement_layers(
-        &self,
-        chain_id: impl Into<U256>,
-    ) -> alloy::contract::Result<bool> {
-        self.instance
-            .whitelistedSettlementLayers(chain_id.into())
-            .call()
-            .await
-    }
-
-    pub async fn chain_asset_handler_address(&self) -> alloy::contract::Result<Address> {
-        self.instance.chainAssetHandler().call().await
-    }
-
-    pub async fn migration_number(&self, chain_id: u64) -> alloy::contract::Result<U256> {
-        let chain_asset_handler_address = self.chain_asset_handler_address().await?;
-        let chain_asset_handler =
-            IChainAssetHandler::new(chain_asset_handler_address, self.instance.provider());
-        chain_asset_handler
-            .migrationNumber(U256::from(chain_id))
-            .call()
-            .await
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -807,12 +791,13 @@ impl<P: Provider> ZkChain<P> {
         self.instance.provider()
     }
 
-    pub async fn stored_batch_hash(&self, batch_number: u64) -> Result<B256> {
+    pub async fn stored_batch_hash(&self, batch_number: u64, block_id: BlockId) -> Result<B256> {
         self.instance
             .storedBatchHash(U256::from(batch_number))
+            .block(block_id)
             .call()
             .await
-            .enrich("storedBatchHash", None)
+            .enrich("storedBatchHash", Some(block_id))
     }
 
     pub async fn get_total_batches_committed(&self, block_id: BlockId) -> Result<u64> {
@@ -986,5 +971,27 @@ impl<T> Enrich for alloy::contract::Result<T> {
             None => Error::Call(Box::new(e), function_name.to_string()),
             Some(block_id) => Error::CallAtBlock(Box::new(e), function_name.to_string(), block_id),
         })
+    }
+}
+
+impl From<&InteropRoot> for InteropRootLegacy {
+    fn from(root: &InteropRoot) -> Self {
+        Self {
+            chainId: root.chainId,
+            blockOrBatchNumber: root.blockOrBatchNumber,
+            sides: root.sides.clone(),
+        }
+    }
+}
+
+impl From<InteropRootLegacy> for InteropRoot {
+    fn from(root: InteropRootLegacy) -> Self {
+        Self {
+            chainId: root.chainId,
+            blockOrBatchNumber: root.blockOrBatchNumber,
+            // The v31 wire has no timestamp; zero marks a root sourced from a legacy event/call.
+            timestamp: U256::ZERO,
+            sides: root.sides,
+        }
     }
 }
