@@ -79,6 +79,14 @@ impl JobMetadata {
         self.assigned_to_prover_id = Some(assigned_to_prover_id);
         self.current_attempt += 1;
     }
+
+    /// Clear the assignment so the job can be picked up again immediately
+    /// (e.g. after the assigned prover submitted a proof that failed verification).
+    /// `current_attempt` is preserved as assignment history.
+    pub fn unassign(&mut self) {
+        self.assigned_at = None;
+        self.assigned_to_prover_id = None;
+    }
 }
 
 /// Statistics about a batch of jobs for logging and metrics
@@ -90,7 +98,7 @@ pub struct JobBatchStats {
     pub max_time_since_added: Duration,
     pub total_txs: usize,
     pub total_computational_native_used: Option<u64>,
-    // if at least one of the batches was already assigned
+    // present if at least one of the batches is currently assigned
     pub job_with_max_attempts_info: Option<PreviousAttemptsInfo>,
 }
 
@@ -106,20 +114,26 @@ impl JobBatchStats {
 
         let min_batch = &metadata_list[0];
         let max_batch_number = metadata_list[metadata_list.len() - 1].batch_number;
-        let job_with_max_attempts = metadata_list
+        // `unassign` keeps `current_attempt` as history but clears the assignment fields,
+        // so `current_attempt > 0` does not imply the job is assigned.
+        let job_with_max_attempts_info = metadata_list
             .iter()
-            .max_by_key(|m| m.current_attempt)
-            .unwrap();
-
-        let job_with_max_attempts_info = if job_with_max_attempts.current_attempt > 0 {
-            Some(PreviousAttemptsInfo {
-                attempts: job_with_max_attempts.current_attempt,
-                time_since_last_assignment: job_with_max_attempts.assigned_at.unwrap().elapsed(),
-                last_assigned_to: job_with_max_attempts.assigned_to_prover_id.clone().unwrap(),
+            .filter(|m| m.current_attempt > 0)
+            .filter_map(|m| {
+                Some((
+                    m.current_attempt,
+                    m.assigned_at?,
+                    m.assigned_to_prover_id.clone()?,
+                ))
             })
-        } else {
-            None
-        };
+            .max_by_key(|(attempts, ..)| *attempts)
+            .map(
+                |(attempts, assigned_at, last_assigned_to)| PreviousAttemptsInfo {
+                    attempts,
+                    time_since_last_assignment: assigned_at.elapsed(),
+                    last_assigned_to,
+                },
+            );
 
         JobBatchStats {
             min_batch_number: min_batch.batch_number,

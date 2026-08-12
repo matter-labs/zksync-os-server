@@ -10,9 +10,14 @@ pub const PROTOCOL_VERSION_V30_2: &str = "v30.2";
 /// Protocol version v31.0
 pub const PROTOCOL_VERSION_V31_0: &str = "v31.0";
 
+/// Protocol version v32.0
+pub const PROTOCOL_VERSION_V32_0: &str = "v32.0";
+
 /// Current default protocol version for local chain configuration.
-pub const PROTOCOL_VERSION: &str = PROTOCOL_VERSION_V30_2;
+/// v30.x can no longer be launched with default settings: V6 proving support was dropped.
+pub const PROTOCOL_VERSION: &str = PROTOCOL_VERSION_V31_0;
 
 /// Next protocol version for local chain configuration.
-/// Required for testing the upgrade process.
-pub const NEXT_PROTOCOL_VERSION: &str = PROTOCOL_VERSION_V31_0;
+/// Required for testing the upgrade process. No local-chain fixtures exist for it yet;
+/// tests reach it by upgrading a `PROTOCOL_VERSION` chain in-test.
+pub const NEXT_PROTOCOL_VERSION: &str = PROTOCOL_VERSION_V32_0;

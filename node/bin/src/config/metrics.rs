@@ -29,7 +29,6 @@ pub(super) static CONFIG_METRICS: vise::Global<ConfigMetrics> = vise::Global::ne
 pub(crate) fn report_static_config_metrics(config: &Config) {
     report_flat_config_metrics(&config.general_config, "general");
     report_flat_config_metrics(&config.l1_provider_config, "l1_provider");
-    report_flat_config_metrics_opt(config.gateway_provider_config.as_ref(), "gateway_provider");
     report_flat_config_metrics(&config.network_config, "network");
     report_flat_config_metrics(&config.genesis_config, "genesis");
     report_flat_config_metrics(&config.rpc_config, "rpc");
@@ -37,7 +36,6 @@ pub(crate) fn report_static_config_metrics(config: &Config) {
     report_flat_config_metrics(&config.tx_validator_config, "tx_validator");
     report_flat_config_metrics(&config.sequencer_config, "sequencer");
     report_flat_config_metrics(&config.l1_sender_config, "l1_sender");
-    report_flat_config_metrics(&config.gateway_sender_config, "gateway_sender");
     report_flat_config_metrics(&config.l1_watcher_config, "l1_watcher");
     report_flat_config_metrics(&config.batcher_config, "batcher");
     report_flat_config_metrics(

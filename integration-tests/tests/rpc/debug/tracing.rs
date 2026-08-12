@@ -87,9 +87,10 @@ fn pubdata_exhaustion_fee_config() -> FeeConfig {
     }
 }
 
-/// This limit is high enough for validation to pass under `pubdata_exhaustion_fee_config()`,
-/// but low enough for the tx to run out of resources when paying for execution pubdata.
-const PUBDATA_EXHAUSTION_GAS_LIMIT: u64 = 580_000;
+/// This limit is high enough for validation (including the post-v31 intrinsic-native check) to
+/// pass under `pubdata_exhaustion_fee_config()`, but low enough for the tx to run out of
+/// resources when paying for execution pubdata.
+const PUBDATA_EXHAUSTION_GAS_LIMIT: u64 = 750_000;
 
 fn assert_pubdata_exhaustion_call_frame(call_frame: &CallFrame) {
     assert_eq!(

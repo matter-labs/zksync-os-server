@@ -92,9 +92,9 @@ done
 # Check if folder path is provided
 if [ -z "$CONFIG_DIR" ]; then
     echo -e "${RED}Usage: $0 <folder-path> [--logs-dir <path>]${NC}"
-    echo -e "Example: $0 ./local-chains/v30.2/default"
+    echo -e "Example: $0 ./local-chains/v31.0/default"
     echo -e "Example: $0 ./local-chains/v30.2/multi_chain"
-    echo -e "Example: $0 ./local-chains/v30.2/default --logs-dir ./logs"
+    echo -e "Example: $0 ./local-chains/v31.0/default --logs-dir ./logs"
     exit 1
 fi
 

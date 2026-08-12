@@ -37,6 +37,11 @@ pub struct L1SenderMetrics {
     #[metrics(labels = ["command"])]
     pub parallel_transactions: LabeledFamily<&'static str, Gauge<u64>>,
 
+    /// Occupancy of the pipelined sender's in-flight window: transactions submitted but not
+    /// yet observed mined. Bounded by `command_limit`.
+    #[metrics(labels = ["command"])]
+    pub txs_in_flight: LabeledFamily<&'static str, Gauge<u64>>,
+
     /// L1 Transaction fee in Ether (i.e. total cost of commit/prove/execute)
     #[metrics(labels = ["command"], buckets = Buckets::exponential(0.0001..=100.0, 3.0))]
     pub l1_transaction_fee_ether: LabeledFamily<&'static str, Histogram<f64>>,

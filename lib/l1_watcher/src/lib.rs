@@ -24,9 +24,6 @@ pub use interop_watcher::InteropWatcher;
 mod watcher;
 pub use watcher::{L1Watcher, StartResolver};
 
-mod sl_aware_watcher;
-pub use sl_aware_watcher::{SegmentResolver, SegmentSpec, SlAwareL1Watcher};
-
 mod traits;
 pub(crate) use traits::{ProcessL1Event, ProcessRawEvents};
 
@@ -34,14 +31,9 @@ mod sink;
 pub use sink::EventSink;
 
 mod committed_batch_provider;
-pub use committed_batch_provider::{
-    CommittedBatchProvider, fetch_batch, fetch_batch_commit_tx_hash,
-};
+pub use committed_batch_provider::{CommittedBatchProvider, fetch_live_committed_batch};
 
 mod persist_batch_watcher;
 pub use persist_batch_watcher::L1PersistBatchWatcher;
-
-mod gateway_migration_watcher;
-pub use gateway_migration_watcher::GatewayMigrationWatcher;
 
 pub mod util;

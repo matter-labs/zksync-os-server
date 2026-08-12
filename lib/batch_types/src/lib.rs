@@ -10,4 +10,6 @@ mod batch_info;
 pub mod batcher_model;
 pub mod chain_batch_root;
 
-pub use batch_info::{CommittedBatchInfo, DiscoveredCommittedBatch, PendingBatchInfo};
+pub use batch_info::{
+    CanonicalBatchCommitData, CommittedBatchInfo, DiscoveredCommittedBatch, PendingBatchInfo,
+};

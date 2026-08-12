@@ -156,6 +156,11 @@ impl Genesis {
         }
     }
 
+    /// Cheap accessor: `chain_id` is known upfront and doesn't require building genesis state.
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
     pub async fn state(&self) -> &GenesisState {
         let protocol_version = &self.genesis_upgrade_tx().await.protocol_version;
         self.state
@@ -241,7 +246,9 @@ pub fn genesis_header() -> Sealed<Header> {
     header.seal_slow()
 }
 
-async fn build_genesis(
+/// Builds the genesis state from a genesis input, without requiring an L1 connection
+/// (unlike [`Genesis::state`], which resolves the protocol version on-chain).
+pub async fn build_genesis(
     genesis_input_source: &dyn GenesisInputSource,
     chain_id: u64,
     protocol_version: &ProtocolSemanticVersion,

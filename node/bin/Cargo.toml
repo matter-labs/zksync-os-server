@@ -21,6 +21,9 @@ jemalloc = [
     "zksync_os_rpc/jemalloc",
     "tikv-jemallocator/stats",
 ]
+# GCP replay archive backends (GCS storage + GCP KMS encryption). Off by default so local builds
+# skip the Google Cloud SDK; production builds pass `--features gcp`.
+gcp = ["zksync_os_replay_archive/gcp"]
 
 [dependencies]
 zksync_os_provider.workspace = true
@@ -40,6 +43,7 @@ zksync_os_pipeline.workspace = true
 zksync_os_sequencer.workspace = true
 zksync_os_status_server.workspace = true
 zksync_os_multivm.workspace = true
+zksync_os_native_pig.workspace = true
 zksync_os_contract_interface.workspace = true
 zksync_os_revm_consistency_checker.workspace = true
 zksync_os_gas_adjuster.workspace = true
@@ -65,14 +69,13 @@ zksync_os_backpressure.workspace = true
 zk_ee_prev.workspace = true
 zk_os_basic_system_prev.workspace = true
 zk_os_forward_system_prev.workspace = true
-
-zk_ee.workspace = true
-zk_os_basic_system.workspace = true
-zk_os_forward_system.workspace = true
+execution_utils_prev.workspace = true
+full_statement_verifier_prev.workspace = true
 
 zksync_os_interface.workspace = true
 execution_utils.workspace = true
-full_statement_verifier.workspace = true
+riscv_transpiler.workspace = true
+verifier_common.workspace = true
 
 reth-tasks.workspace = true
 reth-network-peers.workspace = true
@@ -119,3 +122,6 @@ url.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = { workspace = true, optional = true }
+
+[dev-dependencies]
+semver.workspace = true

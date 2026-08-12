@@ -32,6 +32,11 @@ pub struct BatchVerificationSequencerMetrics {
     #[metrics(labels = ["reason"])]
     pub failed_responses: LabeledFamily<&'static str, Counter>,
 
+    /// How long the current batch has been unable to collect enough signatures.
+    /// Zero whenever signature collection is healthy.
+    #[metrics(unit = Unit::Seconds)]
+    pub stuck_duration: Gauge<f64>,
+
     /// Latest request_id used for batch verification
     pub last_request_id: Gauge<u64>,
 

@@ -4,12 +4,11 @@
 
 use crate::subpools::interop_roots::InteropRootsSubpool;
 use crate::subpools::l1::L1Subpool;
-use crate::subpools::sl_chain_id::SlChainIdSubpool;
 use crate::subpools::upgrade::UpgradeSubpool;
 use async_trait::async_trait;
 use std::sync::Arc;
 use zksync_os_l1_watcher::EventSink;
-use zksync_os_types::{IndexedInteropRoot, L1PriorityEnvelope, SystemTxEnvelope, UpgradeInfo};
+use zksync_os_types::{IndexedInteropRoot, L1PriorityEnvelope, UpgradeInfo};
 
 #[async_trait]
 impl EventSink<Arc<L1PriorityEnvelope>> for L1Subpool {
@@ -21,13 +20,6 @@ impl EventSink<Arc<L1PriorityEnvelope>> for L1Subpool {
 #[async_trait]
 impl EventSink<UpgradeInfo> for UpgradeSubpool {
     async fn push(&mut self, item: UpgradeInfo) {
-        self.insert(item).await
-    }
-}
-
-#[async_trait]
-impl EventSink<SystemTxEnvelope> for SlChainIdSubpool {
-    async fn push(&mut self, item: SystemTxEnvelope) {
         self.insert(item).await
     }
 }

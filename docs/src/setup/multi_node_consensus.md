@@ -11,10 +11,10 @@ A ConsensusNode will propose blocks when it is leader and will follow canonized 
 
 ### Prerequisites
 
-Before starting any node, an L1 must be running at `general_l1_rpc_url` (defaults to `http://localhost:8545`) with the chain's contract state preloaded. The `run_local.sh` script does this automatically; to do it manually for the v30.2 default chain:
+Before starting any node, an L1 must be running at `general_l1_rpc_url` (defaults to `http://localhost:8545`) with the chain's contract state preloaded. The `run_local.sh` script does this automatically; to do it manually for the v31.0 default chain:
 
 ```bash
-gzip -d < ./local-chains/v30.2/l1-state.json.gz > /tmp/l1-state.json
+gzip -d < ./local-chains/v31.0/l1-state.json.gz > /tmp/l1-state.json
 anvil --load-state /tmp/l1-state.json --port 8545 --block-time 0.25 --mixed-mining --slots-in-an-epoch 10
 ```
 
@@ -59,7 +59,7 @@ CONSENSUS_ENABLED=true \
 CONSENSUS_BOOTSTRAP=true \
 CONSENSUS_PEER_IDS__JSON="${PEER_IDS_JSON}" \
 GENERAL_ROCKS_DB_PATH="db/en-1" \
-cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
+cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v31.0/default/config.yaml
 ```
 
 ConsensusNode #2:
@@ -78,7 +78,7 @@ STATUS_SERVER_ADDRESS=0.0.0.0:3072 \
 RPC_ADDRESS=0.0.0.0:3051 \
 OBSERVABILITY_PROMETHEUS_PORT=3313 \
 GENERAL_ROCKS_DB_PATH="db/en-2" \
-cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
+cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v31.0/default/config.yaml
 ```
 
 ConsensusNode #3:
@@ -97,7 +97,7 @@ STATUS_SERVER_ADDRESS=0.0.0.0:3073 \
 RPC_ADDRESS=0.0.0.0:3052 \
 OBSERVABILITY_PROMETHEUS_PORT=3314 \
 GENERAL_ROCKS_DB_PATH="db/en-3" \
-cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v30.2/default/config.yaml
+cargo run -- --config ./local-chains/local_dev.yaml --config ./local-chains/v31.0/default/config.yaml
 ```
 
 Failover check:

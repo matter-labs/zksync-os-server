@@ -44,7 +44,6 @@ metrics.workspace = true
 
 reth-network.workspace = true
 reth-network-peers.workspace = true
-reth-net-nat.workspace = true
 reth-eth-wire.workspace = true
 reth-discv5.workspace = true
 reth-chainspec.workspace = true
@@ -54,7 +53,6 @@ reth-tasks.workspace = true
 [dev-dependencies]
 assert_matches.workspace = true
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
-test-casing.workspace = true
 
 reth-network = { workspace = true, features = ["test-utils"] }
 reth-provider = { workspace = true, features = ["test-utils"] }

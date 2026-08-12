@@ -1,4 +1,4 @@
-pub use fee_provider::{FeeConfig, FeeParams, FeeProvider};
+pub use fee_provider::{FeeConfig, FeeProvider};
 
 pub mod block_applier;
 pub mod block_canonizer;

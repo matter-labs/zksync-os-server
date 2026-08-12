@@ -1,10 +1,10 @@
 use crate::config::{
     BackpressureConfig, BaseTokenPriceUpdaterConfig, BatchVerificationConfig, BatcherConfig,
     Config, ConsensusConfig, ExternalPriceApiClientConfig, FeeConfig, GasAdjusterConfig,
-    GatewaySenderConfig, GeneralConfig, GenesisConfig, InteropFeeUpdaterConfig, L1SenderConfig,
-    L1WatcherConfig, MempoolConfig, MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig,
-    ProverApiConfig, ProverInputGeneratorConfig, ProviderConfig, ReplayArchiveConfig, RpcConfig,
-    SequencerConfig, StatusServerConfig,
+    GeneralConfig, GenesisConfig, InteropFeeUpdaterConfig, L1SenderConfig, L1WatcherConfig,
+    MempoolConfig, MempoolTxValidatorConfig, NetworkConfig, ObservabilityConfig, ProverApiConfig,
+    ProverInputGeneratorConfig, ProviderConfig, ReplayArchiveConfig, RpcConfig, SequencerConfig,
+    StatusServerConfig,
 };
 use smart_config::{ConfigRepository, ConfigSources, Json, Yaml};
 use std::fs;
@@ -25,12 +25,6 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         .expect("Failed to load L1 provider config")
         .parse()
         .expect("Failed to parse L1 provider config");
-
-    let gateway_provider_config = repo
-        .get::<ProviderConfig>("gateway_provider")
-        .expect("Failed to load Gateway provider config")
-        .parse_opt()
-        .expect("Failed to parse Gateway provider config");
 
     let network_config = repo
         .single::<NetworkConfig>()
@@ -83,12 +77,6 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         // This line just enforces that we expect no pubdata mode for external node.
         l1_sender_config.pubdata_mode = None;
     }
-
-    let gateway_sender_config = repo
-        .single::<GatewaySenderConfig>()
-        .expect("Failed to load Gateway sender config")
-        .parse()
-        .expect("Failed to parse Gateway sender config");
 
     let l1_watcher_config = repo
         .single::<L1WatcherConfig>()
@@ -177,7 +165,6 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
     Config {
         general_config,
         l1_provider_config,
-        gateway_provider_config,
         network_config,
         consensus_config,
         genesis_config,
@@ -186,7 +173,6 @@ pub async fn build_external_config(repo: ConfigRepository<'_>) -> Config {
         tx_validator_config,
         sequencer_config,
         l1_sender_config,
-        gateway_sender_config,
         l1_watcher_config,
         batcher_config,
         prover_input_generator_config,

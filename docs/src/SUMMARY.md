@@ -7,6 +7,7 @@
 - [Setup](setup/index.md)
   - [Prerequisites](setup/prerequisites.md)
   - [Local Run](setup/local_run.md)
+  - [Besu Network](setup/besu.md)
   - [Docker Setup](setup/docker.md)
   - [Multi-Node Consensus](setup/multi_node_consensus.md)
   - [Batch verification (2FA)](setup/batch_verification.md)
@@ -29,7 +30,6 @@
   - [Base token price updater](design/base_token_price_updater.md)
   - [Fees](design/fees.md)
   - [zks_getProof](design/zks_getProof.md)
-  - [Gateway Migration](design/migration.md)
 
 ---
 

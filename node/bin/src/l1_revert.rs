@@ -1,8 +1,11 @@
+use alloy::eips::BlockId;
 use alloy::primitives::U256;
 use anyhow::Context as _;
-use zksync_os_contract_interface::IValidatorTimelock;
+use backon::{ConstantBuilder, Retryable};
+use std::time::Duration;
 use zksync_os_contract_interface::l1_discovery::L1State;
-use zksync_os_l1_watcher::{fetch_batch, fetch_batch_commit_tx_hash};
+use zksync_os_contract_interface::{IValidatorTimelock, ZkChain};
+use zksync_os_l1_watcher::fetch_live_committed_batch;
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_provider::{EthWalletProvider, NodeProvider};
 
@@ -26,7 +29,6 @@ struct RevertPlan {
 async fn derive_last_l1_batch_to_keep(
     from_block_number: u64,
     l1_state: &L1State,
-    max_blocks_to_process: u64,
 ) -> anyhow::Result<u64> {
     let last_committed_batch = l1_state.last_committed_batch;
     let last_executed_batch = l1_state.last_executed_batch;
@@ -40,8 +42,9 @@ async fn derive_last_l1_batch_to_keep(
     );
 
     let fetch_committed = |batch: u64| async move {
-        fetch_batch(&l1_state.diamond_proxy_sl, batch, max_blocks_to_process)
+        fetch_live_committed_batch(&l1_state.diamond_proxy_l1, batch)
             .await
+            .map(|(batch_data, _commit_tx_hash)| batch_data)
             .with_context(|| format!("failed to fetch committed batch {batch} from L1"))
     };
 
@@ -96,17 +99,17 @@ async fn perform_l1_revert(
     plan: &RevertPlan,
     l1_state: &L1State,
     chain_id: u64,
-    sl_provider: &NodeProvider,
+    l1_provider: &NodeProvider,
 ) -> anyhow::Result<()> {
-    let mut sl_provider = sl_provider.clone();
+    let mut l1_provider = l1_provider.clone();
 
     let reverter_address = plan
         .l1_reverter_sk
-        .register_with_wallet(sl_provider.wallet_mut())
+        .register_with_wallet(l1_provider.wallet_mut())
         .await
         .context("failed to initialize `sequencer.rebuild.l1_reverter_sk`")?;
 
-    let validator_timelock = IValidatorTimelock::new(l1_state.validator_timelock_sl, sl_provider);
+    let validator_timelock = IValidatorTimelock::new(l1_state.validator_timelock, l1_provider);
     let reverter_role = validator_timelock.REVERTER_ROLE().call().await?;
     let has_reverter_role = validator_timelock
         .hasRoleForChainId(U256::from(chain_id), reverter_role, reverter_address)
@@ -122,13 +125,13 @@ async fn perform_l1_revert(
         current_last_committed_batch = l1_state.last_committed_batch,
         current_last_executed_batch = l1_state.last_executed_batch,
         reverter = %reverter_address,
-        validator_timelock = %l1_state.validator_timelock_sl,
+        validator_timelock = %l1_state.validator_timelock,
         "performing startup L1 revert"
     );
 
     let revert_tx = validator_timelock
         .revertBatchesSharedBridge(
-            *l1_state.diamond_proxy_sl.address(),
+            *l1_state.diamond_proxy_l1.address(),
             U256::from(plan.last_l1_batch_to_keep),
         )
         .from(reverter_address)
@@ -137,7 +140,7 @@ async fn perform_l1_revert(
         .with_context(|| {
             format!(
                 "failed to submit `revertBatchesSharedBridge` to validator timelock {}",
-                l1_state.validator_timelock_sl
+                l1_state.validator_timelock
             )
         })?;
 
@@ -158,6 +161,60 @@ async fn perform_l1_revert(
         "startup L1 revert completed"
     );
 
+    // Ensure L1 node returns the proper last committed batch number after the revert.
+    ensure_revert(&l1_state.diamond_proxy_l1, plan.last_l1_batch_to_keep).await?;
+
+    Ok(())
+}
+
+/// Waits until the settlement layer reports a committed-batch count consistent with the revert.
+async fn ensure_revert(
+    diamond_proxy_l1: &ZkChain<NodeProvider>,
+    last_l1_batch_to_keep: u64,
+) -> anyhow::Result<()> {
+    const RETRY_BUILDER: ConstantBuilder = ConstantBuilder::new()
+        .with_delay(Duration::from_secs(2))
+        .with_max_times(30);
+
+    let observed = match (|| async {
+        let committed = diamond_proxy_l1
+            .get_total_batches_committed(BlockId::latest())
+            .await
+            .context("failed to read totalBatchesCommitted")?;
+        anyhow::ensure!(
+            committed == last_l1_batch_to_keep,
+            "last committed batch is {committed}, expected == {last_l1_batch_to_keep}"
+        );
+        anyhow::Ok(committed)
+    })
+    .retry(RETRY_BUILDER)
+    .notify(|err, _| {
+        tracing::warn!(
+            error = %err,
+            last_l1_batch_to_keep,
+            "L1 revert not yet observable at the latest block; retrying"
+        );
+    })
+    .await
+    {
+        Ok(committed) => committed,
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                last_l1_batch_to_keep,
+                "L1 revert did not become observable within the retry timeout; the SL \
+                 RPC kept reporting a committed batch different from the kept batch"
+            );
+            return Err(err)
+                .context("L1 revert not observable at the latest block within the retry timeout");
+        }
+    };
+
+    tracing::info!(
+        last_committed_batch = observed,
+        last_l1_batch_to_keep,
+        "L1 revert observable: settlement-layer committed batch decreased to the expected value"
+    );
     Ok(())
 }
 
@@ -166,7 +223,6 @@ async fn perform_l1_revert(
 async fn plan_l1_revert(
     rebuild: &RebuildConfig,
     l1_state: &L1State,
-    max_blocks_to_process: u64,
 ) -> anyhow::Result<Option<RevertPlan>> {
     match rebuild {
         RebuildConfig::BlockRebuild { .. } => Ok(None),
@@ -181,13 +237,10 @@ async fn plan_l1_revert(
                 "DangerBlockRebuildWithL1Revert: deriving batch to revert from from_block_number"
             );
 
-            let last_l1_batch_to_keep = derive_last_l1_batch_to_keep(
-                bounds.from_block_number,
-                l1_state,
-                max_blocks_to_process,
-            )
-            .await
-            .context("failed to derive last_l1_batch_to_keep")?;
+            let last_l1_batch_to_keep =
+                derive_last_l1_batch_to_keep(bounds.from_block_number, l1_state)
+                    .await
+                    .context("failed to derive last_l1_batch_to_keep")?;
 
             Ok(Some(RevertPlan {
                 last_l1_batch_to_keep,
@@ -217,13 +270,12 @@ async fn plan_l1_revert(
                 l1_state.last_executed_batch,
             );
 
-            let on_chain_commit_tx_hash = fetch_batch_commit_tx_hash(
-                &l1_state.diamond_proxy_sl,
-                from_batch_number,
-                max_blocks_to_process,
-            )
-            .await
-            .context("failed to fetch on-chain commit tx hash for L1Revert from_batch_number")?;
+            let (_, on_chain_commit_tx_hash) =
+                fetch_live_committed_batch(&l1_state.diamond_proxy_l1, from_batch_number)
+                    .await
+                    .context(
+                        "failed to fetch on-chain commit tx hash for L1Revert from_batch_number",
+                    )?;
 
             if on_chain_commit_tx_hash != *from_batch_commit_tx_hash {
                 tracing::info!(
@@ -260,18 +312,17 @@ pub async fn revert_l1_on_startup(
     rebuild: &RebuildConfig,
     config: &Config,
     l1_state: &L1State,
-    sl_provider: &NodeProvider,
+    l1_provider: &NodeProvider,
 ) -> anyhow::Result<bool> {
     let chain_id = config
         .genesis_config
         .chain_id
         .context("`genesis.chain_id` is required for startup rebuild")?;
-    let max_blocks = config.l1_watcher_config.max_blocks_to_process;
 
-    match plan_l1_revert(rebuild, l1_state, max_blocks).await? {
+    match plan_l1_revert(rebuild, l1_state).await? {
         None => Ok(false),
         Some(plan) => {
-            perform_l1_revert(&plan, l1_state, chain_id, sl_provider)
+            perform_l1_revert(&plan, l1_state, chain_id, l1_provider)
                 .await
                 .context("failed to perform startup L1 revert")?;
             Ok(true)

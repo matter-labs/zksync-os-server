@@ -13,6 +13,8 @@ use zksync_os_operator_signer::SignerConfig;
 /// Accepts either:
 /// - A hex string (with or without `0x` prefix): parsed as a local private key (backward-compatible)
 /// - An object `{"type": "gcp_kms", "resource": "projects/..."}`: a GCP KMS key
+/// - An object `{"type": "azure_kms", "key_id": "https://{vault}.vault.azure.net/keys/{name}/{version}"}`:
+///   an Azure Key Vault (or Managed HSM) key
 #[derive(Debug)]
 pub struct SignerConfigDeserializer;
 
@@ -52,8 +54,17 @@ impl DeserializeParam<SignerConfig> for SignerConfigDeserializer {
                                 })?;
                         Ok(SignerConfig::gcp_kms(resource.to_string()))
                     }
+                    "azure_kms" => {
+                        let key_id =
+                            obj.get("key_id").and_then(|v| v.as_str()).ok_or_else(|| {
+                                ErrorWithOrigin::custom(
+                                    "missing 'key_id' field in azure_kms signer config",
+                                )
+                            })?;
+                        Ok(SignerConfig::azure_kms(key_id.to_string()))
+                    }
                     other => Err(ErrorWithOrigin::custom(format!(
-                        "unknown signer type '{other}', expected 'gcp_kms'"
+                        "unknown signer type '{other}', expected 'gcp_kms' or 'azure_kms'"
                     ))),
                 }
             }
@@ -71,6 +82,9 @@ impl DeserializeParam<SignerConfig> for SignerConfigDeserializer {
             }
             SignerConfig::GcpKms { resource_name, .. } => {
                 serde_json::json!({"type": "gcp_kms", "resource": resource_name})
+            }
+            SignerConfig::AzureKms { key_id, .. } => {
+                serde_json::json!({"type": "azure_kms", "key_id": key_id})
             }
         }
     }
