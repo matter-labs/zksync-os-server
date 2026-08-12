@@ -72,8 +72,8 @@ Enable and configure the main node / sequencer with these options:
   How long the main node waits for responses during a single signature collection attempt.
 - `batch_verification_retry_delay`
   Delay between collection attempts when the main node retries.
-- `batch_verification_total_timeout`
-  Overall time budget for collecting enough signatures for a batch.
+
+Signature collection is retried until it succeeds. Unavailable ENs therefore stall the batch pipeline, which pauses block production through backpressure. `batch_verification_sequencer_stuck_duration_seconds` metric reports how long the current batch has been waiting for signatures.
 
 ## 2FA EN Configuration
 

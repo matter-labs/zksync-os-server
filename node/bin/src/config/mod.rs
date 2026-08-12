@@ -1863,9 +1863,6 @@ pub struct BatchVerificationConfig {
     /// [main node] Retry delay between attempts.
     #[config(default_t = Duration::from_secs(1))]
     pub retry_delay: Duration,
-    /// [main node] Total timeout.
-    #[config(default_t = Duration::from_secs(300))]
-    pub total_timeout: Duration,
     /// [external node] Signing key.
     // default address 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
     #[config(default_t = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".into())]
@@ -2272,7 +2269,6 @@ impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerifi
             accepted_signers: c.accepted_signers,
             request_timeout: c.request_timeout,
             retry_delay: c.retry_delay,
-            total_timeout: c.total_timeout,
             signing_key: c.signing_key,
         }
     }

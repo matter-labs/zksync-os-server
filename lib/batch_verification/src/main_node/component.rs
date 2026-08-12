@@ -137,14 +137,10 @@ pub(crate) enum BatchVerificationError {
     NotEnoughSigners(u64, u64),
     #[error("Verify request channel closed")]
     VerifyRequestChannelClosed,
+    #[error("Verify result channel closed")]
+    VerifyResultChannelClosed,
     #[error("Internal error: {0}")]
     Internal(String),
-}
-
-impl BatchVerificationError {
-    fn retryable(&self) -> bool {
-        matches!(self, BatchVerificationError::NotEnoughSigners(..))
-    }
 }
 
 impl BatchVerificationRunner {
@@ -215,43 +211,52 @@ impl BatchVerificationRunner {
             metrics.last_batch_number.set(batch_envelope.batch_number());
 
             let mut retry_count = 0;
-            let deadline = Instant::now() + self.config.total_timeout;
             let start_time = Instant::now();
             let signatures = loop {
                 match self
                     .collect_batch_verification_signatures(&batch_envelope, retry_count + 1)
                     .await
                 {
-                    Ok(result) => break Ok(result),
-                    Err(BatchVerificationError::VerifyRequestChannelClosed) => {
+                    Ok(result) => break result,
+                    Err(
+                        BatchVerificationError::VerifyRequestChannelClosed
+                        | BatchVerificationError::VerifyResultChannelClosed,
+                    ) => {
                         tracing::info!(
                             batch_number = batch_envelope.batch_number(),
-                            "Verify request channel closed, exiting batch verification runner"
+                            "Network channel closed, exiting batch verification runner"
                         );
                         break 'runner Ok(());
                     }
-                    Err(err) if err.retryable() => {
-                        if Instant::now() < deadline {
-                            retry_count += 1;
-                            tracing::warn!(
-                                "Batch verification failed, attempt {} retrying. Error: {}",
-                                retry_count,
-                                err
-                            );
-                            tokio::time::sleep(self.config.retry_delay).await;
+                    // Bailing out would kill the whole node (RPC included) without fixing either. Park on the batch
+                    // instead - the pipeline watermark stops advancing, so backpressure pauses block production
+                    // while reads keep being served.
+                    Err(err) => {
+                        retry_count += 1;
+                        let stuck_secs = start_time.elapsed().as_secs_f64();
+                        metrics.stuck_duration.set(stuck_secs);
+                        let batch_number = batch_envelope.batch_number();
+                        let message = "Batch verification error, retrying until it succeeds";
+                        // Internal errors never clear on their own - worth the louder level.
+                        if matches!(err, BatchVerificationError::Internal(_)) {
+                            tracing::error!(batch_number, retry_count, stuck_secs, %err, "{message}");
                         } else {
-                            tracing::warn!(
-                                "Batch verification failed after {} retries exceeding total timeout. Bailing. Last error: {}",
-                                retry_count,
-                                err
-                            );
-                            break Err(err);
+                            tracing::warn!(batch_number, retry_count, stuck_secs, %err, "{message}");
                         }
+                        tokio::time::sleep(self.config.retry_delay).await;
                     }
-                    Err(err) => break Err(err),
                 }
-            }?;
+            };
 
+            if retry_count > 0 {
+                metrics.stuck_duration.set(0.0);
+                tracing::info!(
+                    batch_number = batch_envelope.batch_number(),
+                    retry_count,
+                    stuck_secs = start_time.elapsed().as_secs_f64(),
+                    "Batch verification recovered"
+                );
+            }
             metrics.attempts_to_success.observe(retry_count + 1);
             metrics.total_latency.observe(start_time.elapsed());
 
@@ -301,11 +306,7 @@ impl BatchVerificationRunner {
             let response =
                 match tokio::time::timeout(remaining_time, self.verify_result_rx.recv()).await {
                     Ok(Some(response)) => response,
-                    Ok(None) => {
-                        return Err(BatchVerificationError::Internal(
-                            "Verify result channel closed".to_string(),
-                        ));
-                    }
+                    Ok(None) => return Err(BatchVerificationError::VerifyResultChannelClosed),
                     Err(_) => {
                         let responses_len = u64::try_from(responses.len()).unwrap();
                         return Err(BatchVerificationError::NotEnoughSigners(
@@ -459,6 +460,7 @@ mod tests {
     };
     use zksync_os_batch_types::{BatchSignature, ValidatedBatchSignature};
     use zksync_os_network::{PeerVerifyBatchResult, VerifyBatchResult};
+    use zksync_os_types::ProtocolSemanticVersion;
 
     const DUMMY_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
     const CHAIN_ID: u64 = 1;
@@ -472,7 +474,6 @@ mod tests {
             accepted_signers,
             request_timeout: Duration::from_secs(5),
             retry_delay: Duration::from_millis(10),
-            total_timeout: Duration::from_secs(10),
             // address 0x1DAeC5f53D365f4BBdA2d05Ed4FbE095b24AE15d
             signing_key: SecretString::new(
                 "0xa4cabe6332985182371b02c0b117d9e83c8d608714b63f71fb000178ef25fa65".into(),
@@ -670,24 +671,113 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_returns_ok_if_verify_request_channel_is_closed() {
+    async fn run_signs_batch_after_a_timed_out_attempt() {
         let batch = dummy_batch_envelope(3, 10, 15);
-        let (verifier, verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 0);
-        drop(verify_request_rx);
+        let (mut response, addr) = make_success_response(1, &batch).await;
+        let (mut verifier, mut verify_request_rx, verify_result_tx) =
+            make_verifier(vec![addr.to_string()], 0);
+        verifier.config.request_timeout = Duration::from_millis(50);
 
         let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
         let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
-        let peekable = zksync_os_pipeline::PeekableReceiver::new(input_rx);
+        let peekable = PeekableReceiver::new(input_rx);
 
         input_tx.try_send(batch).expect("failed to send batch");
         drop(input_tx);
 
         let run_handle = tokio::spawn(async move { verifier.run(peekable, output_tx).await });
 
+        // Leaving the first request unanswered makes the attempt time out.
+        let first = verify_request_rx
+            .recv()
+            .await
+            .expect("verifier should send a verification request");
+        let retried = verify_request_rx
+            .recv()
+            .await
+            .expect("verifier should retry the timed out request");
+        assert_eq!(retried.batch_number, first.batch_number);
+        // Responses are matched by request id, so a retry cannot be answered by a stale response.
+        assert_ne!(retried.request_id, first.request_id);
+
+        response.message.request_id = retried.request_id;
+        verify_result_tx
+            .send(response)
+            .await
+            .expect("failed to send verification response");
+
+        let out = output_rx.recv().await.expect("expected output batch");
+        assert!(matches!(
+            out.signature_data,
+            BatchSignatureData::Signed { .. }
+        ));
         run_handle
             .await
             .expect("run task should complete")
-            .expect("run should exit successfully when verify request channel is closed");
+            .expect("run should succeed");
+    }
+
+    #[tokio::test]
+    async fn run_parks_on_internal_error() {
+        // An unsupported protocol version fails encoding, so every attempt fails identically.
+        let mut batch = dummy_batch_envelope(3, 10, 15);
+        batch.batch.batch_info.protocol_version = ProtocolSemanticVersion::new(0, 1, 0);
+        let (verifier, mut verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 0);
+
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
+        let peekable = PeekableReceiver::new(input_rx);
+
+        input_tx.try_send(batch).expect("failed to send batch");
+        drop(input_tx);
+
+        let run_handle = tokio::spawn(async move { verifier.run(peekable, output_tx).await });
+
+        // Returning here - with either variant of `Result` - would take the whole node down.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), run_handle)
+                .await
+                .is_err(),
+            "runner should stay parked on the batch"
+        );
+        assert!(
+            verify_request_rx.try_recv().is_err(),
+            "encoding should fail before any request is sent"
+        );
+        assert!(output_rx.try_recv().is_err());
+    }
+
+    /// Feeds one batch and expects the runner to shut down without emitting it.
+    async fn assert_graceful_exit(verifier: BatchVerificationRunner) {
+        let (input_tx, input_rx) = mpsc::channel::<BatchForSigning<()>>(1);
+        let (output_tx, mut output_rx) = mpsc::channel::<SignedBatchEnvelope<()>>(1);
+
+        input_tx
+            .try_send(dummy_batch_envelope(3, 10, 15))
+            .expect("failed to send batch");
+        drop(input_tx);
+
+        verifier
+            .run(PeekableReceiver::new(input_rx), output_tx)
+            .await
+            .expect("run should exit successfully when a network channel is closed");
         assert!(output_rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_returns_ok_if_verify_request_channel_is_closed() {
+        let (verifier, verify_request_rx, _verify_result_tx) = make_verifier(Vec::new(), 0);
+        drop(verify_request_rx);
+
+        assert_graceful_exit(verifier).await;
+    }
+
+    #[tokio::test]
+    async fn run_returns_ok_if_verify_result_channel_is_closed() {
+        // Keep the request receiver alive so the runner fails on the result channel instead.
+        let (verifier, _verify_request_rx, verify_result_tx) = make_verifier(Vec::new(), 0);
+        drop(verify_result_tx);
+
+        assert_graceful_exit(verifier).await;
     }
 }
