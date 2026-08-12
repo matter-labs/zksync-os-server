@@ -4,11 +4,11 @@
 # L1-settling) for the run_local.sh `multi_chain` atomic preset.
 #
 # Produces, all from ONE consistent atomic deploy:
-#   local-chains/v32.0/genesis.json            (atomic genesis, root 0x1a1bcd…)
-#   local-chains/v32.0/l1-state.json.gz        (anvil dump WITH historical states, gzipped)
-#   local-chains/v32.0/wallets.yaml
-#   local-chains/v32.0/multi_chain/chain_6565.yaml
-#   local-chains/v32.0/multi_chain/chain_6566.yaml
+#   local-chains/v32.0-atomic/genesis.json            (atomic genesis, root 0x1a1bcd…)
+#   local-chains/v32.0-atomic/l1-state.json.gz        (anvil dump WITH historical states, gzipped)
+#   local-chains/v32.0-atomic/wallets.yaml
+#   local-chains/v32.0-atomic/multi_chain/chain_6565.yaml
+#   local-chains/v32.0-atomic/multi_chain/chain_6566.yaml
 #
 # WHY a full deploy (not a genesis swap): run_local.sh's anvil loads l1-state.json.gz and
 # the servers validate their on-chain chain registration against the atomic genesis root at
@@ -103,7 +103,7 @@ for cid,port in ports.items():
 genesis:
   bridgehub_address: '{g['bridgehub_address']}'
   bytecode_supplier_address: '{g['bytecode_supplier_address']}'
-  genesis_input_path: ./local-chains/v32.0/genesis.json
+  genesis_input_path: ./local-chains/v32.0-atomic/genesis.json
   chain_id: {cid}
 l1_sender:
   pubdata_mode: Blobs
@@ -118,4 +118,4 @@ PY
 
 echo "[generate-atomic-multichain] done."
 echo "  genesis_root: $(python3 -c "import json;print(json.load(open('$HERE/genesis.json'))['genesis_root'])")"
-echo "  Run: ./run_local.sh ./local-chains/v32.0/multi_chain"
+echo "  Run: ./run_local.sh ./local-chains/v32.0-atomic/multi_chain"

@@ -410,9 +410,11 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         imt_root_leaf_index: u64,
     ) -> ZksResult<(Vec<B256>, u64)> {
         let batch_number = batch.number();
+        // "not available" marks a retryable precondition (clients poll until the batch executes);
+        // keep the phrase stable across the proof-precondition errors.
         let execute_sl_block_number = batch.execute_sl_block_number.ok_or_else(|| {
             ZksError::Batch(anyhow::anyhow!(
-                "batch {batch_number} has not been executed on L1 yet"
+                "batch {batch_number} is not executed on L1 yet; settlement anchor not available yet"
             ))
         })?;
 
@@ -471,7 +473,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             .get_batch_by_block_number(block_number)?
         else {
             return Err(ZksError::Batch(anyhow::anyhow!(
-                "block {block_number} is not part of a sealed batch yet"
+                "batch for block {block_number} is not available yet"
             )));
         };
         let batch_end_block = *batch.block_range.end();
@@ -542,7 +544,7 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
     ) -> ZksResult<Option<ImtProof>> {
         let Some(batch) = self.storage.batch().get_batch_by_number(batch_number)? else {
             return Err(ZksError::Batch(anyhow::anyhow!(
-                "batch {batch_number} is not available"
+                "batch {batch_number} is not available yet"
             )));
         };
         let begin_block = batch.block_range.start().saturating_sub(1);
