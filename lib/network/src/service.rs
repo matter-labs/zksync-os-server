@@ -16,11 +16,11 @@ use backon::{ConstantBuilder, Retryable};
 use futures::future::join_all;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, Hardforks};
 use reth_discv5::discv5;
-use reth_eth_wire::HelloMessageWithProtocols;
+use reth_eth_wire::{DisconnectReason, HelloMessageWithProtocols};
 use reth_network::error::NetworkError;
 use reth_network::types::peers::config::PeerBackoffDurations;
 use reth_network::{
-    NetworkConfig as RethNetworkConfig, NetworkConfigBuilder, NetworkManager, PeersConfig,
+    NetworkConfig as RethNetworkConfig, NetworkConfigBuilder, NetworkManager, Peers, PeersConfig,
 };
 use reth_network_peers::PeerId;
 use reth_network_peers::{NodeRecord, TrustedPeer};
@@ -557,6 +557,7 @@ impl NetworkService {
                 }
             });
         }
+        let network_handle = self.network_manager.handle().clone();
         runtime.spawn_critical_with_graceful_shutdown_signal(
             "p2p network task",
             |shutdown| async move {
@@ -649,6 +650,21 @@ impl NetworkService {
                     }
                     ProtocolEvent::MaxActiveConnectionsExceeded { max_connections } => {
                         tracing::warn!(max_connections, "max active connections exceeded");
+                    }
+                    ProtocolEvent::ReplayStreamStalled {
+                        peer_id,
+                        next_block,
+                    } => {
+                        // A dead replay flow can hide behind a healthy-looking RLPx session, so
+                        // force the session down; the peer is redialed with the configured short
+                        // backoffs and the new session re-requests replays from `next_block`.
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            next_block,
+                            "replay stream stalled; disconnecting peer to force a fresh session"
+                        );
+                        network_handle
+                            .disconnect_peer_with_reason(peer_id, DisconnectReason::PingTimeout);
                     }
                 }
             }

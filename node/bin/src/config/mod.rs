@@ -919,6 +919,13 @@ pub struct SequencerConfig {
     #[config(default_t = 1)]
     pub en_max_blocks_per_replay_message: u64,
 
+    /// Maximum time an external node tolerates without receiving any message on its replay
+    /// connection before dropping the session and reconnecting. Must comfortably exceed the
+    /// chain's block cadence; on a chain that can legitimately go idle for longer, raise this
+    /// to avoid periodic reconnect churn.
+    #[config(default_t = Duration::from_secs(300))]
+    pub en_replay_watchdog_timeout: Duration,
+
     #[config(default, with = Serde![*])]
     /// List of (block_number, db_key) pairs to override when downloading replay records.
     pub en_replay_record_overrides: Vec<(u64, Bytes)>,
