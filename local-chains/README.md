@@ -56,8 +56,8 @@ local-chains/
 L1 state snapshot for Anvil. Contains the deployed L1 contracts state. It can be decompressed and then loaded with:
 
 ```bash
-gzip -dfk ./local-chains/v30.2/l1-state.json.gz
-anvil --load-state ./local-chains/v30.2/l1-state.json --port 8545 --block-time 0.25 --mixed-mining --slots-in-an-epoch 10
+gzip -dfk ./local-chains/v31.0/l1-state.json.gz
+anvil --load-state ./local-chains/v31.0/l1-state.json --port 8545 --block-time 0.25 --mixed-mining --slots-in-an-epoch 10
 ```
 
 ### `config.yaml`
@@ -95,9 +95,9 @@ The `run_local.sh` script automates starting Anvil and chain node(s):
 
 ```bash
 # Run a single chain
-./run_local.sh ./local-chains/v30.2/default
+./run_local.sh ./local-chains/v31.0/default
 
-# Run multiple chains
+# Run multiple chains (multi-chain fixtures currently exist only for v30.2)
 ./run_local.sh ./local-chains/v30.2/multi_chain
 
 # Run with logging to files
@@ -143,7 +143,7 @@ Follow the instructions in the [v30.2/multi_chain/README.md](./v30.2/multi_chain
 5. When upgrade is fully finalized, make sure:
    * The new default config in [main.rs](../node/bin/src/main.rs) is updated to point to the new version
    * `genesis.json` path in the [Dockerfile](../Dockerfile) is updated to point to the new version
-   * `CURRENT_PROTOCOL_VERSION` constant in [integration tests](../integration-tests/src/config.rs) is updated to the new version.
+   * `PROTOCOL_VERSION` constant in [default_protocol_version.rs](../node/bin/src/default_protocol_version.rs) is updated to the new version.
    * [`test-configs.sh`](../.github/scripts/test-configs.sh) script is updated to properly test the new version.
 
 ## Troubleshooting

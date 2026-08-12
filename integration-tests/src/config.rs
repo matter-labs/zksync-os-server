@@ -8,38 +8,12 @@ use zksync_os_server::config::{Config, build_external_config, load_config_file_s
 pub enum ChainLayout<'a> {
     /// local-chains/<version>/default/...
     Default { protocol_version: &'a str },
-    /// local-chains/<version>/multi_chain/chain_506.yaml
-    Gateway { protocol_version: &'a str },
-    /// local-chains/<version>/multi_chain/chain_<id>.yaml for chains settling to the gateway.
-    GatewayChain {
-        protocol_version: &'a str,
-        chain_index: usize, // 0 -> 6565, 1 -> 6566, ...
-    },
 }
 
 impl<'a> ChainLayout<'a> {
-    fn chain_id(self) -> Option<u64> {
-        match self {
-            ChainLayout::Default { .. } => None,
-            ChainLayout::Gateway { .. } => Some(506),
-            ChainLayout::GatewayChain { chain_index, .. } => Some(6565u64 + chain_index as u64),
-        }
-    }
-
     pub fn protocol_version(self) -> &'a str {
         match self {
             ChainLayout::Default { protocol_version } => protocol_version,
-            ChainLayout::Gateway { protocol_version } => protocol_version,
-            ChainLayout::GatewayChain {
-                protocol_version, ..
-            } => protocol_version,
-        }
-    }
-
-    fn dir(self) -> &'static str {
-        match self {
-            ChainLayout::Default { .. } => "default",
-            ChainLayout::Gateway { .. } | ChainLayout::GatewayChain { .. } => "multi_chain",
         }
     }
 
@@ -50,17 +24,11 @@ impl<'a> ChainLayout<'a> {
     }
 
     fn base_dir(self) -> PathBuf {
-        self.protocol_dir().join(self.dir())
+        self.protocol_dir().join("default")
     }
 
     fn config_path(self) -> PathBuf {
-        match self {
-            ChainLayout::Default { .. } => self.base_dir().join("config.yaml"),
-            ChainLayout::Gateway { .. } | ChainLayout::GatewayChain { .. } => {
-                let chain_id = self.chain_id().expect("multi-chain always has chain_id");
-                self.base_dir().join(format!("chain_{chain_id}.yaml"))
-            }
-        }
+        self.base_dir().join("config.yaml")
     }
 
     /// Read the pre-decompressed L1 state JSON.

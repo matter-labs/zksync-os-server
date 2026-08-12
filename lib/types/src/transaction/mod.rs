@@ -62,9 +62,41 @@ impl ZkEnvelope {
 /// ZKsync OS transaction with a known signer (usually EC recovered or simulated). Unlike alloy/reth
 /// we mostly operate on this type as ZKsync OS expects signer to be provided externally (e.g., from
 /// the sequencer). This could change in the future.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ZkTransaction {
     pub inner: Recovered<ZkEnvelope>,
+}
+
+/// `serde_with` adapter serializing a [`ZkTransaction`] as its canonical EIP-2718 encoding (hex in
+/// human-readable formats). Field-level JSON projections of transactions exist for RPC responses
+/// only and are lossy for non-Ethereum transaction types, while the 2718 encoding is lossless by
+/// construction: the transaction hash commits to it.
+///
+/// Applied explicitly at the JSON call sites (e.g. `#[serde_as(as = "Vec<Eip2718>")]`) rather than
+/// as a blanket `Serialize`/`Deserialize` on the type, so a serde consumer opts into this encoding
+/// deliberately.
+pub struct Eip2718;
+
+impl serde_with::SerializeAs<ZkTransaction> for Eip2718 {
+    fn serialize_as<S: serde::Serializer>(
+        source: &ZkTransaction,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Bytes::from(source.inner.encoded_2718()).serialize(serializer)
+    }
+}
+
+impl<'de> serde_with::DeserializeAs<'de, ZkTransaction> for Eip2718 {
+    fn deserialize_as<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<ZkTransaction, D::Error> {
+        let bytes = Bytes::deserialize(deserializer)?;
+        let envelope =
+            ZkEnvelope::decode_2718(&mut bytes.as_ref()).map_err(serde::de::Error::custom)?;
+        envelope
+            .try_into_recovered()
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl bincode::Encode for ZkTransaction {
@@ -214,14 +246,50 @@ mod tests {
     use alloy::consensus::private::alloy_primitives;
     use alloy::primitives::TxKind;
 
-    #[test]
     // Test vector from https://etherscan.io/tx/0x280cde7cdefe4b188750e76c888f13bd05ce9a4d7767730feefe8a0e50ca6fc4
+    fn live_legacy_raw_tx() -> alloy_primitives::Bytes {
+        alloy_primitives::bytes!(
+            "f9015482078b8505d21dba0083022ef1947a250d5630b4cf539739df2c5dacb4c659f2488d880c46549a521b13d8b8e47ff36ab50000000000000000000000000000000000000000000066ab5a608bd00a23f2fe000000000000000000000000000000000000000000000000000000000000008000000000000000000000000048c04ed5691981c42154c6167398f95e8f38a7ff00000000000000000000000000000000000000000000000000000000632ceac70000000000000000000000000000000000000000000000000000000000000002000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000006c6ee5e31d828de241282b9606c8e98ea48526e225a0c9077369501641a92ef7399ff81c21639ed4fd8fc69cb793cfa1dbfab342e10aa0615facb2f1bcf3274a354cfe384a38d0cc008a11c2dd23a69111bc6930ba27a8"
+        )
+    }
+
+    /// The replay archive (and block dumps) round-trip transactions through the [`Eip2718`]
+    /// `serde_as` adapter; the canonical EIP-2718 encoding is the only representation that is
+    /// lossless for every transaction variant, so that is what the adapter must use.
+    #[test]
+    fn eip2718_serde_as_round_trips_via_canonical_2718_bytes() {
+        #[serde_with::serde_as]
+        #[derive(Serialize, Deserialize)]
+        struct Wrapper {
+            #[serde_as(as = "Vec<Eip2718>")]
+            txs: Vec<ZkTransaction>,
+        }
+
+        let system_tx: ZkTransaction = SystemTxEnvelope::set_sl_chain_id(11155111, 7).into();
+        let l2_tx = ZkEnvelope::fallback_decode(&mut live_legacy_raw_tx().as_ref())
+            .unwrap()
+            .try_into_recovered()
+            .unwrap();
+
+        let wrapper = Wrapper {
+            txs: vec![system_tx, l2_tx],
+        };
+        let json = serde_json::to_value(&wrapper).unwrap();
+        for tx_json in json["txs"].as_array().unwrap() {
+            assert!(
+                tx_json.is_string(),
+                "transaction must serialize as canonical 2718 bytes, got: {tx_json}"
+            );
+        }
+        let decoded: Wrapper = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.txs, wrapper.txs);
+    }
+
+    #[test]
     fn test_decode_live_legacy_tx() {
         use alloy_primitives::address;
 
-        let raw_tx = alloy_primitives::bytes!(
-            "f9015482078b8505d21dba0083022ef1947a250d5630b4cf539739df2c5dacb4c659f2488d880c46549a521b13d8b8e47ff36ab50000000000000000000000000000000000000000000066ab5a608bd00a23f2fe000000000000000000000000000000000000000000000000000000000000008000000000000000000000000048c04ed5691981c42154c6167398f95e8f38a7ff00000000000000000000000000000000000000000000000000000000632ceac70000000000000000000000000000000000000000000000000000000000000002000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000006c6ee5e31d828de241282b9606c8e98ea48526e225a0c9077369501641a92ef7399ff81c21639ed4fd8fc69cb793cfa1dbfab342e10aa0615facb2f1bcf3274a354cfe384a38d0cc008a11c2dd23a69111bc6930ba27a8"
-        );
+        let raw_tx = live_legacy_raw_tx();
         let res = ZkEnvelope::fallback_decode(&mut raw_tx.as_ref()).unwrap();
         assert_eq!(res.tx_type(), ZkTxType::L2(TxType::Legacy));
 

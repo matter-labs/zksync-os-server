@@ -7,7 +7,7 @@ use super::ProtocolSemanticVersion;
 /// The main difference is that even if the state transition function remains the same,
 /// there might be changes in the proving circuit which would not change the outcome of execution,
 /// but would require different proving and verification keys.
-#[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ProvingVersion {
     V1 = 1,
@@ -17,6 +17,7 @@ pub enum ProvingVersion {
     V5 = 5,
     V6 = 6,
     V7 = 7,
+    V8 = 8,
 }
 
 impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
@@ -34,7 +35,7 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
             (30, 2) => Ok(ProvingVersion::V6),
             (31, 0) => Ok(ProvingVersion::V7),
             (31, 1) => Ok(ProvingVersion::V7),
-            (32, 0) => Ok(ProvingVersion::V7),
+            (32, 0) => Ok(ProvingVersion::V8),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
         }
     }
@@ -69,6 +70,13 @@ impl ProvingVersion {
     const V7_VK_HASH: &'static str =
         "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
 
+    /// verification key hash generated from zksync-airbender v0.6.0-rc.1 (3f8f8e54, combined
+    /// recursion layers) and zkos-wrapper v0.6.0-rc.1; matches the V8 entry in
+    /// zksync-airbender-prover. App-independent: the SNARK wraps the unified verifier, so the
+    /// zksync-os app binary is bound via `V8_APP_END_PARAMS`, not this hash.
+    const V8_VK_HASH: &'static str =
+        "0x3e7784b0fdb09035a677ae80568d34fdb1f1ec6ac65bba5192cd977a4f0e7609";
+
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
         match self {
@@ -79,6 +87,7 @@ impl ProvingVersion {
             Self::V5 => Self::V5_VK_HASH,
             Self::V6 => Self::V6_VK_HASH,
             Self::V7 => Self::V7_VK_HASH,
+            Self::V8 => Self::V8_VK_HASH,
         }
     }
 
@@ -92,6 +101,7 @@ impl ProvingVersion {
             Self::V5_VK_HASH => Ok(Self::V5),
             Self::V6_VK_HASH => Ok(Self::V6),
             Self::V7_VK_HASH => Ok(Self::V7),
+            Self::V8_VK_HASH => Ok(Self::V8),
             val => Err(ProvingVersionError::UnsupportedVkHash(val.to_string())),
         }
     }
@@ -121,7 +131,7 @@ mod tests {
             ((0, 30, 1), ProvingVersion::V6),
             ((0, 31, 0), ProvingVersion::V7),
             ((0, 31, 1), ProvingVersion::V7),
-            ((0, 32, 0), ProvingVersion::V7),
+            ((0, 32, 0), ProvingVersion::V8),
         ];
 
         for ((major, minor, patch), expected) in test_vector.iter() {
@@ -131,7 +141,7 @@ mod tests {
             assert_eq!(&proving_version, expected);
         }
 
-        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 33, 0)];
+        let unknown_versions = [(0, 27, 10), (0, 28, 5), (0, 30, 3), (0, 32, 1), (0, 33, 0)];
 
         for (major, minor, patch) in unknown_versions.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
@@ -152,6 +162,8 @@ mod tests {
             (ProvingVersion::V4, ProvingVersion::V4_VK_HASH),
             (ProvingVersion::V5, ProvingVersion::V5_VK_HASH),
             (ProvingVersion::V6, ProvingVersion::V6_VK_HASH),
+            (ProvingVersion::V7, ProvingVersion::V7_VK_HASH),
+            (ProvingVersion::V8, ProvingVersion::V8_VK_HASH),
         ];
 
         for (proving_version, expected_vk_hash) in test_vector.iter() {

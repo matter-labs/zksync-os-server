@@ -41,9 +41,9 @@ pub(crate) async fn build_node_config(
     let mut config = load_chain_config(chain_layout).await;
     config.l1_provider_config =
         ProviderConfig::new(l1.address.clone(), TEST_PROVIDER_POLL_INTERVAL);
-    if let Some(gateway_provider_config) = &mut config.gateway_provider_config {
-        gateway_provider_config.rpc_poll_interval = TEST_PROVIDER_POLL_INTERVAL;
-    }
+    // The L1 senders poll receipts on their own cadence (1s default) — keep tests fast
+    // against anvil's 0.25s blocks.
+    config.l1_sender_config.poll_interval = TEST_PROVIDER_POLL_INTERVAL;
     config.sequencer_config.fee_collector_address = Address::random();
     config.rpc_config.send_raw_transaction_sync_timeout = Duration::from_secs(10);
     config.prover_api_config.fake_fri_provers.enabled = !with_proofs;
@@ -54,7 +54,6 @@ pub(crate) async fn build_node_config(
     config.batch_verification_config.accepted_signers = BATCH_VERIFICATION_ADDRESSES.clone();
     config.batch_verification_config.request_timeout = Duration::from_millis(500);
     config.batch_verification_config.retry_delay = Duration::from_secs(1);
-    config.batch_verification_config.total_timeout = Duration::from_secs(300);
     config.batch_verification_config.signing_key = BATCH_VERIFICATION_KEYS[0].into();
     config.status_server_config.enabled = true;
     config.network_config.enabled = true;

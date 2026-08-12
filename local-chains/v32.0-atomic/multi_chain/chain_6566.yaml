@@ -1,0 +1,14 @@
+general:
+  ephemeral: true
+genesis:
+  bridgehub_address: '0xcfbc861562f879a97890d21658b9438549e0f326'
+  bytecode_supplier_address: '0x5c9920a5cdeb5265a014b0fe7468f6bd383b894b'
+  genesis_input_path: ./local-chains/v32.0-atomic/genesis.json
+  chain_id: 6566
+l1_sender:
+  pubdata_mode: Blobs
+  operator_commit_sk: '0x184101e421324713dae15ec104dbdada9a5ae2427ea5fe0b7dffc43007eda890'
+  operator_prove_sk: '0x6e8edc65c3a1bffcdcd88bb5851b039deaa80531317b5de4a75f92ece4f73bc4'
+  operator_execute_sk: '0xaab971e3760af3990b8665258bb099d917be7c29a7f6a2ae50870ceca0789872'
+rpc:
+  address: 0.0.0.0:3051

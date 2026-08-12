@@ -4,7 +4,7 @@
 //! and proof storage.
 mod v1;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use crate::prover_api::{
     fri_job_manager::FriJobManager, proof_storage::ProofStorage, prover_server::v1::v1_routes,
@@ -23,13 +23,12 @@ pub(in crate::prover_api::prover_server) struct AppState {
     proof_storage: ProofStorage,
 }
 
-/// Entry point for prover API server.
-/// Starts an HTTP server listening on the specified bind address.
+/// Runs the prover API HTTP server on a pre-bound listener.
 pub async fn run(
     fri_job_manager: Arc<FriJobManager>,
     snark_job_manager: Arc<SnarkJobManager>,
     proof_storage: ProofStorage,
-    bind_address: String,
+    listener: TcpListener,
     shutdown: GracefulShutdown,
 ) {
     let app_state = AppState {
@@ -41,15 +40,13 @@ pub async fn run(
     let app = Router::new()
         .nest("/prover-jobs/v1", v1_routes())
         .with_state(app_state)
-        // Set the request body limit to 10MiB
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024));
 
-    let bind_address: SocketAddr = bind_address.parse().expect("failed to parse bind address");
-    tracing::info!("starting proof data server on {bind_address}");
+    let addr = listener
+        .local_addr()
+        .expect("failed to get prover server local addr");
+    tracing::info!("prover API server listening on {addr}");
 
-    let listener = TcpListener::bind(bind_address)
-        .await
-        .expect("failed to bind");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown.ignore_guard())
         .await

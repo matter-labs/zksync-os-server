@@ -16,9 +16,10 @@ zksync_os_interface.workspace = true
 zksync_os_storage_api.workspace = true
 zk_os_forward_system_0_1_2.workspace = true
 zk_os_forward_system_0_0_28.workspace = true
-zk_os_forward_system_0_2_8.workspace = true
-zk_os_forward_system_prev.workspace = true
+zk_os_forward_system_0_2_10.workspace = true
 zk_os_forward_system.workspace = true
+zk_os_forward_system_0_4_0.workspace = true
+zksync_os_native_pig.workspace = true
 anyhow.workspace = true
 zksync_os_types.workspace = true
 alloy = { workspace = true, default-features = false, features = [
@@ -26,7 +27,6 @@ alloy = { workspace = true, default-features = false, features = [
     "eips",
     "rlp",
 ] }
-tracing.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true

@@ -46,13 +46,6 @@ pub struct BatchMetadata {
     pub messages: Vec<Vec<u8>>,
     #[serde(default)]
     pub multichain_root: B256,
-    /// Interop commitment tree (IMT) root at batch begin — chain-batch-root leaf 2. Zero for
-    /// batches persisted before the 8-leaf chain batch root (serde default).
-    #[serde(default)]
-    pub imt_root_begin: B256,
-    /// Interop commitment tree (IMT) root at batch end — chain-batch-root leaf 3.
-    #[serde(default)]
-    pub imt_root_end: B256,
     /// Migration number of the `SetSLChainId` system transaction executed in this batch, if any.
     /// `None` for the vast majority of batches; `Some(n)` only for the single batch that contains
     /// the `SetSLChainId` transaction triggered by a gateway migration.

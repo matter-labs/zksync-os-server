@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Integration tests**: `cargo nextest run -p zksync_os_integration_tests --profile no-pig` (no live anvil needed — each test manages its own L1/node; `--profile no-pig` disables Prover Input Generation for faster runs)
 
 ### Local Development Setup
-1. Run script: `./run_local.sh ./local-chains/v30.2/default`
+1. Run script: `./run_local.sh ./local-chains/v31.0/default`
 2. To restart chain: `rm -rf db/*` then re-run the script
 
 ## Submitting a PR
@@ -34,3 +34,18 @@ If the PR title uses the breaking-change marker (`feat!: ...`, `fix!: ...`), you
 ### Wire format immutability
 
 Do **not** modify existing versioned wire format files under `lib/network/src/wire/replays/v*.rs`. Add a new versioned file instead.
+
+### Comments
+Comment **why**, not **what**. The code shows what it does; comments explain intent, invariants, and non-obvious decisions. No comments on self-evident code.
+
+✅ **Comment when:**
+- Non-obvious behavior or edge cases
+- Performance trade-offs
+- Safety requirements (unsafe blocks must always be documented)
+- Limitations, constraints, assumptions or gotchas
+- Why simpler alternatives don't work
+
+❌ **Don't comment when:**
+- Code is self-explanatory
+- Just restating the code in English
+- Describing what changed in this PR

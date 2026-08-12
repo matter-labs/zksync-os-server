@@ -2,7 +2,6 @@ pub mod calldata;
 pub mod l1_discovery;
 mod metrics;
 pub mod models;
-pub mod settlement_layer_intervals;
 
 use crate::IBridgehub::{
     IBridgehubInstance, L2TransactionRequestDirect, L2TransactionRequestTwoBridgesOuter,
@@ -48,8 +47,6 @@ alloy::sol! {
     }
 
     interface ServerNotifier {
-        event MigrateToGateway(uint256 indexed chainId, uint256 migrationNumber);
-        event MigrateFromGateway(uint256 indexed chainId, uint256 migrationNumber);
         event UpgradeTimestampUpdated(uint256 indexed chainId, uint256 indexed protocolVersion, uint256 upgradeTimestamp);
     }
 
@@ -60,6 +57,18 @@ alloy::sol! {
     interface IInteropCenter {
         function setInteropFee(uint256 _interopFee);
         function interopProtocolFee() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface IL2InteropCommitmentTree {
+        struct IMTLeaf {
+            uint256 value;
+            uint256 nextIndex;
+            uint256 nextValue;
+        }
+
+        function leafCount() external view returns (uint256);
+        function leafAt(uint256 index) external view returns (IMTLeaf memory);
     }
 
     #[sol(rpc)]
@@ -77,7 +86,7 @@ alloy::sol! {
     // `IMessageRoot.sol`
     #[sol(rpc)]
     interface IMessageRoot {
-        // Event that is being emitted by GW
+        // Emitted whenever MessageRoot advances the shared interop root imported by chains.
         event NewInteropRoot (
             uint256 indexed chainId,
             uint256 indexed blockNumber,
@@ -85,7 +94,7 @@ alloy::sol! {
             bytes32[] sides
         );
 
-        // Event that is being emmited by L1
+        // Emitted when a chain root is appended to the shared tree.
         event AppendedChainRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 indexed chainRoot);
 
         function addInteropRoot (
@@ -100,6 +109,7 @@ alloy::sol! {
 
         function getChainTree(uint256 chainId) public view returns (Bytes32PushTree);
 
+        // `l1Timestamp` is part of the batch-leaf preimage, so proofs bind the batch to L1 time.
         event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot, uint256 l1Timestamp);
         function getMerklePathForChain(uint256 _chainId) external view returns (bytes32[] memory);
         mapping(uint256 chainId => uint256 chainIndex) public chainIndex;
@@ -171,30 +181,6 @@ alloy::sol! {
             uint256 _l2GasLimit,
             uint256 _l2GasPerPubdataByteLimit
         ) external view returns (uint256);
-    }
-
-    #[sol(rpc)]
-    interface IChainAssetHandler {
-        struct MigrationInterval {
-            uint256 migrateToGWBatchNumber;
-            uint256 migrateFromGWBatchNumber;
-            uint256 settlementLayerBatchLowerBound;
-            uint256 settlementLayerBatchUpperBound;
-            uint256 settlementLayerChainId;
-            bool isActive;
-        }
-
-        function migrationNumber(uint256 _chainId) external view returns (uint256);
-        event MigrationFinalized(
-            uint256 indexed chainId,
-            uint256 migrationNumber,
-            bytes32 indexed assetId,
-            address indexed zkChain
-        );
-        function migrationInterval(
-            uint256 _chainId,
-            uint256 _migrationNumber
-        ) external view returns (MigrationInterval memory interval);
     }
 
     // `IChainTypeManager.sol`
@@ -384,13 +370,6 @@ alloy::sol! {
            bytes32 key;
            bytes32 value;
        }
-
-        /// A batch's interop commitment tree (IMT) root snapshots at its boundaries, as committed
-        /// by the bootloader into the chain batch root (leaves 2 and 3 of ChainBatchRootTree).
-        struct BatchImtRoots {
-            bytes32 rootBegin;
-            bytes32 rootEnd;
-        }
 
         function executeBatchesSharedBridge(
             address _chainAddress,
@@ -667,30 +646,6 @@ impl<P: Provider + Clone> Bridgehub<P> {
     pub async fn get_all_zk_chain_chain_ids(&self) -> alloy::contract::Result<Vec<U256>> {
         self.instance.getAllZKChainChainIDs().call().await
     }
-
-    pub async fn whitelisted_settlement_layers(
-        &self,
-        chain_id: impl Into<U256>,
-    ) -> alloy::contract::Result<bool> {
-        self.instance
-            .whitelistedSettlementLayers(chain_id.into())
-            .call()
-            .await
-    }
-
-    pub async fn chain_asset_handler_address(&self) -> alloy::contract::Result<Address> {
-        self.instance.chainAssetHandler().call().await
-    }
-
-    pub async fn migration_number(&self, chain_id: u64) -> alloy::contract::Result<U256> {
-        let chain_asset_handler_address = self.chain_asset_handler_address().await?;
-        let chain_asset_handler =
-            IChainAssetHandler::new(chain_asset_handler_address, self.instance.provider());
-        chain_asset_handler
-            .migrationNumber(U256::from(chain_id))
-            .call()
-            .await
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -802,12 +757,13 @@ impl<P: Provider> ZkChain<P> {
         self.instance.provider()
     }
 
-    pub async fn stored_batch_hash(&self, batch_number: u64) -> Result<B256> {
+    pub async fn stored_batch_hash(&self, batch_number: u64, block_id: BlockId) -> Result<B256> {
         self.instance
             .storedBatchHash(U256::from(batch_number))
+            .block(block_id)
             .call()
             .await
-            .enrich("storedBatchHash", None)
+            .enrich("storedBatchHash", Some(block_id))
     }
 
     pub async fn get_total_batches_committed(&self, block_id: BlockId) -> Result<u64> {

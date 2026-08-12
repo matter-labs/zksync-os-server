@@ -30,5 +30,13 @@ impl NodeStateOnStartup {
             self.last_l1_proved_block,
             self.last_l1_executed_block,
         );
+        assert!(
+            !self.node_role.is_main()
+                || self.block_replay_storage_last_block >= self.last_l1_committed_block,
+            "Block replay WAL head ({}) is behind the last L1-committed block ({}); \
+             check DB consistency and restore the WAL from a replay archive if available",
+            self.block_replay_storage_last_block,
+            self.last_l1_committed_block,
+        );
     }
 }

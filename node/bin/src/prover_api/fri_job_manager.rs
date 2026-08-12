@@ -131,12 +131,21 @@ impl FriJobManager {
     ///
     /// `min_age` is used for fake provers to avoid taking fresh items,
     /// letting real provers race first.
+    ///
+    /// `supported_proving_versions` restricts assignment to batches of these versions;
+    /// `None` means the prover declared nothing and any batch qualifies.
     pub async fn pick_next_job(
         &self,
         min_age: Duration,
         prover_id: String,
+        supported_proving_versions: Option<&[ProvingVersion]>,
     ) -> Option<(FriJob, ProverInput)> {
-        self.jobs.pick_job(min_age, &prover_id).await
+        self.jobs
+            .pick_job(min_age, &prover_id, |job| {
+                supported_proving_versions
+                    .is_none_or(|versions| versions.contains(&job.metadata.proving_version))
+            })
+            .await
     }
 
     /// Submit a **real** proof provided by an external prover.
@@ -164,15 +173,22 @@ impl FriJobManager {
             .proving_version()
             .expect("Must be valid execution as set by the server");
 
-        if server_proving_version != proving_version {
-            return Err(SubmitError::ProvingVersionMismatch(
+        let verdict = if server_proving_version != proving_version {
+            Err(SubmitError::ProvingVersionMismatch(
                 server_proving_version,
                 proving_version,
-            ));
+            ))
+        } else {
+            self.verify_proof(&batch_metadata, &proof_bytes, batch_number, prover_id)
+                .await
+        };
+        if let Err(err) = verdict {
+            // Definitive rejection: release the assignment so the job can be re-picked
+            // immediately instead of waiting out the assignment timeout (which is set
+            // to many hours for slow CPU provers).
+            self.jobs.unassign_job(batch_number, prover_id).await;
+            return Err(err);
         }
-
-        self.verify_proof(&batch_metadata, &proof_bytes, batch_number, prover_id)
-            .await?;
 
         // We want to ensure we can send the result downstream before we remove the job from queue
         let permit = self.try_reserve_permit_downstream()?;
@@ -216,21 +232,127 @@ impl FriJobManager {
         batch_number: u64,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        // TODO: This match is needed for the transition period.
-        // v0.5.2 airbender cannot verify proofs generated with v0.5.1.
-        // Once all networks are protocol upgraded, the code below can be removed.
         let proving_version = batch_metadata
             .proving_version()
             // should be safe to unwrap, as it's been checked before this call
             .expect("invalid proving version");
-        let result = match proving_version {
+
+        // Deserialization + cryptographic verification are CPU-heavy (seconds of work) -
+        // run them on a blocking thread so prover API requests don't stall the runtime.
+        // `spawn_blocking` also catches panics that escape the verifiers' own `catch_unwind`.
+        let verify_result = tokio::task::spawn_blocking({
+            let batch_metadata = batch_metadata.clone();
+            let proof_bytes = proof_bytes.clone();
+            move || {
+                Self::verify_proof_blocking(
+                    proving_version,
+                    &batch_metadata,
+                    &proof_bytes,
+                    batch_number,
+                )
+            }
+        })
+        .await;
+
+        let result = match verify_result {
+            Ok(result) => result,
+            Err(join_error) if join_error.is_panic() => {
+                tracing::error!(
+                    batch_number,
+                    prover_id,
+                    %join_error,
+                    "proof verification panicked; rejecting the proof"
+                );
+                // The verifier died before producing register values; still report the
+                // expected hash so the persisted proof stays diagnosable.
+                let expected_hash_u32s = fri_proof_verifier::expected_public_input_registers(
+                    proving_version,
+                    batch_metadata,
+                )
+                .unwrap_or([0u32; 8]);
+                Err(SubmitError::FriProofVerificationError {
+                    expected_hash_u32s,
+                    proof_final_register_values: [0u32; 16],
+                })
+            }
+            Err(join_error) => {
+                return Err(SubmitError::Other(format!(
+                    "proof verification task failed: {join_error}"
+                )));
+            }
+        };
+        match result {
+            Ok(()) => Ok(()),
+            Err(SubmitError::FriProofVerificationError {
+                expected_hash_u32s,
+                proof_final_register_values,
+            }) => {
+                tracing::warn!(
+                    batch_number,
+                    expected = ?expected_hash_u32s,
+                    actual = ?proof_final_register_values,
+                    "Proof verification failed",
+                );
+
+                // Persist the failed proof with some information about the batch for debugging
+                let failed_proof = FailedFriProof {
+                    batch_number,
+                    last_block_timestamp: batch_metadata
+                        .batch_info
+                        .commit_info
+                        .last_block_timestamp,
+                    expected_hash_u32s,
+                    proof_final_register_values,
+                    vk_hash: batch_metadata
+                        .verification_key_hash()
+                        .expect("VK must exist")
+                        .to_string(),
+                    proof_bytes: proof_bytes.clone(),
+                };
+
+                if let Err(save_err) = self.proof_storage.save_failed_proof(&failed_proof).await {
+                    tracing::error!(
+                        batch_number,
+                        ?save_err,
+                        "Failed to persist failed proof for debugging",
+                    );
+                } else {
+                    tracing::info!(batch_number, prover_id, "Failed proof saved for debugging",);
+                }
+
+                Err(SubmitError::FriProofVerificationError {
+                    expected_hash_u32s,
+                    proof_final_register_values,
+                })
+            }
+            // Any other error (deserialization, unsupported version, ...) must reject the
+            // submission too - falling through here would accept an unverified proof.
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Deserializes and cryptographically verifies the proof.
+    /// CPU-heavy and may panic on malformed input - always call via `spawn_blocking`
+    /// (see `verify_proof`).
+    fn verify_proof_blocking(
+        proving_version: ProvingVersion,
+        batch_metadata: &BatchMetadata,
+        proof_bytes: &Bytes,
+        batch_number: u64,
+    ) -> Result<(), SubmitError> {
+        let expected_hash_u32s =
+            fri_proof_verifier::expected_public_input_registers(proving_version, batch_metadata)?;
+        // TODO: This match is needed for the transition period.
+        // v0.5.2 airbender cannot verify proofs generated with v0.5.1.
+        // Once all networks are protocol upgraded, the code below can be removed.
+        match proving_version {
             ProvingVersion::V1
             | ProvingVersion::V2
             | ProvingVersion::V3
             | ProvingVersion::V4
-            | ProvingVersion::V5 => {
-                panic!("proof verification for v1-v5 is not supported")
-            }
+            | ProvingVersion::V5 => Err(SubmitError::Other(
+                "proof verification for v1-v5 is not supported".to_string(),
+            )),
             ProvingVersion::V6 | ProvingVersion::V7 => {
                 tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
                 let program_proof =
@@ -241,55 +363,32 @@ impl FriJobManager {
                         })?
                         .0;
                 fri_proof_verifier::verify_fri_proof(
-                    batch_metadata.previous_stored_batch_info.state_commitment,
-                    batch_metadata.batch_info.clone().into_stored(),
+                    expected_hash_u32s,
                     program_proof,
+                    batch_number,
                 )
             }
-        };
-
-        if let Err(SubmitError::FriProofVerificationError {
-            expected_hash_u32s,
-            proof_final_register_values,
-        }) = result
-        {
-            tracing::warn!(
-                batch_number,
-                expected = ?expected_hash_u32s,
-                actual = ?proof_final_register_values,
-                "Proof verification failed",
-            );
-
-            // Persist the failed proof with some information about the batch for debugging
-            let failed_proof = FailedFriProof {
-                batch_number,
-                last_block_timestamp: batch_metadata.batch_info.commit_info.last_block_timestamp,
-                expected_hash_u32s,
-                proof_final_register_values,
-                vk_hash: batch_metadata
-                    .verification_key_hash()
-                    .expect("VK must exist")
-                    .to_string(),
-                proof_bytes: proof_bytes.clone(),
-            };
-
-            if let Err(save_err) = self.proof_storage.save_failed_proof(&failed_proof).await {
-                tracing::error!(
-                    batch_number,
-                    ?save_err,
-                    "Failed to persist failed proof for debugging",
+            ProvingVersion::V8 => {
+                // V8 provers (airbender unrolled stack) submit `UnrolledProgramProof`,
+                // which is a different wire format and proof system than the 0.5.2 lane.
+                tracing::debug!(
+                    "Using airbender unified-layer proof verifier for batch {}",
+                    batch_number
                 );
-            } else {
-                tracing::info!(batch_number, prover_id, "Failed proof saved for debugging",);
+                let program_proof: execution_utils::unrolled::UnrolledProgramProof =
+                    bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
+                        .map_err(|err| {
+                            tracing::warn!(batch_number, ?err, "Failed to deserialize V8 proof");
+                            SubmitError::DeserializationFailed(err)
+                        })?
+                        .0;
+                fri_proof_verifier::verify_fri_proof_v8(
+                    expected_hash_u32s,
+                    &program_proof,
+                    batch_number,
+                )
             }
-
-            return Err(SubmitError::FriProofVerificationError {
-                expected_hash_u32s,
-                proof_final_register_values,
-            });
         }
-
-        Ok(())
     }
 
     /// Submit a **fake** proof on behalf of a fake prover worker.

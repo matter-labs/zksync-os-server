@@ -36,7 +36,7 @@ impl SendToL1 for ProofCommand {
     const MINED_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1TxMined;
     const PASSTHROUGH_STAGE: BatchExecutionStage = BatchExecutionStage::ProveL1Passthrough;
 
-    fn solidity_call(&self, _gateway: bool, _operator: &Address) -> Bytes {
+    fn solidity_call(&self, _operator: &Address) -> Bytes {
         proveBatchesSharedBridgeCall::new((
             self.batches.first().unwrap().batch.chain_address,
             U256::from(self.batches.first().unwrap().batch_number()),
@@ -145,6 +145,8 @@ impl ProofCommand {
             Some(5) => 5,
             Some(6) => 6,
             Some(7) => 0,
+            // Switch to 0 once the L1 default verifier becomes the V8 one (as done for V7).
+            Some(8) => 8,
             Some(execution_version) => panic!(
                 "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
             ),

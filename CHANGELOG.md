@@ -1,5 +1,127 @@
 # Changelog
 
+## [0.22.0](https://github.com/matter-labs/zksync-os-server/compare/v0.21.0...v0.22.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **l1_sender:** pipelined sending with a bounded in-flight window ([#1485](https://github.com/matter-labs/zksync-os-server/issues/1485))
+
+### Features
+
+* **l1_sender:** pipelined sending with a bounded in-flight window ([#1485](https://github.com/matter-labs/zksync-os-server/issues/1485)) ([83a0dc8](https://github.com/matter-labs/zksync-os-server/commit/83a0dc8ab363ec2fdfd7babf3a00c3f9c560f7f1))
+* **node:** refuse main-node startup when replay WAL is behind L1 ([#1504](https://github.com/matter-labs/zksync-os-server/issues/1504)) ([7b5d906](https://github.com/matter-labs/zksync-os-server/commit/7b5d9060a107ad9adba0fe4419ceb11b45293c39))
+* **rpc:** L1 aggregation-hop proof for L1-settled chains (enable interop on L1) ([#1413](https://github.com/matter-labs/zksync-os-server/issues/1413)) ([5974897](https://github.com/matter-labs/zksync-os-server/commit/597489700bc45d61437e829305c8aa6517548958))
+* zksync-os 0.4.0 ([#1421](https://github.com/matter-labs/zksync-os-server/issues/1421)) ([59bb218](https://github.com/matter-labs/zksync-os-server/commit/59bb218bc7b0bfe84dc3dca90a3df66a6d49069d))
+
+
+### Bug Fixes
+
+* **batch_verification:** bound cache eviction to cached blocks ([#1502](https://github.com/matter-labs/zksync-os-server/issues/1502)) ([418db6e](https://github.com/matter-labs/zksync-os-server/commit/418db6e64f1ee9f7dd2abc497b33f74865c937b9))
+
+## [0.21.0](https://github.com/matter-labs/zksync-os-server/compare/v0.20.12...v0.21.0) (2026-08-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **network:** drop support for zks v1-v4 ([#1482](https://github.com/matter-labs/zksync-os-server/issues/1482))
+
+### Features
+
+* Expose protocol version filtering for prover ([#1480](https://github.com/matter-labs/zksync-os-server/issues/1480)) ([b660c2e](https://github.com/matter-labs/zksync-os-server/commit/b660c2e3e7f1fcccf2912c0fb00b85cf91b7e7e7))
+* **mempool:** validate intrinsic native resources for l2 txs ([#1217](https://github.com/matter-labs/zksync-os-server/issues/1217)) ([e8efe74](https://github.com/matter-labs/zksync-os-server/commit/e8efe74df283cfe58fcb484f2703d1cebb2aeee2))
+* **network:** drop support for zks v1-v4 ([#1482](https://github.com/matter-labs/zksync-os-server/issues/1482)) ([f97cd67](https://github.com/matter-labs/zksync-os-server/commit/f97cd67aa370166ba94e21e34a4424f6df0a2cf9))
+* **replay_archive:** native gcs archive support ([#1426](https://github.com/matter-labs/zksync-os-server/issues/1426)) ([2338202](https://github.com/matter-labs/zksync-os-server/commit/233820206e23356f5206fb10c195f9b907f1f5cf))
+* **rpc:** opt-in parallel execution of JSON-RPC batch entries ([#1475](https://github.com/matter-labs/zksync-os-server/issues/1475)) ([17b45c6](https://github.com/matter-labs/zksync-os-server/commit/17b45c6b1fa8c6d9dda28f1bfdd102bd72bc35f4))
+* **sequencer:** rate limiter on gas/s ([#1474](https://github.com/matter-labs/zksync-os-server/issues/1474)) ([dc88a9d](https://github.com/matter-labs/zksync-os-server/commit/dc88a9d246b1f2f1e499cc18e6c524c76f48d4d0))
+
+
+### Bug Fixes
+
+* **provider:** fail hung L1 RPC requests with a retryable timeout ([#1498](https://github.com/matter-labs/zksync-os-server/issues/1498)) ([8a52df5](https://github.com/matter-labs/zksync-os-server/commit/8a52df58cf60d1881b46a43a737364181a4b9962))
+* **provider:** retry header watcher poll when RPC returns no block ([#1492](https://github.com/matter-labs/zksync-os-server/issues/1492)) ([0034170](https://github.com/matter-labs/zksync-os-server/commit/003417016188dcc35ccb9530de41ee23ca4f0843))
+* **provider:** survive transient RPC errors in header watchers ([#1490](https://github.com/matter-labs/zksync-os-server/issues/1490)) ([a6849b8](https://github.com/matter-labs/zksync-os-server/commit/a6849b8856a6abd5cec0e01b78ef6edbb31667d2))
+* **sequencer:** improve default config values ([#1486](https://github.com/matter-labs/zksync-os-server/issues/1486)) ([57f7ad5](https://github.com/matter-labs/zksync-os-server/commit/57f7ad547d1dbfadb483243c7e661578570dc37a))
+
+## [0.20.12](https://github.com/matter-labs/zksync-os-server/compare/v0.20.11...v0.20.12) (2026-07-20)
+
+
+### Features
+
+* Add Azure HSM signing support ([#1467](https://github.com/matter-labs/zksync-os-server/issues/1467)) ([316f4e0](https://github.com/matter-labs/zksync-os-server/commit/316f4e0417b49f5287a16376e24b33ba4d810665))
+* drop support for SL intervals ([#1457](https://github.com/matter-labs/zksync-os-server/issues/1457)) ([1561279](https://github.com/matter-labs/zksync-os-server/commit/1561279ddc8320cba434884379d9af278e9af199))
+* **network:** move 2FA logic to its own subprotocol ([#1409](https://github.com/matter-labs/zksync-os-server/issues/1409)) ([fab1bb3](https://github.com/matter-labs/zksync-os-server/commit/fab1bb39eb88b5466b87eb83f00fdf8ff239c95c))
+* new v31 state generated by zk-deployer ([#1462](https://github.com/matter-labs/zksync-os-server/issues/1462)) ([223ca3e](https://github.com/matter-labs/zksync-os-server/commit/223ca3ed2bc434b61aa1a3ff4a8ef81ae6867d35))
+* **status:** add /status/ready readiness probe ([#1461](https://github.com/matter-labs/zksync-os-server/issues/1461)) ([1dfcb88](https://github.com/matter-labs/zksync-os-server/commit/1dfcb88e60eaf1ec3a0152927eb21fc7100cbf77))
+
+
+### Bug Fixes
+
+* **network:** drop external IP probe at startup ([#1465](https://github.com/matter-labs/zksync-os-server/issues/1465)) ([6d673bc](https://github.com/matter-labs/zksync-os-server/commit/6d673bcd5b2e3cea81aa64255eec841987738e2d))
+* **network:** honor EN-requested replay record overrides ([#1464](https://github.com/matter-labs/zksync-os-server/issues/1464)) ([d8d7440](https://github.com/matter-labs/zksync-os-server/commit/d8d7440db925d30a8049f083758de01d8008feec))
+* **node:** retry listener prebind on transient AddrInUse ([#1453](https://github.com/matter-labs/zksync-os-server/issues/1453)) ([0d076c2](https://github.com/matter-labs/zksync-os-server/commit/0d076c222c2fa12fa090e421c84474ccf0c1a411))
+* **revm-checker:** feed REVM the hardcoded prevrandao ZKsync OS actually uses ([#1470](https://github.com/matter-labs/zksync-os-server/issues/1470)) ([abbfb36](https://github.com/matter-labs/zksync-os-server/commit/abbfb36178a989289e6c31dc1de7f61f26e02126))
+* **tree_manager:** track tree RocksDB writes as graceful shutdown tasks ([#1444](https://github.com/matter-labs/zksync-os-server/issues/1444)) ([e34880b](https://github.com/matter-labs/zksync-os-server/commit/e34880b52e8a12a0246403e7fdaf4faead72c6b6))
+
+
+### Performance Improvements
+
+* **l1_watcher:** batch-sweep startup commit discovery ([#1460](https://github.com/matter-labs/zksync-os-server/issues/1460)) ([ab4e583](https://github.com/matter-labs/zksync-os-server/commit/ab4e5831eee876f5415ea219a2389f578d7a7ae7))
+* **provider:** skip logs cache historical backfill on cold start ([#1452](https://github.com/matter-labs/zksync-os-server/issues/1452)) ([61c5a3f](https://github.com/matter-labs/zksync-os-server/commit/61c5a3f5a2797009418b96f93086681902000855))
+* **storage:** stop depending on persisted block hashes  ([#1458](https://github.com/matter-labs/zksync-os-server/issues/1458)) ([0da3c24](https://github.com/matter-labs/zksync-os-server/commit/0da3c24ce1af4e4dbf2a4a2bef481bbc4579eae2))
+
+## [0.20.11](https://github.com/matter-labs/zksync-os-server/compare/v0.20.10...v0.20.11) (2026-07-13)
+
+
+### Performance Improvements
+
+* **l1_sender:** improve fees and metrics usage ([#1443](https://github.com/matter-labs/zksync-os-server/issues/1443)) ([e23a088](https://github.com/matter-labs/zksync-os-server/commit/e23a0882265deabc5f5b4a7a5ac922ef480a06c3))
+
+## [0.20.10](https://github.com/matter-labs/zksync-os-server/compare/v0.20.9...v0.20.10) (2026-07-13)
+
+
+### Features
+
+* **network:** restrict external nodes to trusted peers only ([#1438](https://github.com/matter-labs/zksync-os-server/issues/1438)) ([9b57b36](https://github.com/matter-labs/zksync-os-server/commit/9b57b36161304fa203731e92f367a6870942bf96))
+* **network:** treat boot nodes as trusted peers to keep ENs synced ([#1432](https://github.com/matter-labs/zksync-os-server/issues/1432)) ([c37f7b8](https://github.com/matter-labs/zksync-os-server/commit/c37f7b87091d1be82b23fd520a31d7aa240be9f0))
+* **status:** add pipeline status endpoint ([#1269](https://github.com/matter-labs/zksync-os-server/issues/1269)) ([07641b7](https://github.com/matter-labs/zksync-os-server/commit/07641b7d16d9a3a6e07bb506225710f94ff23c5b))
+
+
+### Bug Fixes
+
+* **deps:** update crossbeam-epoch to 0.9.20 ([#1439](https://github.com/matter-labs/zksync-os-server/issues/1439)) ([521a705](https://github.com/matter-labs/zksync-os-server/commit/521a70588587845f5e322fe759d90ea0a54fd580))
+* **l1-sender:** retry nonce-class L1 rejections instead of crashing the node ([#1436](https://github.com/matter-labs/zksync-os-server/issues/1436)) ([e1039e4](https://github.com/matter-labs/zksync-os-server/commit/e1039e44c77628eabfb14f3f60da0683d89c53d7))
+* **sequencer:** detect EIP-7594 blob support via eth_config ([#1434](https://github.com/matter-labs/zksync-os-server/issues/1434)) ([81f719c](https://github.com/matter-labs/zksync-os-server/commit/81f719c551114bc9ebf05c861f6fc5b523d50973))
+
+## [0.20.9](https://github.com/matter-labs/zksync-os-server/compare/v0.20.8...v0.20.9) (2026-07-03)
+
+
+### Bug Fixes
+
+* **deps:** bump anyhow to 1.0.103 ([#1424](https://github.com/matter-labs/zksync-os-server/issues/1424)) ([85d7700](https://github.com/matter-labs/zksync-os-server/commit/85d7700da4981bd5dfbfa812ad193af0a8f0103c))
+* **deps:** ignore unfixable quick-xml DoS advisories ([#1431](https://github.com/matter-labs/zksync-os-server/issues/1431)) ([477960e](https://github.com/matter-labs/zksync-os-server/commit/477960e8351cd6d18204b8c2ab4fca16cfe6cfce))
+* harden ephemeral node port handling ([#1400](https://github.com/matter-labs/zksync-os-server/issues/1400)) ([068b62d](https://github.com/matter-labs/zksync-os-server/commit/068b62da2d71e434909b7fef865002b2644870f6))
+* **sequencer:** ensure l1 revert is completed ([#1420](https://github.com/matter-labs/zksync-os-server/issues/1420)) ([7bacb33](https://github.com/matter-labs/zksync-os-server/commit/7bacb33519db1bbdd9f997f07824755e4b5b2bca))
+
+## [0.20.8](https://github.com/matter-labs/zksync-os-server/compare/v0.20.7...v0.20.8) (2026-06-29)
+
+
+### Features
+
+* **external-node:** retry main-node RPC instead of crash-looping on startup ([#1405](https://github.com/matter-labs/zksync-os-server/issues/1405)) ([df3f9d7](https://github.com/matter-labs/zksync-os-server/commit/df3f9d78848b1ded760271fb5dba45291aa58da7))
+* **gateway:** drop support for live gateway migration ([#1401](https://github.com/matter-labs/zksync-os-server/issues/1401)) ([aea7b88](https://github.com/matter-labs/zksync-os-server/commit/aea7b88aa37c9b4619aa8903c8670d79fded5b77))
+* **rpc:** add method_filter to disable stateful methods ([#1396](https://github.com/matter-labs/zksync-os-server/issues/1396)) ([1f772e7](https://github.com/matter-labs/zksync-os-server/commit/1f772e77df652af7614af8ff47bf865dbe5d6bd1))
+* **rpc:** configurable rate limits via RateLimits enum ([#1397](https://github.com/matter-labs/zksync-os-server/issues/1397)) ([9a60352](https://github.com/matter-labs/zksync-os-server/commit/9a6035273e4b2b1abe182efd51084113e61240d9))
+* **sequencer:** L1 batch revert ([#1328](https://github.com/matter-labs/zksync-os-server/issues/1328)) ([e6f0575](https://github.com/matter-labs/zksync-os-server/commit/e6f0575b33c1f0b8eb2069a7e7c2881e7ff9cdad))
+
+
+### Bug Fixes
+
+* bump memmap2, quinn-proto versions ([#1411](https://github.com/matter-labs/zksync-os-server/issues/1411)) ([f82477c](https://github.com/matter-labs/zksync-os-server/commit/f82477c58d6bc600ab8916b7e1060b4ec97371e4))
+* **l1_watcher:** tolerate migrationNumber reverts when resolving gateway migration start block ([#1404](https://github.com/matter-labs/zksync-os-server/issues/1404)) ([b7be022](https://github.com/matter-labs/zksync-os-server/commit/b7be02268adf4afafc9761476ced74be8de8e997))
+* **l1-watcher:** handle pre-v31 CAH interface ([#1418](https://github.com/matter-labs/zksync-os-server/issues/1418)) ([47aa445](https://github.com/matter-labs/zksync-os-server/commit/47aa445cbe1cb3f6256fb1da9f9d9e844db5cfa3))
+* **rpc:** bound RPC metric label cardinality by method name ([#1419](https://github.com/matter-labs/zksync-os-server/issues/1419)) ([878fc3b](https://github.com/matter-labs/zksync-os-server/commit/878fc3b09bbd0bd09ae247f6cd73788bbe7bfa4a))
+
 ## [0.20.7](https://github.com/matter-labs/zksync-os-server/compare/v0.20.6...v0.20.7) (2026-06-16)
 
 

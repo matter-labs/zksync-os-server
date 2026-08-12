@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use zk_ee::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
+use zk_ee_prev::{common_structs::MAX_NUMBER_OF_LOGS, system::MAX_NATIVE_COMPUTATIONAL};
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{BlockOutput, ProtocolSemanticVersion, SystemTxType, ZkTxType};
@@ -41,7 +41,7 @@ impl BatchInfoAccumulator {
 
     pub fn add(&mut self, block_output: &BlockOutput, replay_record: &ReplayRecord) -> &Self {
         self.native_cycles += block_output.computational_native_used;
-        self.pubdata_bytes += block_output.pubdata.len() as u64;
+        self.pubdata_bytes += block_output.pubdata_used();
         self.l2_to_l1_logs_count += block_output
             .tx_results
             .iter()
@@ -84,16 +84,17 @@ impl BatchInfoAccumulator {
                 .any(|tx| tx.tx_type() == ZkTxType::Upgrade)
         {
             // Sanity check: upgrade tx must be either the only tx in the block,
-            // or followed by exactly one SetSLChainId tx (only for the v31 upgrade).
+            // or followed by exactly one placeholder SetSLChainId tx on post-v31
+            // protocols.
             assert!(
                 replay_record.transactions.len() == 1
                     || (replay_record.transactions.len() == 2
-                        && replay_record.protocol_version.minor == 31
+                        && replay_record.protocol_version.is_post_v31()
                         && matches!(
                             replay_record.transactions[1].as_system_tx_type(),
                             Some(SystemTxType::SetSLChainId(_, u64::MAX))
                         )),
-                "upgrade tx must be the only tx in the block (or followed by a single SetSLChainId tx for v31): {replay_record:?}"
+                "upgrade tx must be the only tx in the block (or followed by a single placeholder SetSLChainId tx on post-v31 protocols): {replay_record:?}"
             );
             self.has_upgrade_tx = true;
         }
@@ -179,5 +180,90 @@ impl BatchInfoAccumulator {
         BATCHER_METRICS
             .pubdata_per_batch
             .observe(self.pubdata_bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BatchInfoAccumulator;
+    use alloy::consensus::{Header, Sealed};
+    use alloy::primitives::{Address, B256, U256};
+    use semver::Version;
+    use zksync_os_storage_api::{BlockContext, BlockHashes, ReplayRecord};
+    use zksync_os_types::{
+        BlockOutput, BlockPubdata, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
+    };
+
+    fn dummy_block_output(pubdata: BlockPubdata) -> BlockOutput {
+        let header = Header {
+            number: 1,
+            timestamp: 11,
+            ..Default::default()
+        };
+        BlockOutput {
+            header: Sealed::new_unchecked(header, B256::ZERO),
+            tx_results: vec![],
+            storage_writes: vec![],
+            account_diffs: vec![],
+            published_preimages: vec![],
+            pubdata,
+            computational_native_used: 0,
+        }
+    }
+
+    fn dummy_replay_record() -> ReplayRecord {
+        ReplayRecord::new(
+            BlockContext {
+                chain_id: 270,
+                block_number: 1,
+                block_hashes: BlockHashes::default(),
+                timestamp: 11,
+                eip1559_basefee: U256::ZERO,
+                pubdata_price: U256::ZERO,
+                native_price: U256::ZERO,
+                coinbase: Address::ZERO,
+                gas_limit: 0,
+                pubdata_limit: 0,
+                mix_hash: U256::ZERO,
+                execution_version: ExecutionVersion::V7 as u32,
+                blob_fee: U256::ZERO,
+            },
+            vec![],
+            10,
+            Version::new(0, 0, 0),
+            ProtocolSemanticVersion::new(0, 32, 0),
+            B256::ZERO,
+            vec![],
+            BlockStartCursors::default(),
+        )
+    }
+
+    #[test]
+    fn accumulator_tracks_pubdata_used_not_pubdata_length() {
+        let mut accumulator = BatchInfoAccumulator::new(100, 20, 100);
+
+        accumulator.add(
+            &dummy_block_output(BlockPubdata::Length(7)),
+            &dummy_replay_record(),
+        );
+
+        assert_eq!(accumulator.pubdata_bytes, 7);
+        assert!(!accumulator.should_seal());
+    }
+
+    #[test]
+    fn pubdata_seal_limit_uses_pubdata_used() {
+        let mut accumulator = BatchInfoAccumulator::new(100, 20, 100);
+
+        accumulator.add(
+            &dummy_block_output(BlockPubdata::Length(21)),
+            &dummy_replay_record(),
+        );
+        accumulator.add(
+            &dummy_block_output(BlockPubdata::Length(0)),
+            &dummy_replay_record(),
+        );
+
+        assert!(accumulator.should_seal());
     }
 }

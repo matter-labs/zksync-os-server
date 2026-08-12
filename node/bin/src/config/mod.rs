@@ -25,7 +25,8 @@ use zksync_os_l1_sender::commands::commit::CommitCommand;
 use zksync_os_l1_sender::commands::execute::ExecuteCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_l1_sender::config::{
-    DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY, DEFAULT_REQUIRED_CONFIRMATIONS_L1,
+    DEFAULT_NONCE_ERROR_MAX_ATTEMPTS, DEFAULT_NONCE_ERROR_RETRY_BACKOFF,
+    DEFAULT_REQUIRED_CONFIRMATIONS_L1,
 };
 use zksync_os_mempool::SubPoolLimit;
 use zksync_os_network::{NodeRecord, PeerId, SecretKey};
@@ -60,7 +61,6 @@ pub use build_external_config::{build_external_config, load_config_file_sources}
 pub struct Config {
     pub general_config: GeneralConfig,
     pub l1_provider_config: ProviderConfig,
-    pub gateway_provider_config: Option<ProviderConfig>,
     pub network_config: NetworkConfig,
     pub consensus_config: ConsensusConfig,
     pub genesis_config: GenesisConfig,
@@ -70,8 +70,6 @@ pub struct Config {
     pub sequencer_config: SequencerConfig,
     #[config_validate(async_validate(Self::validate_operator_signers))]
     pub l1_sender_config: L1SenderConfig,
-    #[config_validate(async_validate(Self::validate_gw_operator_signers))]
-    pub gateway_sender_config: GatewaySenderConfig,
     pub l1_watcher_config: L1WatcherConfig,
     pub batcher_config: BatcherConfig,
     pub prover_input_generator_config: ProverInputGeneratorConfig,
@@ -198,9 +196,6 @@ impl Config {
             .insert(&ProviderConfig::DESCRIPTION, "l1_provider")
             .expect("Failed to insert L1 provider config");
         schema
-            .insert(&ProviderConfig::DESCRIPTION, "gateway_provider")
-            .expect("Failed to insert Gateway provider config");
-        schema
             .insert(&NetworkConfig::DESCRIPTION, "network")
             .expect("Failed to insert network config");
         schema
@@ -224,9 +219,6 @@ impl Config {
         schema
             .insert(&L1SenderConfig::DESCRIPTION, "l1_sender")
             .expect("Failed to insert l1_sender config");
-        schema
-            .insert(&GatewaySenderConfig::DESCRIPTION, "gateway_sender")
-            .expect("Failed to insert gateway_sender config");
         schema
             .insert(&L1WatcherConfig::DESCRIPTION, "l1_watcher")
             .expect("Failed to insert l1_watcher config");
@@ -355,78 +347,6 @@ impl Config {
 
         Ok(())
     }
-
-    async fn validate_gw_operator_signers(
-        root: &Self,
-        gateway_sender_config: &GatewaySenderConfig,
-        errors: &mut Vec<ValidationError>,
-    ) -> anyhow::Result<()> {
-        if !root.general_config.node_role.is_main() {
-            return Ok(());
-        }
-
-        // gateway_sender operator keys are optional at config-validation time; their presence is
-        // enforced at runtime when the chain is discovered to be settling on Gateway. Skip the
-        // uniqueness check unless all three are configured.
-        let Some(commit) = &gateway_sender_config.operator_commit_sk else {
-            return Ok(());
-        };
-        let Some(prove) = &gateway_sender_config.operator_prove_sk else {
-            return Ok(());
-        };
-        let Some(execute) = &gateway_sender_config.operator_execute_sk else {
-            return Ok(());
-        };
-
-        let commit_addr = match commit.address().await {
-            Ok(address) => Some(address),
-            Err(err) => {
-                errors.push(ValidationError::new(
-                    "gateway_sender.operator_commit_sk",
-                    format!("failed to resolve signer address: {err}"),
-                ));
-                None
-            }
-        };
-        let prove_addr = match prove.address().await {
-            Ok(address) => Some(address),
-            Err(err) => {
-                errors.push(ValidationError::new(
-                    "gateway_sender.operator_prove_sk",
-                    format!("failed to resolve signer address: {err}"),
-                ));
-                None
-            }
-        };
-        let execute_addr = match execute.address().await {
-            Ok(address) => Some(address),
-            Err(err) => {
-                errors.push(ValidationError::new(
-                    "gateway_sender.operator_execute_sk",
-                    format!("failed to resolve signer address: {err}"),
-                ));
-                None
-            }
-        };
-
-        if let (Some(commit_addr), Some(prove_addr), Some(execute_addr)) =
-            (commit_addr, prove_addr, execute_addr)
-            && (commit_addr == prove_addr
-                || prove_addr == execute_addr
-                || execute_addr == commit_addr)
-        {
-            errors.push(ValidationError::new(
-                "gateway_sender.operator_commit_sk",
-                format!(
-                    "must be different from `gateway_sender.operator_prove_sk` and \
-                     `gateway_sender.operator_execute_sk`; got commit={commit_addr}, \
-                     prove={prove_addr}, execute={execute_addr}"
-                ),
-            ));
-        }
-
-        Ok(())
-    }
 }
 
 fn log_all_errors(errors: ParseErrors) -> anyhow::Error {
@@ -469,11 +389,6 @@ fn log_all_errors(errors: ParseErrors) -> anyhow::Error {
 pub struct GeneralConfig {
     #[config(default_t = NodeRole::MainNode, with = Serde![str])]
     pub node_role: NodeRole,
-
-    /// Gateway chain ID. Used by the migration watcher to construct `SetSLChainId` system
-    /// transactions when a `MigrateToGateway` event fires. Defaults to 506 (ZKsync Gateway).
-    #[config(default_t = 506)]
-    pub gateway_chain_id: u64,
 
     /// Min number of blocks to replay on restart
     /// Depending on L1/persistence state, we may need to replay more blocks than this number
@@ -539,7 +454,7 @@ pub struct GeneralConfig {
     pub ephemeral_state: Option<PathBuf>,
 }
 
-/// Config for L1 or Gateway provider
+/// Config for the L1 provider
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct ProviderConfig {
@@ -559,6 +474,11 @@ pub struct ProviderConfig {
     /// Backoff used between retry attempts.
     #[config(default_t = Duration::from_millis(1000))]
     pub retry_backoff: Duration,
+
+    /// Per-attempt timeout for every L1 RPC request. Must comfortably exceed the slowest
+    /// legitimate request (e.g. `eth_getLogs` over `l1_watcher.max_blocks_to_process` blocks).
+    #[config(default_t = 30 * TimeUnit::Seconds)]
+    pub request_timeout: Duration,
 }
 
 impl ProviderConfig {
@@ -600,12 +520,17 @@ pub struct NetworkConfig {
     #[config(default_t = None)]
     pub interface: Option<String>,
     /// Port to use for Node Discovery Protocol v5 (discv5) and RLPx Transport Protocol (rlpx).
+    /// Set to 0 to let startup pick a concrete TCP+UDP port before initializing networking.
     #[config(default_t = 3060)]
     pub port: u16,
     /// All boot nodes to start network discovery with. Expected format is
     /// `enode://<node ID>@<IP address>:<port>` or `enode://<node ID>@<DNS name>:<port>`
     /// delimited by commas (`,`). DNS names are resolved by the networking stack. For example:
     /// `enode://dbd18888f17bad7df7fa958b57f4993f47312ba5364508fd0d9027e62ea17a037ca6985d6b0969c4341f1d4f8763a802785961989d07b1fb5373ced9d43969f6@127.0.0.1:3060`
+    ///
+    /// Boot nodes are also treated as trusted peers: always kept connected and admitted to the zks
+    /// subprotocol regardless of the active-connection cap. On an external node, listing the main
+    /// node here keeps replay sync from getting stranded on non-serving peers.
     #[config(
         default,
         with = Delimited::repeat(Serde![str], ",")
@@ -1112,6 +1037,19 @@ pub struct RpcConfig {
     #[config(default_t = 24)]
     pub max_response_size: u32,
 
+    /// Limits the work admitted by one JSON-RPC batch. The server rejects larger batches before
+    /// dispatching any entry, so one request cannot create an unbounded work queue.
+    #[config(default_t = 1000)]
+    pub max_batch_size: u32,
+
+    /// Allows entries in one JSON-RPC batch to run concurrently, with a per-batch limit.
+    ///
+    /// Responses stay in request order, but execution does not. For example, a transaction and a
+    /// read that depends on it may race when sent in the same batch. Keep this disabled for clients
+    /// that rely on sequential batch execution.
+    #[config(default_t = false)]
+    pub parallel_batches: bool,
+
     /// Maximum number of blocks that could be scanned per filter
     #[config(default_t = 10_000)]
     pub max_blocks_per_filter: u64,
@@ -1150,6 +1088,11 @@ pub struct RpcConfig {
     /// Rate limits for incoming JSON-RPC requests.
     #[config(nest)]
     pub rate_limits: RpcRateLimitsConfig,
+
+    /// Rate limiter for incoming L2 transactions based on executed gas throughput.
+    /// Disabled by default; set `enabled = true` to turn it on.
+    #[config(nest, default)]
+    pub tx_gas_rate_limit: TxGasRateLimitConfig,
 
     /// List of disabled methods.
     /// Some stateful methods like `eth_newFilter` don't make sense when running in a cluster behind a load-balancer.
@@ -1196,25 +1139,103 @@ impl From<RpcRateLimitsConfig> for zksync_os_rpc::RateLimits {
     }
 }
 
+/// Rate limiter for incoming L2 transactions, gating admission based on the sequencer's
+/// *total* recent execution throughput — L1 priority / upgrade / interop txs all count
+/// toward it too, even though only L2 admission is ever actually gated. Only effective on
+/// the main node.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+#[config(validate(
+    Self::check_credit_windows,
+    "max_credit_seconds must be positive, other windows non-negative, and reopen_credit_seconds must not exceed max_credit_seconds"
+))]
+pub struct TxGasRateLimitConfig {
+    /// Whether the gas rate limiter is enabled. Only effective on the main node.
+    #[config(default_t = false)]
+    pub enabled: bool,
+
+    /// Target sustained executed-gas throughput, in gas per second.
+    #[config(default_t = NonZeroU64::new(72_000_000).unwrap())]
+    pub gas_per_second: NonZeroU64,
+
+    /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`. Sized to
+    /// absorb realistic bursty traffic without tripping, while staying under the
+    /// backpressure mechanism's own block-diff horizon.
+    #[config(default_t = 30.0)]
+    pub max_credit_seconds: f64,
+
+    /// Credit required to resume acceptance after the bank was exhausted, in seconds'
+    /// worth of `gas_per_second`.
+    #[config(default_t = 1.0)]
+    pub reopen_credit_seconds: f64,
+
+    /// Max remembered deficit, in seconds' worth of `gas_per_second`. Capacity consumed
+    /// above target while closing is repaid before reopening; `0` clamps the bank at zero.
+    #[config(default_t = 2.0)]
+    pub deficit_floor_seconds: f64,
+
+    /// Senders whose transactions are never rate-limited.
+    #[config(default, with = Delimited::new(","))]
+    pub exempt_senders: HashSet<Address>,
+}
+
+impl TxGasRateLimitConfig {
+    fn check_credit_windows(&self) -> Result<(), ErrorWithOrigin> {
+        let windows = [
+            self.max_credit_seconds,
+            self.reopen_credit_seconds,
+            self.deficit_floor_seconds,
+        ];
+        if windows.iter().any(|w| !w.is_finite() || *w < 0.0) {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit seconds windows must be finite and non-negative",
+            ));
+        }
+        // A zero-capacity bank pins the level at <= 0 and makes the gate flap on
+        // every submission.
+        if self.max_credit_seconds == 0.0 {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit.max_credit_seconds must be positive",
+            ));
+        }
+        // A reopen threshold above capacity is unreachable: once closed, the gate
+        // would never reopen.
+        if self.reopen_credit_seconds > self.max_credit_seconds {
+            return Err(ErrorWithOrigin::custom(
+                "tx_gas_rate_limit.reopen_credit_seconds must not exceed max_credit_seconds",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_lib(self) -> zksync_os_mempool::TxGasRateLimitConfig {
+        zksync_os_mempool::TxGasRateLimitConfig {
+            gas_per_second: self.gas_per_second.get(),
+            max_credit_seconds: self.max_credit_seconds,
+            reopen_credit_seconds: self.reopen_credit_seconds,
+            deficit_floor_seconds: self.deficit_floor_seconds,
+            exempt_senders: self.exempt_senders,
+        }
+    }
+}
+
 /// L1 sender configuration. The signing key fields are only required on the Main Node;
 /// External Nodes do not send L1 transactions and may omit them.
 ///
-/// Each operator accepts either a hex private key string (backward-compatible) or a GCP KMS
-/// resource object: `{"type": "gcp_kms", "resource": "projects/.../cryptoKeyVersions/N"}`.
+/// Each operator accepts either a hex private key string (backward-compatible) or a cloud KMS
+/// object: `{"type": "gcp_kms", "resource": "projects/.../cryptoKeyVersions/N"}` or
+/// `{"type": "azure_kms", "key_id": "https://{vault}.vault.azure.net/keys/{name}/{version}"}`.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 pub struct L1SenderConfig {
     /// Signer to commit batches to L1.
     /// Must be consistent with the operator key set on the contract (permissioned!)
     /// Not required for External Nodes, which do not send L1 transactions.
-    /// On a Main Node, required at runtime only when the chain is discovered to be settling on
-    /// L1 (otherwise `gateway_sender.operator_commit_sk` is used). Whether the chain settles on L1 or
-    /// Gateway is determined from on-chain state at startup, which is why presence is not
-    /// enforced here.
+    /// Required at runtime on the Main Node; presence is enforced at startup rather than here.
     #[config(secret, alias = "operator_commit_pk", with = SignerConfigDeserializer)]
     pub operator_commit_sk: Option<SignerConfig>,
 
     /// Signer to submit proofs to L1.
-    /// Can be arbitrary funded address - proof submission is permissionless.
+    /// Must hold `PROVER_ROLE` for the chain on the ValidatorTimelock (permissioned).
     /// Not required for External Nodes, which do not send L1 transactions.
     /// On a Main Node, required at runtime only when settling on L1 (see `operator_commit_sk`).
     #[config(secret, alias = "operator_prove_pk", with = SignerConfigDeserializer)]
@@ -1244,10 +1265,21 @@ pub struct L1SenderConfig {
     pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
 
     /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
+    /// With pipelined sending this is the in-flight window size: the max number of
+    /// submitted-but-not-yet-mined L1 transactions. Must not exceed the L1 node's per-account
+    /// pool cap — 16 for both geth's blobpool (`maxTxsPerAccount`) and reth's default
+    /// `max-account-slots` — or sends are rejected until the pool drains.
     #[config(default_t = 16)]
     pub command_limit: usize,
 
-    /// How often to poll L1 for new blocks.
+    /// When true (default), L1 transactions are submitted through a bounded in-flight window
+    /// and confirmations are tracked separately, so submission never waits for inclusion.
+    /// When false, commands are processed in synchronous cycles instead: drain up to
+    /// `command_limit` commands, send, wait for all receipts + confirmations, repeat.
+    #[config(default_t = true)]
+    pub pipelining_enabled: bool,
+
+    /// Receipt/inclusion polling cadence of the L1 senders.
     #[config(default_t = 1 * TimeUnit::Seconds)]
     pub poll_interval: Duration,
 
@@ -1262,6 +1294,16 @@ pub struct L1SenderConfig {
     #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_L1)]
     pub required_confirmations: u64,
 
+    /// Max submission attempts per L1 transaction when the L1 node rejects it with a
+    /// nonce-class error.
+    #[config(default_t = DEFAULT_NONCE_ERROR_MAX_ATTEMPTS)]
+    pub nonce_error_max_attempts: usize,
+
+    /// Backoff between attempts after a nonce-class rejection. Gives the L1 node time to
+    /// settle its pool/state view after a block import.
+    #[config(default_t = DEFAULT_NONCE_ERROR_RETRY_BACKOFF)]
+    pub nonce_error_retry_backoff: Duration,
+
     /// Whether L1 senders are enabled.
     /// Only affects the Main Node.
     /// Only useful for debug. When L1 senders are disabled,
@@ -1269,10 +1311,8 @@ pub struct L1SenderConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// Pubdata mode used by block-producing components on the Main Node. Only read from config
-    /// when the chain settles on L1; when settling on Gateway, the effective mode is derived
-    /// from the gateway's DA input mode and this value is ignored. Required at runtime only
-    /// for Main Nodes settling on L1; External Nodes never produce blocks and may leave it unset.
+    /// Pubdata mode used by block-producing components on the Main Node. Required at runtime on
+    /// Main Nodes; External Nodes never produce blocks and may leave it unset.
     #[config(with = Serde![str])]
     pub pubdata_mode: Option<PubdataMode>,
 
@@ -1283,83 +1323,59 @@ pub struct L1SenderConfig {
 
 #[derive(Clone, Copy, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
+#[config(validate(
+    Self::check_replacement_multipliers,
+    "replacement multipliers must be >= 1.1 (>= 2.0 for the blob fee) while force resubmission \
+     is enabled: geth and reth replace a pooled transaction only with a 10% fee bump (100% for \
+     blob transactions)"
+))]
 pub struct ForceTransactionResubmissionConfig {
     /// Skips startup in-flight recovery and resubmits queued L1 transactions with replacement fee caps.
     #[config(default_t = false)]
     pub enabled: bool,
 
     /// Multiplier applied to `max_fee_per_gas` when force transaction resubmission is enabled.
+    /// Must be >= 1.1 (the pool price-bump rule). The commit sender raises its effective
+    /// multipliers to 2.0 as needed — replacing a blob transaction requires a 100% bump.
     #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_gas_replacement_multiplier: f64,
 
     /// Multiplier applied to `max_priority_fee_per_gas` when force transaction resubmission is enabled.
+    /// Must be >= 1.1 (the pool price-bump rule). The commit sender raises its effective
+    /// multipliers to 2.0 as needed — replacing a blob transaction requires a 100% bump.
     #[config(default_t = 1.1, validate(is_positive_f64, "must be positive"))]
     pub max_priority_fee_per_gas_replacement_multiplier: f64,
 
     /// Multiplier applied to `max_fee_per_blob_gas` when force transaction resubmission is enabled.
+    /// Must be >= 2.0: only blob transactions have a blob fee, and replacing one requires a
+    /// 100% bump on all three fee caps.
     #[config(default_t = 2.0, validate(is_positive_f64, "must be positive"))]
     pub max_fee_per_blob_gas_replacement_multiplier: f64,
 }
 
-fn is_positive_f64(&val: &f64) -> bool {
-    val > 0.0
+impl ForceTransactionResubmissionConfig {
+    /// Replacing a pooled transaction requires a >= 10% fee bump (geth/reth default price
+    /// bump); the blob fee cap only exists on blob transactions, whose replacement requires
+    /// 100% on every field — the commit sender enforces that 2.0 minimum itself. Lower
+    /// multipliers make every forced resubmission fail as "replacement transaction
+    /// underpriced" — a crash loop — so they are rejected up front.
+    fn check_replacement_multipliers(&self) -> Result<(), ErrorWithOrigin> {
+        if self.enabled
+            && (self.max_fee_per_gas_replacement_multiplier < 1.1
+                || self.max_priority_fee_per_gas_replacement_multiplier < 1.1
+                || self.max_fee_per_blob_gas_replacement_multiplier < 2.0)
+        {
+            return Err(ErrorWithOrigin::custom(
+                "replacement multipliers must be >= 1.1 (>= 2.0 for the blob fee) while force \
+                 resubmission is enabled",
+            ));
+        }
+        Ok(())
+    }
 }
 
-/// Gateway sender configuration. Used by the L1Sender pipeline components when the chain is
-/// currently settling on a Gateway (as discovered from the L1 settlement layer interval at
-/// startup). When the chain is settling on L1 directly, this config is ignored and
-/// [`L1SenderConfig`] is used instead.
-///
-/// Operator keys here must be funded on the Gateway chain. They are optional at config-validation
-/// time; their presence is enforced at runtime once the settlement layer is discovered.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
-#[config(derive(Default))]
-pub struct GatewaySenderConfig {
-    /// Signer to commit batches to the Gateway.
-    /// Must be consistent with the operator key set on the Gateway chain admin (permissioned!).
-    /// Required at runtime when the chain settles on Gateway.
-    #[config(secret, alias = "operator_commit_pk", with = SignerConfigDeserializer)]
-    pub operator_commit_sk: Option<SignerConfig>,
-
-    /// Signer to submit proofs to the Gateway.
-    /// Can be an arbitrary funded address — proof submission is permissionless.
-    /// Required at runtime when the chain settles on Gateway.
-    #[config(secret, alias = "operator_prove_pk", with = SignerConfigDeserializer)]
-    pub operator_prove_sk: Option<SignerConfig>,
-
-    /// Signer to execute batches on the Gateway.
-    /// Can be an arbitrary funded address — execute submission is permissionless.
-    /// Required at runtime when the chain settles on Gateway.
-    #[config(secret, alias = "operator_execute_pk", with = SignerConfigDeserializer)]
-    pub operator_execute_sk: Option<SignerConfig>,
-
-    /// Max fee per gas (in Gateway base token wei) we are willing to spend.
-    #[config(default_t = 200 * EtherUnit::Gwei)]
-    pub max_fee_per_gas: EtherAmount,
-
-    /// Max priority fee per gas (in Gateway base token wei) we are willing to spend.
-    #[config(default_t = 1 * EtherUnit::Gwei)]
-    pub max_priority_fee_per_gas: EtherAmount,
-
-    /// Force transaction resubmission options.
-    #[config(nest, default)]
-    pub force_transaction_resubmission: ForceTransactionResubmissionConfig,
-
-    /// Max number of commands (to commit/prove/execute one batch) to be processed at a time.
-    #[config(default_t = 16)]
-    pub command_limit: usize,
-
-    /// How often to poll the Gateway for new blocks.
-    #[config(default_t = 1 * TimeUnit::Seconds)]
-    pub poll_interval: Duration,
-
-    /// Maximum time to wait for a Gateway transaction to be included.
-    #[config(default_t = 600 * TimeUnit::Seconds)]
-    pub transaction_timeout: Duration,
-
-    /// Gateway blocks (inclusive of the inclusion block) before a transaction is confirmed.
-    #[config(default_t = DEFAULT_REQUIRED_CONFIRMATIONS_GATEWAY)]
-    pub required_confirmations: u64,
+fn is_positive_f64(&val: &f64) -> bool {
+    val > 0.0
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1614,6 +1630,14 @@ pub enum ReplayArchiveConfig {
         #[config(nest, default)]
         encryption: ReplayArchiveEncryptionConfig,
     },
+    /// GCS backend using Application Default Credentials. This supports GKE Workload Identity,
+    /// external workload identity federation, and local ADC.
+    Gcs {
+        /// Name of the GCS bucket.
+        bucket_base_url: String,
+        #[config(nest, default)]
+        encryption: ReplayArchiveEncryptionConfig,
+    },
 }
 
 /// Replay archive encryption applied before data is written to cold storage.
@@ -1625,6 +1649,15 @@ pub enum ReplayArchiveEncryptionConfig {
     AgeX25519 {
         /// age X25519 recipient public key. The node only needs this public key.
         recipient: String,
+    },
+    /// GCP KMS encryption using Application Default Credentials. This supports GKE Workload
+    /// Identity, external workload identity federation, and local ADC.
+    GcpKms {
+        /// KMS key version, full resource name
+        /// `projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}`.
+        /// Purpose `ASYMMETRIC_DECRYPT` with an `RSA_DECRYPT_OAEP_*_SHA256` algorithm. The node only
+        /// reads the public key to encrypt locally, so it needs no decrypt permission.
+        kms_key_version: String,
     },
 }
 
@@ -1657,6 +1690,22 @@ impl From<ReplayArchiveConfig> for zksync_os_replay_archive::ReplayArchiveConfig
                 },
                 encryption: encryption.into(),
             },
+            #[cfg(feature = "gcp")]
+            ReplayArchiveConfig::Gcs {
+                bucket_base_url,
+                encryption,
+            } => zksync_os_replay_archive::ReplayArchiveConfig::Gcs {
+                config: zksync_os_replay_archive::GcsReplayArchiveConfig {
+                    bucket_base_url,
+                    auth_mode: zksync_os_replay_archive::GcsReplayArchiveAuthMode::Authenticated,
+                },
+                encryption: encryption.into(),
+            },
+            #[cfg(not(feature = "gcp"))]
+            ReplayArchiveConfig::Gcs { .. } => panic!(
+                "this build was compiled without the `gcp` feature; rebuild with \
+                 `--features gcp` to use the GCS replay archive backend"
+            ),
         }
     }
 }
@@ -1672,6 +1721,19 @@ impl From<ReplayArchiveEncryptionConfig>
             ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                 zksync_os_replay_archive::ReplayArchiveEncryptionConfig::AgeX25519 { recipient }
             }
+            #[cfg(feature = "gcp")]
+            ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                zksync_os_replay_archive::ReplayArchiveEncryptionConfig::GcpKms {
+                    config: zksync_os_replay_archive::GcpKmsConfig {
+                        key_version: kms_key_version,
+                    },
+                }
+            }
+            #[cfg(not(feature = "gcp"))]
+            ReplayArchiveEncryptionConfig::GcpKms { .. } => panic!(
+                "this build was compiled without the `gcp` feature; rebuild with \
+                 `--features gcp` to use the GCP KMS replay archive encryption"
+            ),
         }
     }
 }
@@ -1801,9 +1863,6 @@ pub struct BatchVerificationConfig {
     /// [main node] Retry delay between attempts.
     #[config(default_t = Duration::from_secs(1))]
     pub retry_delay: Duration,
-    /// [main node] Total timeout.
-    #[config(default_t = Duration::from_secs(300))]
-    pub total_timeout: Duration,
     /// [external node] Signing key.
     // default address 0x36615Cf349d7F6344891B1e7CA7C72883F5dc049
     #[config(default_t = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110".into())]
@@ -1831,8 +1890,6 @@ pub struct BaseTokenPriceUpdaterConfig {
     pub base_token_addr_override: Option<Address>,
     /// Override for decimals of the base token.
     pub base_token_decimals_override: Option<u8>,
-    /// Override for address of the gateway base token address used to calculate ETH<->GatewayBaseToken ratio on gateway using chains.
-    pub gateway_base_token_addr_override: Option<Address>,
     /// Signer to update base token price on L1.
     /// Must be consistent with the key set on the chain admin contract.
     /// Not used for chains with ETH as base token; expected to be set for all other chains.
@@ -2004,6 +2061,8 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             max_connections: c.max_connections,
             max_request_size: c.max_request_size,
             max_response_size: c.max_response_size,
+            max_batch_size: c.max_batch_size,
+            parallel_batches: c.parallel_batches,
             max_blocks_per_filter: c.max_blocks_per_filter,
             max_logs_per_response: c.max_logs_per_response,
             l2_signer_blacklist: c.l2_signer_blacklist,
@@ -2123,9 +2182,12 @@ impl L1SenderConfig {
             },
             force_transaction_resubmission: force_transaction_resubmission.enabled,
             command_limit: self.command_limit,
+            pipelining_enabled: self.pipelining_enabled,
             poll_interval: self.poll_interval,
             transaction_timeout: self.transaction_timeout,
             required_confirmations: self.required_confirmations,
+            nonce_error_max_attempts: self.nonce_error_max_attempts,
+            nonce_error_retry_backoff: self.nonce_error_retry_backoff,
             phantom_data: Default::default(),
         }
     }
@@ -2155,66 +2217,6 @@ impl From<L1SenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<Execut
         let signer = c.operator_execute_sk.clone().expect(
             "l1_sender.operator_execute_sk must be set on the Main Node when settling on L1",
         );
-        c.into_lib_l1_sender_config(signer)
-    }
-}
-
-impl GatewaySenderConfig {
-    fn into_lib_l1_sender_config<Input>(
-        self,
-        operator_signer: SignerConfig,
-    ) -> zksync_os_l1_sender::config::L1SenderConfig<Input> {
-        let force_transaction_resubmission = self.force_transaction_resubmission;
-        zksync_os_l1_sender::config::L1SenderConfig {
-            operator_signer,
-            fee_config: zksync_os_l1_sender::config::L1SenderFeeConfig {
-                max_fee_per_gas_wei: self.max_fee_per_gas.0,
-                max_priority_fee_per_gas_wei: self.max_priority_fee_per_gas.0,
-                // Gateway transactions never carry blobs, so the blob fee cap is unused.
-                max_fee_per_blob_gas_wei: 0,
-                max_fee_per_gas_replacement_multiplier: force_transaction_resubmission
-                    .max_fee_per_gas_replacement_multiplier,
-                max_priority_fee_per_gas_replacement_multiplier: force_transaction_resubmission
-                    .max_priority_fee_per_gas_replacement_multiplier,
-                max_fee_per_blob_gas_replacement_multiplier: force_transaction_resubmission
-                    .max_fee_per_blob_gas_replacement_multiplier,
-            },
-            force_transaction_resubmission: force_transaction_resubmission.enabled,
-            command_limit: self.command_limit,
-            poll_interval: self.poll_interval,
-            transaction_timeout: self.transaction_timeout,
-            required_confirmations: self.required_confirmations,
-            phantom_data: Default::default(),
-        }
-    }
-}
-
-impl From<GatewaySenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<CommitCommand> {
-    fn from(c: GatewaySenderConfig) -> Self {
-        let signer = c
-            .operator_commit_sk
-            .clone()
-            .expect("gateway_sender.operator_commit_sk must be set when settling on Gateway");
-        c.into_lib_l1_sender_config(signer)
-    }
-}
-
-impl From<GatewaySenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ProofCommand> {
-    fn from(c: GatewaySenderConfig) -> Self {
-        let signer = c
-            .operator_prove_sk
-            .clone()
-            .expect("gateway_sender.operator_prove_sk must be set when settling on Gateway");
-        c.into_lib_l1_sender_config(signer)
-    }
-}
-
-impl From<GatewaySenderConfig> for zksync_os_l1_sender::config::L1SenderConfig<ExecuteCommand> {
-    fn from(c: GatewaySenderConfig) -> Self {
-        let signer = c
-            .operator_execute_sk
-            .clone()
-            .expect("gateway_sender.operator_execute_sk must be set when settling on Gateway");
         c.into_lib_l1_sender_config(signer)
     }
 }
@@ -2267,7 +2269,6 @@ impl From<BatchVerificationConfig> for zksync_os_batch_verification::BatchVerifi
             accepted_signers: c.accepted_signers,
             request_timeout: c.request_timeout,
             retry_delay: c.retry_delay,
-            total_timeout: c.total_timeout,
             signing_key: c.signing_key,
         }
     }
@@ -2301,7 +2302,6 @@ pub fn base_token_price_updater_config(
         price_fetching_max_attempts: c.price_fetching_max_attempts,
         base_token_addr_override: c.base_token_addr_override,
         base_token_decimals_override: c.base_token_decimals_override,
-        gateway_base_token_addr_override: c.gateway_base_token_addr_override,
         token_multiplier_setter_signer,
         max_fee_per_gas_wei: l1_sender_config.max_fee_per_gas.0,
         max_priority_fee_per_gas_wei: l1_sender_config.max_priority_fee_per_gas.0,
@@ -2431,10 +2431,7 @@ mod tests {
                 assert_eq!(root_path, PathBuf::from("/tmp/replay-archive"));
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
-            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
-                panic!("expected file system replay archive config")
-            }
+            _ => panic!("expected file system replay archive config"),
         }
     }
 
@@ -2468,9 +2465,26 @@ mod tests {
                 assert_eq!(region.as_deref(), Some("us-east-2"));
                 assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
-            ReplayArchiveConfig::Noop | ReplayArchiveConfig::FileSystem { .. } => {
-                panic!("expected S3 replay archive config")
+            _ => panic!("expected S3 replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcs_backend() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "Gcs"),
+            ("REPLAY_ARCHIVE_BUCKET_BASE_URL", "replay-archive"),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::Gcs {
+                bucket_base_url,
+                encryption,
+            } => {
+                assert_eq!(bucket_base_url, "replay-archive");
+                assert!(matches!(encryption, ReplayArchiveEncryptionConfig::Noop));
             }
+            _ => panic!("expected GCS replay archive config"),
         }
     }
 
@@ -2488,14 +2502,35 @@ mod tests {
                 ReplayArchiveEncryptionConfig::AgeX25519 { recipient } => {
                     assert_eq!(recipient, "age1recipient");
                 }
-                ReplayArchiveEncryptionConfig::Noop => {
-                    panic!("expected age X25519 replay archive encryption")
-                }
+                _ => panic!("expected age X25519 replay archive encryption"),
             },
-            ReplayArchiveConfig::Noop => panic!("expected file system replay archive config"),
-            ReplayArchiveConfig::S3WithCredentialFile { .. } => {
-                panic!("expected file system replay archive config")
-            }
+            _ => panic!("expected file system replay archive config"),
+        }
+    }
+
+    #[test]
+    fn replay_archive_config_parses_gcp_kms_encryption() {
+        let config = parse_replay_archive_config([
+            ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
+            ("REPLAY_ARCHIVE_ROOT_PATH", "/tmp/replay-archive"),
+            ("REPLAY_ARCHIVE_ENCRYPTION_TYPE", "GcpKms"),
+            (
+                "REPLAY_ARCHIVE_ENCRYPTION_KMS_KEY_VERSION",
+                "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+            ),
+        ]);
+
+        match config {
+            ReplayArchiveConfig::FileSystem { encryption, .. } => match encryption {
+                ReplayArchiveEncryptionConfig::GcpKms { kms_key_version } => {
+                    assert_eq!(
+                        kms_key_version,
+                        "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"
+                    );
+                }
+                _ => panic!("expected GCP KMS replay archive encryption"),
+            },
+            _ => panic!("expected file system replay archive config"),
         }
     }
 
@@ -2550,7 +2585,6 @@ mod tests {
                 ..Default::default()
             },
             l1_provider_config: ProviderConfig::default(),
-            gateway_provider_config: None,
             network_config: NetworkConfig::default(),
             consensus_config: ConsensusConfig::default(),
             genesis_config: GenesisConfig {
@@ -2572,14 +2606,16 @@ mod tests {
                 max_fee_per_blob_gas: 2 * EtherUnit::Gwei,
                 force_transaction_resubmission: ForceTransactionResubmissionConfig::default(),
                 command_limit: 16,
+                pipelining_enabled: true,
                 poll_interval: Duration::from_millis(100),
                 transaction_timeout: Duration::from_secs(600),
                 required_confirmations: DEFAULT_REQUIRED_CONFIRMATIONS_L1,
+                nonce_error_max_attempts: DEFAULT_NONCE_ERROR_MAX_ATTEMPTS,
+                nonce_error_retry_backoff: DEFAULT_NONCE_ERROR_RETRY_BACKOFF,
                 enabled: true,
                 pubdata_mode: Some(PubdataMode::Blobs),
                 max_batch_diff_to_upstream: None,
             },
-            gateway_sender_config: GatewaySenderConfig::default(),
             l1_watcher_config: L1WatcherConfig::default(),
             batcher_config: BatcherConfig::default(),
             prover_input_generator_config: ProverInputGeneratorConfig::default(),
@@ -2684,33 +2720,6 @@ mod tests {
             err.contains("`genesis.bridgehub_address` is required when `general.node_role=main`")
         );
         assert!(err.contains("`l1_sender.operator_commit_sk`"));
-        assert!(err.contains("must be different"));
-    }
-
-    #[tokio::test]
-    async fn main_node_can_omit_l1_sender_operator_keys_when_gateway_sender_keys_set() {
-        let mut config = base_config(NodeRole::MainNode);
-        config.l1_sender_config.operator_commit_sk = None;
-        config.l1_sender_config.operator_prove_sk = None;
-        config.l1_sender_config.operator_execute_sk = None;
-        config.gateway_sender_config.operator_commit_sk = Some(local_signer(0x44));
-        config.gateway_sender_config.operator_prove_sk = Some(local_signer(0x55));
-        config.gateway_sender_config.operator_execute_sk = Some(local_signer(0x66));
-
-        config.validate().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn main_node_validation_rejects_duplicate_gateway_sender_addresses() {
-        let mut config = base_config(NodeRole::MainNode);
-        let signer = local_signer(0x77);
-        config.gateway_sender_config.operator_commit_sk = Some(signer.clone());
-        config.gateway_sender_config.operator_prove_sk = Some(signer);
-        config.gateway_sender_config.operator_execute_sk = Some(local_signer(0x88));
-
-        let err = config.validate().await.unwrap_err().to_string();
-
-        assert!(err.contains("`gateway_sender.operator_commit_sk`"));
         assert!(err.contains("must be different"));
     }
 

@@ -1,5 +1,5 @@
-use self::tree_adapter::TreeOutputAdapter;
-use self::tree_adapter::VersionedMerkleTree;
+use self::tree_adapter::{LaneTreeAdapter, VersionedMerkleTree};
+use crate::pig_telemetry::{BlockPigTelemetry, record_block_pig_telemetry};
 use crate::prover_block::ProverBlock;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -73,12 +73,19 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     return Ok(());
                 };
                 state_reporter.enter_state(GenericComponentState::Active);
+                // Even with PIG disabled, the V8+ batcher consumes per-block tree data at seal
+                // time (the native batch run produces the canonical commit data, not just the
+                // prover input); pre-V8 blocks don't need it.
+                let needs_tree_data =
+                    ProvingVersion::try_from(replay_record.protocol_version.clone())
+                        .is_ok_and(|v| v >= ProvingVersion::V8);
                 output.send_and_record(
                     ProverBlock {
                         output: block_output,
                         record: replay_record,
                         prover_input: ProverInput::Fake,
                         tree_output: tree.output,
+                        tree_data: needs_tree_data.then_some(tree),
                     },
                     &state_reporter,
                 )?;
@@ -158,29 +165,53 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             .adapt_for_protocol_version(&replay_record.protocol_version)
             .da_commitment_scheme();
         let block_number = replay_record.block_context.block_number;
+        let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
+            .expect("invalid protocol version");
         tracing::debug!(
             block_number,
             "ProverInputGenerator started processing block {} with {} transactions",
             block_number,
             replay_record.transactions.len(),
         );
+        if proving_version >= ProvingVersion::V8 {
+            // V8 prover input is generated natively at batch seal time; pass the block's tree
+            // data along so the batch run can serve tree queries without I/O.
+            let _ = result_tx.send(ProverBlock {
+                output: block_output,
+                record: replay_record,
+                prover_input: ProverInput::Fake,
+                tree_output: tree.output,
+                tree_data: Some(tree),
+            });
+            return result_rx;
+        }
+
         let versioned_tree = VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1);
 
         let mut handle = tokio::task::spawn_blocking(move || {
             let tree_output = tree.output;
-            let prover_input = ProverInput::Real(compute_prover_input(
+            let (prover_input_words, elapsed) = compute_prover_input(
                 &replay_record,
                 read_state,
                 tree,
                 versioned_tree,
                 da_commitment_scheme,
                 enable_logging,
-            ));
+            );
+            record_block_pig_telemetry(BlockPigTelemetry {
+                chain_id: replay_record.block_context.chain_id,
+                block_number,
+                proving_version,
+                prover_input_words: prover_input_words.len(),
+                elapsed,
+            });
+            let prover_input = ProverInput::Real(prover_input_words);
             ProverBlock {
                 output: block_output,
                 record: replay_record,
                 prover_input,
                 tree_output,
+                tree_data: None,
             }
         });
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
@@ -210,7 +241,7 @@ fn compute_prover_input(
     versioned_tree: VersionedMerkleTree,
     da_commitment_scheme: DACommitmentScheme,
     enable_logging: bool,
-) -> Vec<u32> {
+) -> (Vec<u32>, Duration) {
     let block_number = replay_record.block_context.block_number;
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
     let transactions = replay_record
@@ -228,52 +259,15 @@ fn compute_prover_input(
         | ProvingVersion::V2
         | ProvingVersion::V3
         | ProvingVersion::V4
-        | ProvingVersion::V5 => {
-            panic!("computing prover input for batch with prover version v1-v5 is not supported");
+        | ProvingVersion::V5
+        | ProvingVersion::V6 => {
+            panic!("computing prover input for batch with prover version v1-v6 is not supported");
         }
-        ProvingVersion::V6 => {
+        ProvingVersion::V7 => {
             use zk_ee_prev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
             use zk_os_forward_system_prev::run::{
-                StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
-            };
-
-            let initial_storage_commitment = StorageCommitment {
-                root: tree_view.input.root_hash.0.into(),
-                next_free_slot: tree_view.input.leaf_count,
-            };
-
-            let list_source = TxListSource { transactions };
-
-            let bin_bytes = if enable_logging {
-                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_LOGGING_ENABLED
-            } else {
-                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_APP
-            };
-
-            let da_commitment_scheme = (da_commitment_scheme as u8)
-                .try_into()
-                .expect("Failed to convert DA commitment scheme");
-            generate_proof_input_from_bytes(
-                bin_bytes,
-                BlockMetadataFromOracle::from_interface(replay_record.block_context),
-                ProofData {
-                    state_root_view: initial_storage_commitment,
-                    last_block_timestamp: replay_record.previous_block_timestamp,
-                },
-                da_commitment_scheme,
-                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
-                state_view,
-                list_source,
-            )
-            .expect("proof gen failed")
-        }
-        ProvingVersion::V7 => {
-            use zk_ee::{
-                common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
-            };
-            use zk_os_forward_system::run::{
                 StorageCommitment, convert::FromInterface, generate_proof_input_from_bytes,
             };
 
@@ -301,11 +295,14 @@ fn compute_prover_input(
                     last_block_timestamp: replay_record.previous_block_timestamp,
                 },
                 da_commitment_scheme,
-                TreeOutputAdapter::new(tree_view).with_fallback(versioned_tree),
+                LaneTreeAdapter::new(tree_view, versioned_tree),
                 state_view,
                 list_source,
             )
             .expect("proof gen failed")
+        }
+        ProvingVersion::V8 => {
+            unreachable!("V8 prover input is generated natively at batch seal time")
         }
     };
     let latency = prover_input_generation_latency.observe();
@@ -316,10 +313,9 @@ fn compute_prover_input(
         latency
     );
 
-    prover_input
+    (prover_input, latency)
 }
 
-const LEN_BUCKETS: Buckets = Buckets::exponential(1.0..=1000.0, 2.0);
 const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 
 #[derive(Debug, Metrics)]
@@ -327,15 +323,6 @@ const LATENCIES_FAST: Buckets = Buckets::exponential(0.001..=30.0, 2.0);
 struct ProverInputGeneratorMetrics {
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = LATENCIES_FAST)]
     prover_input_generation: LabeledFamily<&'static str, Histogram<Duration>>,
-    /// Number of unexpected existing storage slots queried per block. Positive values are abnormal.
-    #[metrics(buckets = LEN_BUCKETS)]
-    unexpected_queried_keys: Histogram<usize>,
-    /// Number of unexpected missing storage slots queried per block. Positive values are abnormal.
-    #[metrics(buckets = LEN_BUCKETS)]
-    unexpected_queried_missing_keys: Histogram<usize>,
-    /// Number of unexpected Merkle proofs queried per block. Positive values are abnormal.
-    #[metrics(buckets = LEN_BUCKETS)]
-    unexpected_queried_proofs: Histogram<usize>,
 }
 
 #[vise::register]

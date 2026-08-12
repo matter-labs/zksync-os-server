@@ -17,5 +17,6 @@ futures.workspace = true
 tracing.workspace = true
 
 reth-tasks.workspace = true
+serde = { workspace = true, features = ["derive"] }
 vise.workspace = true
 zksync_os_observability.workspace = true

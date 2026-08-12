@@ -1,22 +1,12 @@
 general:
-  protocol_version: "v31.0"
-  variant: "atomic-interop (IMT bundle model)"
-  genesis_root: "0x1a1bcd12720224a96cac4b34c9ee0942bf3afe48fcf8932c28476bd47ec84959"
-
-# This preset's genesis.json + l1-state.json.gz + per-chain configs all come from ONE
-# consistent atomic deploy of two L1-settling chains (6565, 6566). Regenerate them
-# together via generate-atomic-multichain.sh — never swap genesis without the matching L1 state.
+  zksync_os_version: "0.32.0"
+  verification_key: "TBD"
 
 era-contracts:
-  branch: "atomic-imt-interop"
-  sha: "d2d9426239cd4bb137128c716c9409b16d580660"
+  sha: "62a58d61c46a4681b3da85421081df51d9d086fb"
 
 zksync-os-integration-tests:
-  # Provides the zk-deployer CLI (bootstrap + apply + server-config) used to generate the artifacts.
-  branch: "kl/l1-settled-interop-proof"
-  sha: "50f355892086362ea8ac2ac854054df4172baac6"
+  sha: "16c6a83b4f634609958f347c56549ba19bf9df9b"
 
 zksync-os-server:
-  # The atomic server (this repo): serves zks_getImtInclusionProof / zks_getImtLowNullifierIndex
-  # and zks_getL2ToL1LogProof(messageRoot) used to build the per-leg atomic finality proofs.
-  branch: "kl/l1-settled-interop-proof"
+  sha: "c8cd48d2d9d407978491872b1fd7e1e4b9612897"

@@ -52,7 +52,7 @@ impl PipelineComponent for BatchSink {
             );
             state_reporter.record_processed(
                 envelope.batch.last_block_number,
-                None,
+                Some(envelope.batch.batch_info.last_block_timestamp),
                 Some(envelope.batch_number()),
             );
             if let Some(n) = internal_config.failing_block

@@ -1,6 +1,9 @@
 use crate::types::{BatchStorageProof, BlockMetadata, ImtProof, L2ToL1LogProof, LogProofTarget};
 use alloy::primitives::{Address, B256, TxHash, U256};
 use alloy::rpc::types::Index;
+// In client-only mode the `rpc` macro replaces `RpcResult` return types with
+// `Result<_, ClientError>`, leaving this import unused.
+#[cfg(feature = "server")]
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 use zksync_os_genesis::GenesisInput;
@@ -17,7 +20,9 @@ pub trait ZksApi {
     /// Returns the merkle proof for an L2->L1 log emitted in a given transaction.
     ///
     /// `proof_target` selects which root the proof anchors to (see [`LogProofTarget`]).
-    /// If omitted, [`LogProofTarget::L1BatchRoot`] is used.
+    /// If omitted, [`LogProofTarget::L1BatchRoot`] is used. A `MessageRoot` proof is available only
+    /// after the source batch has executed on L1 and only for protocol versions that support L1
+    /// interop.
     #[method(name = "getL2ToL1LogProof")]
     async fn get_l2_to_l1_log_proof(
         &self,
@@ -26,10 +31,10 @@ pub trait ZksApi {
         proof_target: Option<LogProofTarget>,
     ) -> RpcResult<Option<L2ToL1LogProof>>;
 
-    /// Returns the complete atomic-interop inclusion proof for the commit leaf holding
-    /// `commit_value`: the IMT membership half against the **batch-end** IMT root of the batch
-    /// containing `block_number` (typically the atomic-send block), plus the settlement half
-    /// authenticating that root as chain-batch-root leaf 3 against the imported interop root.
+    /// Returns the complete atomic-interop inclusion proof for the leaf holding `commit_value`:
+    /// the IMT membership half against the **batch-end** IMT root of the batch containing
+    /// `block_number` (normally the atomic-send block), plus the settlement half authenticating
+    /// that root as chain-batch-root leaf 3 against the imported interop root.
     ///
     /// The batch must be executed on the settlement layer (the settlement half anchors at the
     /// execution block). Returns `None` if no leaf holds `commit_value` in that batch.
@@ -45,9 +50,10 @@ pub trait ZksApi {
     /// value absent, plus the settlement half authenticating that root as chain-batch-root leaf 2.
     ///
     /// For a refund the caller picks a batch whose settlement timestamp exceeds the flow deadline
-    /// (`AtomicInteropProof.verifyTimeoutAbsence`); absence at the begin of a late batch proves
-    /// the value was never committed in time. The batch must be executed on the settlement layer.
-    /// Returns `None` if the value IS present (no low-nullifier bracket exists).
+    /// (`AtomicInteropProof.verifyTimeoutAbsence`, begin branch); the tree is append-only, so
+    /// absence at the begin of a late batch proves the value was never committed in time. The
+    /// batch must be executed on the settlement layer. Returns `None` if the value IS present
+    /// (no low-nullifier bracket exists).
     #[method(name = "getImtNonInclusionProof")]
     async fn get_imt_non_inclusion_proof(
         &self,
@@ -55,11 +61,12 @@ pub trait ZksApi {
         batch_number: u64,
     ) -> RpcResult<Option<ImtProof>>;
 
-    /// Returns the index of the low-nullifier leaf for `value` (the predecessor used when inserting
-    /// `value`) in this chain's commitment tree as of `block_number`, or `None` if none exists.
+    /// Returns the low-nullifier leaf index needed to insert `value` against the tree state at
+    /// `block_number`.
     ///
-    /// Used at atomic-send time to supply the IMT insert's low-nullifier index without an off-chain
-    /// tree reconstruction in the client.
+    /// This is the predecessor that brackets the new value in the IMT's sorted linked list. For
+    /// leaves `5 -> 9`, inserting `7` returns the index of leaf `5`. Clients use this before the
+    /// atomic-send transaction instead of reconstructing the tree themselves.
     #[method(name = "getImtLowNullifierIndex")]
     async fn get_imt_low_nullifier_index(
         &self,

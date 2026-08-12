@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::watcher::{L1WatcherError, StartResolver};
 use crate::{EventSink, L1WatcherConfig, ProcessL1Event, util};
@@ -29,28 +28,21 @@ use zksync_os_contract_interface::ISettlementLayerV31Upgrade::ISettlementLayerV3
 /// and we don't expect a lot of results.
 const UPGRADE_DATA_LOOKBEHIND_BLOCKS: u64 = 2_500_000;
 
-/// Watches L1 and the settlement layer for protocol upgrade scheduling and payload data.
+/// Watches L1 for protocol upgrade scheduling and payload data.
 ///
 /// This component listens for `UpgradeTimestampUpdated` events on L1, fetches the matching upgrade
-/// cut data and force-deploy preimages from the appropriate contracts, waits until the scheduled
+/// cut data (`NewUpgradeCutData` events from `ChainTypeManager`) and force-deploy preimages
+/// (`EVMBytecodePublished` events from the `BytecodesSupplier`), waits until the scheduled
 /// timestamp, and then inserts an `UpgradeInfo` item into its sink.
-///
-/// When settling on Gateway, the upgrade data is split across two layers:
-/// - **Gateway (SL)**: `NewUpgradeCutData` / `NewUpgradeCutHash` events from `ChainTypeManager`,
-///   plus the full upgrade execution including the L2 upgrade transaction.
-/// - **L1**: The `BytecodesSupplier` publishes the factory dep bytecodes via
-///   `EVMBytecodePublished` events — these live on L1 regardless of settlement layer.
 pub struct L1UpgradeTxWatcher {
     l2_chain_id: ChainId,
     provider_l1: NodeProvider,
-    provider_sl: NodeProvider,
     bridgehub_l1: Address,
     /// Address of the bytecode supplier contract on L1 (used to scan EVMBytecodePublished events)
     bytecode_supplier_address: Address,
-    /// Address of the CTM contract on L1 (used to resolve the canonical bytecode supplier)
+    /// Address of the CTM contract on L1 (used to scan NewUpgradeCutData events and to resolve
+    /// the canonical bytecode supplier)
     ctm_l1: Address,
-    /// Address of the CTM contract on SL (used to scan NewUpgradeCutData events)
-    ctm_sl: Address,
     current_protocol_version: ProtocolSemanticVersion,
     sink: Box<dyn EventSink<UpgradeInfo>>,
 
@@ -59,35 +51,28 @@ pub struct L1UpgradeTxWatcher {
 }
 
 impl L1UpgradeTxWatcher {
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_watcher(
         config: L1WatcherConfig,
         l2_chain_id: ChainId,
         bridgehub_l1: Bridgehub<NodeProvider>,
-        zk_chain_l1: ZkChain<NodeProvider>,
-        zk_chain_sl: ZkChain<NodeProvider>,
+        zk_chain: ZkChain<NodeProvider>,
         bytecode_supplier_address: Address,
         sink: impl EventSink<UpgradeInfo>,
     ) -> anyhow::Result<StartResolver<ProtocolSemanticVersion, Self>> {
         tracing::info!(
             config.max_blocks_to_process,
             ?config.poll_interval,
-            zk_chain_address_l1 = ?zk_chain_l1.address(),
-            zk_chain_address_sl = ?zk_chain_sl.address(),
+            zk_chain_address = ?zk_chain.address(),
             "initializing upgrade transaction watcher"
         );
 
-        let server_notifier_l1 = zk_chain_l1.get_server_notifier_address().await?;
+        let server_notifier_l1 = zk_chain.get_server_notifier_address().await?;
         tracing::info!(server_notifier_l1 = ?server_notifier_l1, "resolved server notifier");
 
-        let ctm_l1 = zk_chain_l1.get_chain_type_manager().await?;
+        let ctm_l1 = zk_chain.get_chain_type_manager().await?;
         tracing::info!(ctm_l1 = ?ctm_l1, "resolved L1 chain type manager");
 
-        let ctm_sl = zk_chain_sl.get_chain_type_manager().await?;
-        tracing::info!(ctm_sl = ?ctm_sl, "resolved SL chain type manager");
-
-        let provider_l1 = zk_chain_l1.provider().clone();
-        let provider_sl = zk_chain_sl.provider().clone();
+        let provider_l1 = zk_chain.provider().clone();
 
         // The configured bytecode supplier address is used as fallback for pre-v31 CTMs.
         // On v31+ CTMs, `resolve_active_bytecode_supplier` discovers the address dynamically.
@@ -101,24 +86,21 @@ impl L1UpgradeTxWatcher {
         );
 
         let watcher_provider = provider_l1.clone();
-        let l1_chain_id = provider_l1.get_chain_id().await?;
         let bridgehub_l1 = *bridgehub_l1.address();
         let max_blocks_to_process = config.max_blocks_to_process;
 
         let resolve_start = move |current_protocol_version: ProtocolSemanticVersion| async move {
             let last_l1_block =
-                find_l1_block_by_protocol_version(zk_chain_l1, current_protocol_version.clone())
+                find_l1_block_by_protocol_version(&zk_chain, current_protocol_version.clone())
                     .await?;
             tracing::info!(last_l1_block, "checking block starting from");
 
             let processor = Self {
                 l2_chain_id,
                 provider_l1,
-                provider_sl,
                 bridgehub_l1,
                 bytecode_supplier_address,
                 ctm_l1,
-                ctm_sl,
                 current_protocol_version,
                 sink: Box::new(sink),
                 max_blocks_to_process,
@@ -126,15 +108,13 @@ impl L1UpgradeTxWatcher {
             Ok((last_l1_block, processor))
         };
 
-        StartResolver::new(
+        Ok(StartResolver::new(
             config,
             watcher_provider,
             server_notifier_l1.into(),
             None,
-            l1_chain_id,
             resolve_start,
-        )
-        .await
+        ))
     }
 
     async fn fetch_upgrade_info(&self, request: &L1UpgradeRequest) -> anyhow::Result<UpgradeInfo> {
@@ -244,46 +224,37 @@ impl L1UpgradeTxWatcher {
     /// Finds the `NewUpgradeCutData` event for `raw_protocol_version`.
     ///
     /// Prefers `ChainTypeManagerBase.upgradeCutDataBlock(protocolVersion)` (populated starting
-    /// with V31) on each CTM: a non-zero answer pins the cut to a specific block on that CTM's
-    /// chain, so we can fetch the event with a single `eth_getLogs` call against the right
-    /// settlement layer. For pre-V31 CTMs the mapping is absent, so we fall back to the
-    /// pre-existing backward linear scan on the SL CTM.
+    /// with V31): a non-zero answer pins the cut to a specific L1 block, so we can fetch the
+    /// event with a single `eth_getLogs` call. For pre-V31 CTMs the mapping is absent, so we
+    /// fall back to the pre-existing backward linear scan.
     async fn find_upgrade_cut_log(&self, raw_protocol_version: U256) -> anyhow::Result<Log> {
         let l1_block =
             get_upgrade_cut_data_block(&self.provider_l1, self.ctm_l1, raw_protocol_version)
                 .await?;
-        // Avoid a redundant RPC when L1 and SL are the same (chain settling on L1).
-        let sl_block = if self.ctm_l1 == self.ctm_sl {
-            l1_block
-        } else {
-            get_upgrade_cut_data_block(&self.provider_sl, self.ctm_sl, raw_protocol_version).await?
-        };
 
-        let target = match (l1_block, sl_block) {
-            (Some(b), _) if b != 0 => Some((&self.provider_l1, self.ctm_l1, b)),
-            (_, Some(b)) if b != 0 => Some((&self.provider_sl, self.ctm_sl, b)),
-            _ => None,
-        };
-
-        if let Some((provider, ctm_address, block)) = target {
-            return fetch_upgrade_cut_log_at(provider, ctm_address, raw_protocol_version, block)
-                .await;
+        if let Some(block) = l1_block.filter(|b| *b != 0) {
+            return fetch_upgrade_cut_log_at(
+                &self.provider_l1,
+                self.ctm_l1,
+                raw_protocol_version,
+                block,
+            )
+            .await;
         }
 
-        // Neither CTM reports a cut data block; either we're on a pre-V31 CTM without this
+        // The CTM does not report a cut data block; either we're on a pre-V31 CTM without this
         // mapping, or the upgrade has not yet been registered.
         self.legacy_backward_scan(raw_protocol_version).await
     }
 
     /// Pre-V31 fallback: scan `UPGRADE_DATA_LOOKBEHIND_BLOCKS` worth of `NewUpgradeCutData`
-    /// events backward on the SL CTM. Pre-V31 chains do not have Gateway migrations, so the
-    /// cut always lives on the SL CTM (which equals the L1 CTM in that era).
+    /// events backward on the L1 CTM.
     ///
     /// Pre-V31 CTMs emit `NewUpgradeCutData` indexed by the new (target) version rather than
     /// the old one. We first resolve old→new via the `NewProtocolVersion` event (emitted in the
     /// same tx as `NewUpgradeCutData`), then filter by that new version.
     async fn legacy_backward_scan(&self, raw_old_protocol_version: U256) -> anyhow::Result<Log> {
-        let current_block = self.provider_sl.get_block_number().await?;
+        let current_block = self.provider_l1.get_block_number().await?;
         let start_block = current_block
             .saturating_sub(UPGRADE_DATA_LOOKBEHIND_BLOCKS)
             .max(1u64);
@@ -304,10 +275,10 @@ impl L1UpgradeTxWatcher {
             let filter = Filter::new()
                 .from_block(from_block)
                 .to_block(current_block)
-                .address(self.ctm_sl)
+                .address(self.ctm_l1)
                 .event_signature(NewUpgradeCutData::SIGNATURE_HASH)
                 .topic1(new_protocol_version);
-            upgrade_cut_data_logs = self.provider_sl.get_logs(&filter).await?;
+            upgrade_cut_data_logs = self.provider_l1.get_logs(&filter).await?;
             current_block = from_block.saturating_sub(1);
         }
 
@@ -344,10 +315,10 @@ impl L1UpgradeTxWatcher {
             let filter = Filter::new()
                 .from_block(from_block)
                 .to_block(current_block)
-                .address(self.ctm_sl)
+                .address(self.ctm_l1)
                 .event_signature(NewProtocolVersion::SIGNATURE_HASH)
                 .topic1(raw_old_protocol_version);
-            logs = self.provider_sl.get_logs(&filter).await?;
+            logs = self.provider_l1.get_logs(&filter).await?;
             current_block = from_block.saturating_sub(1);
         }
 
@@ -770,17 +741,17 @@ async fn fetch_upgrade_cut_log_at(
 }
 
 async fn find_l1_block_by_protocol_version(
-    zk_chain: ZkChain<NodeProvider>,
+    zk_chain: &ZkChain<NodeProvider>,
     protocol_version: ProtocolSemanticVersion,
 ) -> anyhow::Result<BlockNumber> {
     let protocol_version = protocol_version.packed()?;
 
     let deployment_block = zk_chain.deployment_block().await?;
     util::find_l1_block_by_predicate(
-        Arc::new(zk_chain),
+        zk_chain.provider(),
         deployment_block,
-        move |zk, block| async move {
-            let res = zk.get_raw_protocol_version(block.into()).await?;
+        move |block| async move {
+            let res = zk_chain.get_raw_protocol_version(block.into()).await?;
             Ok(res >= protocol_version)
         },
     )

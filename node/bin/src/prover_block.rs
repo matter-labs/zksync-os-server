@@ -1,3 +1,4 @@
+use zksync_os_batch_types::BlockMerkleTreeData;
 use zksync_os_batch_types::batcher_model::ProverInput;
 use zksync_os_merkle_tree::TreeBatchOutput;
 use zksync_os_pipeline::HasBlockRangeEnd;
@@ -10,6 +11,10 @@ pub struct ProverBlock {
     pub record: ReplayRecord,
     pub prover_input: ProverInput,
     pub tree_output: TreeBatchOutput,
+    /// Tree batch update proof for this block; `Some` for proving versions whose prover input
+    /// is generated natively at batch seal time (V8+), where it feeds the batch run's tree
+    /// queries instead of being consumed by per-block PIG.
+    pub tree_data: Option<BlockMerkleTreeData>,
 }
 
 impl HasBlockRangeEnd for ProverBlock {

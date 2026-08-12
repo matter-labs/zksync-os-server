@@ -80,8 +80,12 @@ pub trait SendToL1:
     const SENT_STAGE: BatchExecutionStage;
     const MINED_STAGE: BatchExecutionStage;
     const PASSTHROUGH_STAGE: BatchExecutionStage;
+    /// Whether this command type can produce blob-carrying transactions. Replacing a blob
+    /// transaction in the pool requires a 100% fee bump (vs 10% for regular transactions),
+    /// so blob-capable senders enforce higher replacement-fee minimums.
+    const MAY_SEND_BLOBS: bool = false;
     /// We use `Bytes` instead of `SolCall`, because SolCall is a trait that cannot be dyn
-    fn solidity_call(&self, gateway: bool, operator: &Address) -> Bytes;
+    fn solidity_call(&self, operator: &Address) -> Bytes;
 
     fn blob_sidecar(&self) -> Option<BlobTransactionSidecar> {
         None

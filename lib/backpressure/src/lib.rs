@@ -9,5 +9,7 @@ pub use config::{
     PipelineCondition,
 };
 pub use gate::{PipelineAdmissionGate, PipelineAdmissionReceiver};
-pub use monitor::{AdjacentSnapshot, BackpressureMonitor, PipelineSnapshot};
+pub use monitor::{
+    AdjacentSnapshot, BackpressureMonitor, PipelineSnapshot, compute_adjacent_snapshots,
+};
 pub use tracker::PipelineTracker;

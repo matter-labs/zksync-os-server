@@ -5,6 +5,8 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - '.github/workflows/cargo-audit.yml'
+      - 'deny.toml'
   schedule:
     # Run every Monday-Friday at 8:30 AM UTC.
     - cron: "30 8 * * 1-5"
@@ -28,20 +30,24 @@ jobs:
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit@0.22.0
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Run cargo audit
         uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # 'RUSTSEC-2025-0055' todo: waiting for ark-relations to release a patch https://github.com/arkworks-rs/snark/issues/413
-          # 'RUSTSEC-2026-0118', 'RUSTSEC-2026-0119': hickory-proto 0.25.2 via reth-dns-discovery; DNS discovery
-          # is disabled in our network config so neither path is reachable. Fix requires reth v2.2.0+ (alloy 1.x→2.x).
-          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2026-0118,RUSTSEC-2026-0119'
+          # 'RUSTSEC-2023-0071': Marvin timing sidechannel in `rsa` private-key operations. Production code only
+          # performs public-key RSA-OAEP encryption (wrapping the age file key to the GCP KMS public key);
+          # private-key decryption happens inside GCP KMS, never locally. No patched version exists yet.
+          # 'RUSTSEC-2026-0235': out-of-bounds read in `rkyv` < 0.8.17 when validating untrusted archives.
+          # `rkyv` 0.7.46 is only in Cargo.lock as an unused optional dependency of `rust_decimal` (via
+          # `byte-unit` <- `openraft`); no feature combination in this workspace enables it, so it is never compiled.
+          ignore: 'RUSTSEC-2025-0055,RUSTSEC-2023-0071,RUSTSEC-2026-0235'
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@76cd80eb775d7bbbd2d80292136d74d39e1b4918 # v2.0.14
         with:
