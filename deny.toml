@@ -22,6 +22,14 @@ ignore = [
     "RUSTSEC-2025-0141", # bincode 1.x unmaintained
     "RUSTSEC-2026-0247", # bitmaps unmaintained
     "RUSTSEC-2026-0105", # core2 unmaintained, versions yanked
+    # Unsound-advisory on a frozen transitive dep: bitmaps (via imbl <- reth-transaction-pool,
+    # pinned by the reth git tag) has no fixed release — the crate is unmaintained; the unsound
+    # TryFrom<&[u8]> constructor is not used by this workspace's dependency path.
+    "RUSTSEC-2025-0167",
+    # lru (via alloy-provider, which pins ^0.16; fixed only in a breaking release): the
+    # use-after-free needs a stored key whose Drop panics during pop() — cache keys on this
+    # dependency path are plain hashes/integers with trivial Drop.
+    "RUSTSEC-2026-0253",
 ]
 
 [bans]
