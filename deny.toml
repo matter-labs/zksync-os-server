@@ -7,9 +7,8 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-# `spin 0.10.0` (via aws-smithy-checksums and boa_engine) was yanked upstream with no
-# semver-compatible replacement requirement from its dependents yet; warn until they move.
-yanked = "warn"
+# Yanked transitive deps (spin 0.10.0, core2 — no unyanked version exists) are tolerated via
+# the workflow's `--allow yanked`: the config key for this varies across cargo-deny versions.
 ignore = [
     # Marvin timing sidechannel in `rsa` private-key operations. We use `rsa`
     # directly in `replay_archive` for KMS envelope encryption, but production
