@@ -48,6 +48,7 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
 /// Performs V31->V32 protocol upgrade with a force deployment, exercising the legacy path
 /// where the node already knows the bytecode preimage from a prior L2 deployment.
 #[test_log::test(tokio::test)]
+#[ignore = "the v31->v32 upgrade needs the ecosystem-level contracts upgrade, not just chain facets: the v32 executor appends batch roots via MessageRoot.addChainBatchRootV32, which a v31-deployed L1 lacks. Enable when the v32 ecosystem-upgrade tooling (era-contracts protocol-ops) can drive the fixture upgrade"]
 async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
@@ -150,6 +151,7 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
 
 /// Performs V31->V32 protocol upgrade which also does a force deployment.
 #[test_log::test(tokio::test)]
+#[ignore = "the v31->v32 upgrade needs the ecosystem-level contracts upgrade, not just chain facets: the v32 executor appends batch roots via MessageRoot.addChainBatchRootV32, which a v31-deployed L1 lacks. Enable when the v32 ecosystem-upgrade tooling (era-contracts protocol-ops) can drive the fixture upgrade"]
 async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade

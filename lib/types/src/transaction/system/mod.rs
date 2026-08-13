@@ -439,7 +439,7 @@ mod tests {
     use alloy::primitives::{B256, U256, Uint};
     use zksync_os_contract_interface::InteropRoot;
 
-    use crate::SystemTxEnvelope;
+    use crate::{SystemTxEnvelope, SystemTxType};
 
     /// System transaction serialization should be consistent with Ethereum JSON-RPC spec
     /// See https://ethereum.github.io/execution-apis/api-documentation/
