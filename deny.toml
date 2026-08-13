@@ -7,8 +7,8 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-# Yanked transitive deps (spin 0.10.0, core2 — no unyanked version exists) are tolerated via
-# the workflow's `--allow yanked`: the config key for this varies across cargo-deny versions.
+# Yanked transitives (spin 0.10.0, core2 — no unyanked version exists) are tolerated via the
+# workflow's `--allow yanked`; the config key for this varies across cargo-deny versions.
 ignore = [
     # Marvin timing sidechannel in `rsa` private-key operations. We use `rsa`
     # directly in `replay_archive` for KMS envelope encryption, but production
@@ -17,18 +17,15 @@ ignore = [
     # never locally. Local `RsaPrivateKey` usage is test-only. No patched
     # version exists yet (tracked in RustCrypto/RSA#19).
     "RUSTSEC-2023-0071",
-    # Unmaintained-crate notices on frozen transitive deps; all pinned by upstream
-    # dependencies (reth / zksync-os lanes / aws sdk), none reachable to fix here.
+    # Unmaintained notices on frozen transitive deps, none reachable to fix here.
     "RUSTSEC-2025-0141", # bincode 1.x unmaintained
     "RUSTSEC-2026-0247", # bitmaps unmaintained
     "RUSTSEC-2026-0105", # core2 unmaintained, versions yanked
-    # Unsound-advisory on a frozen transitive dep: bitmaps (via imbl <- reth-transaction-pool,
-    # pinned by the reth git tag) has no fixed release — the crate is unmaintained; the unsound
-    # TryFrom<&[u8]> constructor is not used by this workspace's dependency path.
+    # bitmaps (via imbl <- reth-transaction-pool): no fixed release; the unsound
+    # TryFrom<&[u8]> constructor is unused on this dependency path.
     "RUSTSEC-2025-0167",
-    # lru (via alloy-provider, which pins ^0.16; fixed only in a breaking release): the
-    # use-after-free needs a stored key whose Drop panics during pop() — cache keys on this
-    # dependency path are plain hashes/integers with trivial Drop.
+    # lru (via alloy-provider, pins ^0.16; fixed only in a breaking release): needs a key
+    # whose Drop panics during pop() — keys on this path have trivial Drop.
     "RUSTSEC-2026-0253",
 ]
 

@@ -8,10 +8,8 @@ general:
 # together via generate-atomic-multichain.sh — never swap genesis without the matching L1 state.
 
 era-contracts:
-  # The atomic-interop DA contracts with the genesis protocol version bumped to 0.32.0, so
-  # chains deployed from them report v32 and activate the server's atomic (v32) code paths.
-  # Rotate to the branch that lands atomic as the real v32 (`atomic-imt-reduced` line) once
-  # the stack adapts to it.
+  # Atomic-interop DA contracts with the genesis protocol version bumped to 0.32.0, so
+  # deployed chains report v32 and activate the server's atomic code paths.
   branch: "ad-atomic-interop-da-v32-genesis"
   sha: "0e64eab27ee4301c65a84b82a60faded120676fb"
 
@@ -21,8 +19,5 @@ zksync-os-integration-tests:
   sha: "bcca5cd"
 
 zksync-os-server:
-  # The atomic server (this repo): the v32-gated atomic-interop stack — 8-leaf chain batch
-  # root, IMT proof RPCs (zks_getImtInclusionProof / zks_getImtNonInclusionProof /
-  # zks_getImtLowNullifierIndex), timestamped interop-root import and the encoding-v2
-  # execute wire.
+  # The v32-gated atomic-interop server stack (this repo).
   branch: "ad-atomic-interop"

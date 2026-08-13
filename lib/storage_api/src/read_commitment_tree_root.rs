@@ -6,12 +6,9 @@ use zksync_os_interface::traits::ReadStorage;
 /// Reads the atomic-interop commitment tree (IMT) root from the
 /// `L2InteropCommitmentTree` (0x10012) contract state.
 ///
-/// Mirrors `read_multichain_root`: the contract keeps its root in the dynamic-height
-/// `FullMerkle` engine at `_imt.tree._nodes[_height][0]` — a deliberate, consensus-critical
-/// storage ABI (see `L2InteropCommitmentTree.sol`): the IMT is the contract's first state
-/// variable, so `_height` sits at slot 0 and the `_nodes` array base at slot 2. An
-/// uninitialized or absent tree reads as `B256::ZERO`, matching the bootloader's reading on
-/// chains without the atomic stack.
+/// The root lives at `_imt.tree._nodes[_height][0]` (`_height` at slot 0, `_nodes` base at
+/// slot 2) — a consensus-critical storage ABI shared with the bootloader. An uninitialized
+/// tree reads as `B256::ZERO`.
 pub fn read_commitment_tree_root(mut state: impl ReadStorage) -> B256 {
     const L2_INTEROP_COMMITMENT_TREE_ADDRESS: Address =
         address!("0x0000000000000000000000000000000000010012");

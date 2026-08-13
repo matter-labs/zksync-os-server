@@ -53,7 +53,6 @@ jobs:
         with:
           manifest-path: "./Cargo.toml"
           command: check
-          # `--allow yanked`: spin 0.10.0 and core2 (all versions) were yanked upstream after
-          # this lockfile resolved them; core2 has no unyanked version to move to. deny.toml's
-          # `yanked = "warn"` covers newer cargo-deny, the flag covers the action's pinned one.
+          # `--allow yanked`: spin 0.10.0 and core2 are yanked transitives; core2 has no
+          # unyanked version to move to.
           command-arguments: "--allow unmaintained --allow yanked --hide-inclusion-graph"

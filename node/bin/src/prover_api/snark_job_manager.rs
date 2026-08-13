@@ -64,8 +64,7 @@ impl SnarkJobManager {
         // consume/remove all fake jobs that may be in the front of the queue
         self.process_pending_fake_fri_proofs().await?;
 
-        // Same protocol-version-boundary split as the fake path: a SNARK group spanning the
-        // boundary can verify on neither the pre- nor post-upgrade executor.
+        // Same version-boundary split as the fake path.
         let mut group_version = None;
         let batches_with_real_proofs = self
             .jobs
@@ -161,11 +160,9 @@ impl SnarkJobManager {
         timeout_for_real_fris: Option<Duration>,
     ) -> anyhow::Result<()> {
         loop {
-            // A SNARK must not span a protocol-version boundary: the executor verifying it
-            // (old or new — swapped atomically with the on-chain version bump) computes EVERY
-            // batch's proof public input with its own formula, so a mixed group can satisfy
-            // neither side; the pre-boundary batches must finalize first (executing them is a
-            // precondition of the upgrade). Version check first: picking stops at the boundary.
+            // A SNARK must not span a protocol-version boundary: the verifying executor
+            // applies its own PI formula to every batch in the group. Version check first so
+            // picking stops at the boundary.
             let mut group_version = None;
             let assigned: Vec<(FriJob, FriProof)> = self
                 .jobs
@@ -271,14 +268,9 @@ impl FakeSnarkProver {
     }
 }
 
-/// The chain-config-hash word of the batch proof public input: `Some` for v32+ batches (whose
-/// executor folds it between the state commitments and the batch commitment), `None` before.
-/// Derived from the LAST batch's protocol version: the v32 diamond cut applies atomically with
-/// the on-chain version bump, and a batch can only commit once its version is active — so a
-/// proof whose newest batch is v32 always verifies on the v32 executor (which folds the config
-/// word for EVERY batch in the proof), even when the proof spans the chain's final v31 batches
-/// at the upgrade boundary; an all-pre-v32 proof always precedes the cut, since executing those
-/// batches is a precondition of the upgrade.
+/// Chain-config-hash word of the batch proof public input: `Some` for v32+, `None` before.
+/// The pickers never mix protocol versions in one group, so the last batch's version is the
+/// group's.
 fn proof_chain_config_hash(
     batches: &[zksync_os_batch_types::batcher_model::SignedBatchEnvelope<
         zksync_os_batch_types::batcher_model::FriProof,

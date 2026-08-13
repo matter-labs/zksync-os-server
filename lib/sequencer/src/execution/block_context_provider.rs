@@ -107,11 +107,8 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         // v32 moves interop roots to L1's MessageRoot. Key this off the version active before the
         // block so the upgrade block remains upgrade-only and interop traffic starts in the first
         // block executed entirely under v32.
-        // v32 opens L1 interop, but importing roots also needs the TIMESTAMPED interop-root
-        // protocol (event + import ABI): this branch still speaks the untimestamped wire, which
-        // the v32 execution environment rejects (`InvalidStructure`). Hold the traffic until the
-        // timestamped-interop change (stacked on this one) lands and restores the version gate;
-        // watched roots stay queued, so enabling it later needs no restart.
+        // v32 imports need the timestamped interop-root wire, which this code does not speak
+        // yet; hold the traffic (watched roots stay queued) until it lands.
         let include_interop_traffic = false;
         let best_txs = self
             .pool
