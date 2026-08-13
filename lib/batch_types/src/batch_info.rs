@@ -286,22 +286,17 @@ impl PendingBatchInfo {
                 )
                     .abi_encode_packed(),
             )),
-            // The v32 contracts hash the batch output without the leading chain id — it moved
-            // into the chain config hash of the batch public input (`Committer.batchOutputHash`,
-            // same layout as the V8 batch program's `BatchOutput::hash`). A divergent value here
-            // makes the NEXT commit revert with BatchHashMismatch on the previous batch's hash.
+            // v32 hashes the batch output without the leading chain id
+            // (`Committer.batchOutputHash`); it moved into the chain config hash.
             32 => self.v32_batch_output_hash(),
             _ => panic!("Unsupported protocol version: {}", self.protocol_version),
         }
     }
 
     /// Batch output hash exactly as the zksync-os 0.4.0 (proving V8) batch program computes it
-    /// (`BatchOutput::hash` in `basic_bootloader/.../post_tx_op/public_input.rs`): unlike the
-    /// pre-v32 [`Self::public_input_hash`] layouts, it does NOT include the leading `chain_id` —
-    /// the chain id is committed through the chain config hash in the outer batch public input
-    /// instead. Used for server-side verification of V8 FRI proofs and, via
-    /// [`Self::public_input_hash`], as the v32 L1-facing commitment
-    /// (`Committer.batchOutputHash`).
+    /// (`BatchOutput::hash` in `basic_bootloader/.../post_tx_op/public_input.rs`): no leading
+    /// `chain_id` — it is committed through the chain config hash instead. Also the v32
+    /// L1-facing commitment (`Committer.batchOutputHash`).
     pub fn v32_batch_output_hash(&self) -> B256 {
         let commit_info = &self.commit_info;
         let upgrade_tx_hash = self.upgrade_tx_hash.unwrap_or(B256::ZERO);

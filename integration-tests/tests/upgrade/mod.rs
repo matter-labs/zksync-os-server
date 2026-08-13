@@ -48,7 +48,7 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
 /// Performs V31->V32 protocol upgrade with a force deployment, exercising the legacy path
 /// where the node already knows the bytecode preimage from a prior L2 deployment.
 #[test_log::test(tokio::test)]
-#[ignore = "the v31->v32 upgrade needs the ecosystem-level contracts upgrade, not just chain facets: the v32 executor appends batch roots via MessageRoot.addChainBatchRootV32, which a v31-deployed L1 lacks. Enable when the v32 ecosystem-upgrade tooling (era-contracts protocol-ops) can drive the fixture upgrade"]
+#[ignore = "needs the v32 ecosystem contracts upgrade (MessageRoot.addChainBatchRootV32 is missing on a v31-deployed L1); chain facet cuts alone cannot model it"]
 async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
@@ -83,9 +83,7 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
         .with_timestamp(upgrade_timestamp)
         .build();
 
-    // Deploy the v32 (atomic contracts) facets: the post-upgrade server speaks v32 — the
-    // chain-id-free batch output hash, the 4-word batch proof public input and the
-    // encoding-v2 execute wire — so the settlement entry points must be the v32 ones.
+    // The post-upgrade server speaks the v32 wire, so the settlement facets must be v32.
     let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
     let committer_facet = CommitterFacetV32::deploy(
         upgrade_tester.tester.l1_provider().clone(),
@@ -151,7 +149,7 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
 
 /// Performs V31->V32 protocol upgrade which also does a force deployment.
 #[test_log::test(tokio::test)]
-#[ignore = "the v31->v32 upgrade needs the ecosystem-level contracts upgrade, not just chain facets: the v32 executor appends batch roots via MessageRoot.addChainBatchRootV32, which a v31-deployed L1 lacks. Enable when the v32 ecosystem-upgrade tooling (era-contracts protocol-ops) can drive the fixture upgrade"]
+#[ignore = "needs the v32 ecosystem contracts upgrade (MessageRoot.addChainBatchRootV32 is missing on a v31-deployed L1); chain facet cuts alone cannot model it"]
 async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
@@ -189,9 +187,7 @@ async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
         .with_timestamp(upgrade_timestamp)
         .build();
 
-    // The v32 upgrade must install the v32 settlement facets (see
-    // `upgrade_to_v32_with_predeployed_bytecodes`), or the post-upgrade batches cannot
-    // commit/prove/execute against the fixture's v31 diamond.
+    // Same v32 facet cuts as `upgrade_to_v32_with_predeployed_bytecodes`.
     let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
     let committer_facet = CommitterFacetV32::deploy(
         upgrade_tester.tester.l1_provider().clone(),

@@ -73,19 +73,11 @@ pub struct ImtLeaf {
 }
 
 /// A complete, on-chain-ready atomic-interop IMT proof, mirroring `ImtProof` in
-/// `IAtomicInterop.sol` (minus `sourceChainId`, which the caller knows).
-///
-/// Two layers:
-///   1. The IMT half (`chain_imt_root` / `leaf` / `imt_leaf_index` / `imt_proof`) authenticates a
-///      leaf against the chain's IMT root. For an inclusion proof (`zks_getImtInclusionProof`)
-///      `leaf` is the commit value's own leaf; for a non-inclusion proof
-///      (`zks_getImtNonInclusionProof`) it is the low-nullifier (predecessor) leaf bracketing the
-///      absent value.
-///   2. The settlement half (`batch_number` / `settlement_proof`) authenticates `chain_imt_root`
-///      as a chain-batch-root leaf of the source batch (leaf 3 = batch-end root for inclusion,
-///      leaf 2 = batch-begin root for non-inclusion; the mask is hardcoded on-chain per verify
-///      path) against the interop root the verifying chain imported, and carries the batch's
-///      `l1Timestamp` for the deadline check.
+/// `IAtomicInterop.sol` (minus `sourceChainId`, which the caller knows): the IMT half
+/// authenticates a leaf (own leaf for inclusion, low-nullifier leaf for non-inclusion)
+/// against the chain's IMT root; the settlement half authenticates that root as a
+/// chain-batch-root leaf (3 = batch end for inclusion, 2 = batch begin for non-inclusion)
+/// against the interop root the verifying chain imported.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ImtProof {

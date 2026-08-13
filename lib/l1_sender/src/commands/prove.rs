@@ -17,10 +17,8 @@ const FAKE_PROOF_MAGIC_VALUE: u32 = 13;
 pub struct ProofCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     proof: SnarkProof,
-    /// keccak commitment to the runtime chain config — the third word of the v32 batch proof
-    /// public input (`Executor._getBatchProofPublicInputZKsyncOS`), where the chain id moved out
-    /// of the batch output. `None` for pre-v32 batches, whose executor folds three words only.
-    /// Computed by the caller from the chain id (see `zksync_os_native_pig::v32_chain_config_hash`).
+    /// Third word of the v32 batch proof public input
+    /// (`Executor._getBatchProofPublicInputZKsyncOS`); `None` for pre-v32 (3-word fold).
     chain_config_hash: Option<B256>,
 }
 
@@ -103,8 +101,8 @@ impl ProofCommand {
         batch: &StoredBatchInfo,
         chain_config_hash: Option<&B256>,
     ) -> B256 {
-        // v32 (`Executor._getBatchProofPublicInputZKsyncOS`) folds the chain config hash between
-        // the state commitments and the batch commitment; earlier executors fold three words.
+        // v32 folds the chain config hash between the state commitments and the batch
+        // commitment.
         let mut bytes = Vec::with_capacity(32 * 4);
         bytes.extend_from_slice(prev_batch.state_commitment.as_slice());
         bytes.extend_from_slice(batch.state_commitment.as_slice());

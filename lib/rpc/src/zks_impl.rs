@@ -128,10 +128,8 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             .ok_or(ZksError::BlockNotAvailable(*batch.block_range.end()))?;
         let protocol_version = &last_block_replay_record.protocol_version;
         let (root, log_leaf_proof) = if protocol_version.supports_l1_interop() {
-            // From v32 the chain batch root is a fixed height-3 (8-leaf) keccak tree over the
-            // logs root, the multichain root, and the IMT (interop commitment tree) boundary
-            // snapshots — see `chain_batch_root`. The log-leaf path extends with leaf 0's three
-            // siblings instead of the bare multichain word.
+            // From v32 the chain batch root is the 8-leaf tree (see `chain_batch_root`); the
+            // log-leaf path extends with leaf 0's three siblings.
             let multichain_root = read_multichain_root(state);
             let (imt_root_begin, imt_root_end) = self.imt_boundary_roots(&batch)?;
             let root =
@@ -360,9 +358,8 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         Ok(tree.find_low_nullifier_index(value))
     }
 
-    /// The batch's IMT (interop commitment tree) boundary snapshots, exactly as the bootloader
-    /// commits them into the chain batch root: `begin` = the root before the batch's first block
-    /// ran (i.e. at the end of the previous block), `end` = after the batch's last block.
+    /// The batch's IMT boundary snapshots as the bootloader commits them: `begin` = before the
+    /// batch's first block, `end` = after its last.
     fn imt_boundary_roots(&self, batch: &PersistedBatch) -> ZksResult<(B256, B256)> {
         let first_block = *batch.block_range.start();
         let begin =
@@ -398,20 +395,17 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
         )
     }
 
-    /// Builds the settlement half of an atomic-interop IMT proof: the multi-hop `bytes32[]`
-    /// (metadata word, the three chain-batch-root siblings for `imt_root_leaf_index`, then the
-    /// batch-leaf / chain-tree / shared-tree hops) that `AtomicInteropProof._authenticateRoot`
-    /// consumes to authenticate the batch's IMT boundary root against an imported interop root.
-    ///
-    /// Returns the proof words and the L1 execution block whose imported interop root anchors it.
+    /// Settlement half of an atomic-interop IMT proof: metadata word, the chain-batch-root
+    /// siblings for `imt_root_leaf_index`, then the aggregation hops — the `bytes32[]` that
+    /// `AtomicInteropProof._authenticateRoot` consumes. Also returns the L1 execution block
+    /// whose imported interop root anchors it.
     async fn build_imt_settlement_proof(
         &self,
         batch: &PersistedBatch,
         imt_root_leaf_index: u64,
     ) -> ZksResult<(Vec<B256>, u64)> {
         let batch_number = batch.number();
-        // "not available" marks a retryable precondition (clients poll until the batch executes);
-        // keep the phrase stable across the proof-precondition errors.
+        // "not available" marks a retryable precondition; pollers match on the phrase.
         let execute_sl_block_number = batch.execute_sl_block_number.ok_or_else(|| {
             ZksError::Batch(anyhow::anyhow!(
                 "batch {batch_number} is not executed on L1 yet; settlement anchor not available yet"
@@ -499,9 +493,8 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             }
             .into());
         }
-        // Cross-check the engine root against the tree contract's own storage at the batch-end
-        // boundary — the exact value the bootloader committed as chain-batch-root leaf 3, and
-        // thus what the settlement proof authenticates.
+        // Cross-check against the tree contract's storage at the batch-end boundary — the
+        // value the settlement proof authenticates.
         let stored_end_root =
             read_commitment_tree_root(self.storage.state_view_at(batch_end_block)?);
         if root != stored_end_root {
@@ -569,7 +562,8 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             }
             .into());
         }
-        // Cross-check against the tree contract's storage at the batch-begin boundary.
+        // Cross-check against the tree contract's storage at the batch-begin boundary — the
+        // value the settlement proof authenticates.
         let stored_begin_root = read_commitment_tree_root(self.storage.state_view_at(begin_block)?);
         if root != stored_begin_root {
             return Err(ZksError::Batch(anyhow::anyhow!(
