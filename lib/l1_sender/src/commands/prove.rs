@@ -211,7 +211,13 @@ impl ProofCommand {
             >= 32
         {
             Some(Self::zksync_os_chain_config_hash(
-                self.batches.first().unwrap().batch.batch_info.commit_info.chain_id,
+                self.batches
+                    .first()
+                    .unwrap()
+                    .batch
+                    .batch_info
+                    .commit_info
+                    .chain_id,
             ))
         } else {
             None
