@@ -7,6 +7,9 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
+# `spin 0.10.0` (via aws-smithy-checksums and boa_engine) was yanked upstream with no
+# semver-compatible replacement requirement from its dependents yet; warn until they move.
+yanked = "warn"
 ignore = [
     # Marvin timing sidechannel in `rsa` private-key operations. We use `rsa`
     # directly in `replay_archive` for KMS envelope encryption, but production
@@ -15,6 +18,11 @@ ignore = [
     # never locally. Local `RsaPrivateKey` usage is test-only. No patched
     # version exists yet (tracked in RustCrypto/RSA#19).
     "RUSTSEC-2023-0071",
+    # Unmaintained-crate notices on frozen transitive deps; all pinned by upstream
+    # dependencies (reth / zksync-os lanes / aws sdk), none reachable to fix here.
+    "RUSTSEC-2025-0141", # bincode 1.x unmaintained
+    "RUSTSEC-2026-0247", # bitmaps unmaintained
+    "RUSTSEC-2026-0105", # core2 unmaintained, versions yanked
 ]
 
 [bans]
