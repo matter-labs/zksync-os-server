@@ -1155,7 +1155,7 @@ pub struct TxGasRateLimitConfig {
     pub enabled: bool,
 
     /// Target sustained executed-gas throughput, in gas per second.
-    #[config(default_t = NonZeroU64::new(72_000_000).unwrap())]
+    #[config(default_t = NonZeroU64::new(35_000_000).unwrap())]
     pub gas_per_second: NonZeroU64,
 
     /// Bank capacity (idle burst headroom), in seconds' worth of `gas_per_second`. Sized to
