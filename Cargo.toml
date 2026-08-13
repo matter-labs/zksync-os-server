@@ -171,9 +171,10 @@ full_statement_verifier_prev = { package = "full_statement_verifier", git = "htt
 # generated from this pinned rev — bump V8_APP_END_PARAMS and the prover-side bin_md5sum
 # together with it (see `V8_VK_HASH` provenance in lib/types).
 # TODO: `dev-20260724-atomic-interop` is a dev pre-release of the atomic-interop zksync-os line
-# (timestamped interop-root import, 8-leaf chain batch root, always-public IMT leaves & L2->L1
-# logs, PubdataContent scheme/content split); move to the proper release tag once it is cut and
-# regenerate the V8 app binary / VK provenance together with it.
+# (timestamped interop-root import, 8-leaf chain batch root, 4-word chain-config hash, atomic DA);
+# the v32 lane (contracts facets, batch program, server-side commitment/proof code) must come
+# from one lineage. Move to the proper release tag once cut and regenerate the V8 app binary /
+# VK provenance together with it.
 zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", tag = "dev-20260724-atomic-interop", features = [
     "production",
     "no_print",
