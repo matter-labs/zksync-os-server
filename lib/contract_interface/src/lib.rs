@@ -38,9 +38,18 @@ alloy::sol! {
         bytes reservedDynamic;
     }
 
-    // `Messaging.sol`
+    // `Messaging.sol` (v32+): the timestamp is part of the dependency-roots rolling hash.
     #[derive(Debug)]
     struct InteropRoot {
+        uint256 chainId;
+        uint256 blockOrBatchNumber;
+        uint256 timestamp;
+        bytes32[] sides;
+    }
+
+    // Released v31 wire shape; legacy sources decode into `InteropRoot` with `timestamp == 0`.
+    #[derive(Debug)]
+    struct InteropRootLegacy {
         uint256 chainId;
         uint256 blockOrBatchNumber;
         bytes32[] sides;
@@ -87,21 +96,17 @@ alloy::sol! {
     #[sol(rpc)]
     interface IMessageRoot {
         // Emitted whenever MessageRoot advances the shared interop root imported by chains.
+        // v32+ form: carries the root's creation timestamp.
         event NewInteropRoot (
             uint256 indexed chainId,
             uint256 indexed blockNumber,
             uint256 indexed logId,
+            uint256 timestamp,
             bytes32[] sides
         );
 
         // Emitted when a chain root is appended to the shared tree.
         event AppendedChainRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 indexed chainRoot);
-
-        function addInteropRoot (
-            uint256 chainId,
-            uint256 blockOrBatchNumber,
-            bytes32[] calldata sides
-        );
 
         function addInteropRootsInBatch(InteropRoot[] calldata interopRootsInput);
 
@@ -113,6 +118,19 @@ alloy::sol! {
         event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot, uint256 l1Timestamp);
         function getMerklePathForChain(uint256 _chainId) external view returns (bytes32[] memory);
         mapping(uint256 chainId => uint256 chainIndex) public chainIndex;
+    }
+
+    // Released (v31) MessageRoot wire forms; the watcher matches both event signatures and
+    // historical blocks decode the legacy call (`0xcca2f7bc`).
+    interface IMessageRootLegacy {
+        event NewInteropRoot (
+            uint256 indexed chainId,
+            uint256 indexed blockNumber,
+            uint256 indexed logId,
+            bytes32[] sides
+        );
+
+        function addInteropRootsInBatch(InteropRootLegacy[] calldata interopRootsInput);
     }
 
     // `ZKChainStorage.sol`
@@ -370,6 +388,14 @@ alloy::sol! {
            bytes32 key;
            bytes32 value;
        }
+
+        /// `BatchDecoder.DecodedExecuteData`: the v32 execute payload after the version byte is
+        /// `abi.encode` of this one struct-typed parameter.
+        struct DecodedExecuteData {
+            StoredBatchInfo[] batchesData;
+            PriorityOpsBatchInfo[] priorityOpsData;
+            InteropRoot[][] dependencyRoots;
+        }
 
         function executeBatchesSharedBridge(
             address _chainAddress,
@@ -937,5 +963,27 @@ impl<T> Enrich for alloy::contract::Result<T> {
             None => Error::Call(Box::new(e), function_name.to_string()),
             Some(block_id) => Error::CallAtBlock(Box::new(e), function_name.to_string(), block_id),
         })
+    }
+}
+
+impl From<&InteropRoot> for InteropRootLegacy {
+    fn from(root: &InteropRoot) -> Self {
+        Self {
+            chainId: root.chainId,
+            blockOrBatchNumber: root.blockOrBatchNumber,
+            sides: root.sides.clone(),
+        }
+    }
+}
+
+impl From<InteropRootLegacy> for InteropRoot {
+    fn from(root: InteropRootLegacy) -> Self {
+        Self {
+            chainId: root.chainId,
+            blockOrBatchNumber: root.blockOrBatchNumber,
+            // The v31 wire has no timestamp; zero marks a root sourced from a legacy event/call.
+            timestamp: U256::ZERO,
+            sides: root.sides,
+        }
     }
 }

@@ -55,7 +55,7 @@ L1_RPC_URL=http://127.0.0.1:8545 \
 2. Predict both leg bundle hashes via `InteropCenter.sendBundle` callStatic
    (bundleHash is independent of the atomic params), with
    `value = interopProtocolFee * callCount` (0 here).
-3. `flowId = keccak256(abi.encode(sortedLegHashes, sortedChainIds, deadline))`.
+3. `flowId = keccak256(abi.encode(sortedLegHashes, sortedChainIds, deadline, settlementLayerChainId))`.
 4. For each leg: `commitValue = keccak256(ATOMIC_COMMIT_LEAF_TAG, flowId, bundleHash)`,
    get the IMT low-nullifier via `zks_getImtLowNullifierIndex`, then
    `sendBundle(..., [atomicBundle(flowId, deadline, lowNullifier)])`. This burns and
@@ -72,8 +72,10 @@ L1_RPC_URL=http://127.0.0.1:8545 \
    destination. `AtomicFlowManager.requireFlowFinalized` verifies an inclusion proof
    for **every** leg before any executes → both reach `FullyExecuted`, both mints land.
 
-`deadline` is a settlement-layer block number set well above the L1 head (default
-`10_000_000`); the proof's `gatewayBlockNumber` is the actual settlement block.
+`deadline` is a settlement-layer (L1) **timestamp**: each leg's inclusion proof carries
+its batch's L1 settlement timestamp, which must be ≤ the deadline. The driver defaults it
+to `l1Now + 24h` (override with `ATOMIC_DEADLINE_TS`), far beyond the few seconds a batch
+takes to settle on the harness Anvil.
 
 ## Server RPCs this relies on (kl/l1-settled-interop-proof)
 

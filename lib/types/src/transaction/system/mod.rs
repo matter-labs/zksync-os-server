@@ -12,6 +12,7 @@ use alloy_rlp::{BufMut, Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use zksync_os_contract_interface::IMessageRoot::addInteropRootsInBatchCall;
+use zksync_os_contract_interface::IMessageRootLegacy::addInteropRootsInBatchCall as addInteropRootsInBatchLegacyCall;
 use zksync_os_contract_interface::ISystemContext::setSettlementLayerChainIdCall;
 use zksync_os_contract_interface::InteropRoot;
 
@@ -104,6 +105,14 @@ impl SystemTxEnvelope {
                 let call = addInteropRootsInBatchCall::abi_decode(data)
                     .expect("failed to decode interop roots system transaction");
                 SystemTxInput::ImportInteropRoots(call.interopRootsInput)
+            }
+            // Released v31 form, still present in historical blocks replayed by external nodes.
+            addInteropRootsInBatchLegacyCall::SELECTOR => {
+                let call = addInteropRootsInBatchLegacyCall::abi_decode(data)
+                    .expect("failed to decode legacy interop roots system transaction");
+                SystemTxInput::ImportInteropRoots(
+                    call.interopRootsInput.into_iter().map(Into::into).collect(),
+                )
             }
             setSettlementLayerChainIdCall::SELECTOR => {
                 let call = setSettlementLayerChainIdCall::abi_decode(data)
@@ -429,16 +438,18 @@ mod tests {
     use alloy::primitives::{B256, U256, Uint};
     use zksync_os_contract_interface::InteropRoot;
 
-    use crate::SystemTxEnvelope;
+    use crate::{SystemTxEnvelope, SystemTxType};
 
     /// System transaction serialization should be consistent with Ethereum JSON-RPC spec
     /// See https://ethereum.github.io/execution-apis/api-documentation/
     #[test]
     fn interop_roots_tx_serialization() {
+        // Locks the timestamped import ABI (`0xc17a9fbd`).
         let tx = SystemTxEnvelope::import_interop_roots(
             vec![InteropRoot {
                 chainId: Uint::from(1),
                 blockOrBatchNumber: Uint::from(1),
+                timestamp: Uint::from(1),
                 sides: vec![B256::ZERO],
             }],
             0,
@@ -447,6 +458,29 @@ mod tests {
         assert_eq!(
             serde_json::to_string_pretty(&tx).unwrap(),
             r#"{
+  "hash": "0x2854bb811888d1284dd3210b2b855506c84fae184c4637369ce5a7b325819aaa",
+  "initiator": "0x0000000000000000000000000000000000008001",
+  "to": "0x0000000000000000000000000000000000010008",
+  "gas": "0x0",
+  "maxFeePerGas": "0x0",
+  "maxPriorityFeePerGas": "0x0",
+  "nonce": "0x0",
+  "salt": "0x0",
+  "value": "0x0",
+  "input": "0xc17a9fbd000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
+  "v": "0x0",
+  "r": "0x0",
+  "s": "0x0",
+  "yParity": "0x0"
+}"#
+        );
+    }
+
+    /// Pre-v32 blocks carry legacy imports (`0xcca2f7bc`); replay must keep decoding them.
+    /// Legacy roots can no longer be encoded, so this golden checks decode only.
+    #[test]
+    fn legacy_interop_roots_tx_decodes() {
+        let json = r#"{
   "hash": "0x7bc1a669ea68562d2b22fb56757a7f85c69b286d5d4c0e1fb1b09cd8bd340aee",
   "initiator": "0x0000000000000000000000000000000000008001",
   "to": "0x0000000000000000000000000000000000010008",
@@ -461,8 +495,14 @@ mod tests {
   "r": "0x0",
   "s": "0x0",
   "yParity": "0x0"
-}"#
-        );
+}"#;
+        let tx: SystemTxEnvelope = serde_json::from_str(json).unwrap();
+        let roots = tx.interop_roots().expect("legacy import tx carries roots");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].chainId, Uint::from(1));
+        assert_eq!(roots[0].blockOrBatchNumber, Uint::from(1));
+        assert!(roots[0].timestamp.is_zero());
+        assert_eq!(*tx.system_subtype(), SystemTxType::ImportInteropRoots(1),);
     }
 
     #[test]
@@ -501,6 +541,7 @@ mod tests {
                 vec![InteropRoot {
                     chainId: Uint::from(1),
                     blockOrBatchNumber: Uint::from(1),
+                    timestamp: Uint::from(1),
                     sides: vec![B256::ZERO],
                 }],
                 5,

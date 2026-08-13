@@ -243,6 +243,8 @@ function toLegProof(chainId: bigint, p: RpcImtProof): ImtProof {
     sourceChainId: chainId.toString(),
     batchNumber: String(p.batchNumber),
     chainImtRoot: p.chainImtRoot,
+    // Finality path proves against the batch-end root (mirrors the atomic_swap_l1_settled test).
+    provesAgainstBeginRoot: false,
     settlementProof: p.settlementProof,
     leaf: { value: String(p.leaf.value), nextIndex: String(p.leaf.nextIndex), nextValue: String(p.leaf.nextValue) },
     imtLeafIndex: Number(p.imtLeafIndex),

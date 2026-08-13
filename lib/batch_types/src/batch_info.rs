@@ -87,6 +87,8 @@ impl PendingBatchInfo {
 
                         if let Some(roots) = envelope.interop_roots() {
                             for root in roots {
+                                // Pre-v32 fold — no timestamp word; v32 batches take their
+                                // rolling hash from the native batch run.
                                 dependency_roots_rolling_hash = keccak256(
                                     (
                                         dependency_roots_rolling_hash,

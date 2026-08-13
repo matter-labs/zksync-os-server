@@ -43,13 +43,21 @@ pub(crate) enum SystemTxInput {
 impl SystemTxInput {
     pub fn encode_data(&self) -> (Vec<u8>, u64) {
         match self {
-            Self::ImportInteropRoots(roots) => (
-                addInteropRootsInBatchCall {
-                    interopRootsInput: roots.clone(),
-                }
-                .abi_encode(),
-                0,
-            ),
+            Self::ImportInteropRoots(roots) => {
+                // Only timestamped roots reach the mempool (the watcher drops legacy ones);
+                // the legacy call form survives in decode only, for replay.
+                assert!(
+                    roots.iter().all(|root| !root.timestamp.is_zero()),
+                    "untimestamped interop roots are never encoded; the watcher drops them"
+                );
+                (
+                    addInteropRootsInBatchCall {
+                        interopRootsInput: roots.clone(),
+                    }
+                    .abi_encode(),
+                    0,
+                )
+            }
             Self::SetSLChainId(chain_id, salt) => (
                 setSettlementLayerChainIdCall {
                     _newSettlementLayerChainId: U256::from(*chain_id),
