@@ -38,10 +38,7 @@ alloy::sol! {
         bytes reservedDynamic;
     }
 
-    // `Messaging.sol` (v32+): interop roots carry the root's settlement-layer creation
-    // timestamp end-to-end — it is folded into the batch's dependency-roots rolling hash and
-    // double-checked against the settlement layer's record at batch execution
-    // (`ExecutorFacet._verifyDependencyInteropRoots`).
+    // `Messaging.sol` (v32+): the timestamp is part of the dependency-roots rolling hash.
     #[derive(Debug)]
     struct InteropRoot {
         uint256 chainId;
@@ -50,9 +47,7 @@ alloy::sol! {
         bytes32[] sides;
     }
 
-    // The released v31 wire shape of an interop root (no timestamp). Only used to encode/decode
-    // the v31 forms of `addInteropRootsInBatch` and the execute-batches calldata; everything
-    // in-process carries the timestamped struct (legacy sources decode with `timestamp == 0`).
+    // Released v31 wire shape; legacy sources decode into `InteropRoot` with `timestamp == 0`.
     #[derive(Debug)]
     struct InteropRootLegacy {
         uint256 chainId;
@@ -125,9 +120,8 @@ alloy::sol! {
         mapping(uint256 chainId => uint256 chainIndex) public chainIndex;
     }
 
-    // The released (v31) MessageRoot wire forms, still emitted/consumed on deployments that
-    // predate the timestamped interop roots. The interop watcher listens for both event forms;
-    // v31 blocks encode the import system tx with the legacy call (selector `0xcca2f7bc`).
+    // Released (v31) MessageRoot wire forms; the watcher matches both event signatures and
+    // historical blocks decode the legacy call (`0xcca2f7bc`).
     interface IMessageRootLegacy {
         event NewInteropRoot (
             uint256 indexed chainId,
@@ -395,10 +389,8 @@ alloy::sol! {
            bytes32 value;
        }
 
-        /// `BatchDecoder.DecodedExecuteData` — the execute-batches wire struct of the v32
-        /// (atomic-interop) contracts: the payload after the version byte is `abi.encode` of this
-        /// one struct-typed parameter. The gateway-only fields of the v31 flat tuple (logs,
-        /// messages, multichain roots, operator) were dropped upstream — L1 settlement only.
+        /// `BatchDecoder.DecodedExecuteData`: the v32 execute payload after the version byte is
+        /// `abi.encode` of this one struct-typed parameter.
         struct DecodedExecuteData {
             StoredBatchInfo[] batchesData;
             PriorityOpsBatchInfo[] priorityOpsData;

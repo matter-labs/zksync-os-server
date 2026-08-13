@@ -138,10 +138,8 @@ impl ExecuteCommand {
                         .abi_encode_params(),
                 )
             }
-            // The v32 (atomic-interop) contracts read `abi.decode(data, (DecodedExecuteData))` —
-            // one struct-typed parameter (an extra offset word around the flat tuple) with
-            // timestamped dependency roots and no gateway-relay fields. The breaking re-encoding
-            // carries its own version byte (`BatchDecoder.SUPPORTED_ENCODING_VERSION_EXECUTE`).
+            // v32 reads `abi.decode(data, (DecodedExecuteData))`; the struct wire carries its
+            // own encoding version byte (`BatchDecoder.SUPPORTED_ENCODING_VERSION_EXECUTE`).
             32 => {
                 let decoded = IExecutor::DecodedExecuteData {
                     batchesData: stored_batch_infos,

@@ -75,9 +75,7 @@ impl ProcessRawEvents for InteropWatcher {
     }
 
     fn event_signatures(&self) -> Topic {
-        // One deployment only ever emits one form, but the watcher cannot know which: the
-        // timestamped v32 event and its released (timestamp-free) predecessor are both matched,
-        // and each log is decoded by its own topic0.
+        // Both event forms are matched; each log is decoded by its own topic0.
         vec![
             NewInteropRoot::SIGNATURE_HASH,
             NewInteropRootLegacy::SIGNATURE_HASH,
@@ -114,10 +112,8 @@ impl ProcessRawEvents for InteropWatcher {
             .try_into()
             .map_err(|e: FromUintError<u64>| L1WatcherError::Other(e.into()))?;
 
-        // Interop-root imports only flow into v32+ blocks (`include_interop_traffic`), whose
-        // execution environment and contracts accept only timestamped roots — an untimestamped
-        // (legacy-event) root is unimportable until the settlement layer's MessageRoot is
-        // upgraded to the timestamped protocol, so it is dropped here at the source.
+        // Only timestamped roots are importable at v32; legacy-event roots stay dropped until
+        // the settlement layer's MessageRoot is upgraded.
         if interop_root.timestamp.is_zero() {
             tracing::warn!(
                 log_id,
@@ -148,8 +144,7 @@ impl ProcessRawEvents for InteropWatcher {
     }
 }
 
-/// Decodes either form of `NewInteropRoot` by its topic0. Legacy events carry no timestamp; a
-/// zero timestamp downstream selects the released (v31) import ABI.
+/// Decodes either `NewInteropRoot` form by topic0; legacy events decode with a zero timestamp.
 fn decode_new_interop_root(
     log: &Log,
 ) -> Result<(alloy::primitives::U256, InteropRoot), alloy::sol_types::Error> {

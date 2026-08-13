@@ -44,10 +44,8 @@ impl SystemTxInput {
     pub fn encode_data(&self) -> (Vec<u8>, u64) {
         match self {
             Self::ImportInteropRoots(roots) => {
-                // Imports only flow into v32+ blocks, whose execution environment accepts only
-                // the timestamped entry point; untimestamped (legacy-event) roots are dropped by
-                // the interop watcher before they ever reach the mempool. The legacy call form
-                // survives in decode only, for replaying historical pre-v32 blocks.
+                // Only timestamped roots reach the mempool (the watcher drops legacy ones);
+                // the legacy call form survives in decode only, for replay.
                 assert!(
                     roots.iter().all(|root| !root.timestamp.is_zero()),
                     "untimestamped interop roots are never encoded; the watcher drops them"

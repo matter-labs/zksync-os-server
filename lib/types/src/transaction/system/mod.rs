@@ -106,8 +106,7 @@ impl SystemTxEnvelope {
                     .expect("failed to decode interop roots system transaction");
                 SystemTxInput::ImportInteropRoots(call.interopRootsInput)
             }
-            // Released v31 form (timestamp-free roots), still produced for pre-v32 blocks and
-            // present in historical blocks replayed by external nodes.
+            // Released v31 form, still present in historical blocks replayed by external nodes.
             addInteropRootsInBatchLegacyCall::SELECTOR => {
                 let call = addInteropRootsInBatchLegacyCall::abi_decode(data)
                     .expect("failed to decode legacy interop roots system transaction");
@@ -445,7 +444,7 @@ mod tests {
     /// See https://ethereum.github.io/execution-apis/api-documentation/
     #[test]
     fn interop_roots_tx_serialization() {
-        // A non-zero timestamp selects the v32 (timestamped) import ABI, selector `0xc17a9fbd`.
+        // Locks the timestamped import ABI (`0xc17a9fbd`).
         let tx = SystemTxEnvelope::import_interop_roots(
             vec![InteropRoot {
                 chainId: Uint::from(1),
@@ -477,9 +476,8 @@ mod tests {
         );
     }
 
-    /// Historical pre-v32 blocks carry legacy (timestamp-free) imports, selector `0xcca2f7bc`;
-    /// external nodes must still decode them on replay. Encoding legacy roots is no longer
-    /// possible (the watcher drops untimestamped roots), so this golden checks decode only.
+    /// Pre-v32 blocks carry legacy imports (`0xcca2f7bc`); replay must keep decoding them.
+    /// Legacy roots can no longer be encoded, so this golden checks decode only.
     #[test]
     fn legacy_interop_roots_tx_decodes() {
         let json = r#"{
@@ -503,8 +501,6 @@ mod tests {
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].chainId, Uint::from(1));
         assert_eq!(roots[0].blockOrBatchNumber, Uint::from(1));
-        // Legacy roots decode with a zero timestamp — the marker that they predate the
-        // timestamped protocol.
         assert!(roots[0].timestamp.is_zero());
         assert_eq!(*tx.system_subtype(), SystemTxType::ImportInteropRoots(1),);
     }
