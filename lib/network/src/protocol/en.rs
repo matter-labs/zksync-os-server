@@ -95,8 +95,9 @@ async fn receive_replays<P: ZksProtocolVersionSpec>(
             })
             .ok();
     };
-    let mut watchdog_deadline = Instant::now() + watchdog_timeout;
     loop {
+        // Measure time actually spent waiting on the peer.
+        let watchdog_deadline = Instant::now() + watchdog_timeout;
         let msg = tokio::select! {
             msg = conn.next() => msg,
             _ = tokio::time::sleep_until(watchdog_deadline) => {
@@ -118,7 +119,6 @@ async fn receive_replays<P: ZksProtocolVersionSpec>(
             report_stalled();
             return;
         };
-        watchdog_deadline = Instant::now() + watchdog_timeout;
         match msg {
             ZksMessage::GetBlockReplays(_) => {
                 tracing::info!("ignoring request as local node is also waiting for records");
@@ -136,8 +136,20 @@ async fn receive_replays<P: ZksProtocolVersionSpec>(
                         }
                     };
 
+                    // Never panic on remote data: a panic here is swallowed by the runtime and
+                    // leaves a watchdog-less zombie session. Stalling reconnects instead —
+                    // transient causes self-heal, persistent ones fail loudly (and the sequencer
+                    // pipeline still enforces the sequence as a hard backstop).
                     let expected_next_block = *starting_block.read().unwrap();
-                    assert_eq!(block_number, expected_next_block);
+                    if block_number != expected_next_block {
+                        tracing::warn!(
+                            block_number,
+                            expected_next_block,
+                            "replay block out of sequence; reporting stall"
+                        );
+                        report_stalled();
+                        return;
+                    }
 
                     if replay_sender.send(record).await.is_err() {
                         tracing::trace!("network replay channel is closed");
@@ -292,6 +304,28 @@ mod tests {
                 assert_eq!(peer_id, handles.peer_id);
                 assert_eq!(next_block, 1);
             }
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn out_of_sequence_record_emits_stalled_event() {
+        // The cursor starts at 1, so a record for block 5 breaks the sequence. The stream then
+        // stays pending: the task must finish via the sequence check, not via stream end.
+        let msg = ZksMessage::block_replays(vec![test_record(5)]);
+        let conn = Box::pin(futures::stream::iter([msg]).chain(futures::stream::pending()));
+        let (task, mut handles) = run_test_en_connection(conn);
+
+        task.await.expect("connection task must finish on its own");
+        assert_matches!(
+            handles.events_rx.try_recv(),
+            Ok(ProtocolEvent::ReplayStreamStalled { peer_id, next_block }) => {
+                assert_eq!(peer_id, handles.peer_id);
+                assert_eq!(next_block, 1);
+            }
+        );
+        assert!(
+            handles.replay_rx.try_recv().is_err(),
+            "out-of-sequence record must not be forwarded to the sequencer"
         );
     }
 }
