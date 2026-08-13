@@ -64,10 +64,15 @@ impl SnarkJobManager {
         // consume/remove all fake jobs that may be in the front of the queue
         self.process_pending_fake_fri_proofs().await?;
 
+        // Same protocol-version-boundary split as the fake path: a SNARK group spanning the
+        // boundary can verify on neither the pre- nor post-upgrade executor.
+        let mut group_version = None;
         let batches_with_real_proofs = self
             .jobs
             .pick_jobs_while_with_limit(self.max_fris_per_snark, &prover_id, |job| {
-                !job.batch_envelope.data.is_fake()
+                let version = &job.batch_envelope.batch.batch_info.protocol_version;
+                *group_version.get_or_insert_with(|| version.clone()) == *version
+                    && !job.batch_envelope.data.is_fake()
                     && supported_proving_versions
                         .is_none_or(|versions| versions.contains(&job.metadata.proving_version))
             })
@@ -156,12 +161,21 @@ impl SnarkJobManager {
         timeout_for_real_fris: Option<Duration>,
     ) -> anyhow::Result<()> {
         loop {
+            // A SNARK must not span a protocol-version boundary: the executor verifying it
+            // (old or new — swapped atomically with the on-chain version bump) computes EVERY
+            // batch's proof public input with its own formula, so a mixed group can satisfy
+            // neither side; the pre-boundary batches must finalize first (executing them is a
+            // precondition of the upgrade). Version check first: picking stops at the boundary.
+            let mut group_version = None;
             let assigned: Vec<(FriJob, FriProof)> = self
                 .jobs
                 .pick_jobs_while_with_limit(self.max_fris_per_snark, "fake_prover", |job| {
-                    job.batch_envelope.data.is_fake()
-                        || (timeout_for_real_fris.is_some()
-                            && job.metadata.added_at.elapsed() >= timeout_for_real_fris.unwrap())
+                    let version = &job.batch_envelope.batch.batch_info.protocol_version;
+                    *group_version.get_or_insert_with(|| version.clone()) == *version
+                        && (job.batch_envelope.data.is_fake()
+                            || (timeout_for_real_fris.is_some()
+                                && job.metadata.added_at.elapsed()
+                                    >= timeout_for_real_fris.unwrap()))
                 })
                 .await;
 
@@ -259,14 +273,19 @@ impl FakeSnarkProver {
 
 /// The chain-config-hash word of the batch proof public input: `Some` for v32+ batches (whose
 /// executor folds it between the state commitments and the batch commitment), `None` before.
-/// Batches inside one proof command share a protocol version in practice; derived from the first.
+/// Derived from the LAST batch's protocol version: the v32 diamond cut applies atomically with
+/// the on-chain version bump, and a batch can only commit once its version is active — so a
+/// proof whose newest batch is v32 always verifies on the v32 executor (which folds the config
+/// word for EVERY batch in the proof), even when the proof spans the chain's final v31 batches
+/// at the upgrade boundary; an all-pre-v32 proof always precedes the cut, since executing those
+/// batches is a precondition of the upgrade.
 fn proof_chain_config_hash(
     batches: &[zksync_os_batch_types::batcher_model::SignedBatchEnvelope<
         zksync_os_batch_types::batcher_model::FriProof,
     >],
 ) -> anyhow::Result<Option<alloy::primitives::B256>> {
     let batch_info = &batches
-        .first()
+        .last()
         .expect("proof command must contain at least one batch")
         .batch
         .batch_info;

@@ -5,8 +5,7 @@ use alloy::{
 use serde::{Deserialize, Serialize};
 use zksync_os_contract_interface::{
     IInteropCenter::setInteropFeeCall, IMessageRoot::addInteropRootsInBatchCall,
-    IMessageRootLegacy::addInteropRootsInBatchCall as addInteropRootsInBatchLegacyCall,
-    ISystemContext::setSettlementLayerChainIdCall, InteropRoot, InteropRootLegacy,
+    ISystemContext::setSettlementLayerChainIdCall, InteropRoot,
 };
 
 pub const BOOTLOADER_FORMAL_ADDRESS: Address =
@@ -45,35 +44,21 @@ impl SystemTxInput {
     pub fn encode_data(&self) -> (Vec<u8>, u64) {
         match self {
             Self::ImportInteropRoots(roots) => {
-                // The ABI is self-selected by the roots themselves: roots decoded from the v32
-                // `NewInteropRoot` events carry their (non-zero, contract-enforced) creation
-                // timestamp and are imported through the timestamped v32 entry point; roots from
-                // legacy events decode with `timestamp == 0` and keep the released v31 call,
-                // which is the only form the pre-v32 execution environments parse. One L1 watcher
-                // only ever observes one event form at a time, so a mix means the L1 side was
-                // upgraded mid-flight — refuse rather than guess.
-                let timestamped = roots
-                    .iter()
-                    .filter(|root| !root.timestamp.is_zero())
-                    .count();
-                let calldata = if timestamped == roots.len() {
+                // Imports only flow into v32+ blocks, whose execution environment accepts only
+                // the timestamped entry point; untimestamped (legacy-event) roots are dropped by
+                // the interop watcher before they ever reach the mempool. The legacy call form
+                // survives in decode only, for replaying historical pre-v32 blocks.
+                assert!(
+                    roots.iter().all(|root| !root.timestamp.is_zero()),
+                    "untimestamped interop roots are never encoded; the watcher drops them"
+                );
+                (
                     addInteropRootsInBatchCall {
                         interopRootsInput: roots.clone(),
                     }
-                    .abi_encode()
-                } else if timestamped == 0 {
-                    addInteropRootsInBatchLegacyCall {
-                        interopRootsInput: roots.iter().map(InteropRootLegacy::from).collect(),
-                    }
-                    .abi_encode()
-                } else {
-                    panic!(
-                        "cannot mix timestamped and legacy interop roots in one import ({} of {})",
-                        timestamped,
-                        roots.len()
-                    );
-                };
-                (calldata, 0)
+                    .abi_encode(),
+                    0,
+                )
             }
             Self::SetSLChainId(chain_id, salt) => (
                 setSettlementLayerChainIdCall {

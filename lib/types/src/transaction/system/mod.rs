@@ -477,24 +477,12 @@ mod tests {
         );
     }
 
+    /// Historical pre-v32 blocks carry legacy (timestamp-free) imports, selector `0xcca2f7bc`;
+    /// external nodes must still decode them on replay. Encoding legacy roots is no longer
+    /// possible (the watcher drops untimestamped roots), so this golden checks decode only.
     #[test]
-    fn legacy_interop_roots_tx_serialization() {
-        // Zero timestamps (roots decoded from released, timestamp-free `NewInteropRoot` events)
-        // keep the released v31 import ABI, selector `0xcca2f7bc` — the only form pre-v32
-        // execution environments parse. Golden values carried over from the pre-v32 test.
-        let tx = SystemTxEnvelope::import_interop_roots(
-            vec![InteropRoot {
-                chainId: Uint::from(1),
-                blockOrBatchNumber: Uint::from(1),
-                timestamp: Uint::ZERO,
-                sides: vec![B256::ZERO],
-            }],
-            0,
-        );
-
-        assert_eq!(
-            serde_json::to_string_pretty(&tx).unwrap(),
-            r#"{
+    fn legacy_interop_roots_tx_decodes() {
+        let json = r#"{
   "hash": "0x7bc1a669ea68562d2b22fb56757a7f85c69b286d5d4c0e1fb1b09cd8bd340aee",
   "initiator": "0x0000000000000000000000000000000000008001",
   "to": "0x0000000000000000000000000000000000010008",
@@ -509,12 +497,16 @@ mod tests {
   "r": "0x0",
   "s": "0x0",
   "yParity": "0x0"
-}"#
-        );
-        // Round-trips through the legacy selector back into timestamped form (ts == 0).
-        let roots = tx.interop_roots().expect("import tx carries roots");
+}"#;
+        let tx: SystemTxEnvelope = serde_json::from_str(json).unwrap();
+        let roots = tx.interop_roots().expect("legacy import tx carries roots");
         assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].chainId, Uint::from(1));
+        assert_eq!(roots[0].blockOrBatchNumber, Uint::from(1));
+        // Legacy roots decode with a zero timestamp — the marker that they predate the
+        // timestamped protocol.
         assert!(roots[0].timestamp.is_zero());
+        assert_eq!(*tx.system_subtype(), SystemTxType::ImportInteropRoots(1),);
     }
 
     #[test]
@@ -554,16 +546,6 @@ mod tests {
                     chainId: Uint::from(1),
                     blockOrBatchNumber: Uint::from(1),
                     timestamp: Uint::from(1),
-                    sides: vec![B256::ZERO],
-                }],
-                5,
-            ),
-            // Legacy (timestamp-free) roots round-trip through the v31 import ABI.
-            SystemTxEnvelope::import_interop_roots(
-                vec![InteropRoot {
-                    chainId: Uint::from(1),
-                    blockOrBatchNumber: Uint::from(1),
-                    timestamp: Uint::ZERO,
                     sides: vec![B256::ZERO],
                 }],
                 5,

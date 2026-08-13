@@ -114,6 +114,20 @@ impl ProcessRawEvents for InteropWatcher {
             .try_into()
             .map_err(|e: FromUintError<u64>| L1WatcherError::Other(e.into()))?;
 
+        // Interop-root imports only flow into v32+ blocks (`include_interop_traffic`), whose
+        // execution environment and contracts accept only timestamped roots — an untimestamped
+        // (legacy-event) root is unimportable until the settlement layer's MessageRoot is
+        // upgraded to the timestamped protocol, so it is dropped here at the source.
+        if interop_root.timestamp.is_zero() {
+            tracing::warn!(
+                log_id,
+                chain_id = %interop_root.chainId,
+                "skipping untimestamped (legacy MessageRoot) interop root; \
+                 importable only once the settlement layer emits timestamped roots",
+            );
+            return Ok(());
+        }
+
         // Because startup rescans the block containing the cursor, only that first scanned L1 block
         // can contain roots that were already imported.
         if log_id < self.starting_interop_root_id {
