@@ -65,7 +65,17 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
             .with_timestamp(U256::from(1))
             .build();
         upgrade_tester
-            .execute_default_upgrade(&protocol_upgrade, U256::MAX, U256::from(1), false, vec![])
+            .execute_default_upgrade(
+                &protocol_upgrade,
+                U256::MAX,
+                U256::from(1),
+                false,
+                zksync_os_integration_tests::upgrade::v32_facet_cuts(&upgrade_tester).await?,
+                Some(
+                    zksync_os_integration_tests::upgrade::ZKSYNC_OS_TESTNET_VERIFIER_DEPLOYED_BYTECODE
+                        .parse::<alloy::primitives::Bytes>()?,
+                ),
+            )
             .await?;
     }
     tracing::info!("protocol upgrade to v32.0 executed");

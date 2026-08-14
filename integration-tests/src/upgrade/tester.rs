@@ -75,6 +75,11 @@ impl<'a> UpgradeTester<'a> {
         upgrade_timestamp: U256,
         patch_only: bool,
         facet_cuts: Vec<FacetCut>,
+        // Deployed bytecode to install (via `anvil_setCode`, keeping storage) over the
+        // chain's verifier together with the diamond cut. From v32 on the Executor hands the
+        // verifier untruncated per-batch public inputs, which the old verifier
+        // misinterprets, so a v31 -> v32 upgrade must swap both at once.
+        new_verifier_code: Option<Bytes>,
     ) -> anyhow::Result<()> {
         // Deploy the upgrade contract on SL.
         let upgrade_contract =
@@ -95,11 +100,12 @@ impl<'a> UpgradeTester<'a> {
         .await?;
         tracing::info!("Upgrade is set on CTM");
 
-        // Set timestamp for upgrade on a specific chain under STM via ServerNotifier.
-        self.set_upgrade_timestamp(upgrade_timestamp).await?;
-        tracing::info!("Upgrade scheduled on L1");
-
         if patch_only {
+            // Patch upgrades don't change the protocol minor, so the batch format stays the
+            // same and the diamond cut can trail the schedule.
+            self.set_upgrade_timestamp(upgrade_timestamp).await?;
+            tracing::info!("Upgrade scheduled on L1");
+
             // TODO: for patch upgrades, there is no L2 upgrade transaction, so we must be somewhat probabilistic.
             // We will wait until the timestamp + some margin, then fetch the current l2 block and wait until it's finalized.
             let upgrade_timestamp_secs = u64::try_from(upgrade_timestamp).unwrap();
@@ -124,17 +130,10 @@ impl<'a> UpgradeTester<'a> {
                 )
                 .await?;
             tracing::info!("Current L2 block is finalized, proceeding with patch upgrade");
-        } else {
-            // Wait until the block _before_ upgrade tx is finalized on L1.
-            self.wait_for_upgrade(upgrade_contract.upgrade_tx_l2_hash())
-                .await?;
-            tracing::info!("Block before upgrade tx is finalized on L1");
-        }
 
-        self.upgrade_chain(upgrade_data).await?;
-        tracing::info!("Upgrade tx is executed on SL");
+            self.upgrade_chain(upgrade_data).await?;
+            tracing::info!("Diamond cut is executed on SL");
 
-        if patch_only {
             // For patch upgrades, we need to trigger a transaction finalization, since there is no upgrade tx.
             // So we send a bogus tx and wait until it's finalized instead.
             let tx = self
@@ -156,6 +155,61 @@ impl<'a> UpgradeTester<'a> {
                 )
                 .await?;
         } else {
+            // From v32 on, the batch format the server commits and proves is protocol-version
+            // dependent (chain-id-less batchOutputHash, chain config hash folded into the
+            // batch proof public input), and only the facets carried by the upgrade's diamond
+            // cut compute the matching values on-chain. A new-version batch committed while
+            // the chain still runs the old facets poisons the chain: the contract stores an
+            // old-style hash for it, the server records the new-style one, and the next
+            // commit's `previous_stored_batch_info` check reverts with BatchHashMismatch,
+            // killing the l1_sender.
+            //
+            // Mirror a real rollout instead:
+            //   1. settle everything produced under the old version,
+            //   2. schedule the upgrade a little into the future (the ServerNotifier keys the
+            //      notification on the chain's CURRENT version, so it refuses to schedule
+            //      once the chain is already cut over - it must come before the cut),
+            //   3. execute the diamond cut (new facets + version bump) on the chain, well
+            //      before the scheduled switch,
+            // so when the node starts the new version, the chain can already verify it.
+            let current_l2_block = self.tester.l2_zk_provider.get_block_number().await?;
+            self.tester
+                .l2_zk_provider
+                .wait_finalized_with_timeout(
+                    current_l2_block,
+                    crate::assert_traits::DEFAULT_TIMEOUT,
+                )
+                .await
+                .context("pre-upgrade blocks were not finalized before the diamond cut")?;
+            tracing::info!("Pre-upgrade blocks are finalized on L1");
+
+            // The cut below takes ~1s of L1 transactions; 20s of margin keeps the order
+            // deterministic even on a loaded CI runner. No L2 blocks are produced in the
+            // window - the chain is idle until the upgrade tx.
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs();
+            let notify_at = std::cmp::max(upgrade_timestamp, U256::from(now_secs + 20));
+            self.set_upgrade_timestamp(notify_at).await?;
+            tracing::info!("Upgrade scheduled on L1");
+
+            self.upgrade_chain(upgrade_data).await?;
+            tracing::info!("Diamond cut is executed on SL");
+
+            if let Some(code) = new_verifier_code {
+                let verifier = self.diamond_proxy.getVerifier().call().await?;
+                self.tester
+                    .l1_provider()
+                    .anvil_set_code(verifier, code)
+                    .await?;
+                tracing::info!(%verifier, "Verifier code is replaced");
+            }
+
+            // Wait until the block _before_ upgrade tx is finalized on L1.
+            self.wait_for_upgrade(upgrade_contract.upgrade_tx_l2_hash())
+                .await?;
+            tracing::info!("Block before upgrade tx is finalized on L1");
+
             self.wait_for_upgrade_finalization(upgrade_contract.upgrade_tx_l2_hash())
                 .await?;
         }

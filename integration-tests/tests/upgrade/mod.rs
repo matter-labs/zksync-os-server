@@ -1,9 +1,10 @@
-use alloy::primitives::{Address, Bytes, FixedBytes, U256};
+use alloy::primitives::{Address, Bytes, U256};
 use alloy::providers::Provider;
-use alloy::sol_types::SolCall;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
-use zksync_os_integration_tests::upgrade::{Action, CommitterFacetV31, FacetCut, UpgradeTester};
+use zksync_os_integration_tests::upgrade::{
+    UpgradeTester, ZKSYNC_OS_TESTNET_VERIFIER_DEPLOYED_BYTECODE, v32_facet_cuts,
+};
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester};
 
 /// Executes the simplest patch protocol upgrade:
@@ -36,7 +37,10 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
             deadline,
             upgrade_timestamp,
             true,
+            // A patch upgrade stays on the v31 batch format; the v32 facets and verifier
+            // would break it.
             Vec::new(),
+            None,
         )
         .await?;
 
@@ -80,31 +84,17 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
         .with_timestamp(upgrade_timestamp)
         .build();
 
-    // Deploy new CommitterFacet.
-    let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
-    let committer_facet = CommitterFacetV31::deploy(
-        upgrade_tester.tester.l1_provider().clone(),
-        U256::from(l1_chain_id),
-    )
-    .await?;
-
-    // For simplicity, we only do a replacement for `commitBatchesSharedBridge`.
-    let facet_cut = FacetCut {
-        facet: *committer_facet.address(),
-        action: Action::Replace,
-        isFreezable: true,
-        selectors: vec![FixedBytes(
-            CommitterFacetV31::commitBatchesSharedBridgeCall::SELECTOR,
-        )],
-    };
-
+    // The upgrade carries the v32 facet replacements (they include the Committer, so the
+    // facet-cut path of `execute_default_upgrade` is exercised). A v31 Committer here would
+    // keep storing old-style batch hashes, which the v32 server no longer matches.
     upgrade_tester
         .execute_default_upgrade(
             &protocol_upgrade,
             deadline,
             upgrade_timestamp,
             false,
-            vec![facet_cut],
+            v32_facet_cuts(&upgrade_tester).await?,
+            Some(ZKSYNC_OS_TESTNET_VERIFIER_DEPLOYED_BYTECODE.parse::<Bytes>()?),
         )
         .await?;
 
@@ -176,7 +166,8 @@ async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
             deadline,
             upgrade_timestamp,
             false,
-            vec![],
+            v32_facet_cuts(&upgrade_tester).await?,
+            Some(ZKSYNC_OS_TESTNET_VERIFIER_DEPLOYED_BYTECODE.parse::<Bytes>()?),
         )
         .await?;
 
