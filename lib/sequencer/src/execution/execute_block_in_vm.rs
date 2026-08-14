@@ -244,13 +244,36 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
                         match (tx.tx_type(), command.invalid_tx_policy) {
                             (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
-                                return Err(
-                                    BlockDump {
-                                        ctx,
-                                        txs: all_processed_txs.clone(),
-                                        error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
+                                match rejection_method(&e) {
+                                    // Block-resource exhaustion is a seal signal, not a verdict on
+                                    // the tx: seal what we have and let the tx retry from the
+                                    // subpool head in the next block. L1 caps per-priority-tx
+                                    // pubdata/gas below the block limits, so a lone tx in a fresh
+                                    // block always fits.
+                                    TxRejectionMethod::SealBlock(reason) if !executed_txs.is_empty() => {
+                                        tracing::info!(
+                                            block_number = ctx.block_number,
+                                            "Sealing block {} before {} tx {} because it hit a sealing criterion: reason={reason:?}, error={e:?}",
+                                            ctx.block_number,
+                                            tx.tx_type(),
+                                            tx.hash(),
+                                        );
+                                        break reason;
                                     }
-                                )
+                                    // Everything else is fatal: a genuinely invalid priority tx is
+                                    // a protocol violation (the FIFO cannot skip it), and a
+                                    // seal-class error on an empty block means the tx can never
+                                    // fit (block limits misconfigured below L1's per-tx caps).
+                                    _ => {
+                                        return Err(
+                                            BlockDump {
+                                                ctx,
+                                                txs: all_processed_txs.clone(),
+                                                error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
+                                            }
+                                        )
+                                    }
+                                }
                             }
                             (ZkTxType::System, _) => {
                                 return Err(
