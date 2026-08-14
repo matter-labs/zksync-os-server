@@ -8,7 +8,7 @@ use alloy::primitives::ruint::FromUintError;
 use alloy::rpc::types::{Log, Topic};
 use alloy::sol_types::SolEvent;
 use anyhow::Context;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMessageRoot::NewInteropRoot;
 use zksync_os_contract_interface::IMessageRootLegacy::NewInteropRoot as NewInteropRootLegacy;
@@ -85,8 +85,9 @@ impl ProcessRawEvents for InteropWatcher {
 
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
         // A polling range may contain repeated updates for one log id. Only its latest root should
-        // reach the subpool.
-        let mut indexes = HashMap::new();
+        // reach the subpool, and pushes must stay in log-id order — the consuming stream advances
+        // its cursor past every pushed id, so an out-of-order lower id would be stranded.
+        let mut indexes = BTreeMap::new();
 
         for log in logs {
             let log_id = match decode_new_interop_root(&log) {

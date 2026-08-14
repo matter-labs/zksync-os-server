@@ -10,32 +10,31 @@
  * value to the source chain's IMT (instead of publishing to L1); an execute requires
  * an inclusion proof for *every* leg of the flow before any leg runs.
  *
- * IMPORTANT — protocol layout: the atomic built-ins (`L2InteropCommitmentTree` at
- * `0x10012`, `AtomicFlowManager` at `0x10014`) and the atomic address layout
+ * Protocol layout: the atomic built-ins (`L2InteropCommitmentTree` at `0x10012`,
+ * `AtomicFlowManager` at `0x10014`) and the atomic address layout
  * (`InteropCenter 0x1000d`, `InteropHandler 0x1000e`) come from the era-contracts
- * `atomic-imt-interop` branch. They are NOT present in the stack's default
- * `test-only-interop-demo` server image — see ATOMIC-INTEROP-PLAN.md. This module is
- * shipped so the demo is ready the moment an atomic server image + genesis land; the
- * example (`examples/atomic-swap-3chains.ts`) detects capability at runtime and fails
+ * `atomic-imt-interop` branch and are predeployed by this preset's genesis. The
+ * driver (`atomic-swap-3chains.ts`) still detects capability at runtime and fails
  * with a precise message rather than obscurely.
  *
- * The engine here is a faithful ethers-v6 port of the era-contracts off-chain engine
- * `l1-contracts/test/anvil-interop/src/helpers/imt-engine-lib.ts` (IMT engine B,
- * fixed depth 32). It reconstructs the tree from the contract's live leaf set, so it
- * works even if the server does not expose the `zks_getImt*` RPCs, as long as the
- * commitment-tree contract is deployed.
+ * No off-chain IMT engine is vendored here: per-leg proofs come COMPLETE from the
+ * server RPCs (`zks_getImtInclusionProof` / `zks_getImtNonInclusionProof`, plus
+ * `zks_getImtLowNullifierIndex` for sends) — see ../../ATOMIC_SWAP.md.
  */
 
 import { ethers } from 'ethers';
+import { InteropCenterAbi } from './abis';
+import {
+  L2_INTEROP_CENTER_ADDRESS,
+  L2_INTEROP_HANDLER_ADDRESS,
+  L2_INTEROP_COMMITMENT_TREE_ADDRESS,
+  L2_ATOMIC_FLOW_MANAGER_ADDRESS,
+} from './constants';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Address layout (atomic-imt-interop branch). Overridable via env so the example
-// can adapt if a published atomic image uses a different layout.
+// Address layout (single table in constants.ts). Overridable via env so the
+// driver can adapt if a published atomic image uses a different layout.
 // ─────────────────────────────────────────────────────────────────────────────
-
-const BUILT_IN = 0x10000;
-const builtIn = (offset: number): string =>
-  ethers.getAddress(ethers.zeroPadValue(ethers.toBeHex(BUILT_IN + offset), 20));
 
 /** Atomic protocol address layout. Defaults match the `atomic-imt-interop` branch. */
 export interface AtomicLayout {
@@ -47,10 +46,10 @@ export interface AtomicLayout {
 
 /** Canonical atomic layout from era-contracts `atomic-imt-interop`. */
 export const DEFAULT_ATOMIC_LAYOUT: AtomicLayout = {
-  interopCenter: builtIn(0x0d), // 0x...1000d
-  interopHandler: builtIn(0x0e), // 0x...1000e
-  commitmentTree: builtIn(0x12), // 0x...10012
-  atomicFlowManager: builtIn(0x14), // 0x...10014
+  interopCenter: L2_INTEROP_CENTER_ADDRESS,
+  interopHandler: L2_INTEROP_HANDLER_ADDRESS,
+  commitmentTree: L2_INTEROP_COMMITMENT_TREE_ADDRESS,
+  atomicFlowManager: L2_ATOMIC_FLOW_MANAGER_ADDRESS,
 };
 
 /** Resolve the atomic layout, allowing per-field env overrides. */
@@ -67,16 +66,11 @@ export function resolveAtomicLayout(env: NodeJS.ProcessEnv = process.env): Atomi
 // ABIs (atomic surface). Imported from here, never declared inline elsewhere.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * `InteropCenter.sendBundle` is the same signature as the non-atomic path; the
- * `atomicBundle` attribute is just one more `_bundleAttributes` entry. We keep the
- * `InteropBundleSent` event so callers can recover the ABI-encoded `InteropBundle`
- * (needed verbatim by `executeAtomicBundle`).
- */
+// Atomic sends use the plain `InteropCenter.sendBundle` (the `atomicBundle` attribute
+// is just one more `_bundleAttributes` entry), so reuse the base ABI + the fee getter.
 export const AtomicInteropCenterAbi = [
-  'function sendBundle(bytes calldata _destinationChainId, tuple(bytes to, bytes data, bytes[] callAttributes)[] calldata _callStarters, bytes[] calldata _bundleAttributes) external payable returns (bytes32)',
+  ...InteropCenterAbi,
   'function interopProtocolFee() view returns (uint256)',
-  'event InteropBundleSent(bytes32 l2l1MsgHash, bytes32 interopBundleHash, tuple(bytes1 version, uint256 sourceChainId, uint256 destinationChainId, bytes32 destinationBaseTokenAssetId, bytes32 interopBundleSalt, tuple(bytes1 version, bool shadowAccount, address to, address from, uint256 value, bytes data)[] calls, tuple(bytes executionAddress, bytes unbundlerAddress, bool useFixedFee, bytes32 salt) bundleAttributes) interopBundle)',
 ];
 
 /** ABI tuple type for the on-wire `InteropBundle` (matches Messaging.sol). */
@@ -319,13 +313,22 @@ export async function detectAtomicCapability(
   if (code === '0x' || code === '0x0') {
     return {
       supported: false,
-      reason: `no L2InteropCommitmentTree deployed at ${layout.commitmentTree} (the pinned demo image does not predeploy the atomic built-ins — needs an atomic server image + genesis; see ATOMIC-INTEROP-PLAN.md)`,
+      reason: `no L2InteropCommitmentTree deployed at ${layout.commitmentTree} (needs an atomic server image + genesis; see ATOMIC_SWAP.md)`,
       layout,
     };
   }
   const tree = commitmentTreeContract(layout.commitmentTree, provider);
-  // root() reverting / mismatching ABI means the contract there is not the tree.
-  await tree.root();
-  await tree.leafCount();
+  // A reverting probe means the contract there is not the tree (ABI mismatch).
+  for (const probe of ['root', 'leafCount'] as const) {
+    try {
+      await tree[probe]();
+    } catch (err) {
+      return {
+        supported: false,
+        reason: `${probe}() probe failed on contract at ${layout.commitmentTree} — not an L2InteropCommitmentTree: ${(err as Error).message}`,
+        layout,
+      };
+    }
+  }
   return { supported: true, layout };
 }

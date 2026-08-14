@@ -29,6 +29,7 @@ pub mod state_override_view;
 pub use state_override_view::OverriddenStateView;
 
 mod read_commitment_tree_root;
+mod read_dynamic_tree_root;
 mod read_multichain_root;
 pub use read_commitment_tree_root::read_commitment_tree_root;
 pub use read_multichain_root::read_multichain_root;

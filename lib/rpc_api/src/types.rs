@@ -86,7 +86,11 @@ pub struct ImtProof {
     /// The settlement-layer block the proof's interop root anchor was resolved at
     /// (`interopRoots[slChainId][block]`). Callers wait for the verifying chain to import that
     /// root before submitting the proof on-chain.
-    pub settlement_block_number: Option<u64>,
+    pub settlement_block_number: u64,
+    /// Which chain-batch-root leaf the settlement half proves: `true` = the batch-BEGIN root
+    /// (leaf 2, non-inclusion/timeout proofs), `false` = the batch-END root (leaf 3, inclusion).
+    /// Passes through to `ImtProof.provesAgainstBeginRoot` on-chain.
+    pub proves_against_begin_root: bool,
     /// The proven IMT boundary root: the batch-END root for inclusion proofs, the batch-BEGIN
     /// root for non-inclusion proofs.
     pub chain_imt_root: B256,

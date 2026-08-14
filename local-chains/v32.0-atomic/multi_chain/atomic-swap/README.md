@@ -54,7 +54,7 @@ atomic-swap/
 ├── atomic-swap-3chains.ts   # the driver (imports from ./lib)
 ├── lib/                     # vendored interop-SDK subset (ethers-only)
 │   ├── index.ts             # barrel re-exporting the symbols the driver uses
-│   ├── atomic.ts            # atomic ABIs, IMT engine, proof helpers
+│   ├── atomic.ts            # atomic ABIs, layout, proof helpers
 │   ├── bundle-builder.ts
 │   ├── address.ts
 │   ├── constants.ts

@@ -161,6 +161,15 @@ impl SystemTxEnvelope {
         }
     }
 
+    /// True for the released v31 import wire (`addInteropRootsInBatchLegacy`). Such txs exist
+    /// only in replayed history: the watcher drops untimestamped roots and `encode_data` can
+    /// only produce the timestamped wire, so they can never be rebuilt from the subpool.
+    pub fn is_legacy_interop_import(&self) -> bool {
+        self.inner
+            .input()
+            .starts_with(&addInteropRootsInBatchLegacyCall::SELECTOR)
+    }
+
     pub fn hash(&self) -> &B256 {
         &self.hash
     }

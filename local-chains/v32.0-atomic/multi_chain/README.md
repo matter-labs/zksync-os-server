@@ -37,9 +37,9 @@ Then drive an atomic swap (chain A 6565 ↔ chain B 6566). See
 1. Register the two chains for interop (one permissionless L1 call each direction —
    `Bridgehub.chainRegistrationSender().registerChain(Y, X)`).
 2. Run the atomic-swap driver against `:3050`/`:3051`. It sends both legs
-   (burn + IMT insert), fetches real proofs via `zks_getL2ToL1LogProof`
-   (messageRoot) + `zks_getImtInclusionProof`, waits for interop-root import, then
-   calls `InteropHandler.executeAtomicBundle` on each destination. Both bundles reach
+   (burn + IMT insert), fetches the complete per-leg proofs via
+   `zks_getImtInclusionProof`, waits for interop-root import, then calls
+   `InteropHandler.executeAtomicBundle` on each destination. Both bundles reach
    `FullyExecuted` and both wrapped tokens mint.
 
 ## Wallets

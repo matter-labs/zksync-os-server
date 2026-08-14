@@ -122,6 +122,12 @@ impl InteropRootsSubpool {
             let SystemTxType::ImportInteropRoots(roots_count) = *tx.system_subtype() else {
                 continue;
             };
+            // Legacy (v31-wire) import txs appear only in replayed history: their roots never
+            // enter the subpool (the watcher drops untimestamped roots) and the v32 encoder
+            // cannot rebuild the legacy wire — nothing to reconcile, and waiting would hang.
+            if tx.is_legacy_interop_import() {
+                continue;
+            }
 
             let mut roots = Vec::with_capacity(roots_count as usize);
             let mut tx_last_log_id = None;

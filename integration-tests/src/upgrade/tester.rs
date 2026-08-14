@@ -12,10 +12,11 @@ use crate::upgrade::interfaces::ChainTypeManagerV30::ChainTypeManagerV30Instance
 use crate::upgrade::interfaces::FacetCut;
 use crate::upgrade::interfaces::ZkChainV30::ZkChainV30Instance;
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, B256, Bytes, TxKind, U256, b256};
+use alloy::primitives::{Address, B256, Bytes, FixedBytes, TxKind, U256, b256};
 use alloy::providers::ext::AnvilApi;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
+use alloy::sol_types::SolCall;
 use anyhow::Context;
 use zksync_os_alloy_ext::provider::ZksyncApi as _;
 use zksync_os_contract_interface::l1_discovery::L1State;
@@ -369,6 +370,50 @@ impl<'a> UpgradeTester<'a> {
         self.send_impersonated_transaction(tx).await?;
         tracing::info!("L1MessageRoot proxy upgraded to the v32 implementation");
         Ok(())
+    }
+
+    /// The L1-side fixtures the v31->v32 chain upgrade needs: the ecosystem MessageRoot
+    /// implementation swap (the real rollout upgrades ecosystem contracts before the chains),
+    /// then freshly deployed v32 settlement facets as replace-cuts — the post-upgrade server
+    /// speaks the v32 wire.
+    pub async fn prepare_v32_settlement_fixtures(&self) -> anyhow::Result<Vec<FacetCut>> {
+        self.upgrade_l1_message_root_to_v32().await?;
+
+        let l1_chain_id = self.tester.l1_provider().get_chain_id().await?;
+        let committer_facet = interfaces::CommitterFacetV32::deploy(
+            self.tester.l1_provider().clone(),
+            U256::from(l1_chain_id),
+        )
+        .await?;
+        let executor_facet =
+            interfaces::ExecutorFacetV32::deploy(self.tester.l1_provider().clone()).await?;
+
+        Ok(vec![
+            FacetCut {
+                facet: *committer_facet.address(),
+                action: interfaces::Action::Replace,
+                isFreezable: true,
+                selectors: vec![FixedBytes(
+                    interfaces::CommitterFacetV32::commitBatchesSharedBridgeCall::SELECTOR,
+                )],
+            },
+            FacetCut {
+                facet: *executor_facet.address(),
+                action: interfaces::Action::Replace,
+                isFreezable: true,
+                selectors: vec![
+                    FixedBytes(
+                        interfaces::ExecutorFacetV32::proveBatchesSharedBridgeCall::SELECTOR,
+                    ),
+                    FixedBytes(
+                        interfaces::ExecutorFacetV32::executeBatchesSharedBridgeCall::SELECTOR,
+                    ),
+                    FixedBytes(
+                        interfaces::ExecutorFacetV32::revertBatchesSharedBridgeCall::SELECTOR,
+                    ),
+                ],
+            },
+        ])
     }
 
     pub async fn pause_bridgehub_migrations(&self) -> anyhow::Result<()> {

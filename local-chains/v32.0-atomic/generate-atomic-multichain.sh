@@ -75,8 +75,16 @@ done
 # 3. SIGTERM anvil to flush --dump-state (with historical snapshots).
 kill -TERM "$APID" 2>/dev/null || true
 for _ in $(seq 1 60); do kill -0 "$APID" 2>/dev/null || break; sleep 1; done
+if kill -0 "$APID" 2>/dev/null; then
+  echo "anvil (pid $APID) still alive 60s after SIGTERM; refusing to package a possibly-truncated dump" >&2
+  exit 1
+fi
+wait "$APID" 2>/dev/null || true  # reap; SIGTERM exit status is expected here
 APID=""
 [[ -s "$RAW" ]] || { echo "anvil did not write $RAW" >&2; exit 1; }
+# A slow flush can leave truncated JSON; never gzip an incomplete dump.
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$RAW" \
+  || { echo "l1-state dump is not complete JSON: $RAW" >&2; exit 1; }
 
 # 4. Lay down the preset: genesis, gzipped L1 state, wallets, per-chain run_local configs.
 mkdir -p "$PRESET"

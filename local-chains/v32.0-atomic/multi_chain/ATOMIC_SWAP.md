@@ -61,11 +61,13 @@ L1_RPC_URL=http://127.0.0.1:8545 \
    `sendBundle(..., [atomicBundle(flowId, deadline, lowNullifier)])`. This burns and
    inserts the commit value into the source chain's `L2InteropCommitmentTree`
    (`legState → Committed`); the bundle is NOT published to L1.
-5. Per leg, fetch the real proof: find the commitment-tree (`0x10012`) publish's
-   index in the send receipt's `l2ToL1Logs`, poll
-   `zks_getL2ToL1LogProof(txHash, idx, "messageRoot")` (→ batch, leaf id, merkle
-   path, settlement-layer block), and `zks_getImtInclusionProof(commitValue, sendBlock)`
-   (→ IMT root, leaf, leaf index, merkle path). Assemble the per-leg `ImtProof`.
+5. Per leg, poll `zks_getImtInclusionProof(commitValue, sendBlock)` until the send's
+   batch is executed on L1. The response is the COMPLETE per-leg proof: the IMT half
+   against the batch-END root (chain IMT root, leaf, leaf index, merkle path) plus
+   the settlement half (`settlementProof`) authenticating that root as a
+   chain-batch-root leaf against the imported interop root, and the settlement-layer
+   block number. The driver only adds `sourceChainId` (and sets
+   `provesAgainstBeginRoot = false` — the finality branch).
 6. Wait for each chain's `L2InteropRootStorage.interopRoots(l1ChainId, slBlock)` to
    import the interop root at each leg's settlement block.
 7. `InteropHandler.executeAtomicBundle(bundle, AtomicFinalityProof)` on each
@@ -77,8 +79,7 @@ its batch's L1 settlement timestamp, which must be ≤ the deadline. The driver 
 to `l1Now + 24h` (override with `ATOMIC_DEADLINE_TS`), far beyond the few seconds a batch
 takes to settle on the harness Anvil.
 
-## Server RPCs this relies on (kl/l1-settled-interop-proof)
+## Server RPCs this relies on
 
-- `zks_getImtLowNullifierIndex(value, block)`
-- `zks_getImtInclusionProof(commitValue, block)`
-- `zks_getL2ToL1LogProof(txHash, index, "messageRoot")`
+- `zks_getImtLowNullifierIndex(value, block)` — low-nullifier index for the atomic send
+- `zks_getImtInclusionProof(commitValue, sendBlock)` — the complete per-leg `ImtProof`

@@ -13,20 +13,19 @@
  * single-bundle path.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * REQUIREMENT — atomic server image: this needs a zksync-os-server image that
- * predeploys the atomic built-ins (`L2InteropCommitmentTree` @ 0x10012,
- * `AtomicFlowManager` @ 0x10014) and uses the atomic protocol layout
- * (`InteropCenter` @ 0x1000d, `InteropHandler` @ 0x1000e), built from the
- * `ad-atomic-interop` server branch + the `atomic-imt-interop`
- * era-contracts genesis (chain-batch-root leaf proof model). The pinned `test-only-interop-demo` image in this stack
- * does NOT support it. See ATOMIC-INTEROP-PLAN.md. This script detects that at
- * startup and prints a precise BLOCKED message rather than failing obscurely.
+ * REQUIREMENT — atomic server + genesis: the chains must predeploy the atomic
+ * built-ins (`L2InteropCommitmentTree` @ 0x10012, `AtomicFlowManager` @ 0x10014)
+ * and use the atomic protocol layout (`InteropCenter` @ 0x1000d, `InteropHandler`
+ * @ 0x1000e), from the `ad-atomic-interop` server branch + the `atomic-imt-interop`
+ * era-contracts genesis — exactly what this preset deploys (see ../ATOMIC_SWAP.md).
+ * The script still detects capability at startup and prints a precise BLOCKED
+ * message rather than failing obscurely.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * Usage (default A=6565 @ :3050, B=6566 @ :3051; override RPCs via env):
  *   PRIVATE_KEY=0x... \
  *   L2_RPC_URL=http://127.0.0.1:3050 L2_RPC_URL_SECOND=http://127.0.0.1:3051 \
- *   npx ts-node examples/atomic-swap-3chains.ts
+ *   npm run atomic-swap
  *
  * Optional env:
  *   ATOMIC_DEADLINE_TS      settlement-layer (L1) timestamp for the flow deadline
@@ -143,11 +142,9 @@ async function sendAtomicLeg(params: {
   deadline: number;
   predictedHash: string;
   interopCenterAddr: string;
-  commitmentTreeAddr: string;
   value: bigint;
-}): Promise<{ bundleData: string; bundleHash: string; txHash: string; sendBlock: number }> {
-  const { source, dest, amount, recipient, flowId, deadline, predictedHash, interopCenterAddr, commitmentTreeAddr, value } =
-    params;
+}): Promise<{ bundleData: string; bundleHash: string; sendBlock: number }> {
+  const { source, dest, amount, recipient, flowId, deadline, predictedHash, interopCenterAddr, value } = params;
 
   // Low-nullifier index from the server's IMT engine (zks_getImtLowNullifierIndex). The atomic
   // server always exposes it; a null result means the value is already present (or the tree is
@@ -191,10 +188,9 @@ async function sendAtomicLeg(params: {
     throw new Error(`bundleHash ${bundleHash} != predicted ${predictedHash}`);
   }
   console.log(`[${source.name}->${dest.name}] sent atomic leg, bundleHash=${bundleHash} lowNullifier=${lowNull}`);
-  return { bundleData, bundleHash, txHash: tx.hash, sendBlock: receipt!.blockNumber };
+  return { bundleData, bundleHash, sendBlock: receipt!.blockNumber };
 }
 
-const COMMITMENT_TREE_ADDR = '0x0000000000000000000000000000000000010012';
 const L2_INTEROP_ROOT_STORAGE = '0x0000000000000000000000000000000000010008';
 
 /**
@@ -205,7 +201,8 @@ const L2_INTEROP_ROOT_STORAGE = '0x0000000000000000000000000000000000010008';
  */
 interface RpcImtProof {
   batchNumber: number;
-  settlementBlockNumber?: number;
+  settlementBlockNumber: number;
+  provesAgainstBeginRoot: boolean;
   chainImtRoot: string;
   settlementProof: string[];
   leaf: { value: string; nextIndex: string; nextValue: string };
@@ -243,8 +240,7 @@ function toLegProof(chainId: bigint, p: RpcImtProof): ImtProof {
     sourceChainId: chainId.toString(),
     batchNumber: String(p.batchNumber),
     chainImtRoot: p.chainImtRoot,
-    // Finality path proves against the batch-end root (mirrors the atomic_swap_l1_settled test).
-    provesAgainstBeginRoot: false,
+    provesAgainstBeginRoot: p.provesAgainstBeginRoot,
     settlementProof: p.settlementProof,
     leaf: { value: String(p.leaf.value), nextIndex: String(p.leaf.nextIndex), nextValue: String(p.leaf.nextValue) },
     imtLeafIndex: Number(p.imtLeafIndex),
@@ -300,7 +296,7 @@ async function main() {
       console.error(`\nBLOCKED: chain ${label} does not support atomic interop.`);
       console.error(`  reason: ${cap.reason}`);
       console.error('  This demo needs an atomic-capable zksync-os-server image + genesis.');
-      console.error('  See ATOMIC-INTEROP-PLAN.md (sections 4 and 6).');
+      console.error('  See ATOMIC_SWAP.md in this preset.');
       process.exit(2);
     }
   }
@@ -341,7 +337,6 @@ async function main() {
     deadline,
     predictedHash: hAB,
     interopCenterAddr: layout.interopCenter,
-    commitmentTreeAddr: layout.commitmentTree,
     value: fee,
   });
   const ba = await sendAtomicLeg({
@@ -353,7 +348,6 @@ async function main() {
     deadline,
     predictedHash: hBA,
     interopCenterAddr: layout.interopCenter,
-    commitmentTreeAddr: layout.commitmentTree,
     value: fee,
   });
 
@@ -394,9 +388,17 @@ async function main() {
   // Both executeAtomicBundle calls verify every leg, so each executing chain must
   // have imported the L1 interop root at each leg's settlement block.
   console.log('\n=== WAIT FOR INTEROP ROOTS ===');
-  const slBlocks = [abRaw.settlementBlockNumber, baRaw.settlementBlockNumber].filter(
-    (x): x is number => x !== undefined && x !== null
-  );
+  // Every leg's proof must carry the L1 block its batch settled at; a missing value
+  // would otherwise surface later as an unexplained executeAtomicBundle revert.
+  const slBlocks = ([
+    ['AB', abRaw],
+    ['BA', baRaw],
+  ] as const).map(([leg, p]) => {
+    if (typeof p.settlementBlockNumber !== 'number') {
+      throw new Error(`leg ${leg}: inclusion proof (batch ${p.batchNumber}) has no settlementBlockNumber`);
+    }
+    return p.settlementBlockNumber;
+  });
   console.log(`waiting for interop roots (L1 ${l1ChainId}) at blocks ${slBlocks} on both chains...`);
   for (const ctx of [a, b]) {
     for (const sl of slBlocks) {

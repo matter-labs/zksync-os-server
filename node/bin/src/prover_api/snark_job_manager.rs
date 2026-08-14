@@ -64,16 +64,21 @@ impl SnarkJobManager {
         // consume/remove all fake jobs that may be in the front of the queue
         self.process_pending_fake_fri_proofs().await?;
 
-        // Same version-boundary split as the fake path.
+        // Same version-boundary split as the fake path. The predicate also runs on head jobs
+        // that end up skipped, so the version must be pinned only after the other checks pass —
+        // pinning from a rejected job would block every later job of a different version.
         let mut group_version = None;
         let batches_with_real_proofs = self
             .jobs
             .pick_jobs_while_with_limit(self.max_fris_per_snark, &prover_id, |job| {
+                if job.batch_envelope.data.is_fake()
+                    || !supported_proving_versions
+                        .is_none_or(|versions| versions.contains(&job.metadata.proving_version))
+                {
+                    return false;
+                }
                 let version = &job.batch_envelope.batch.batch_info.protocol_version;
                 *group_version.get_or_insert_with(|| version.clone()) == *version
-                    && !job.batch_envelope.data.is_fake()
-                    && supported_proving_versions
-                        .is_none_or(|versions| versions.contains(&job.metadata.proving_version))
             })
             .await;
 
@@ -101,21 +106,34 @@ impl SnarkJobManager {
         //     anyhow::bail!("proof validation failed")
         // }
 
-        // Prover should generate the proof with VK received from server. These must always match.
-        // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
-        //
-        // This should never happen, but we double-check to guarantee it's the case.
-        let Some(batch_metadata) = self.jobs.get_job_batch_metadata(batch_from).await else {
-            anyhow::bail!("race condition: some batches were completed earlier")
-        };
-        let server_vk = batch_metadata
-            .verification_key_hash()
-            .expect("verification key hash must be present as it was set by server");
-        let prover_vk = proving_version.vk_hash();
-        anyhow::ensure!(
-            server_vk == prover_vk,
-            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
-        );
+        // The range is prover-echoed, so re-validate what the pickers guarantee at hand-out:
+        // every batch was proven with the server's VK, and the range does not span a
+        // protocol-version boundary (the verifying executor applies one PI formula per SNARK).
+        // Per-batch metadata is immutable, so checking before consumption is race-safe —
+        // `complete_many_jobs` re-checks existence under its own lock.
+        let mut group_version = None;
+        for batch_number in batch_from..=batch_to {
+            let Some(batch_metadata) = self.jobs.get_job_batch_metadata(batch_number).await else {
+                anyhow::bail!("race condition: some batches were completed earlier")
+            };
+            let server_vk = batch_metadata
+                .verification_key_hash()
+                .expect("verification key hash must be present as it was set by server");
+            let prover_vk = proving_version.vk_hash();
+            anyhow::ensure!(
+                server_vk == prover_vk,
+                "Verification key hash mismatch for batch {batch_number}: server got {server_vk}, prover got {prover_vk}"
+            );
+            let version = &batch_metadata.batch_info.protocol_version;
+            match &group_version {
+                None => group_version = Some(version.clone()),
+                Some(first) => anyhow::ensure!(
+                    first == version,
+                    "batch range {batch_from}..={batch_to} spans a protocol-version boundary \
+                     ({first:?} vs {version:?} at batch {batch_number}); one SNARK must cover one version"
+                ),
+            }
+        }
 
         // Ensure we can send downstream before consuming jobs from the retryable map.
         let permit = self.try_reserve_permit_downstream()?;
@@ -161,18 +179,21 @@ impl SnarkJobManager {
     ) -> anyhow::Result<()> {
         loop {
             // A SNARK must not span a protocol-version boundary: the verifying executor
-            // applies its own PI formula to every batch in the group. Version check first so
-            // picking stops at the boundary.
+            // applies its own PI formula to every batch in the group. The version is pinned
+            // only after the fake/timeout check passes — the predicate also runs on head jobs
+            // that end up skipped, and pinning from one would block later versions.
             let mut group_version = None;
             let assigned: Vec<(FriJob, FriProof)> = self
                 .jobs
                 .pick_jobs_while_with_limit(self.max_fris_per_snark, "fake_prover", |job| {
+                    let fake_or_timed_out = job.batch_envelope.data.is_fake()
+                        || timeout_for_real_fris
+                            .is_some_and(|timeout| job.metadata.added_at.elapsed() >= timeout);
+                    if !fake_or_timed_out {
+                        return false;
+                    }
                     let version = &job.batch_envelope.batch.batch_info.protocol_version;
                     *group_version.get_or_insert_with(|| version.clone()) == *version
-                        && (job.batch_envelope.data.is_fake()
-                            || (timeout_for_real_fris.is_some()
-                                && job.metadata.added_at.elapsed()
-                                    >= timeout_for_real_fris.unwrap()))
                 })
                 .await;
 
@@ -269,8 +290,8 @@ impl FakeSnarkProver {
 }
 
 /// Chain-config-hash word of the batch proof public input: `Some` for v32+, `None` before.
-/// The pickers never mix protocol versions in one group, so the last batch's version is the
-/// group's.
+/// Groups never mix protocol versions (enforced at pick-time and re-validated for
+/// prover-echoed ranges in `submit_proof`), so the last batch's version is the group's.
 fn proof_chain_config_hash(
     batches: &[zksync_os_batch_types::batcher_model::SignedBatchEnvelope<
         zksync_os_batch_types::batcher_model::FriProof,
