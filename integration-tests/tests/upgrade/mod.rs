@@ -48,7 +48,6 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
 /// Performs V31->V32 protocol upgrade with a force deployment, exercising the legacy path
 /// where the node already knows the bytecode preimage from a prior L2 deployment.
 #[test_log::test(tokio::test)]
-#[ignore = "needs the v32 ecosystem contracts upgrade (MessageRoot.addChainBatchRootV32 is missing on a v31-deployed L1); chain facet cuts alone cannot model it"]
 async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
@@ -82,6 +81,10 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
         .with_force_deployments(force_deployments)
         .with_timestamp(upgrade_timestamp)
         .build();
+
+    // The v32 executor appends batch roots via `MessageRoot.addChainBatchRootV32`; the real
+    // rollout upgrades the ecosystem contracts before the chains do.
+    upgrade_tester.upgrade_l1_message_root_to_v32().await?;
 
     // The post-upgrade server speaks the v32 wire, so the settlement facets must be v32.
     let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
@@ -149,7 +152,6 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
 
 /// Performs V31->V32 protocol upgrade which also does a force deployment.
 #[test_log::test(tokio::test)]
-#[ignore = "needs the v32 ecosystem contracts upgrade (MessageRoot.addChainBatchRootV32 is missing on a v31-deployed L1); chain facet cuts alone cannot model it"]
 async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
     let upgrade_timestamp = U256::from(1); // Protocol upgrade can be executed immediately.
     let deadline = U256::MAX; // The protocol version will not have any deadline in this upgrade
@@ -187,7 +189,9 @@ async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
         .with_timestamp(upgrade_timestamp)
         .build();
 
-    // Same v32 facet cuts as `upgrade_to_v32_with_predeployed_bytecodes`.
+    // Same v32 ecosystem + facet-cut fixtures as `upgrade_to_v32_with_predeployed_bytecodes`.
+    upgrade_tester.upgrade_l1_message_root_to_v32().await?;
+
     let l1_chain_id = upgrade_tester.tester.l1_provider().get_chain_id().await?;
     let committer_facet = CommitterFacetV32::deploy(
         upgrade_tester.tester.l1_provider().clone(),

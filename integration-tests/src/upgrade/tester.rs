@@ -12,7 +12,7 @@ use crate::upgrade::interfaces::ChainTypeManagerV30::ChainTypeManagerV30Instance
 use crate::upgrade::interfaces::FacetCut;
 use crate::upgrade::interfaces::ZkChainV30::ZkChainV30Instance;
 use alloy::network::TransactionBuilder;
-use alloy::primitives::{Address, B256, Bytes, TxKind, U256};
+use alloy::primitives::{Address, B256, Bytes, TxKind, U256, b256};
 use alloy::providers::ext::AnvilApi;
 use alloy::providers::{PendingTransactionBuilder, Provider};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
@@ -316,6 +316,58 @@ impl<'a> UpgradeTester<'a> {
             )
             .await
             .context("Block before upgrade transaction was not finalized")?;
+        Ok(())
+    }
+
+    /// Models the v32 ecosystem-contracts upgrade: swaps the L1MessageRoot proxy implementation
+    /// for the v32 build, whose `addChainBatchRootV32` the v32 executor facet calls on every
+    /// execute. Chain facet cuts cannot model this — the MessageRoot is an ecosystem proxy
+    /// outside the chain diamond.
+    pub async fn upgrade_l1_message_root_to_v32(&self) -> anyhow::Result<()> {
+        const EIP1967_ADMIN_SLOT: B256 =
+            b256!("b53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103");
+
+        let provider = self.tester.l1_provider();
+        let message_root = self.bridgehub.messageRoot().call().await?;
+
+        let proxy_admin = provider
+            .get_storage_at(message_root, EIP1967_ADMIN_SLOT.into())
+            .await?;
+        let proxy_admin =
+            interfaces::ProxyAdmin::new(Address::from_word(proxy_admin.into()), provider.clone());
+        let proxy_admin_owner = proxy_admin.owner().call().await?;
+        provider
+            .anvil_impersonate_account(proxy_admin_owner)
+            .await?;
+        provider
+            .send_transaction(
+                TransactionRequest::default()
+                    .with_to(proxy_admin_owner)
+                    .with_value(U256::from(10).pow(U256::from(18u64))), // 1 ETH
+            )
+            .await?
+            .expect_successful_receipt()
+            .await?;
+
+        // The v31 implementation exposes the same immutables, so the v32 constructor args are
+        // read through the proxy pre-upgrade.
+        let proxied = interfaces::L1MessageRootV32::new(message_root, provider.clone());
+        let era_gateway_chain_id = proxied.ERA_GATEWAY_CHAIN_ID().call().await?;
+        let chain_asset_handler = proxied.CHAIN_ASSET_HANDLER().call().await?;
+        let new_impl = interfaces::L1MessageRootV32::deploy(
+            provider.clone(),
+            *self.bridgehub.address(),
+            era_gateway_chain_id,
+            chain_asset_handler,
+        )
+        .await?;
+
+        let tx = proxy_admin
+            .upgrade(message_root, *new_impl.address())
+            .into_transaction_request()
+            .with_from(proxy_admin_owner);
+        self.send_impersonated_transaction(tx).await?;
+        tracing::info!("L1MessageRoot proxy upgraded to the v32 implementation");
         Ok(())
     }
 
