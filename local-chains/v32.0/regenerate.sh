@@ -12,7 +12,7 @@
 #     ./local-chains/v32.0/regenerate.sh
 #
 # The verifier source is generated from the SNARK VK with era-contracts'
-# `tools/verifier-gen` (`--variant custom --plonk_input_path snark_vk.json`), where
+# `tools/verifier-gen` (`--variant zksync-os`, plonk key from snark_vk.json), where
 # snark_vk.json comes from `zkos-wrapper generate-vk --bin multiblock_batch.bin \
 # --text multiblock_batch.text --check-aux-params --trusted-setup setup_compact.key`.
 set -euo pipefail
@@ -43,7 +43,7 @@ trap 'kill $ANVIL 2>/dev/null || true' EXIT
 until cast block-number --rpc-url "$RPC" >/dev/null 2>&1; do sleep 1; done
 
 # 1. V8 PLONK verifier, registered at dual-verifier version 8
-VERIFIER=$(forge create "$VERIFIER_SRC:VerifierPlonk" \
+VERIFIER=$(forge create "$VERIFIER_SRC:ZKsyncOSVerifierPlonk" \
   --private-key $PK --rpc-url "$RPC" --broadcast \
   | grep -oE 'Deployed to: 0x[0-9a-fA-F]{40}' | awk '{print $3}')
 cast send "$DUAL_VERIFIER" 'addVerifier(uint32,address,address)' 8 "$FFLONK" "$VERIFIER" \

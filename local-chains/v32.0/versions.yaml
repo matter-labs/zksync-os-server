@@ -10,11 +10,12 @@ general:
   verification_key: "0xa81dc850a0724bcd62b7e5fbe60c62be32b4b45e33dd0d950f9c313e4684605a"
 
 era-contracts:
-  # dz-v32-public-init: dz-v32-genesis-protocol-version + era-contracts#2323 (chain config
-  # hash in the batch proof public input, chain-id-less batchOutputHash) + the full-hash
-  # multi-batch fold fix. The previous pin (62a58d61) predates #2323 and cannot verify V8
-  # proofs.
-  sha: "7644cc627307d11419d6b5eb1e55f8e1f7ca6875"
+  # dz-v32-public-input (era-contracts#2381 head): #2323 (chain config hash in the batch
+  # proof public input, chain-id-less batchOutputHash) + the flat multi-batch fold
+  # (keccak of the concatenated per-batch hashes, hashed once - a rolling fold diverges
+  # from N == 3 on). The previous pin (7644cc62) was an amended-away sibling of this
+  # commit that still carried the rolling fold.
+  sha: "8fb7c29a4e3174335c6480b23f57822e054f9d5f"
 
 zksync-os-integration-tests:
   sha: "16c6a83b4f634609958f347c56549ba19bf9df9b"
