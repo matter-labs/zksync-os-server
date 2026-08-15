@@ -40,3 +40,4 @@ tracing.workspace = true
 vise.workspace = true
 semver.workspace = true
 num.workspace = true
+zksync-os-revm.workspace = true
