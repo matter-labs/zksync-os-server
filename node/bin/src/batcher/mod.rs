@@ -194,11 +194,16 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 "Batch da_input",
             );
 
-            if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
-                self.sidecar_sender
-                    .send(sidecar)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
+            if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone()
+                && self.sidecar_sender.send(sidecar).await.is_err()
+            {
+                // The gas adjuster consumes these to estimate blob fill ratios.
+                // Losing a sample degrades a fee estimate; it is not a reason to
+                // fail the batcher. The channel closes when the adjuster's task
+                // is gone, which on shutdown happens while batches are still
+                // being sealed — failing here turns an ordinary shutdown into a
+                // critical-task panic.
+                tracing::debug!("blob fee sample dropped: gas adjuster is gone");
             }
             output.send_and_record(batch_envelope, &state_reporter)?;
         }

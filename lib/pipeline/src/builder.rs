@@ -49,6 +49,13 @@ impl Pipeline<()> {
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
             "pipeline",
             |shutdown| async move {
+                // Keep the sender alive so `recv()` blocks (instead of returning
+                // `None`) when a segment is aborted before it can deregister.
+                // Without this, Rust 2024 edition closure capture rules would drop
+                // the sender when `spawn()` returns because the async block never
+                // references it directly.
+                let _sender_keepalive = self.shutdown_sender;
+
                 // Hold shutdown open until every spawned segment deregisters.
                 let _guard = shutdown.await;
 
@@ -99,13 +106,33 @@ impl<Output: Send + 'static> Pipeline<Output> {
         let shutdown_sender = self.shutdown_sender.clone();
         self.runtime
             .spawn_critical_with_graceful_shutdown_signal(name, |shutdown| async move {
+                let mut shutdown = std::pin::pin!(shutdown);
                 tokio::select! {
                     res = component.run(input_receiver, output_sender, reporter) => {
-                        res.expect("pipeline segment failed");
-                        tracing::debug!(name, "segment finished running");
+                        // Held until after the shutdown status is sent, exactly
+                        // like the guard the shutdown branch below binds.
+                        let mut _shutdown_guard = None;
+                        if let Err(err) = res {
+                            // A segment that fails once shutdown is under way has
+                            // almost certainly just lost a downstream receiver that
+                            // was dropped ahead of it — ordinary teardown, not a
+                            // fault. Panicking there reports a critical-task failure
+                            // and leaves the runtime unable to finish shutting down.
+                            // Both select branches can be ready at once, so this is
+                            // a coin flip rather than a rare interleaving.
+                            match futures::FutureExt::now_or_never(&mut shutdown) {
+                                Some(guard) => {
+                                    _shutdown_guard = Some(guard);
+                                    tracing::info!(name, "segment failed during shutdown: {err:#}");
+                                }
+                                None => panic!("pipeline segment failed: {err:#}"),
+                            }
+                        } else {
+                            tracing::debug!(name, "segment finished running");
+                        }
                         shutdown_sender.send(name).await.expect("failed to send shutdown status");
                     }
-                    _guard = shutdown => {
+                    _guard = &mut shutdown => {
                         tracing::debug!(name, "segment shutting down");
                         shutdown_sender.send(name).await.expect("failed to send shutdown status");
                     }
