@@ -20,13 +20,13 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 /// The SnarkJobManager itself is purely reactive (no run loop), accessed/driven by:
 /// - HTTP server (provers call pick_next_job, submit_proof, etc.)
 /// - Fake provers pool
-pub struct SnarkProvingPipelineStep {
+pub struct RangeProvingPipelineStep {
     last_proved_batch_number: u64,
     snark_job_manager: Arc<SnarkJobManager>,
     proof_commands_receiver: mpsc::Receiver<ProofCommand>,
 }
 
-impl SnarkProvingPipelineStep {
+impl RangeProvingPipelineStep {
     pub fn new(
         max_fris_per_snark: usize,
         last_proved_batch_number: u64,
@@ -53,7 +53,7 @@ impl SnarkProvingPipelineStep {
 }
 
 #[async_trait]
-impl PipelineComponent for SnarkProvingPipelineStep {
+impl PipelineComponent for RangeProvingPipelineStep {
     type Input = SignedBatchEnvelope<FriProof>;
     type Output = L1SenderCommand<ProofCommand>;
 

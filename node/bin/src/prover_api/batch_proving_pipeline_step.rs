@@ -20,13 +20,13 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 /// - HTTP server (provers call pick_next_job, submit_proof, etc.)
 /// - Fake provers pool
 /// - This pipeline step (adds jobs via add_job)
-pub struct FriProvingPipelineStep {
+pub struct BatchProvingPipelineStep {
     last_proved_batch_number: u64,
     fri_job_manager: Arc<FriJobManager>,
     batches_with_proof_receiver: mpsc::Receiver<SignedBatchEnvelope<FriProof>>,
 }
 
-impl FriProvingPipelineStep {
+impl BatchProvingPipelineStep {
     pub fn new(
         proof_storage: ProofStorage,
         last_proved_batch_number: u64,
@@ -55,7 +55,7 @@ impl FriProvingPipelineStep {
 }
 
 #[async_trait]
-impl PipelineComponent for FriProvingPipelineStep {
+impl PipelineComponent for BatchProvingPipelineStep {
     type Input = SignedBatchEnvelope<ProverInput>;
     type Output = SignedBatchEnvelope<FriProof>;
 
