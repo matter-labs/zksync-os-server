@@ -15,21 +15,32 @@ use zksync_os_types::ProvingVersion;
 
 /// Job manager for SNARK proving.
 ///
-/// Supports multiple SNARK provers
+/// Supports multiple SNARK provers.
 ///
 /// Supports both real and fake proofs.
 ///  - Fake FRI proofs always result in fake SNARK proofs.
-///  - Real FRI proofs may result in real or fake SNARK proofs depending on prover availability
+///  - Real FRI proofs may result in real or fake SNARK proofs, depending on prover availability.
 ///
-/// `SnarkJobManager` aims to assign real prover jobs to real SNARK provers -
-///     but if jobs are not picked within a timeout (`max_batch_age`), it releases it to a fake prover
+/// `SnarkJobManager` aims to assign real prover jobs to real SNARK provers. If
+/// a job is not picked within a timeout (`max_batch_age`), it releases the job
+/// to a fake prover.
 pub struct SnarkJobManager {
-    // == state ==
     jobs: ProverJobMap<FriProof>,
     // outbound
     prove_batches_sender: mpsc::Sender<ProofCommand>,
     // config
     max_fris_per_snark: usize,
+    /// Cut a range where the batches' semantic protocol version changes.
+    ///
+    /// Airbender only needs one proving version across a range, and two
+    /// protocol versions can share it (0.31.0 and 0.31.1 are both V7). The
+    /// second proof system is keyed more finely: its guest build, and so its
+    /// verification keys, are pinned per protocol version, and it refuses to
+    /// aggregate a range whose inputs mix key sets. A range straddling an
+    /// upgrade would therefore be Airbender-valid and deterministically
+    /// unaggregatable — a stall where the multi-proof is required. Set only
+    /// when the second lane runs, so the Airbender-only shape is unchanged.
+    cut_ranges_at_protocol_version: bool,
 }
 
 impl SnarkJobManager {
@@ -38,6 +49,7 @@ impl SnarkJobManager {
         max_fris_per_snark: usize,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
+        cut_ranges_at_protocol_version: bool,
     ) -> Self {
         let jobs = ProverJobMap::<FriProof>::new(
             assignment_timeout,
@@ -48,6 +60,7 @@ impl SnarkJobManager {
             jobs,
             prove_batches_sender,
             max_fris_per_snark,
+            cut_ranges_at_protocol_version,
         }
     }
 
@@ -55,32 +68,74 @@ impl SnarkJobManager {
         self.jobs.add_job(batch_envelope).await
     }
 
-    // If there is a job pending, returns a non-empty list of tuples (`batch_number`, `verification_key_hash`, `real_fri_proof`)
     pub async fn pick_real_job(
         &self,
         prover_id: String,
         supported_proving_versions: Option<&[ProvingVersion]>,
     ) -> anyhow::Result<Option<Vec<(FriJob, FriProof)>>> {
-        // consume/remove all fake jobs that may be in the front of the queue
         self.process_pending_fake_fri_proofs().await?;
 
-        let batches_with_real_proofs = self
+        // The prover only receives batches whose proving version it declared
+        // support for (`supported_proving_versions`). The aggregated ZiSK lane
+        // pairs the assigned range with one aggregation range of the same
+        // bounds. A range of one batch is valid — the aggregator guest and the
+        // L1 aggregation verifier both accept any width — so the pick forms
+        // whatever consecutive group is ready. There is no fixed-size group and
+        // no stranded wind-down tail.
+        // Collected as the pick runs: `FriJob` carries only the batch number
+        // and VK hash, and the range has to be cut on the batch's semantic
+        // protocol version.
+        let mut versions = std::collections::HashMap::new();
+        let mut batches_with_real_proofs = self
             .jobs
             .pick_jobs_while_with_limit(self.max_fris_per_snark, &prover_id, |job| {
-                !job.batch_envelope.data.is_fake()
+                let eligible = !job.batch_envelope.data.is_fake()
                     && supported_proving_versions
-                        .is_none_or(|versions| versions.contains(&job.metadata.proving_version))
+                        .is_none_or(|versions| versions.contains(&job.metadata.proving_version));
+                if eligible {
+                    versions.insert(
+                        job.metadata.batch_number,
+                        job.batch_envelope.batch.batch_info.protocol_version.clone(),
+                    );
+                }
+                eligible
             })
             .await;
 
+        if self.cut_ranges_at_protocol_version {
+            let first = batches_with_real_proofs
+                .first()
+                .and_then(|(job, _)| versions.get(&job.batch_number));
+            let cut = batches_with_real_proofs
+                .iter()
+                .position(|(job, _)| versions.get(&job.batch_number) != first);
+            if let Some(cut) = cut {
+                let dropped: Vec<u64> = batches_with_real_proofs
+                    .drain(cut..)
+                    .map(|(job, _)| job.batch_number)
+                    .collect();
+                for batch_number in &dropped {
+                    self.jobs.unassign_job(*batch_number, &prover_id).await;
+                }
+                tracing::info!(
+                    prover_id,
+                    from = dropped.first(),
+                    "cut the SNARK range at a protocol version boundary so the second proof \
+                     system can aggregate it"
+                );
+            }
+        }
+
         if batches_with_real_proofs.is_empty() {
-            tracing::trace!(prover_id, "no SNARK prove jobs are available for pick up",);
+            tracing::trace!(prover_id, "no SNARK prove jobs are available for pick up");
             return Ok(None);
         }
 
         Ok(Some(batches_with_real_proofs))
     }
 
+    /// Submit a real Airbender SNARK proof.
+    ///
     pub async fn submit_proof(
         &self,
         batch_from: u64,
@@ -140,15 +195,11 @@ impl SnarkJobManager {
         Ok(())
     }
 
-    /// Consumes fake FRI proofs from the head of the queue and turns them into fake SNARKs.
     async fn process_pending_fake_fri_proofs(&self) -> anyhow::Result<()> {
         self.process_pending_fake_or_timed_out_fri_proofs(None)
             .await
     }
 
-    /// Consumes FRI proofs from the head of the queue that satisfy the following conditions:
-    /// * FRI proof is fake
-    /// * if `timeout_for_real_fris` is Some, then also jobs that are older than `timeout_for_real_fris`
     async fn process_pending_fake_or_timed_out_fri_proofs(
         &self,
         timeout_for_real_fris: Option<Duration>,
@@ -233,8 +284,6 @@ const POLL_INTERVAL_MS: u64 = 1000;
 
 pub struct FakeSnarkProver {
     job_manager: Arc<SnarkJobManager>,
-
-    // config
     max_batch_age: Duration,
     polling_interval: Duration,
 }
@@ -283,7 +332,7 @@ mod tests {
             ))
             .unwrap();
 
-        let manager = SnarkJobManager::new(sender, 1, Duration::from_secs(60), 100);
+        let manager = SnarkJobManager::new(sender, 1, Duration::from_secs(60), 100, false);
         manager
             .add_job(create_test_batch_envelope_with_data(
                 1,
@@ -304,5 +353,65 @@ mod tests {
         let command = receiver.recv().await.unwrap();
         assert_eq!(command.as_ref()[0].batch_number(), 1);
         assert!(manager.jobs.status().await.is_empty());
+    }
+
+    /// Airbender is happy to prove a range that straddles a protocol upgrade —
+    /// 0.31.0 and 0.31.1 are both proving version V7. The second proof system
+    /// pins its guest build per protocol version and refuses to aggregate a
+    /// range that mixes them, so such a range would be deterministically
+    /// unaggregatable. Cut it at the boundary instead, and leave the tail
+    /// pickable so the next range starts there.
+    #[tokio::test]
+    async fn range_is_cut_at_a_protocol_version_boundary() {
+        use zksync_os_batch_types::batcher_model::RealFriProof;
+        use zksync_os_types::ProtocolSemanticVersion;
+
+        let (sender, _receiver) = mpsc::channel(4);
+        let manager = SnarkJobManager::new(sender, 8, Duration::from_secs(300), 100, true);
+
+        let real = || FriProof::Real(RealFriProof::V1(vec![0u8; 8].into()));
+        for batch in 1..=4u64 {
+            // Batches 3 and 4 land after a patch upgrade.
+            let protocol_version = if batch <= 2 {
+                ProtocolSemanticVersion::new(0, 31, 0)
+            } else {
+                ProtocolSemanticVersion::new(0, 31, 1)
+            };
+            manager
+                .add_job(create_test_batch_envelope_with_data(
+                    batch,
+                    protocol_version,
+                    real(),
+                ))
+                .await;
+        }
+
+        let picked = manager
+            .pick_real_job("prover-1".to_string(), None)
+            .await
+            .expect("pick succeeds")
+            .expect("a range is available");
+        assert_eq!(
+            picked
+                .iter()
+                .map(|(job, _)| job.batch_number)
+                .collect::<Vec<_>>(),
+            vec![1, 2],
+            "the range stops at the version boundary"
+        );
+
+        // The tail was not consumed: another prover picks it as its own range.
+        let next = manager
+            .pick_real_job("prover-2".to_string(), None)
+            .await
+            .expect("pick succeeds")
+            .expect("the tail is still pickable");
+        assert_eq!(
+            next.iter()
+                .map(|(job, _)| job.batch_number)
+                .collect::<Vec<_>>(),
+            vec![3, 4],
+            "the cut tail forms the next range"
+        );
     }
 }

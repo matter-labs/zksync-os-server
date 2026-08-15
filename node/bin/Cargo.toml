@@ -61,6 +61,8 @@ zksync_os_replay_archive.workspace = true
 zksync_os_state.workspace = true
 zksync_os_state_full_diffs.workspace = true
 zksync_os_merkle_tree.workspace = true
+zisk_witness.workspace = true
+zisk_prover_lane.workspace = true
 zksync_os_raft.workspace = true
 zksync_os_tx_validators.workspace = true
 zksync_os_config_validation_macros.workspace = true
@@ -75,6 +77,14 @@ zk_os_forward_system_prev.workspace = true
 execution_utils_prev.workspace = true
 full_statement_verifier_prev.workspace = true
 
+zksync-os-zisk-lib.workspace = true
+# The aggregated lane always verifies the per-batch vadcop_final STARK stream
+# natively before it parks the proof. The stark-native feature pulls the
+# pil2-proofman verifier. This is the real cryptographic check, so the server
+# accepts the heavier build.
+zisk-verifier = { workspace = true, features = ["stark-native"] }
+zksync-os-revm.workspace = true
+revm.workspace = true
 zksync_os_interface.workspace = true
 execution_utils.workspace = true
 riscv_transpiler.workspace = true
@@ -128,4 +138,10 @@ url.workspace = true
 tikv-jemallocator = { workspace = true, optional = true }
 
 [dev-dependencies]
+reqwest.workspace = true
 semver.workspace = true
+tempfile.workspace = true
+# Enables the proof-stream test fixtures for the ZiSK prover-lane unit tests
+# that live in node/bin. The feature is off in the normal build (resolver 3
+# does not activate dev-dependency features for non-test targets).
+zisk_prover_lane = { workspace = true, features = ["test-support"] }

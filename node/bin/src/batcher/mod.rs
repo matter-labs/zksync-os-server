@@ -1,5 +1,6 @@
 use crate::batcher::batch_deadline_policy::deadline_from_block_timestamp;
 use crate::batcher::seal_criteria::BatchInfoAccumulator;
+use crate::batcher::zisk_batch::SecondProofSystemConfig;
 use crate::config::BatcherConfig;
 use crate::prover_block::ProverBlock;
 use alloy::consensus::BlobTransactionSidecar;
@@ -11,7 +12,7 @@ use tokio::time::{Instant, Sleep};
 use tracing;
 use zksync_os_batch_types::DiscoveredCommittedBatch;
 use zksync_os_batch_types::batcher_model::{
-    BatchEnvelope, BatchForSigning, MissingSignature, ProverInput,
+    BatchEnvelope, BatchForSigning, MissingSignature, ProvingInputs,
 };
 use zksync_os_batcher_metrics::BATCHER_METRICS;
 use zksync_os_contract_interface::models::StoredBatchInfo;
@@ -26,6 +27,7 @@ pub mod batch_builder;
 mod batch_deadline_policy;
 mod seal_criteria;
 pub mod util;
+pub mod zisk_batch;
 
 /// Set of fields to define batcher's behavior on startup (when to replay, when to produce, etc.)
 pub struct BatcherStartupConfig {
@@ -53,6 +55,10 @@ pub struct Batcher<ReadState> {
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
     pub merkle_tree: MerkleTree<RocksDBWrapper>,
+    /// Second proof-system settings on the seal path. `Some` enables the ZiSK
+    /// batch witness build and shadow execution; `None` disables the whole
+    /// path, so the batcher behaves like upstream.
+    pub second_proof: Option<SecondProofSystemConfig>,
 }
 
 #[async_trait]
@@ -60,7 +66,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
     for Batcher<ReadState>
 {
     type Input = ProverBlock;
-    type Output = BatchEnvelope<ProverInput, MissingSignature>;
+    type Output = BatchEnvelope<ProvingInputs, MissingSignature>;
 
     const COMPONENT_ID: zksync_os_pipeline::ComponentId = zksync_os_pipeline::ComponentId::Batcher;
 
@@ -210,7 +216,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         block_receiver: &mut PeekableReceiver<ProverBlock>,
         prev_batch_info: &StoredBatchInfo,
         state_reporter: &ComponentStateReporter,
-    ) -> anyhow::Result<Option<BatchForSigning<ProverInput>>> {
+    ) -> anyhow::Result<Option<BatchForSigning<ProvingInputs>>> {
         // Armed once we reach `last_persisted_block`, using the first block's timestamp.
         let mut deadline: Option<Pin<Box<Sleep>>> = None;
         // Captured from the very first block added to the batch, even during catch-up replay.
@@ -346,12 +352,13 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         prev_batch_info: StoredBatchInfo,
         batch_number: u64,
         pubdata_mode: PubdataMode,
-    ) -> anyhow::Result<BatchForSigning<ProverInput>> {
+    ) -> anyhow::Result<BatchForSigning<ProvingInputs>> {
         let chain_id = self.chain_id;
         let chain_address = self.chain_address;
         let sl_chain_id = self.sl_chain_id;
         let read_state = self.read_state.clone();
         let merkle_tree = self.merkle_tree.clone();
+        let second_proof = self.second_proof.clone();
         tokio::task::spawn_blocking(move || {
             batch_builder::seal_batch(
                 &blocks,
@@ -363,6 +370,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 sl_chain_id,
                 &read_state,
                 &merkle_tree,
+                second_proof.as_ref(),
             )
         })
         .await?
@@ -374,7 +382,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         prev_batch_info: &StoredBatchInfo,
         existing_batch: DiscoveredCommittedBatch,
         state_reporter: &ComponentStateReporter,
-    ) -> anyhow::Result<Option<BatchForSigning<ProverInput>>> {
+    ) -> anyhow::Result<Option<BatchForSigning<ProvingInputs>>> {
         let batch_number = existing_batch.number();
 
         tracing::info!(

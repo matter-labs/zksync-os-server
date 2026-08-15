@@ -75,7 +75,13 @@ pub struct JobState {
     pub current_attempt: usize,
 }
 
-#[derive(Debug)]
+// Manual Debug impl because ProofStorage and other fields don't derive Debug.
+impl std::fmt::Debug for FriJobManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FriJobManager").finish_non_exhaustive()
+    }
+}
+
 pub struct FriJobManager {
     // == state ==
     jobs: ProverJobMap<ProverInput>,
@@ -108,6 +114,22 @@ impl FriJobManager {
     /// Awaits if the queue is full (ProverJobMap.max_assigned_batch_range).
     pub async fn add_job(&self, batch_envelope: SignedBatchEnvelope<ProverInput>) {
         self.jobs.add_job(batch_envelope).await
+    }
+
+    /// The FRI job's verification-key hash, if the batch is in the FRI job map.
+    /// The second proof-system debug peek endpoint pairs it with the batch
+    /// bytes held in the batcher-owned buffer; the FRI lane holds no second
+    /// proof-system state.
+    pub async fn peek_fri_vk_hash(&self, batch_number: u64) -> Option<String> {
+        self.jobs
+            .get_job_batch_metadata(batch_number)
+            .await
+            .map(|metadata| {
+                metadata
+                    .verification_key_hash()
+                    .expect("VK hash must exist")
+                    .to_string()
+            })
     }
 
     /// Peek batch data for a given batch number
