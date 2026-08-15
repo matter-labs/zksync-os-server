@@ -180,7 +180,29 @@ impl SnarkJobManager {
 
             let batch_from = assigned.first().unwrap().0.batch_number;
             let batch_to = assigned.last().unwrap().0.batch_number;
-            let permit = self.try_reserve_permit_downstream()?;
+            let permit = match self.prove_batches_sender.try_reserve() {
+                Ok(permit) => permit,
+                Err(TrySendError::Full(_)) => {
+                    // Downstream is busy. The pick above already leased these
+                    // batches, so returning now without giving the lease back
+                    // would hold them until the assignment timeout — idle, and
+                    // invisible to every other prover — while the stage that
+                    // applied the backpressure drains in milliseconds.
+                    for (job, _) in &assigned {
+                        self.jobs
+                            .unassign_job(job.batch_number, "fake_prover")
+                            .await;
+                    }
+                    tracing::info!(
+                        batch_from,
+                        batch_to,
+                        "downstream is full; returned the fake-SNARK lease so the range stays \
+                         pickable"
+                    );
+                    return Ok(());
+                }
+                Err(TrySendError::Closed(_)) => anyhow::bail!("server is shutting down"),
+            };
             let Some(completed) = self
                 .jobs
                 .complete_many_jobs(batch_from, batch_to, ProverType::Fake, "fake_prover")
@@ -250,5 +272,47 @@ impl FakeSnarkProver {
                 tracing::info!("`FakeSnarkProver` iteration failed: {err}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prover_api::test_util::create_test_batch_envelope;
+
+    /// Downstream backpressure must not cost a lease. The fake prover picks
+    /// under the same assignment rules as a real one, so a pick it cannot use
+    /// has to be handed back: otherwise the range sits assigned for the whole
+    /// `assignment_timeout` (300s by default) while the stage that pushed back
+    /// drains in milliseconds — a stall no other prover can break.
+    #[tokio::test]
+    async fn backpressure_returns_the_fake_snark_lease() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let manager = SnarkJobManager::new(sender.clone(), 4, Duration::from_secs(300), 100);
+        manager
+            .add_job(create_test_batch_envelope(1, FriProof::Fake))
+            .await;
+
+        // Occupy the only downstream slot, then let the fake prover run.
+        let filler = create_test_batch_envelope(999, FriProof::Fake);
+        sender
+            .try_send(ProofCommand::new(vec![filler], SnarkProof::Fake))
+            .expect("the one slot starts free");
+        manager
+            .process_pending_fake_fri_proofs()
+            .await
+            .expect("backpressure is not an error");
+
+        // Capacity returns; the batch must be provable right away.
+        receiver.recv().await.expect("filler command");
+        manager
+            .process_pending_fake_fri_proofs()
+            .await
+            .expect("the second round proceeds");
+        let command = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("batch 1 is still leased to the fake prover")
+            .expect("batch 1 is picked again once there is room");
+        assert_eq!(command.batches()[0].batch_number(), 1);
     }
 }

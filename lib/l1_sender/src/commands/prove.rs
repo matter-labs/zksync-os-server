@@ -27,6 +27,11 @@ impl ProofCommand {
         );
         Self { batches, proof }
     }
+
+    /// The batches this command settles, in range order.
+    pub fn batches(&self) -> &[SignedBatchEnvelope<FriProof>] {
+        &self.batches
+    }
 }
 
 impl SendToL1 for ProofCommand {
