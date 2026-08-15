@@ -566,9 +566,15 @@ impl L1UpgradeTxWatcher {
                 );
             }
             Err(e) => {
-                // Transport errors (503, timeout, etc.) should propagate.
-                // Contract-level reverts (function not found) are expected on pre-v31 CTMs.
-                if matches!(e, alloy::contract::Error::TransportError(_)) {
+                // A pre-v31 CTM has no `L1_BYTECODES_SUPPLIER()` at all, so the
+                // call reverts on an unknown selector — which providers report
+                // as a JSON-RPC error response, not a transport failure. That
+                // one shape takes the configured fallback. Everything else
+                // (transport failures, rate limits, provider internal errors,
+                // bad params) propagates: they say nothing about which
+                // supplier is canonical, and silently falling back on a
+                // transient provider hiccup would pin the wrong one.
+                if !is_revert_response(&e) {
                     return Err(e.into());
                 }
                 tracing::info!(
@@ -580,6 +586,42 @@ impl L1UpgradeTxWatcher {
             }
         }
     }
+}
+
+/// Whether a contract-call error is the chain saying "this function reverted",
+/// as opposed to the provider failing to answer. A revert on a call with no
+/// return data is how an unknown selector surfaces.
+///
+/// Deliberately stricter than the shared [`is_method_missing`], which treats
+/// every JSON-RPC error response as a missing method. That is tolerable where a
+/// wrong answer only costs a retry; here it decides which bytecode supplier the
+/// node treats as canonical, so a rate limit or a paused contract must surface
+/// instead of silently selecting the configured fallback.
+fn is_revert_response(error: &alloy::contract::Error) -> bool {
+    let alloy::contract::Error::TransportError(transport) = error else {
+        return false;
+    };
+    let Some(payload) = transport.as_error_resp() else {
+        return false;
+    };
+    // JSON-RPC 3 is the de-facto "execution reverted" code; some providers only
+    // set the message. Rate limiting (-32005/429) and internal errors (-32603)
+    // never match either test.
+    let reverted = payload.code == 3
+        || payload
+            .message
+            .to_ascii_lowercase()
+            .contains("execution reverted");
+    // An unknown selector reverts with no return data. A revert that carries a
+    // reason is the contract deliberately refusing — a paused or misconfigured
+    // CTM — and answering that by pinning the configured supplier would hide a
+    // real fault behind a fallback. Read the raw `data`: alloy's
+    // `as_revert_data` only spelunks the payload shapes it recognises.
+    let carries_reason = payload.data.as_ref().is_some_and(|data| {
+        let raw = data.get().trim().trim_matches('"');
+        !(raw.is_empty() || raw == "null" || raw == "0x")
+    });
+    reverted && !carries_reason
 }
 
 #[async_trait::async_trait]
@@ -791,5 +833,56 @@ mod tests {
         // The hash should be blake2s256 of the full preimage.
         let expected_hash = B256::from_slice(Blake2s256::digest(&full_preimage).as_slice());
         assert_eq!(hash, expected_hash);
+    }
+
+    /// Only a revert-shaped JSON-RPC error means "this CTM has no
+    /// `L1_BYTECODES_SUPPLIER()`". A provider that is rate limiting us, or one
+    /// that failed internally, says nothing about the chain, and taking the
+    /// configured fallback on those would pin the wrong supplier.
+    #[test]
+    fn only_reverts_select_the_configured_supplier() {
+        use alloy::transports::{RpcError, TransportErrorKind};
+
+        fn rpc_error(code: i64, message: &'static str) -> alloy::contract::Error {
+            alloy::contract::Error::TransportError(RpcError::ErrorResp(
+                alloy::rpc::json_rpc::ErrorPayload {
+                    code,
+                    message: message.into(),
+                    data: None,
+                },
+            ))
+        }
+
+        // Pre-v31 CTM: the call reverts on an unknown selector.
+        assert!(is_revert_response(&rpc_error(3, "execution reverted")));
+        assert!(is_revert_response(&rpc_error(-32000, "execution reverted")));
+
+        // A revert that carries a reason is a real refusal, not a missing
+        // method: a misconfigured or paused CTM must surface rather than
+        // silently pin the configured supplier.
+        let with_reason = alloy::contract::Error::TransportError(RpcError::ErrorResp(
+            alloy::rpc::json_rpc::ErrorPayload {
+                code: 3,
+                message: "execution reverted: paused".into(),
+                data: Some(
+                    serde_json::value::RawValue::from_string("\"0x08c379a0\"".into())
+                        .expect("raw value"),
+                ),
+            },
+        ));
+        assert!(!is_revert_response(&with_reason));
+
+        // Provider trouble, not chain state.
+        assert!(!is_revert_response(&rpc_error(
+            -32005,
+            "rate limit exceeded"
+        )));
+        assert!(!is_revert_response(&rpc_error(-32603, "internal error")));
+        assert!(!is_revert_response(&rpc_error(-32602, "invalid params")));
+        assert!(!is_revert_response(
+            &alloy::contract::Error::TransportError(RpcError::Transport(
+                TransportErrorKind::BackendGone
+            ))
+        ));
     }
 }
