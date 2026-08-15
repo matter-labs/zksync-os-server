@@ -20,6 +20,7 @@ members = [
     "lib/storage",
     "lib/storage_api",
     "lib/types",
+    "lib/zisk_prover_lane",
     "lib/zisk_witness",
     "node/bin",
     "node/config-validation-macros",
@@ -325,6 +326,8 @@ reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 
 zksync-os-zisk-lib = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b" }
 zisk_witness = { version = "=0.22.0", path = "lib/zisk_witness" }
+zisk-verifier = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b", default-features = false }
+zisk_prover_lane = { version = "=0.22.0", path = "lib/zisk_prover_lane" }
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", rev = "24aee15109a0c15e6c09fd37ece7df682309cbc1" }
 revm = { version = "=42.0.1", features = ["optional_balance_check"] }
 
