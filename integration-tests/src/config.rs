@@ -8,23 +8,34 @@ use zksync_os_server::config::{Config, build_external_config, load_config_file_s
 pub enum ChainLayout<'a> {
     /// local-chains/<version>/default/...
     Default { protocol_version: &'a str },
+    /// local-chains/<version>-multiprover/default/... — the same chain on an
+    /// L1 whose verifier accepts a combined Airbender + ZiSK proof only.
+    Multiprover { protocol_version: &'a str },
 }
 
 impl<'a> ChainLayout<'a> {
     pub fn protocol_version(self) -> &'a str {
         match self {
-            ChainLayout::Default { protocol_version } => protocol_version,
+            ChainLayout::Default { protocol_version }
+            | ChainLayout::Multiprover { protocol_version } => protocol_version,
         }
     }
 
-    fn protocol_dir(self) -> PathBuf {
-        workspace_dir()
-            .join("local-chains")
-            .join(self.protocol_version())
+    fn dir_name(self) -> String {
+        match self {
+            ChainLayout::Default { protocol_version } => protocol_version.to_string(),
+            ChainLayout::Multiprover { protocol_version } => {
+                format!("{protocol_version}-multiprover")
+            }
+        }
+    }
+
+    fn chain_dir(self) -> PathBuf {
+        workspace_dir().join("local-chains").join(self.dir_name())
     }
 
     fn base_dir(self) -> PathBuf {
-        self.protocol_dir().join("default")
+        self.chain_dir().join("default")
     }
 
     fn config_path(self) -> PathBuf {
@@ -34,7 +45,7 @@ impl<'a> ChainLayout<'a> {
     /// Read the pre-decompressed L1 state JSON.
     /// Produced by `build.rs` locally, or by a CI step on remote runners.
     pub(crate) fn l1_state(self) -> Vec<u8> {
-        let json_path = self.protocol_dir().join("l1-state.json");
+        let json_path = self.chain_dir().join("l1-state.json");
         std::fs::read(&json_path).unwrap_or_else(|e| {
             panic!(
                 "failed to read decompressed L1 state at {}: {e}\n\
@@ -45,13 +56,9 @@ impl<'a> ChainLayout<'a> {
         })
     }
 
-    /// Genesis input is always taken from `<version>/default/genesis.json`
+    /// Genesis input is always taken from `<chain>/default/genesis.json`
     fn genesis_input_path(self) -> PathBuf {
-        workspace_dir()
-            .join("local-chains")
-            .join(self.protocol_version())
-            .join("default")
-            .join("genesis.json")
+        self.base_dir().join("genesis.json")
     }
 }
 

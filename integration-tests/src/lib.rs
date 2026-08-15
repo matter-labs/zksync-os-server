@@ -4,8 +4,8 @@ use crate::prover_tester::ProverTester;
 use crate::provider::ZksyncTestingProvider;
 use crate::rpc_recorder::{HttpRpcRecorder, RpcRecordConfig};
 use crate::test_config::{build_node_config, disable_prover_input_generation};
-use alloy::network::EthereumWallet;
-use alloy::primitives::U256;
+use alloy::network::{EthereumWallet, TransactionBuilder};
+use alloy::primitives::{Address, B256, U256};
 use alloy::providers::utils::Eip1559Estimator;
 use alloy::providers::{
     DynProvider, PendingTransactionBuilder, Provider, ProviderBuilder, WalletProvider,
@@ -64,14 +64,43 @@ pub use zksync_os_integration_tests_macros::test_multisetup;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TestCase {
-    pub protocol_version: &'static str,
+    chain_layout: ChainLayout<'static>,
 }
 
 impl TestCase {
+    /// A default-layout chain pinned to an explicit protocol version, for
+    /// tests that drive a specific version rather than the current default.
+    pub const fn at_protocol_version(protocol_version: &'static str) -> Self {
+        Self {
+            chain_layout: ChainLayout::Default { protocol_version },
+        }
+    }
+
     pub const fn current_to_l1() -> Self {
         Self {
-            protocol_version: PROTOCOL_VERSION,
+            chain_layout: ChainLayout::Default {
+                protocol_version: PROTOCOL_VERSION,
+            },
         }
+    }
+
+    /// The current protocol version on the multiprover L1. Its verifier accepts
+    /// a combined Airbender + ZiSK proof only, so a real settlement there proves
+    /// both lanes agreed. Fake proofs settle as they do on the default chain.
+    pub const fn current_to_multiprover_l1() -> Self {
+        Self {
+            chain_layout: ChainLayout::Multiprover {
+                protocol_version: PROTOCOL_VERSION,
+            },
+        }
+    }
+
+    pub fn protocol_version(self) -> &'static str {
+        self.chain_layout.protocol_version()
+    }
+
+    pub fn chain_layout(self) -> ChainLayout<'static> {
+        self.chain_layout
     }
 
     pub async fn environment(self) -> anyhow::Result<TestEnvironment> {
@@ -79,15 +108,14 @@ impl TestCase {
     }
 }
 
-// A NEXT_TO_L1 lane (fresh chain at `NEXT_PROTOCOL_VERSION`) needs local-chain fixtures for
+// A next-version lane (fresh chain at the next protocol version) needs local-chain fixtures for
 // v32.0; reintroduce it once they are generated. Until then v32 is covered via in-test upgrades.
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
+pub const CURRENT_TO_MULTIPROVER_L1: TestCase = TestCase::current_to_multiprover_l1();
 
 /// Fresh chain at v30.2 — the oldest protocol version with live proving support (V6).
 #[cfg(feature = "prover-tests")]
-pub const V30_TO_L1: TestCase = TestCase {
-    protocol_version: PROTOCOL_VERSION_V30_2,
-};
+pub const V30_TO_L1: TestCase = TestCase::at_protocol_version(PROTOCOL_VERSION_V30_2);
 
 /// Set of private keys for batch verification participants.
 pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
@@ -131,9 +159,7 @@ impl PreparedRuntime {
 
 impl TestEnvironment {
     async fn from_case(case: TestCase) -> anyhow::Result<Self> {
-        let chain_layout = ChainLayout::Default {
-            protocol_version: case.protocol_version,
-        };
+        let chain_layout = case.chain_layout();
         let l1 = AnvilL1::start(chain_layout).await?;
         let prepared_runtime = PreparedRuntime::new().await?;
         Ok(Self {
@@ -163,35 +189,37 @@ impl TestEnvironment {
         self.launch(config).await
     }
 
+    pub async fn launch(self, config: Config) -> anyhow::Result<Tester> {
+        self.launch_impl(config, true, None).await
+    }
+
     /// Launches the node with its L1 RPC routed through `l1_rpc_url` (e.g. a fault-injecting
     /// proxy in front of anvil) instead of anvil's direct endpoint. Test-side helpers
     /// (`Tester::l1_provider()` etc.) still talk to anvil directly.
     pub async fn launch_with_l1_rpc(
         self,
-        mut config: Config,
+        config: Config,
         l1_rpc_url: String,
     ) -> anyhow::Result<Tester> {
-        if !prover_input_generation_enabled() {
-            disable_prover_input_generation(&mut config);
-        }
-        Tester::bind_runtime_config(
-            &self.l1,
-            self.prepared_runtime.tempdir.as_ref(),
-            &mut config,
-        );
-        config.l1_provider_config.rpc_url = l1_rpc_url;
-        Tester::launch_node_inner(
-            self.l1,
-            config,
-            self.prepared_runtime.tempdir,
-            self.chain_layout,
-            None,
-            true,
-        )
-        .await
+        self.launch_impl(config, true, Some(l1_rpc_url)).await
     }
 
-    pub async fn launch(self, mut config: Config) -> anyhow::Result<Tester> {
+    /// Launch without auto-spawning prover services even when the fake
+    /// provers are disabled (`prover-tests`). For tests that orchestrate the
+    /// real provers manually — the two-lane runs must control when each lane
+    /// holds the single GPU.
+    pub async fn launch_without_provers(self, config: Config) -> anyhow::Result<Tester> {
+        self.launch_impl(config, false, None).await
+    }
+
+    async fn launch_impl(
+        self,
+        mut config: Config,
+        auto_spawn_provers: bool,
+        l1_rpc_url: Option<String>,
+    ) -> anyhow::Result<Tester> {
+        #[cfg(not(feature = "prover-tests"))]
+        let _ = auto_spawn_provers;
         if !prover_input_generation_enabled() {
             disable_prover_input_generation(&mut config);
         }
@@ -200,8 +228,15 @@ impl TestEnvironment {
             self.prepared_runtime.tempdir.as_ref(),
             &mut config,
         );
+        // After `bind_runtime_config`, which points the node at anvil directly:
+        // a caller asking for a different endpoint (a fault-injecting proxy in
+        // front of anvil) must win, or the proxy is silently bypassed.
+        if let Some(l1_rpc_url) = l1_rpc_url {
+            config.l1_provider_config.rpc_url = l1_rpc_url;
+        }
         #[cfg(feature = "prover-tests")]
-        let enable_prover = !config.prover_api_config.fake_fri_provers.enabled;
+        let enable_prover =
+            auto_spawn_provers && !config.prover_api_config.fake_fri_provers.enabled;
         let tester = Tester::launch_node_inner(
             self.l1,
             config,
@@ -283,17 +318,30 @@ pub struct SupportingNode {
     _tempdir: Arc<TempDir>,
 }
 
-impl Tester {
-    pub fn config(&self) -> &Config {
-        &self.config
-    }
+/// How far the batcher has sealed, read from the `batcher` component's
+/// `processed` coordinates on `/status/pipeline`.
+#[derive(Debug, Clone, Copy)]
+pub struct BatcherProgress {
+    /// The last block that the batcher put into a sealed batch. It is `0`
+    /// before the batcher seals its first batch.
+    pub last_included_block: u64,
+    /// The last batch that the batcher sealed. Batches are numbered `1..N`, so
+    /// this is also the number of sealed batches. It is `0` before the batcher
+    /// seals its first batch.
+    pub last_sealed_batch: u64,
+}
 
-    /// URL of the node's prover API, if the prover server is enabled.
+impl Tester {
+    /// Prover API base URL of this node, if the prover API server is bound.
     /// Stable across [`Tester::stop`] / restart (HTTP ports are preserved).
     pub fn prover_api_url(&self) -> Option<String> {
         self.bound_ports
             .prover_api
-            .map(|port| format!("http://localhost:{port}"))
+            .map(|p| format!("http://localhost:{p}"))
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     fn apply_external_node_defaults(&self, config: &mut Config) {
@@ -382,6 +430,219 @@ impl Tester {
         Ok(response.json::<StatusResponse>().await?)
     }
 
+    /// The batcher's *actual sealing progress*: how far the downstream proving
+    /// and commit stages have advanced does not change it, and — because the
+    /// batcher sits downstream of prover-input generation — it is already past
+    /// any input-generation lag.
+    pub async fn batcher_progress(&self) -> anyhow::Result<BatcherProgress> {
+        let components: serde_json::Value =
+            reqwest::get(format!("{}/status/pipeline", self.status_server_url))
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+        let processed = components
+            .as_array()
+            .and_then(|comps| comps.iter().find(|c| c["name"] == "batcher"))
+            .and_then(|batcher| batcher.get("processed"));
+        let field = |name: &str| {
+            processed
+                .and_then(|p| p.get(name))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+        };
+        Ok(BatcherProgress {
+            last_included_block: field("block_number"),
+            last_sealed_batch: field("batch_number"),
+        })
+    }
+
+    /// Drive the chain to exactly `target_batches` sealed batches.
+    ///
+    /// Waits for the boot batches to settle, then sends one transfer per
+    /// remaining batch and gates each send on its batch's seal. Sealing rides
+    /// the test config's short batch timeout: `tx_per_batch_limit = 1` is not
+    /// usable because the genesis batch is one multi-transaction block.
+    /// Requires the status server.
+    pub async fn drive_to_exact_sealed_batches(&self, target_batches: u64) -> anyhow::Result<()> {
+        const SETTLE_TIMEOUT: Duration = Duration::from_secs(180);
+        const STABLE_WINDOW: Duration = Duration::from_secs(6);
+        const SEAL_TIMEOUT: Duration = Duration::from_secs(180);
+
+        let recipient: Address = "0xdead000000000000000000000000000000000001".parse()?;
+
+        // 1. Settle boot: the batcher has caught up to the RPC head (every
+        //    produced block is in a sealed batch) and stays there for a window.
+        let settle_deadline = std::time::Instant::now() + SETTLE_TIMEOUT;
+        let mut caught_up_since: Option<std::time::Instant> = None;
+        let base = loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            // Read the batcher first: if the head advances in between, the
+            // comparison below fails conservatively (we wait, never settle
+            // early on a stale head).
+            let BatcherProgress {
+                last_included_block,
+                last_sealed_batch,
+            } = self.batcher_progress().await?;
+            let head = self.l2_provider.get_block_number().await?;
+            if head >= 1 && last_included_block == head {
+                let since = *caught_up_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() >= STABLE_WINDOW {
+                    break last_sealed_batch;
+                }
+            } else {
+                caught_up_since = None;
+            }
+            anyhow::ensure!(
+                std::time::Instant::now() < settle_deadline,
+                "chain did not settle after boot (rpc_head={head}, batcher_block={last_included_block})"
+            );
+        };
+        // Boot can seal exactly `target_batches` on its own; the chain is
+        // then already in the requested state and no transfer is needed.
+        anyhow::ensure!(
+            base <= target_batches,
+            "boot produced {base} batches, more than the {target_batches}-batch target"
+        );
+
+        // 2. One transfer per remaining batch, gated on each seal.
+        for batch in (base + 1)..=target_batches {
+            self.l2_provider
+                .send_transaction(
+                    TransactionRequest::default()
+                        .with_to(recipient)
+                        .with_value(U256::from(batch)),
+                )
+                .await?
+                .get_receipt()
+                .await?;
+            let seal_deadline = std::time::Instant::now() + SEAL_TIMEOUT;
+            while self.batcher_progress().await?.last_sealed_batch < batch {
+                anyhow::ensure!(
+                    std::time::Instant::now() < seal_deadline,
+                    "batch {batch} did not seal within the deadline"
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        // 3. The chain must rest at exactly `target_batches`: give any stray
+        //    late seal a window to surface, then require exactly the target.
+        tokio::time::sleep(STABLE_WINDOW).await;
+        let sealed = self.batcher_progress().await?.last_sealed_batch;
+        anyhow::ensure!(
+            sealed == target_batches,
+            "expected exactly {target_batches} sealed batches, batcher is at {sealed}"
+        );
+        Ok(())
+    }
+
+    /// Drive an L1→L2 ETH deposit (priority transaction) for `beneficiary`
+    /// and return the canonical L2 transaction hash once the L1 side has
+    /// landed. Callers wait for the L2 receipt themselves.
+    pub async fn deposit_l1_to_l2(
+        &self,
+        beneficiary: Address,
+        amount: U256,
+    ) -> anyhow::Result<B256> {
+        let chain_id = self.l2_provider.get_chain_id().await?;
+        let bridgehub = Bridgehub::new(
+            self.l2_zk_provider.get_bridgehub_contract().await?,
+            self.l1.provider.clone(),
+            chain_id,
+        );
+        let max_priority_fee_per_gas = self.l1.provider.get_max_priority_fee_per_gas().await?;
+        let base_l1_fees = self
+            .l1
+            .provider
+            .estimate_eip1559_fees_with(Eip1559Estimator::new(|base_fee_per_gas, _| {
+                alloy::eips::eip1559::Eip1559Estimation {
+                    max_fee_per_gas: base_fee_per_gas * 3 / 2,
+                    max_priority_fee_per_gas: 0,
+                }
+            }))
+            .await?;
+        let max_fee_per_gas = base_l1_fees.max_fee_per_gas + max_priority_fee_per_gas;
+        let gas_limit = self
+            .l2_provider
+            .estimate_gas(
+                TransactionRequest::default()
+                    .transaction_type(L1PriorityTxType::TX_TYPE)
+                    .from(beneficiary)
+                    .to(beneficiary)
+                    .value(amount),
+            )
+            .await?;
+        let tx_base_cost = bridgehub
+            .l2_transaction_base_cost(
+                max_fee_per_gas + max_priority_fee_per_gas,
+                gas_limit,
+                REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+            )
+            .await?;
+
+        let receipt = self
+            .l1
+            .provider
+            .send_transaction(
+                bridgehub
+                    .request_l2_transaction_direct(
+                        amount + tx_base_cost,
+                        beneficiary,
+                        amount,
+                        vec![],
+                        gas_limit,
+                        REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
+                        beneficiary,
+                    )
+                    .value(amount + tx_base_cost)
+                    .max_fee_per_gas(max_fee_per_gas)
+                    .max_priority_fee_per_gas(max_priority_fee_per_gas)
+                    .into_transaction_request(),
+            )
+            .await?
+            .get_receipt()
+            .await?;
+        let l1_to_l2_tx_log = receipt
+            .logs()
+            .iter()
+            .filter_map(|log| log.log_decode::<NewPriorityRequest>().ok())
+            .next()
+            .expect("no L1->L2 logs produced by deposit tx");
+        Ok(l1_to_l2_tx_log.inner.txHash)
+    }
+
+    /// Deposit L1 ETH to the test wallet if its L2 balance is zero.
+    async fn ensure_test_wallet_funded(&self) -> anyhow::Result<()> {
+        let beneficiary = self.l2_wallet.default_signer().address();
+        let balance = self.l2_provider.get_balance(beneficiary).await?;
+        if balance > U256::ZERO {
+            return Ok(());
+        }
+
+        let amount = U256::from(1_000_000_000_000_000_000u128) * U256::from(1_000u64);
+        let l2_tx_hash = self.deposit_l1_to_l2(beneficiary, amount).await?;
+
+        PendingTransactionBuilder::new(self.l2_zk_provider.root().clone(), l2_tx_hash)
+            .get_receipt()
+            .await?;
+
+        (|| async {
+            let balance = self.l2_provider.get_balance(beneficiary).await?;
+            if balance > U256::ZERO {
+                Ok(())
+            } else {
+                anyhow::bail!("L2 wallet is still unfunded")
+            }
+        })
+        .retry(
+            ConstantBuilder::default()
+                .with_delay(Duration::from_secs(1))
+                .with_max_times(10),
+        )
+        .await
+    }
+
     pub async fn wait_for_initial_deposit(&self) -> anyhow::Result<()> {
         tokio::time::timeout(
             Duration::from_secs(60),
@@ -389,13 +650,7 @@ impl Tester {
         )
         .await
         .context("timed out waiting for block 2 (initial deposit)")??;
-        ensure_test_wallet_funded(
-            &self.l1,
-            &self.l2_provider,
-            &self.l2_zk_provider,
-            &self.l2_wallet,
-        )
-        .await
+        self.ensure_test_wallet_funded().await
     }
 
     pub async fn launch_external_node(&self) -> anyhow::Result<Self> {
@@ -760,102 +1015,6 @@ async fn shutdown_runtime(runtime: Runtime) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn ensure_test_wallet_funded(
-    l1: &AnvilL1,
-    l2_provider: &NodeProvider,
-    l2_zk_provider: &DynProvider<Zksync>,
-    l2_wallet: &EthereumWallet,
-) -> anyhow::Result<()> {
-    let beneficiary = l2_wallet.default_signer().address();
-    let balance = l2_provider.get_balance(beneficiary).await?;
-    if balance > U256::ZERO {
-        return Ok(());
-    }
-
-    let chain_id = l2_provider.get_chain_id().await?;
-    let bridgehub = Bridgehub::new(
-        l2_zk_provider.get_bridgehub_contract().await?,
-        l1.provider.clone(),
-        chain_id,
-    );
-    let amount = U256::from(1_000_000_000_000_000_000u128) * U256::from(1_000u64);
-    let max_priority_fee_per_gas = l1.provider.get_max_priority_fee_per_gas().await?;
-    let base_l1_fees = l1
-        .provider
-        .estimate_eip1559_fees_with(Eip1559Estimator::new(|base_fee_per_gas, _| {
-            alloy::eips::eip1559::Eip1559Estimation {
-                max_fee_per_gas: base_fee_per_gas * 3 / 2,
-                max_priority_fee_per_gas: 0,
-            }
-        }))
-        .await?;
-    let max_fee_per_gas = base_l1_fees.max_fee_per_gas + max_priority_fee_per_gas;
-    let gas_limit = l2_provider
-        .estimate_gas(
-            TransactionRequest::default()
-                .transaction_type(L1PriorityTxType::TX_TYPE)
-                .from(beneficiary)
-                .to(beneficiary)
-                .value(amount),
-        )
-        .await?;
-    let tx_base_cost = bridgehub
-        .l2_transaction_base_cost(
-            max_fee_per_gas + max_priority_fee_per_gas,
-            gas_limit,
-            REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
-        )
-        .await?;
-
-    let receipt = l1
-        .provider
-        .send_transaction(
-            bridgehub
-                .request_l2_transaction_direct(
-                    amount + tx_base_cost,
-                    beneficiary,
-                    amount,
-                    vec![],
-                    gas_limit,
-                    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
-                    beneficiary,
-                )
-                .value(amount + tx_base_cost)
-                .max_fee_per_gas(max_fee_per_gas)
-                .max_priority_fee_per_gas(max_priority_fee_per_gas)
-                .into_transaction_request(),
-        )
-        .await?
-        .get_receipt()
-        .await?;
-    let l1_to_l2_tx_log = receipt
-        .logs()
-        .iter()
-        .filter_map(|log| log.log_decode::<NewPriorityRequest>().ok())
-        .next()
-        .expect("no L1->L2 logs produced by funding tx");
-    let l2_tx_hash = l1_to_l2_tx_log.inner.txHash;
-
-    PendingTransactionBuilder::new(l2_zk_provider.root().clone(), l2_tx_hash)
-        .get_receipt()
-        .await?;
-
-    (|| async {
-        let balance = l2_provider.get_balance(beneficiary).await?;
-        if balance > U256::ZERO {
-            Ok(())
-        } else {
-            anyhow::bail!("L2 wallet is still unfunded")
-        }
-    })
-    .retry(
-        ConstantBuilder::default()
-            .with_delay(Duration::from_secs(1))
-            .with_max_times(10),
-    )
-    .await
-}
-
 fn prover_input_generation_enabled() -> bool {
     std::env::var("NEXTEST_PROFILE").as_deref() != Ok("no-pig")
 }
@@ -966,9 +1125,20 @@ impl AnvilL1 {
     }
 }
 
+/// Spawn the real Airbender prover service for a specific protocol version
+/// (the app binary and the service release are version-specific). Returns
+/// the child so the caller can await its exit or kill it — the tests that
+/// run both lanes must free the GPU before the ZiSK daemon starts.
+///
+/// Requires `COMPACT_CRS_FILE` (path to the SNARK trusted setup).
 #[cfg(feature = "prover-tests")]
-async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
-    let protocol_version = tester.chain_layout.protocol_version();
+pub async fn spawn_airbender_prover(
+    tester: &Tester,
+    protocol_version: &str,
+    sequencer_urls: &[String],
+    iterations: usize,
+    max_fris_per_snark: usize,
+) -> tokio::process::Child {
     let app_bin_path = match protocol_version {
         PROTOCOL_VERSION_V30_2 => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
@@ -989,7 +1159,7 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
     let path =
         download_prover_and_unpack(protocol_version, cfg!(feature = "gpu-prover-tests")).await;
 
-    let mut child = tokio::process::Command::new(&path)
+    let child = tokio::process::Command::new(&path)
         .arg("--sequencer-urls")
         .arg(sequencer_urls.join(","))
         .arg("--app-bin-path")
@@ -1003,7 +1173,7 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
         .arg("--iterations")
         .arg(iterations.to_string())
         .arg("--max-fris-per-snark")
-        .arg("1")
+        .arg(max_fris_per_snark.to_string())
         .arg("--disable-zk")
         // Without this the prover keeps running after a panic: the wait-task below is
         // dropped on runtime shutdown without ever signalling the child.
@@ -1020,17 +1190,224 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
     // Same rationale as for anvil: `kill_on_drop` never fires if the test process is
     // SIGKILLed or aborts.
     leash::attach(pid, &name).expect("failed to attach leash to prover service");
+    child
+}
+
+#[cfg(feature = "prover-tests")]
+async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
+    #[cfg(feature = "gpu-prover-tests")]
+    let zisk_sequencer_url = sequencer_urls
+        .first()
+        .expect("at least one sequencer URL for prover tests")
+        .clone();
+    #[cfg(feature = "gpu-prover-tests")]
+    let second_proof_system = tester
+        .config
+        .prover_input_generator_config
+        .second_proof_system;
+    let protocol_version = tester.chain_layout.protocol_version();
+    let mut child =
+        spawn_airbender_prover(tester, protocol_version, sequencer_urls, iterations, 1).await;
     tokio::task::spawn(async move {
         let code = child
             .wait()
             .await
             .expect("failed to wait for prover service");
         if code.success() {
-            tracing::info!("prover service finished running");
+            tracing::info!("Airbender prover service finished running");
         } else {
-            panic!("prover service terminated with exit code {}", code);
+            panic!(
+                "Airbender prover service terminated with exit code {}",
+                code
+            );
+        }
+
+        // GPU is now free. Launch the ZiSK GPU prover to generate the second
+        // proof. Both provers share a single GPU and must run sequentially.
+        // A test that keeps the lane off seals no ZiSK job, so the daemon has
+        // nothing to prove. This run is a smoke pass with no acceptance check:
+        // the Airbender lane settled its batches before the daemon started, so
+        // which batches remain above the aggregation floor is not deterministic
+        // (the dedicated ZiSK tests assert acceptance).
+        #[cfg(feature = "gpu-prover-tests")]
+        if second_proof_system
+            && zisk_gpu_artifacts_available("the ZiSK lane of the auto-spawned prover run")
+        {
+            run_zisk_gpu_prover(&zisk_sequencer_url, 1).await;
         }
     });
+}
+
+/// Entry guard for every path that drives the real ZiSK GPU daemon. The daemon
+/// needs a guest ELF and a prover binary that only a ZiSK-provisioned runner
+/// holds. When they are absent this prints a loud note that names them and
+/// returns `false`, so a green run on a bare runner never reads as coverage of
+/// the ZiSK lane.
+#[cfg(feature = "gpu-prover-tests")]
+pub fn zisk_gpu_artifacts_available(skipped: &str) -> bool {
+    if std::env::var("ZISK_ELF").is_ok() && std::env::var("ZISK_AGG_ELF").is_ok() {
+        return true;
+    }
+    eprintln!(
+        "NOTE: {skipped} SKIPPED. ZISK_ELF or ZISK_AGG_ELF is not set, so this \
+         run checked NOTHING of the ZiSK lane. Set ZISK_ELF (path to the ZiSK \
+         guest ELF), ZISK_AGG_ELF (path to the ZiSK aggregator guest ELF) and \
+         ZISK_PROVER_BIN (path to the zksync-os-zisk-prover-service binary) on \
+         a runner that holds the ZiSK artifacts."
+    );
+    false
+}
+
+/// Run the ZiSK GPU prover service until it accepts `iterations` submissions.
+///
+/// This must only be called after the Airbender GPU prover has exited so both
+/// provers never contend for the same GPU simultaneously.
+///
+/// The daemon runs in aggregated mode, which is the mode the server serves: the
+/// ZiSK job manager always carries an aggregation sink when the second proof
+/// system is on, so it accepts `vadcop_final` streams and rejects per-batch
+/// PLONK submissions. The daemon proves each picked batch to a `vadcop_final`
+/// STARK and submits the stream, and proves each formed range in the aggregator
+/// guest (`ZISK_AGG_ELF`) and submits one PLONK-wrapped range proof.
+/// `iterations` counts both kinds.
+///
+/// The exit status only reports that the daemon stopped without an error — a
+/// cancelled daemon also exits 0, and the server answers a submission for a
+/// batch below the aggregation floor with a success it then drops. Call
+/// [`assert_zisk_lane_accepted`] to check what the server actually kept.
+///
+/// Required environment variables:
+/// - `ZISK_PROVER_BIN` — path to `zksync-os-zisk-prover-service` binary
+/// - `ZISK_BINARY` — path to `cargo-zisk` GPU binary
+/// - `ZISK_ELF` — path to the ZiSK guest ELF
+/// - `ZISK_AGG_ELF` — path to the ZiSK aggregator guest ELF
+/// - `ZISK_PK` — path to ZiSK STARK proving key directory
+/// - `ZISK_SK` — path to ZiSK PLONK proving key directory
+#[cfg(feature = "gpu-prover-tests")]
+pub async fn run_zisk_gpu_prover(sequencer_url: &str, iterations: usize) {
+    let zisk_bin = std::env::var("ZISK_PROVER_BIN")
+        .unwrap_or_else(|_| "zksync-os-zisk-prover-service".to_string());
+    let cargo_zisk = std::env::var("ZISK_BINARY").unwrap_or_else(|_| "cargo-zisk".to_string());
+    let elf_path = std::env::var("ZISK_ELF")
+        .expect("ZISK_ELF must be set for gpu-prover-tests (path to ZiSK guest ELF)");
+    let agg_elf_path = std::env::var("ZISK_AGG_ELF")
+        .expect("ZISK_AGG_ELF must be set (path to the aggregator guest ELF)");
+    let proving_key = std::env::var("ZISK_PK")
+        .unwrap_or_else(|_| format!("{}/.zisk/provingKey", std::env::var("HOME").unwrap()));
+    let proving_key_plonk = std::env::var("ZISK_SK")
+        .unwrap_or_else(|_| format!("{}/.zisk/provingKeySnark", std::env::var("HOME").unwrap()));
+
+    tracing::info!(
+        zisk_bin = %zisk_bin,
+        cargo_zisk = %cargo_zisk,
+        elf_path = %elf_path,
+        agg_elf_path = %agg_elf_path,
+        iterations,
+        "Launching ZiSK GPU prover"
+    );
+
+    let mut child = tokio::process::Command::new(&zisk_bin)
+        .arg("--sequencer-url")
+        .arg(sequencer_url)
+        .arg("--zisk-binary")
+        .arg(&cargo_zisk)
+        .arg("--elf-path")
+        .arg(&elf_path)
+        .arg("--proving-key")
+        .arg(&proving_key)
+        .arg("--proving-key-plonk")
+        .arg(&proving_key_plonk)
+        .arg("--aggregation")
+        .arg("--aggregator-elf")
+        .arg(&agg_elf_path)
+        .arg("--iterations")
+        .arg(iterations.to_string())
+        .spawn()
+        .expect("failed to spawn ZiSK prover service");
+
+    let code = child
+        .wait()
+        .await
+        .expect("failed to wait for ZiSK prover service");
+    if code.success() {
+        tracing::info!("ZiSK GPU prover service finished running");
+    } else {
+        panic!("ZiSK GPU prover service terminated with exit code {}", code);
+    }
+}
+
+/// The ZiSK lane's server-side view: what each stage of the lane holds.
+///
+/// The wire shape is the server's, so it is declared here rather than exported
+/// from the binary — an assertion about an HTTP response belongs to the test.
+#[cfg(feature = "gpu-prover-tests")]
+#[derive(Debug, serde::Deserialize)]
+pub struct ZiskLaneStatusPayload {
+    pub per_batch: zisk_prover_lane::ZiskQueueCounts,
+    pub aggregation: zisk_prover_lane::ZiskAggregationCounts,
+}
+
+/// Read the ZiSK lane status endpoint.
+#[cfg(feature = "gpu-prover-tests")]
+pub async fn zisk_lane_status(prover_api_url: &str) -> anyhow::Result<ZiskLaneStatusPayload> {
+    let response = reqwest::Client::new()
+        .get(format!("{prover_api_url}/prover-jobs/v1/ZiSK/status"))
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(response.json().await?)
+}
+
+/// Assert that the server accepted and kept the expected ZiSK submissions.
+///
+/// This is the acceptance check for a GPU daemon run: an accepted per-batch
+/// proof stays parked as a completion marker, and an accepted range proof stays
+/// parked for the MultiProof rendezvous. A submission the server answered with
+/// a success but dropped — a batch below the aggregation floor, whose Airbender
+/// range already settled — leaves neither, so it fails here.
+#[cfg(feature = "gpu-prover-tests")]
+pub async fn assert_zisk_lane_accepted(
+    prover_api_url: &str,
+    batch_proofs: u64,
+    range_proofs: u64,
+) -> anyhow::Result<()> {
+    let status = zisk_lane_status(prover_api_url).await?;
+    anyhow::ensure!(
+        status.per_batch.proofs_completed == batch_proofs
+            && status.aggregation.range_proofs_completed == range_proofs,
+        "the ZiSK lane holds {} accepted per-batch proofs and {} accepted range proofs, \
+         expected {batch_proofs} and {range_proofs}; full lane status: {status:?}",
+        status.per_batch.proofs_completed,
+        status.aggregation.range_proofs_completed,
+    );
+    Ok(())
+}
+
+/// Poll until the Airbender SNARK lane has registered `ranges` aggregation
+/// ranges — the ZiSK lane learns a range's bounds when a real SNARK job is
+/// picked, so this resolves once the Airbender lane reaches the SNARK stage and
+/// the ZiSK daemon has ranges to prove.
+#[cfg(feature = "gpu-prover-tests")]
+pub async fn wait_for_zisk_aggregation_ranges(
+    prover_api_url: &str,
+    ranges: u64,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = zisk_lane_status(prover_api_url).await?;
+        let tracked =
+            status.aggregation.ranges_in_flight + status.aggregation.range_proofs_completed;
+        if tracked >= ranges {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "the Airbender SNARK lane registered {tracked} aggregation ranges within {timeout:?}, \
+             expected {ranges}; full lane status: {status:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
 }
 
 #[cfg(feature = "prover-tests")]

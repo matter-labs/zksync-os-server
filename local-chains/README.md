@@ -28,25 +28,36 @@ local-chains/
 │   ├── l1-state.json.gz         # Shared L1 state for protocol v30.2
 │   ├── genesis.json             # Genesis configuration for protocol v30.2
 │   └── versions.yaml            # Version metadata for protocol v30.2
-└── v31.0/                       # Protocol version v31.0
+├── v31.0/                       # Protocol version v31.0
+│   ├── default/                 # Default (single-chain) setup
+│   │   ├── README.md            # Scenario-specific documentation
+│   │   ├── config.yaml          # Sequencer configuration
+│   │   ├── genesis.json         # Genesis configuration (symlink to parent genesis)
+│   │   ├── wallets.yaml         # Wallets configuration (symlink to multi_chain/wallets_6565.yaml)
+│   │   └── contracts.yaml       # Contracts configuration (symlink to multi_chain/contracts_6565.yaml)
+│   ├── multi_chain/             # Multi-chain scenario
+│   │   ├── README.md            # Scenario-specific documentation
+│   │   ├── genesis.json         # Genesis configuration (symlink to parent genesis)
+│   │   ├── chain_6565.yaml      # Configuration for chain with ID 6565
+│   │   ├── chain_6566.yaml      # Configuration for chain with ID 6566
+│   │   ├── wallets_6565.yaml    # Wallets for chain 6565
+│   │   ├── wallets_6566.yaml    # Wallets for chain 6566
+│   │   ├── contracts_6565.yaml  # Contracts for chain 6565
+│   │   └── contracts_6566.yaml  # Contracts for chain 6566
+│   ├── l1-state.json.gz         # Shared L1 state for protocol v31.0
+│   ├── genesis.json             # Genesis configuration for protocol v31.0
+│   └── versions.yaml            # Version metadata for protocol v31.0
+└── v31.0-multiprover/           # Protocol version v31.0 on the multiprover L1
+    ├── README.md                # Deployed verifier set and how to rebake the state
+    ├── bake-l1-state.sh         # Regenerates l1-state.json.gz from v31.0's
     ├── default/                 # Default (single-chain) setup
     │   ├── README.md            # Scenario-specific documentation
     │   ├── config.yaml          # Sequencer configuration
     │   ├── genesis.json         # Genesis configuration (symlink to parent genesis)
-    │   ├── wallets.yaml         # Wallets configuration (symlink to multi_chain/wallets_6565.yaml)
-    │   └── contracts.yaml       # Contracts configuration (symlink to multi_chain/contracts_6565.yaml)
-    ├── multi_chain/             # Multi-chain scenario
-    │   ├── README.md            # Scenario-specific documentation
-    │   ├── genesis.json         # Genesis configuration (symlink to parent genesis)
-    │   ├── chain_6565.yaml      # Configuration for chain with ID 6565
-    │   ├── chain_6566.yaml      # Configuration for chain with ID 6566
-    │   ├── wallets_6565.yaml    # Wallets for chain 6565
-    │   ├── wallets_6566.yaml    # Wallets for chain 6566
-    │   ├── contracts_6565.yaml  # Contracts for chain 6565
-    │   └── contracts_6566.yaml  # Contracts for chain 6566
-│   ├── l1-state.json.gz         # Shared L1 state for protocol v31.0
-│   ├── genesis.json             # Genesis configuration for protocol v31.0
-    └── versions.yaml            # Version metadata for protocol v31.0
+    │   └── wallets.yaml         # Wallets configuration (symlink to ../../v31.0/default/wallets.yaml)
+    ├── l1-state.json.gz         # v31.0 L1 state plus the multiprover verifier set
+    ├── genesis.json             # Genesis configuration (symlink to ../v31.0/genesis.json)
+    └── versions.yaml            # Version metadata
 ```
 
 ## Configuration Files

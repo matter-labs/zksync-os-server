@@ -46,13 +46,11 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
 
     // Phase 1: v31.0 chain settling on L1; fake FRI + SNARK provers keep the
     // pipeline moving.
-    let tester = TestCase {
-        protocol_version: PROTOCOL_VERSION_V31_0,
-    }
-    .environment()
-    .await?
-    .launch_default()
-    .await?;
+    let tester = TestCase::at_protocol_version(PROTOCOL_VERSION_V31_0)
+        .environment()
+        .await?
+        .launch_default()
+        .await?;
 
     // Upgrade v31.0 -> v32.0 (execution V7 / proving V8).
     {
