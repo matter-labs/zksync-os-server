@@ -22,6 +22,7 @@
   - [Components Overview](design/components.md)
   - [RPC](design/rpc.md)
   - [devp2p / zks protocol](design/devp2p.md)
+  - [Proving](design/provers.md)
   - [Prover API](design/prover_api.md)
   - [Database Layout](design/db.md)
   - [State Model](design/state.md)

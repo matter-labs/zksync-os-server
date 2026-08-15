@@ -20,8 +20,6 @@ members = [
     "lib/storage",
     "lib/storage_api",
     "lib/types",
-    "lib/zisk_prover_lane",
-    "lib/zisk_witness",
     "node/bin",
     "node/config-validation-macros",
     "integration-tests",
@@ -50,6 +48,8 @@ members = [
     "lib/backpressure",
     "lib/alloy_ext",
     "lib/provider",
+    "lib/zisk_witness",
+    "lib/zisk_prover_lane",
 ]
 resolver = "3"
 default-members = ["node/bin"]
@@ -324,10 +324,6 @@ reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0
 reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 
-zksync-os-zisk-lib = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b" }
-zisk_witness = { version = "=0.22.0", path = "lib/zisk_witness" }
-zisk-verifier = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b", default-features = false }
-zisk_prover_lane = { version = "=0.22.0", path = "lib/zisk_prover_lane" }
 zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", rev = "24aee15109a0c15e6c09fd37ece7df682309cbc1" }
 revm = { version = "=42.0.1", features = ["optional_balance_check"] }
 
@@ -384,6 +380,10 @@ zksync_os_server = { version = "=0.22.0", path = "node/bin" }
 #zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
 
+zksync-os-zisk-lib = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b" }
+zisk_witness = { version = "=0.22.0", path = "lib/zisk_witness" }
+zisk-verifier = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b", default-features = false }
+zisk_prover_lane = { version = "=0.22.0", path = "lib/zisk_prover_lane" }
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
 overflow-checks = true
