@@ -67,6 +67,7 @@ impl<State: ReadStateHistory, Repository: ReadRepository> ZkProviderFactory<Stat
                 base_fee_per_gas: None,
                 excess_blob_gas: None,
                 blob_gas_used: None,
+                slot_number: None,
                 number: None,
                 parent_hash: None,
             });
