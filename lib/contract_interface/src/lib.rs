@@ -47,14 +47,6 @@ alloy::sol! {
         bytes32[] sides;
     }
 
-    // Released v31 wire shape; legacy sources decode into `InteropRoot` with `timestamp == 0`.
-    #[derive(Debug)]
-    struct InteropRootLegacy {
-        uint256 chainId;
-        uint256 blockOrBatchNumber;
-        bytes32[] sides;
-    }
-
     interface ServerNotifier {
         event UpgradeTimestampUpdated(uint256 indexed chainId, uint256 indexed protocolVersion, uint256 upgradeTimestamp);
     }
@@ -118,19 +110,6 @@ alloy::sol! {
         event AppendedChainBatchRoot(uint256 indexed chainId, uint256 indexed batchNumber, bytes32 chainBatchRoot, uint256 l1Timestamp);
         function getMerklePathForChain(uint256 _chainId) external view returns (bytes32[] memory);
         mapping(uint256 chainId => uint256 chainIndex) public chainIndex;
-    }
-
-    // Released (v31) MessageRoot wire forms; the watcher matches both event signatures and
-    // historical blocks decode the legacy call (`0xcca2f7bc`).
-    interface IMessageRootLegacy {
-        event NewInteropRoot (
-            uint256 indexed chainId,
-            uint256 indexed blockNumber,
-            uint256 indexed logId,
-            bytes32[] sides
-        );
-
-        function addInteropRootsInBatch(InteropRootLegacy[] calldata interopRootsInput);
     }
 
     // `ZKChainStorage.sol`
@@ -963,27 +942,5 @@ impl<T> Enrich for alloy::contract::Result<T> {
             None => Error::Call(Box::new(e), function_name.to_string()),
             Some(block_id) => Error::CallAtBlock(Box::new(e), function_name.to_string(), block_id),
         })
-    }
-}
-
-impl From<&InteropRoot> for InteropRootLegacy {
-    fn from(root: &InteropRoot) -> Self {
-        Self {
-            chainId: root.chainId,
-            blockOrBatchNumber: root.blockOrBatchNumber,
-            sides: root.sides.clone(),
-        }
-    }
-}
-
-impl From<InteropRootLegacy> for InteropRoot {
-    fn from(root: InteropRootLegacy) -> Self {
-        Self {
-            chainId: root.chainId,
-            blockOrBatchNumber: root.blockOrBatchNumber,
-            // The v31 wire has no timestamp; zero marks a root sourced from a legacy event/call.
-            timestamp: U256::ZERO,
-            sides: root.sides,
-        }
     }
 }

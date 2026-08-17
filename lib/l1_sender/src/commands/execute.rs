@@ -5,7 +5,7 @@ use std::fmt::Display;
 use zksync_os_batch_types::batcher_model::{FriProof, SignedBatchEnvelope};
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::PriorityOpsBatchInfo;
-use zksync_os_contract_interface::{IExecutor, InteropRoot, InteropRootLegacy};
+use zksync_os_contract_interface::{IExecutor, InteropRoot};
 
 #[derive(Debug)]
 pub struct ExecuteCommand {
@@ -101,57 +101,68 @@ impl ExecuteCommand {
             .batch_info
             .protocol_version
             .minor;
-        // The released (<= v31) wires carry the timestamp-free legacy interop root shape.
-        let legacy_interop_roots = || {
-            self.interop_roots
-                .iter()
-                .map(|roots| {
-                    roots
-                        .iter()
-                        .map(InteropRootLegacy::from)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-        };
-        let (encoding_version, encoded_data): (u8, Vec<u8>) = match protocol_version_minor {
-            29 | 30 => (
-                1,
-                (stored_batch_infos, priority_ops, legacy_interop_roots()).abi_encode_params(),
-            ),
-            31 => {
-                // Batch logs / messages / multichain roots are only relayed when executing on a
-                // Gateway; when settling on L1 they are always empty.
-                let logs: Vec<Vec<IExecutor::L2Log>> = Vec::new();
-                let messages: Vec<Vec<Vec<u8>>> = Vec::new();
-                let multichain_roots: Vec<B256> = Vec::new();
-                (
-                    1,
-                    (
-                        stored_batch_infos,
-                        priority_ops,
-                        legacy_interop_roots(),
-                        logs,
-                        messages,
-                        multichain_roots,
-                        operator,
-                    )
-                        .abi_encode_params(),
-                )
-            }
-            // v32 reads `abi.decode(data, (DecodedExecuteData))`; the struct wire carries its
-            // own encoding version byte (`BatchDecoder.SUPPORTED_ENCODING_VERSION_EXECUTE`).
-            32 => {
-                let decoded = IExecutor::DecodedExecuteData {
-                    batchesData: stored_batch_infos,
-                    priorityOpsData: priority_ops,
-                    dependencyRoots: self.interop_roots.clone(),
-                };
-                (2, (decoded,).abi_encode_params())
-            }
-            _ => panic!("Unsupported protocol version: {}", protocol_version_minor),
-        };
+        let (encoding_version, encoded_data) = encode_execute_data(
+            protocol_version_minor,
+            stored_batch_infos,
+            priority_ops,
+            self.interop_roots.clone(),
+            operator,
+        );
 
         // Prefixed by the encoding version expected by the protocol for this wire format.
         [vec![encoding_version], encoded_data].concat().to_vec()
+    }
+}
+
+fn encode_execute_data(
+    protocol_version_minor: u64,
+    stored_batch_infos: Vec<IExecutor::StoredBatchInfo>,
+    priority_ops: Vec<IExecutor::PriorityOpsBatchInfo>,
+    interop_roots: Vec<Vec<InteropRoot>>,
+    operator: &Address,
+) -> (u8, Vec<u8>) {
+    if protocol_version_minor < 32 {
+        assert!(
+            interop_roots.iter().all(Vec::is_empty),
+            "interop roots are supported from protocol version 32"
+        );
+    }
+
+    match protocol_version_minor {
+        29 | 30 => (
+            1,
+            (stored_batch_infos, priority_ops, interop_roots).abi_encode_params(),
+        ),
+        31 => {
+            // Batch logs / messages / multichain roots are only relayed when executing on a
+            // Gateway; when settling on L1 they are always empty.
+            let logs: Vec<Vec<IExecutor::L2Log>> = Vec::new();
+            let messages: Vec<Vec<Vec<u8>>> = Vec::new();
+            let multichain_roots: Vec<B256> = Vec::new();
+            (
+                1,
+                (
+                    stored_batch_infos,
+                    priority_ops,
+                    interop_roots,
+                    logs,
+                    messages,
+                    multichain_roots,
+                    operator,
+                )
+                    .abi_encode_params(),
+            )
+        }
+        // v32 reads `abi.decode(data, (DecodedExecuteData))`; the struct wire carries its
+        // own encoding version byte (`BatchDecoder.SUPPORTED_ENCODING_VERSION_EXECUTE`).
+        32 => {
+            let decoded = IExecutor::DecodedExecuteData {
+                batchesData: stored_batch_infos,
+                priorityOpsData: priority_ops,
+                dependencyRoots: interop_roots,
+            };
+            (2, (decoded,).abi_encode_params())
+        }
+        _ => panic!("Unsupported protocol version: {}", protocol_version_minor),
     }
 }

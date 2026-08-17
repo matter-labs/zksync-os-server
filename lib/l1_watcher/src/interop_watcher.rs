@@ -11,7 +11,6 @@ use anyhow::Context;
 use std::collections::BTreeMap;
 use zksync_os_contract_interface::Bridgehub;
 use zksync_os_contract_interface::IMessageRoot::NewInteropRoot;
-use zksync_os_contract_interface::IMessageRootLegacy::NewInteropRoot as NewInteropRootLegacy;
 use zksync_os_contract_interface::InteropRoot;
 use zksync_os_provider::NodeProvider;
 use zksync_os_types::IndexedInteropRoot;
@@ -75,12 +74,7 @@ impl ProcessRawEvents for InteropWatcher {
     }
 
     fn event_signatures(&self) -> Topic {
-        // Both event forms are matched; each log is decoded by its own topic0.
-        vec![
-            NewInteropRoot::SIGNATURE_HASH,
-            NewInteropRootLegacy::SIGNATURE_HASH,
-        ]
-        .into()
+        NewInteropRoot::SIGNATURE_HASH.into()
     }
 
     fn filter_events(&self, logs: Vec<Log>) -> Vec<Log> {
@@ -90,14 +84,14 @@ impl ProcessRawEvents for InteropWatcher {
         let mut indexes = BTreeMap::new();
 
         for log in logs {
-            let log_id = match decode_new_interop_root(&log) {
-                Ok((log_id, _)) => log_id,
+            let event = match NewInteropRoot::decode_log(&log.inner) {
+                Ok(event) => event.data,
                 Err(err) => {
                     tracing::error!(?log, error = ?err, "failed to decode interop root log");
                     continue;
                 }
             };
-            indexes.insert(log_id, log);
+            indexes.insert(event.logId, log);
         }
 
         indexes.into_values().collect()
@@ -108,22 +102,11 @@ impl ProcessRawEvents for InteropWatcher {
         _provider: &NodeProvider,
         log: Log,
     ) -> Result<(), L1WatcherError> {
-        let (log_id, interop_root) = decode_new_interop_root(&log)?;
-        let log_id: u64 = log_id
+        let event = NewInteropRoot::decode_log(&log.inner)?.data;
+        let log_id: u64 = event
+            .logId
             .try_into()
             .map_err(|e: FromUintError<u64>| L1WatcherError::Other(e.into()))?;
-
-        // Only timestamped roots are importable at v32; legacy-event roots stay dropped until
-        // the settlement layer's MessageRoot is upgraded.
-        if interop_root.timestamp.is_zero() {
-            tracing::warn!(
-                log_id,
-                chain_id = %interop_root.chainId,
-                "skipping untimestamped (legacy MessageRoot) interop root; \
-                 importable only once the settlement layer emits timestamped roots",
-            );
-            return Ok(());
-        }
 
         // Because startup rescans the block containing the cursor, only that first scanned L1 block
         // can contain roots that were already imported.
@@ -138,37 +121,14 @@ impl ProcessRawEvents for InteropWatcher {
         self.sink
             .push(IndexedInteropRoot {
                 log_id,
-                root: interop_root,
+                root: InteropRoot {
+                    chainId: event.chainId,
+                    blockOrBatchNumber: event.blockNumber,
+                    timestamp: event.timestamp,
+                    sides: event.sides,
+                },
             })
             .await;
         Ok(())
     }
-}
-
-/// Decodes either `NewInteropRoot` form by topic0; legacy events decode with a zero timestamp.
-fn decode_new_interop_root(
-    log: &Log,
-) -> Result<(alloy::primitives::U256, InteropRoot), alloy::sol_types::Error> {
-    if log.inner.topics().first() == Some(&NewInteropRootLegacy::SIGNATURE_HASH) {
-        let event = NewInteropRootLegacy::decode_log(&log.inner)?.data;
-        return Ok((
-            event.logId,
-            InteropRoot {
-                chainId: event.chainId,
-                blockOrBatchNumber: event.blockNumber,
-                timestamp: alloy::primitives::U256::ZERO,
-                sides: event.sides,
-            },
-        ));
-    }
-    let event = NewInteropRoot::decode_log(&log.inner)?.data;
-    Ok((
-        event.logId,
-        InteropRoot {
-            chainId: event.chainId,
-            blockOrBatchNumber: event.blockNumber,
-            timestamp: event.timestamp,
-            sides: event.sides,
-        },
-    ))
 }
