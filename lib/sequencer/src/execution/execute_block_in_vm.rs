@@ -245,11 +245,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
                         match (tx.tx_type(), command.invalid_tx_policy) {
                             (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
                                 match rejection_method(&e) {
-                                    // Block-resource exhaustion is a seal signal, not a verdict on
-                                    // the tx: seal what we have and let the tx retry from the
-                                    // subpool head in the next block. L1 caps per-priority-tx
-                                    // pubdata/gas below the block limits, so a lone tx in a fresh
-                                    // block always fits.
+                                    // Seal what we have and let the tx retry from the subpool head in the next block.
                                     TxRejectionMethod::SealBlock(reason) if !executed_txs.is_empty() => {
                                         tracing::info!(
                                             block_number = ctx.block_number,
@@ -260,10 +256,20 @@ pub async fn execute_block_in_vm<V: ViewState>(
                                         );
                                         break reason;
                                     }
-                                    // Everything else is fatal: a genuinely invalid priority tx is
-                                    // a protocol violation (the FIFO cannot skip it), and a
-                                    // seal-class error on an empty block means the tx can never
-                                    // fit (block limits misconfigured below L1's per-tx caps).
+                                    // A resource-limit error for the first L1 tx means the block limits are
+                                    // configured below L1's per-tx caps. Log the configuration error without
+                                    // generating a block dump.
+                                    TxRejectionMethod::SealBlock(reason) => {
+                                        tracing::error!(
+                                            block_number = ctx.block_number,
+                                            "Cannot include {} tx {} in an empty block because it hit a sealing criterion; block limits may be configured below L1's per-tx caps: reason={reason:?}, error={e:?}",
+                                            tx.tx_type(),
+                                            tx.hash(),
+                                        );
+                                        break reason;
+                                    }
+                                    // A genuinely invalid priority tx is a protocol violation: the FIFO cannot
+                                    // skip it, so retain the block dump for investigation.
                                     _ => {
                                         return Err(
                                             BlockDump {
