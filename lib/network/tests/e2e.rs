@@ -244,8 +244,8 @@ where
                     max_blocks_per_message: 64,
                     replay_sender: replay_tx,
                     verification: None,
-                    // Generous enough that the watchdog never interferes with these tests.
-                    replay_watchdog_timeout: std::time::Duration::from_secs(600),
+                    // Generous enough that the inactivity timeout never affects these tests.
+                    replay_inactivity_timeout: std::time::Duration::from_secs(600),
                 },
                 state,
             )
@@ -304,8 +304,8 @@ where
                     max_blocks_per_message: 64,
                     replay_sender: replay_tx,
                     verification: None,
-                    // Generous enough that the watchdog never interferes with these tests.
-                    replay_watchdog_timeout: std::time::Duration::from_secs(600),
+                    // Generous enough that the inactivity timeout never affects these tests.
+                    replay_inactivity_timeout: std::time::Duration::from_secs(600),
                 },
                 zks_state,
             ));

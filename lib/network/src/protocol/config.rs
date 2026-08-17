@@ -37,7 +37,7 @@ pub struct ExternalNodeProtocolConfig {
     /// Maximum time to wait without receiving any message on an established replay connection
     /// before reporting it as stalled (which disconnects the peer and forces a fresh session).
     /// Must comfortably exceed the chain's block cadence.
-    pub replay_watchdog_timeout: Duration,
+    pub replay_inactivity_timeout: Duration,
 }
 
 /// Verifier identity and channels used by an external node participating in `zks_2fa`.

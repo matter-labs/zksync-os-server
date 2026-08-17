@@ -19,8 +19,8 @@ use zksync_os_storage_api::ReplayRecord;
 /// Sends a `GetBlockReplays` request immediately, then forwards each received `BlockReplays`
 /// record to the local sequencer via `replay_sender` and advances `starting_block`.
 ///
-/// Once the replay request is out, the connection is guarded by a watchdog: if no message
-/// arrives within `replay_watchdog_timeout` (or the message stream terminates while the RLPx
+/// Once the replay request is out, the connection has an inactivity timeout: if no message
+/// arrives within `replay_inactivity_timeout` (or the message stream terminates while the RLPx
 /// session stays up), a [`ProtocolEvent::ReplayStreamStalled`] is emitted so the service can
 /// disconnect the peer and let a fresh session re-request replays. Without this, a session
 /// whose data flow silently dies leaves the external node waiting forever.
@@ -37,7 +37,7 @@ pub(super) async fn run_en_connection<P: ZksProtocolVersionSpec>(
         max_blocks_per_message,
         replay_sender,
         verification: _,
-        replay_watchdog_timeout,
+        replay_inactivity_timeout,
     } = config;
 
     if send_replay_request::<P>(
@@ -57,7 +57,7 @@ pub(super) async fn run_en_connection<P: ZksProtocolVersionSpec>(
         replay_sender,
         events_sender,
         peer_id,
-        replay_watchdog_timeout,
+        replay_inactivity_timeout,
     )
     .await;
 }
@@ -84,7 +84,7 @@ async fn receive_replays<P: ZksProtocolVersionSpec>(
     replay_sender: mpsc::Sender<ReplayRecord>,
     events_sender: mpsc::UnboundedSender<ProtocolEvent>,
     peer_id: PeerId,
-    watchdog_timeout: Duration,
+    inactivity_timeout: Duration,
 ) {
     let report_stalled = || {
         let next_block = *starting_block.read().unwrap();
@@ -97,15 +97,15 @@ async fn receive_replays<P: ZksProtocolVersionSpec>(
     };
     loop {
         // Measure time actually spent waiting on the peer.
-        let watchdog_deadline = Instant::now() + watchdog_timeout;
+        let inactivity_deadline = Instant::now() + inactivity_timeout;
         let msg = tokio::select! {
             msg = conn.next() => msg,
-            _ = tokio::time::sleep_until(watchdog_deadline) => {
+            _ = tokio::time::sleep_until(inactivity_deadline) => {
                 // The session may still look established (RLPx pings can flow while the replay
-                // stream is dead), so silence past the watchdog is treated as a stall.
+                // stream is dead), so silence past the inactivity timeout is treated as a stall.
                 tracing::warn!(
-                    ?watchdog_timeout,
-                    "no messages from replay peer within watchdog timeout; reporting stall"
+                    ?inactivity_timeout,
+                    "no messages from replay peer within inactivity timeout; reporting stall"
                 );
                 report_stalled();
                 return;
@@ -137,9 +137,9 @@ async fn receive_replays<P: ZksProtocolVersionSpec>(
                     };
 
                     // Never panic on remote data: a panic here is swallowed by the runtime and
-                    // leaves a watchdog-less zombie session. Stalling reconnects instead —
-                    // transient causes self-heal, persistent ones fail loudly (and the sequencer
-                    // pipeline still enforces the sequence as a hard backstop).
+                    // leaves a zombie session with no inactivity monitoring. Stalling reconnects
+                    // instead — transient causes self-heal, persistent ones fail loudly (and the
+                    // sequencer pipeline still enforces the sequence as a hard backstop).
                     let expected_next_block = *starting_block.read().unwrap();
                     if block_number != expected_next_block {
                         tracing::warn!(
@@ -175,7 +175,7 @@ mod tests {
     use zksync_os_storage_api::BlockContext;
     use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
 
-    const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(1);
+    const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(1);
 
     struct TestEnConnection {
         outbound_rx: mpsc::Receiver<BytesMut>,
@@ -197,7 +197,7 @@ mod tests {
             max_blocks_per_message: 64,
             replay_sender: replay_tx,
             verification: None,
-            replay_watchdog_timeout: WATCHDOG_TIMEOUT,
+            replay_inactivity_timeout: INACTIVITY_TIMEOUT,
         };
         let task = tokio::spawn(run_en_connection::<ZksProtocolV5>(
             conn,
@@ -239,7 +239,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn watchdog_terminates_idle_replay_connection() {
+    async fn inactivity_timeout_terminates_idle_replay_connection() {
         // A session that stays established but never delivers anything, like the one observed
         // when the main node's outbound flow silently dies.
         let conn = futures::stream::pending::<ZksMessage<ZksProtocolV5>>();
@@ -259,15 +259,15 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn watchdog_resets_on_incoming_replays() {
+    async fn inactivity_timeout_resets_on_incoming_replays() {
         let (msg_tx, mut msg_rx) = mpsc::unbounded_channel();
         let conn = Box::pin(futures::stream::poll_fn(move |cx| msg_rx.poll_recv(cx)));
         let (task, mut handles) = run_test_en_connection(conn);
 
-        // Deliver replays with gaps shorter than the watchdog timeout; cumulative time exceeds
+        // Deliver replays with gaps shorter than the inactivity timeout; cumulative time exceeds
         // the timeout several times over, so this only passes if activity resets the deadline.
         for block_number in 1..=3 {
-            tokio::time::sleep(WATCHDOG_TIMEOUT.mul_f64(0.7)).await;
+            tokio::time::sleep(INACTIVITY_TIMEOUT.mul_f64(0.7)).await;
             msg_tx
                 .send(ZksMessage::block_replays(vec![test_record(block_number)]))
                 .expect("connection task must still be reading");
@@ -276,10 +276,10 @@ mod tests {
         }
         assert!(
             !task.is_finished(),
-            "watchdog must not fire while replays keep arriving"
+            "inactivity timeout must not fire while replays keep arriving"
         );
 
-        // Now go silent: the watchdog terminates the connection from the next block onwards.
+        // Now go silent: the inactivity timeout terminates the connection from the next block.
         task.await.expect("connection task must finish on its own");
         assert_matches!(
             handles.events_rx.try_recv(),

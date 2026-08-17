@@ -924,7 +924,7 @@ pub struct SequencerConfig {
     /// chain's block cadence; on a chain that can legitimately go idle for longer, raise this
     /// to avoid periodic reconnect churn.
     #[config(default_t = Duration::from_secs(300))]
-    pub en_replay_watchdog_timeout: Duration,
+    pub en_replay_inactivity_timeout: Duration,
 
     #[config(default, with = Serde![*])]
     /// List of (block_number, db_key) pairs to override when downloading replay records.
