@@ -244,13 +244,42 @@ pub async fn execute_block_in_vm<V: ViewState>(
 
                         match (tx.tx_type(), command.invalid_tx_policy) {
                             (ZkTxType::L1 | ZkTxType::Upgrade, _) => {
-                                return Err(
-                                    BlockDump {
-                                        ctx,
-                                        txs: all_processed_txs.clone(),
-                                        error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
+                                match rejection_method(&e) {
+                                    // Seal what we have and let the tx retry from the subpool head in the next block.
+                                    TxRejectionMethod::SealBlock(reason) if !executed_txs.is_empty() => {
+                                        tracing::info!(
+                                            block_number = ctx.block_number,
+                                            "Sealing block {} before {} tx {} because it hit a sealing criterion: reason={reason:?}, error={e:?}",
+                                            ctx.block_number,
+                                            tx.tx_type(),
+                                            tx.hash(),
+                                        );
+                                        break reason;
                                     }
-                                )
+                                    // A resource-limit error for the first L1 tx means the block limits are
+                                    // configured below L1's per-tx caps. Log the configuration error without
+                                    // generating a block dump.
+                                    TxRejectionMethod::SealBlock(reason) => {
+                                        tracing::error!(
+                                            block_number = ctx.block_number,
+                                            "Cannot include {} tx {} in an empty block because it hit a sealing criterion; block limits may be configured below L1's per-tx caps: reason={reason:?}, error={e:?}",
+                                            tx.tx_type(),
+                                            tx.hash(),
+                                        );
+                                        break reason;
+                                    }
+                                    // A genuinely invalid priority tx is a protocol violation: the FIFO cannot
+                                    // skip it, so retain the block dump for investigation.
+                                    _ => {
+                                        return Err(
+                                            BlockDump {
+                                                ctx,
+                                                txs: all_processed_txs.clone(),
+                                                error: format!("invalid {} tx: {e:?} ({})", tx.tx_type(), tx.hash()),
+                                            }
+                                        )
+                                    }
+                                }
                             }
                             (ZkTxType::System, _) => {
                                 return Err(
