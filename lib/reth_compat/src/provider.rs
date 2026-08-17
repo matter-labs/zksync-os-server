@@ -270,7 +270,7 @@ impl<State: ReadStateHistory> StateProofProvider for ZkProvider<State> {
 }
 
 impl<State: ReadStateHistory> HashedPostStateProvider for ZkProvider<State> {
-    fn hashed_post_state(&self, _bundle_state: &BundleState) -> HashedPostState {
+    fn hashed_post_state(&self, _bundle_state: &BundleState) -> ProviderResult<HashedPostState> {
         todo!()
     }
 }
