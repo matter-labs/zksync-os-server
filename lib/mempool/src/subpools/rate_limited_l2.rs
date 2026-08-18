@@ -548,6 +548,13 @@ impl<T: TransactionPool> TransactionPool for RateLimitedL2Subpool<T> {
         self.inner.get_all_blobs_exact(tx_hashes)
     }
 
+    fn has_blobs_for_versioned_hashes(
+        &self,
+        versioned_hashes: &[alloy::primitives::B256],
+    ) -> Result<Vec<bool>, BlobStoreError> {
+        self.inner.has_blobs_for_versioned_hashes(versioned_hashes)
+    }
+
     fn get_blobs_for_versioned_hashes_v1(
         &self,
         versioned_hashes: &[alloy::primitives::B256],

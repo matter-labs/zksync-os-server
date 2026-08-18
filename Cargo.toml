@@ -67,12 +67,12 @@ auto_impl = "1.3.0"
 blake2 = "0.10.6"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-alloy = { version = "2.0.5", default-features = false, features = [
+alloy = { version = "2.4.1", default-features = false, features = [
     "serde",
     "serde-bincode-compat",
 ] }
-alloy-rlp = { version = "0.3.13" }
-alloy-signer = { version = "2.0.5", default-features = false }
+alloy-rlp = { version = "0.3.16" }
+alloy-signer = { version = "2.4.1", default-features = false }
 anyhow = "1"
 async-trait = "0.1"
 aws-config = { version = "1.8.17", default-features = false, features = [
@@ -148,12 +148,12 @@ zk_os_forward_system_0_2_10 = { package = "forward_system", git = "https://githu
 # v0.3.1 is also still the currently-running protocol version, so these resolve to the same
 # source as the unsuffixed entries below; the separate names mark the proving-lane code that
 # gets deleted when V7 proving support is dropped.
-zk_ee_prev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
-zk_os_forward_system_prev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10", features = [
+zk_ee_prev = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.2-interface-v0.1.3" }
+zk_os_forward_system_prev = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.2-interface-v0.1.3", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_os_basic_system_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
+zk_os_basic_system_prev = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.2-interface-v0.1.3" }
 # airbender v0.5.2 rebuilt for nightly-2026-02-10: a compat tag, not a release (airbender
 # v0.6.0 removed `risc_v_simulator`, so no upstream release carries this fix). Same tag spec as
 # the v0.3.1 zksync-os lane's internal airbender deps so cargo unifies the sources.
@@ -170,12 +170,12 @@ full_statement_verifier_prev = { package = "full_statement_verifier", git = "htt
 # version-suffixed names. Move to the final v0.4.0 release once cut. The V8 app binary is
 # generated from this pinned rev — bump V8_APP_END_PARAMS and the prover-side bin_md5sum
 # together with it (see `V8_VK_HASH` provenance in lib/types).
-zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", tag = "v0.4.0-rc.1", features = [
+zk_os_forward_system_0_4_0 = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os.git", tag = "v0.4.0-rc.2", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", tag = "v0.4.0-rc.1" }
-zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", tag = "v0.4.0-rc.1" }
+zk_ee_0_4_0 = { package = "zk_ee", git = "https://github.com/matter-labs/zksync-os.git", tag = "v0.4.0-rc.2" }
+zk_os_basic_system_0_4_0 = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os.git", tag = "v0.4.0-rc.2" }
 # Airbender crates for verifying V8 FRI proofs submitted by external provers. The tag must match
 # the version the V8 VK was generated with (see `V8_VK_HASH` provenance in lib/types);
 # v0.6.0-rc.1 = 3f8f8e54, the `dev` merge of matter-labs/zksync-airbender#340 (combined
@@ -189,14 +189,14 @@ verifier_common = { git = "https://github.com/matter-labs/zksync-airbender", tag
 
 # zksync-os version backing the server-wide types and pre-v32 execution. Same source as the
 # `_prev` proving lane above; these unsuffixed names outlive V7 proving support.
-zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10", features = [
+zk_os_forward_system = { package = "forward_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.2-interface-v0.1.3", features = [
     "production",
     "no_print",
 ], default-features = false }
-zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
-zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.1-interface-v0.1.3-2026-02-10" }
+zk_ee = { git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.2-interface-v0.1.3" }
+zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.2-interface-v0.1.3" }
+zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.2-interface-v0.1.3" }
+zk_os_evm_interpreter = { package = "evm_interpreter", git = "https://github.com/matter-labs/zksync-os", tag = "v0.3.2-interface-v0.1.3" }
 
 # Other dependencies.
 
@@ -297,28 +297,28 @@ opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry-appender-tracing = "0.31.1"
 
 # Reth dependencies
-reth-db-models = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-trie-common = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-primitives-traits = { version = "0.4.1", default-features = false }
-reth-revm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-storage-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-network = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-network-peers = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-net-nat = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-eth-wire = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-eth-wire-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-discv5 = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
-reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
+reth-db-models = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-trie-common = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-primitives-traits = { version = "0.6.0", default-features = false }
+reth-revm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-storage-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-network = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-net-nat = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-eth-wire = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-eth-wire-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-discv5 = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
+reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 
-zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.1.0" }
-revm = { version = "=38.0.0", features = ["optional_balance_check"] }
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", rev = "40e07fd2ad1230c407e581fac5ab38f386a1ee46" }
+revm = { version = "=42.0.1", features = ["optional_balance_check"] }
 
 # "Local" dependencies
 zksync_os_provider = { version = "=0.22.0", path = "lib/provider" }
