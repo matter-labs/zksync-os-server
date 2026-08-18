@@ -15,6 +15,12 @@ ignore = [
     # never locally. Local `RsaPrivateKey` usage is test-only. No patched
     # version exists yet (tracked in RustCrypto/RSA#19).
     "RUSTSEC-2023-0071",
+    # bitmaps (via imbl <- reth-transaction-pool): no fixed release; the unsound
+    # TryFrom<&[u8]> constructor is unused on this dependency path.
+    "RUSTSEC-2025-0167",
+    # lru (via aws-sdk-s3, pins ^0.16): needs a key
+    # whose Drop panics during pop() — keys on this path have trivial Drop.
+    "RUSTSEC-2026-0253",
 ]
 
 [bans]
