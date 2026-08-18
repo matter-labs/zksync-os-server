@@ -3,8 +3,32 @@ use crate::component_id::ComponentId;
 use crate::peekable_receiver::PeekableReceiver;
 use reth_tasks::Runtime;
 use std::collections::HashSet;
+use std::future::Future;
 use tokio::sync::{mpsc, watch};
 use zksync_os_observability::{ComponentState, ComponentStateReporter};
+
+enum SegmentExit<T, Guard> {
+    Shutdown(Guard),
+    Component(T),
+}
+
+async fn select_segment_exit<Component, Shutdown, T, Guard>(
+    component: Component,
+    shutdown: Shutdown,
+) -> SegmentExit<T, Guard>
+where
+    Component: Future<Output = T>,
+    Shutdown: Future<Output = Guard>,
+{
+    tokio::pin!(component);
+    tokio::pin!(shutdown);
+
+    tokio::select! {
+        biased;
+        guard = &mut shutdown => SegmentExit::Shutdown(guard),
+        result = &mut component => SegmentExit::Component(result),
+    }
+}
 
 /// Pipeline with an active output stream that can be piped to more components
 pub struct Pipeline<Output: Send + 'static> {
@@ -99,17 +123,26 @@ impl<Output: Send + 'static> Pipeline<Output> {
         let shutdown_sender = self.shutdown_sender.clone();
         self.runtime
             .spawn_critical_with_graceful_shutdown_signal(name, |shutdown| async move {
-                tokio::select! {
-                    res = component.run(input_receiver, output_sender, reporter) => {
+                let _shutdown_guard = match select_segment_exit(
+                    component.run(input_receiver, output_sender, reporter),
+                    shutdown,
+                )
+                .await
+                {
+                    SegmentExit::Component(res) => {
                         res.expect("pipeline segment failed");
                         tracing::debug!(name, "segment finished running");
-                        shutdown_sender.send(name).await.expect("failed to send shutdown status");
+                        None
                     }
-                    _guard = shutdown => {
+                    SegmentExit::Shutdown(guard) => {
                         tracing::debug!(name, "segment shutting down");
-                        shutdown_sender.send(name).await.expect("failed to send shutdown status");
+                        Some(guard)
                     }
-                }
+                };
+                shutdown_sender
+                    .send(name)
+                    .await
+                    .expect("failed to send shutdown status");
             });
         self.spawned_tasks.insert(name);
 
@@ -149,5 +182,20 @@ impl<Output: Send + 'static> Pipeline<Output> {
             true => self.pipe(c_true),
             false => self.pipe(c_false),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SegmentExit, select_segment_exit};
+    use std::future::ready;
+
+    #[tokio::test]
+    async fn shutdown_wins_when_both_futures_are_ready() {
+        let component = ready::<anyhow::Result<()>>(Err(anyhow::anyhow!("component failed")));
+
+        let exit = select_segment_exit(component, ready(())).await;
+
+        assert!(matches!(exit, SegmentExit::Shutdown(())));
     }
 }
