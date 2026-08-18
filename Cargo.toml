@@ -322,7 +322,7 @@ reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0
 reth-rpc-eth-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 
-zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", tag = "v0.2.0" }
+zksync-os-revm = { git = "https://github.com/matter-labs/zksync-os-revm", rev = "24aee15109a0c15e6c09fd37ece7df682309cbc1" }
 revm = { version = "=42.0.1", features = ["optional_balance_check"] }
 
 # "Local" dependencies
@@ -386,3 +386,4 @@ overflow-checks = true
 inherits = "release"
 lto = "fat"
 codegen-units = 1
+
