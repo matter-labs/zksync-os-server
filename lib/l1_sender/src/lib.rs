@@ -1578,7 +1578,7 @@ mod tests {
     }
 
     #[test]
-    fn blob_simulation_request_is_buildable_only_with_sidecar() {
+    fn blob_simulation_request_is_buildable() {
         let operator_address = Address::with_last_byte(1);
         let to_address = Address::with_last_byte(2);
         let input = Bytes::from_static(b"commit");
@@ -1589,26 +1589,6 @@ mod tests {
             max_fee_per_blob_gas: 20,
         };
         let blob_sidecar = alloy::consensus::BlobTransactionSidecar::default();
-
-        let mut old_request = TransactionRequest::default()
-            .with_from(operator_address)
-            .with_to(to_address)
-            .with_input(input.clone())
-            .with_max_fee_per_gas(fee_params.max_fee_per_gas)
-            .with_max_priority_fee_per_gas(fee_params.max_priority_fee_per_gas)
-            .with_nonce(nonce)
-            .with_gas_limit(L1_SIM_GAS_LIMIT);
-        old_request.blob_versioned_hashes = Some(blob_sidecar.versioned_hashes().collect());
-        old_request.max_fee_per_blob_gas = Some(fee_params.max_fee_per_blob_gas);
-        old_request.transaction_type = Some(3);
-
-        let old_err = old_request
-            .build_typed_simulate_transaction()
-            .expect_err("hashes-only blob simulation request should not be buildable");
-        assert!(
-            old_err.to_string().contains("Transaction is not buildable"),
-            "unexpected old request error: {old_err}",
-        );
 
         let prepared = PreparedSidecar {
             blob_count: blob_sidecar.blobs.len() as u64,

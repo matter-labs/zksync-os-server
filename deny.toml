@@ -15,21 +15,12 @@ ignore = [
     # never locally. Local `RsaPrivateKey` usage is test-only. No patched
     # version exists yet (tracked in RustCrypto/RSA#19).
     "RUSTSEC-2023-0071",
-    # `LruCache::pop()` in `lru` < 0.18.2 is not panic-safe: a cache key whose
-    # `Drop` panics under `catch_unwind` leaves dangling list pointers (potential
-    # use-after-free). Our only `lru` dependents are `alloy-provider` (keys:
-    # `u64`, `B256`) and `aws-sdk-s3` (string-like credential cache keys); no
-    # key type has a panicking `Drop`, so the unsound path is unreachable. The
-    # fix exists only in `lru` >= 0.18.2 while both dependents require `^0.16`.
-    # Drop this once they move their `lru` requirement past 0.18.2.
-    "RUSTSEC-2026-0253",
-    # `Bitmap::try_from(&[u8])` and `AsMut<[u8]>` in `bitmaps` can construct
-    # invalid backing-store values (UB); no patched version exists. Our only
-    # path to `bitmaps` is `imbl` (via `reth-transaction-pool`), which builds
-    # bitmaps exclusively through `new()`/`default()`/`from_value()` and never
-    # touches the unsound byte-slice conversions, so the UB is unreachable.
-    # Drop this if a patched `bitmaps` release appears or reth drops `imbl`.
+    # bitmaps (via imbl <- reth-transaction-pool): no fixed release; the unsound
+    # TryFrom<&[u8]> constructor is unused on this dependency path.
     "RUSTSEC-2025-0167",
+    # lru (via aws-sdk-s3, pins ^0.16): needs a key
+    # whose Drop panics during pop() — keys on this path have trivial Drop.
+    "RUSTSEC-2026-0253",
 ]
 
 [bans]
