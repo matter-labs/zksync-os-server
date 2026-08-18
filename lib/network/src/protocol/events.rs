@@ -64,4 +64,13 @@ pub enum ProtocolEvent {
         /// The max number of active connections.
         max_connections: usize,
     },
+    /// External node's replay stream from this peer is no longer usable (no messages within the
+    /// inactivity timeout, or the message stream terminated while the session stayed up). The
+    /// service reacts by disconnecting the peer so that a fresh session re-requests replays.
+    ReplayStreamStalled {
+        /// Peer ID.
+        peer_id: PeerId,
+        /// Next block the external node still expects to receive.
+        next_block: BlockNumber,
+    },
 }

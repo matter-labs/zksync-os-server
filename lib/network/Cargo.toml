@@ -52,6 +52,7 @@ reth-tasks.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 test-log = { workspace = true, default-features = false, features = ["trace", "color"] }
 
 reth-network = { workspace = true, features = ["test-utils"] }
