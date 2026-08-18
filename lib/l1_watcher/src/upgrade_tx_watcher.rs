@@ -565,12 +565,7 @@ impl L1UpgradeTxWatcher {
                     self.ctm_l1
                 );
             }
-            Err(e) => {
-                // Transport errors (503, timeout, etc.) should propagate.
-                // Contract-level reverts (function not found) are expected on pre-v31 CTMs.
-                if matches!(e, alloy::contract::Error::TransportError(_)) {
-                    return Err(e.into());
-                }
+            Err(e) if is_method_missing(&e) => {
                 tracing::info!(
                     configured_supplier = ?self.bytecode_supplier_address,
                     ctm = ?self.ctm_l1,
@@ -578,6 +573,7 @@ impl L1UpgradeTxWatcher {
                 );
                 Ok(self.bytecode_supplier_address)
             }
+            Err(e) => Err(e.into()),
         }
     }
 }
