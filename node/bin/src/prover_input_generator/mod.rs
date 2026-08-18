@@ -255,14 +255,6 @@ fn compute_prover_input(
     let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
         .expect("invalid protocol version");
     let prover_input = match proving_version {
-        ProvingVersion::V1
-        | ProvingVersion::V2
-        | ProvingVersion::V3
-        | ProvingVersion::V4
-        | ProvingVersion::V5
-        | ProvingVersion::V6 => {
-            panic!("computing prover input for batch with prover version v1-v6 is not supported");
-        }
         ProvingVersion::V7 => {
             use zk_ee_prev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,

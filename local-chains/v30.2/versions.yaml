@@ -1,5 +1,6 @@
 general:
   protocol_version: "v30.2"
+  # Historical fixture provenance only; the server no longer supports real proving for v30.2.
   verification_key: "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337"
 
 era-contracts:
