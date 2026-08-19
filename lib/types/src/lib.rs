@@ -31,6 +31,7 @@ pub use zksync_os_contract_interface::InteropRoot;
 
 mod pubdata_mode;
 pub use pubdata_mode::PubdataMode;
+pub use zksync_os_contract_interface::models::PubdataContent;
 
 mod node;
 pub use node::NodeRole;

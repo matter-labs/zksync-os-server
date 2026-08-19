@@ -1,7 +1,7 @@
 use crate::prover_api::fri_job_manager::SubmitError;
 use alloy::primitives::{B256, keccak256};
 use zksync_os_batch_types::batcher_model::BatchMetadata;
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::{ProvingVersion, PubdataContent};
 
 /// Expected batch public-input hash, as the final register values a valid FRI proof of this
 /// batch must expose.
@@ -14,16 +14,19 @@ use zksync_os_types::ProvingVersion;
 pub fn expected_public_input_registers(
     proving_version: ProvingVersion,
     batch_metadata: &BatchMetadata,
+    pubdata_content: PubdataContent,
 ) -> Result<[u32; 8], SubmitError> {
     let state_before = batch_metadata.previous_stored_batch_info.state_commitment;
     let hash = match proving_version {
         ProvingVersion::V8 => {
             let batch_info = &batch_metadata.batch_info;
-            let chain_config_hash =
-                zksync_os_native_pig::v32_chain_config_hash(batch_info.commit_info.chain_id)
-                    .map_err(|err| {
-                        SubmitError::Other(format!("cannot compute V8 chain config hash: {err:#}"))
-                    })?;
+            let chain_config_hash = zksync_os_native_pig::v32_chain_config_hash(
+                batch_info.commit_info.chain_id,
+                pubdata_content,
+            )
+            .map_err(|err| {
+                SubmitError::Other(format!("cannot compute V8 chain config hash: {err:#}"))
+            })?;
             keccak256(
                 [
                     state_before.0,

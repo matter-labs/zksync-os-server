@@ -17,7 +17,7 @@ use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{OverlayBuffer, ReadStateHistory, WriteState};
 use zksync_os_tx_validators::deployment_filter;
 use zksync_os_tx_validators::policy_client::AccessType;
-use zksync_os_types::{NotAcceptingReason, TransactionAcceptanceState};
+use zksync_os_types::{NotAcceptingReason, PubdataContent, TransactionAcceptanceState};
 
 /// Executes blocks, while only updating local in-memory state (mempool, block context).
 /// Does not persist anything to disk.
@@ -30,6 +30,7 @@ where
     pub block_context_provider: BlockContextProvider<Subpool>,
     pub state: State,
     pub config: SequencerConfig,
+    pub pubdata_content: PubdataContent,
     /// Controls transaction acceptance state.
     /// When max_blocks_to_produce limit is reached, sequencer sends NotAccepting to stop RPC from accepting new txs.
     pub tx_acceptance_state_sender: watch::Sender<TransactionAcceptanceState>,
@@ -145,6 +146,7 @@ where
                 let policy_tracer = policy_session.paired_tracer();
                 execute_block_in_vm(
                     prepared_command,
+                    self.pubdata_content,
                     exec_view,
                     &state_reporter,
                     policy_tracer,
@@ -156,6 +158,7 @@ where
                     make_deployment_filter(is_produce, &self.config.tx_validator.deployment_filter);
                 execute_block_in_vm(
                     prepared_command,
+                    self.pubdata_content,
                     exec_view,
                     &state_reporter,
                     tracer,

@@ -118,6 +118,11 @@ alloy::sol! {
         Validium
     }
 
+    enum PubdataContent {
+        FullPubdata,
+        LogsOnly
+    }
+
     // `IMailbox.sol`
     interface IMailbox {
         event NewPriorityRequest(
@@ -275,6 +280,7 @@ alloy::sol! {
         function getTotalBatchesExecuted() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
         function getPubdataPricingMode() external view returns (PubdataPricingMode);
+        function getPubdataContent() external view returns (PubdataContent);
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
@@ -817,6 +823,14 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("getPubdataPricingMode", None)
+    }
+
+    pub async fn get_pubdata_content(&self) -> Result<PubdataContent> {
+        self.instance
+            .getPubdataContent()
+            .call()
+            .await
+            .enrich("getPubdataContent", None)
     }
 
     /// Returns true iff the contract has non-empty code at `block_id`.

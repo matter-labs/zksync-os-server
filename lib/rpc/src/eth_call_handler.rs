@@ -31,8 +31,8 @@ use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient, PolicySes
 use zksync_os_types::ZksyncOsEncode;
 use zksync_os_types::{
     L1_TX_MINIMAL_GAS_LIMIT, L1Envelope, L1PriorityTxType, L1Tx, L1TxType, L2Envelope,
-    REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, UpgradeTxType, ZkEnvelope,
-    ZkTransaction, ZkTxType,
+    PubdataContent, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE, SYSTEM_TX_TYPE_ID, UpgradeTxType,
+    ZkEnvelope, ZkTransaction, ZkTxType,
 };
 
 #[derive(Clone, Debug)]
@@ -40,6 +40,7 @@ pub struct EthCallHandler<RpcStorage> {
     pub(crate) config: RpcConfig,
     pub(crate) storage: RpcStorage,
     pub(crate) chain_id: u64,
+    pub(crate) pubdata_content: PubdataContent,
     /// Last block context constructed by sequencer but not necessarily executed yet.
     last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
     /// Optional policy client. When set, `eth_call` and `eth_estimateGas`
@@ -109,6 +110,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         config: RpcConfig,
         storage: RpcStorage,
         chain_id: u64,
+        pubdata_content: PubdataContent,
         last_constructed_block_context: watch::Receiver<Option<BlockContext>>,
         policy_client: Option<PolicyClient>,
     ) -> Self {
@@ -116,6 +118,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             config,
             storage,
             chain_id,
+            pubdata_content,
             last_constructed_block_context,
             policy_client,
         }
@@ -341,6 +344,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let res = simulate_with_optional_policy(
             execution_env.transaction,
             execution_env.block_context,
+            self.pubdata_content,
             state_view,
             policy_session.as_mut(),
         )
@@ -377,12 +381,14 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             Some(overrides) => call_trace_simulate(
                 execution_env.transaction,
                 execution_env.block_context,
+                self.pubdata_content,
                 OverriddenStateView::with_state_overrides(storage_view, overrides),
                 call_config,
             ),
             None => call_trace_simulate(
                 execution_env.transaction,
                 execution_env.block_context,
+                self.pubdata_content,
                 storage_view,
                 call_config,
             ),
@@ -414,6 +420,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 zksync_os_multivm::simulate_tx(
                     execution_env.transaction.encode(),
                     execution_env.block_context,
+                    self.pubdata_content,
                     view.clone(),
                     view,
                     &mut tracer,
@@ -432,6 +439,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
                 zksync_os_multivm::simulate_tx(
                     execution_env.transaction.encode(),
                     execution_env.block_context,
+                    self.pubdata_content,
                     storage_view.clone(),
                     storage_view,
                     &mut tracer,
@@ -518,8 +526,13 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let run_at = |gas_limit: u64| {
             let mut attempt = tx.clone();
             set_gas_limit(&mut attempt, gas_limit);
-            execute(attempt, block_context, storage_view.clone())
-                .map_err(EthCallError::ForwardSubsystemError)
+            execute(
+                attempt,
+                block_context,
+                self.pubdata_content,
+                storage_view.clone(),
+            )
+            .map_err(EthCallError::ForwardSubsystemError)
         };
 
         // Execute the transaction with the highest possible gas limit.
@@ -576,6 +589,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             simulate_with_optional_policy(
                 judged_tx,
                 block_context,
+                self.pubdata_content,
                 storage_view,
                 Some(&mut policy_session),
             )
@@ -597,14 +611,22 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
 fn simulate_with_optional_policy<V: ViewState>(
     tx: ZkTransaction,
     block_context: BlockContext,
+    pubdata_content: PubdataContent,
     view: V,
     policy: Option<&mut PolicySession>,
 ) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
     if let Some(policy) = policy {
         let mut tracer = policy.paired_tracer();
-        execute_with(tx, block_context, view, &mut tracer, policy)
+        execute_with(
+            tx,
+            block_context,
+            pubdata_content,
+            view,
+            &mut tracer,
+            policy,
+        )
     } else {
-        execute(tx, block_context, view)
+        execute(tx, block_context, pubdata_content, view)
     }
 }
 

@@ -27,7 +27,7 @@ use zksync_os_batch_types::batcher_model::{
     BatchMetadata, FriProof, ProverInput, RealFriProof, SignedBatchEnvelope,
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::{ProvingVersion, PubdataContent};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -83,12 +83,14 @@ pub struct FriJobManager {
     batches_with_proof_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
     // == storage ==
     proof_storage: ProofStorage,
+    pubdata_content: PubdataContent,
 }
 
 impl FriJobManager {
     pub fn new(
         batches_with_proof_sender: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
         proof_storage: ProofStorage,
+        pubdata_content: PubdataContent,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> Self {
@@ -101,6 +103,7 @@ impl FriJobManager {
             jobs,
             batches_with_proof_sender,
             proof_storage,
+            pubdata_content,
         }
     }
 
@@ -240,6 +243,7 @@ impl FriJobManager {
         // Deserialization + cryptographic verification are CPU-heavy (seconds of work) -
         // run them on a blocking thread so prover API requests don't stall the runtime.
         // `spawn_blocking` also catches panics that escape the verifiers' own `catch_unwind`.
+        let pubdata_content = self.pubdata_content;
         let verify_result = tokio::task::spawn_blocking({
             let batch_metadata = batch_metadata.clone();
             let proof_bytes = proof_bytes.clone();
@@ -249,6 +253,7 @@ impl FriJobManager {
                     &batch_metadata,
                     &proof_bytes,
                     batch_number,
+                    pubdata_content,
                 )
             }
         })
@@ -268,6 +273,7 @@ impl FriJobManager {
                 let expected_hash_u32s = fri_proof_verifier::expected_public_input_registers(
                     proving_version,
                     batch_metadata,
+                    self.pubdata_content,
                 )
                 .unwrap_or([0u32; 8]);
                 Err(SubmitError::FriProofVerificationError {
@@ -339,9 +345,13 @@ impl FriJobManager {
         batch_metadata: &BatchMetadata,
         proof_bytes: &Bytes,
         batch_number: u64,
+        pubdata_content: PubdataContent,
     ) -> Result<(), SubmitError> {
-        let expected_hash_u32s =
-            fri_proof_verifier::expected_public_input_registers(proving_version, batch_metadata)?;
+        let expected_hash_u32s = fri_proof_verifier::expected_public_input_registers(
+            proving_version,
+            batch_metadata,
+            pubdata_content,
+        )?;
         // TODO: This match is needed for the transition period.
         // Protocol 0.30/0.31 proofs use the Airbender 0.5.2 `ProgramProof` format, while
         // protocol 0.32 proofs use the unified stack's `UnrolledProgramProof`. All these

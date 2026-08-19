@@ -12,6 +12,7 @@ use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{EncodedTx, NextTxResponse, TxResultCallback, TxSource};
 use zksync_os_interface::types::TxProcessingOutputOwned;
 use zksync_os_storage_api::{BlockContext, ViewState};
+use zksync_os_types::PubdataContent;
 
 /// A one‐by‐one driver around `run_block`, enabling `execute_next_tx` interface
 /// (as opposed to pull interface of `run_block` in zksync-os)
@@ -26,6 +27,7 @@ impl VmWrapper {
     /// Spawn the VM runner in a blocking task.
     pub fn new(
         context: BlockContext,
+        pubdata_content: PubdataContent,
         state_view: impl ViewState,
         mut tracer: impl AnyTracer + Send + 'static,
         mut validator: impl AnyTxValidator + Send + 'static,
@@ -44,6 +46,7 @@ impl VmWrapper {
             let (recording_state, recording_handle) = ReadRecordingState::new(state_view.clone());
             let block_output = zksync_os_multivm::run_block(
                 context,
+                pubdata_content,
                 recording_state,
                 state_view,
                 tx_source,

@@ -12,7 +12,7 @@ use zksync_os_interface::traits::{NoopTxCallback, TxListSource};
 use zksync_os_interface::types::{ExecutionResult, TxOutput};
 use zksync_os_multivm::{run_block, simulate_tx};
 use zksync_os_storage_api::{BlockContext, ViewState};
-use zksync_os_types::{ZkTransaction, ZksyncOsEncode};
+use zksync_os_types::{PubdataContent, ZkTransaction, ZksyncOsEncode};
 
 /// EVM max stack size.
 pub const STACK_SIZE: usize = 1024;
@@ -34,11 +34,13 @@ pub(crate) const POST_EXECUTION_PUBDATA_ERROR: &str =
 pub fn execute(
     tx: ZkTransaction,
     block_context: BlockContext,
+    pubdata_content: PubdataContent,
     state_view: impl ViewState,
 ) -> anyhow::Result<Result<TxOutput, InvalidTransaction>> {
     execute_with(
         tx,
         block_context,
+        pubdata_content,
         state_view,
         &mut NopTracer,
         &mut NopValidator,
@@ -51,6 +53,7 @@ pub fn execute(
 pub fn execute_with<T: AnyTracer, V: AnyTxValidator>(
     tx: ZkTransaction,
     block_context: BlockContext,
+    pubdata_content: PubdataContent,
     state_view: impl ViewState,
     tracer: &mut T,
     validator: &mut V,
@@ -60,6 +63,7 @@ pub fn execute_with<T: AnyTracer, V: AnyTxValidator>(
     simulate_tx(
         encoded_tx,
         block_context,
+        pubdata_content,
         state_view.clone(),
         state_view,
         tracer,
@@ -70,6 +74,7 @@ pub fn execute_with<T: AnyTracer, V: AnyTxValidator>(
 pub fn call_trace_simulate(
     tx: ZkTransaction,
     mut block_context: BlockContext,
+    pubdata_content: PubdataContent,
     state_view: impl ViewState,
     call_config: CallConfig,
 ) -> anyhow::Result<CallFrame> {
@@ -85,6 +90,7 @@ pub fn call_trace_simulate(
     let tx_result = simulate_tx(
         encoded_tx,
         block_context,
+        pubdata_content,
         state_view.clone(),
         state_view,
         &mut tracer,
@@ -110,6 +116,7 @@ pub fn call_trace_simulate(
 pub fn call_trace(
     txs: Vec<ZkTransaction>,
     block_context: BlockContext,
+    pubdata_content: PubdataContent,
     state_view: impl ViewState,
     call_config: CallConfig,
 ) -> anyhow::Result<Vec<CallFrame>> {
@@ -124,6 +131,7 @@ pub fn call_trace(
     };
     let block_output = run_block(
         block_context,
+        pubdata_content,
         state_view.clone(),
         state_view,
         tx_source,

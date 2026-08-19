@@ -76,7 +76,13 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                     .into_call_config()
                     .map_err(|_| DebugError::InvalidTracerConfig)?;
 
-                match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
+                match sandbox::call_trace(
+                    txs,
+                    block_context,
+                    self.eth_call_handler.pubdata_content,
+                    prev_state_view,
+                    call_config,
+                ) {
                     Ok(calls) => Ok(calls
                         .into_iter()
                         .zip(&block.body.transactions)
@@ -97,6 +103,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                 match crate::js_tracer::tracer::trace_block(
                     txs,
                     block_context,
+                    self.eth_call_handler.pubdata_content,
                     prev_state_view,
                     js,
                     limits,

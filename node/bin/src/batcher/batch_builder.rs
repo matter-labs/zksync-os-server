@@ -12,7 +12,7 @@ use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_native_pig::{NativeBatchBlock, NativeBatchRunOutput, generate_batch_run};
 use zksync_os_storage_api::{ReadStateHistory, read_multichain_root};
-use zksync_os_types::{ProvingVersion, PubdataMode, SystemTxType, ZkEnvelope};
+use zksync_os_types::{ProvingVersion, PubdataContent, PubdataMode, SystemTxType, ZkEnvelope};
 
 #[derive(Debug, Clone, Copy)]
 struct BatchPigMeasurement {
@@ -30,6 +30,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     chain_id: u64,
     chain_address: Address,
     pubdata_mode: PubdataMode,
+    pubdata_content: PubdataContent,
     sl_chain_id: u64,
     read_state: &ReadState,
     merkle_tree: &MerkleTree<RocksDBWrapper>,
@@ -67,6 +68,7 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             read_state,
             merkle_tree.clone(),
             pubdata_mode,
+            pubdata_content,
         )?;
         let measurement = BatchPigMeasurement {
             mode: BatchPigMode::NativeBatch,
@@ -324,7 +326,7 @@ mod tests {
     use zksync_os_storage_api::{BlockContext, BlockHashes, ReplayRecord};
     use zksync_os_types::{
         BlockOutput, BlockPubdata, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
-        ProvingVersion, PubdataMode,
+        ProvingVersion, PubdataContent, PubdataMode,
     };
 
     fn dummy_block_output() -> BlockOutput {
@@ -400,6 +402,7 @@ mod tests {
                 last_block_timestamp: 0,
                 chain_id: 0,
                 sl_chain_id: 0,
+                pubdata_content: PubdataContent::FullPubdata,
                 upgrade_tx_hash: None,
             }),
         )

@@ -127,6 +127,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
             let read_state = self.read_state.clone();
             let merkle_tree = self.merkle_tree.clone();
             let pubdata_mode = request.pubdata_mode;
+            let pubdata_content = self.l1_state.pubdata_content;
             let native_batch_run = tokio::task::spawn_blocking(move || {
                 let native_blocks = native_run_blocks
                     .iter()
@@ -141,6 +142,7 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
                     &read_state,
                     merkle_tree,
                     pubdata_mode,
+                    pubdata_content,
                 )
             })
             .await
@@ -322,7 +324,7 @@ mod tests {
     };
     use zksync_os_types::{
         BlockOutput, BlockPubdata, BlockStartCursors, ExecutionVersion, ProtocolSemanticVersion,
-        PubdataMode, SystemTxEnvelope, ZkTransaction,
+        PubdataContent, PubdataMode, SystemTxEnvelope, ZkTransaction,
     };
 
     const CHAIN_ID: u64 = 270;
@@ -488,6 +490,7 @@ mod tests {
             &read_state,
             tree.clone(),
             PubdataMode::Calldata,
+            PubdataContent::FullPubdata,
         )
         .unwrap();
 
@@ -499,8 +502,11 @@ mod tests {
         )
         .unwrap();
 
-        let chain_config_hash =
-            zksync_os_native_pig::v32_chain_config_hash(batch_info.commit_info.chain_id).unwrap();
+        let chain_config_hash = zksync_os_native_pig::v32_chain_config_hash(
+            batch_info.commit_info.chain_id,
+            PubdataContent::FullPubdata,
+        )
+        .unwrap();
         let reconstructed = keccak256(
             [
                 native_batch_run.previous_state_commitment.0,
@@ -546,6 +552,7 @@ mod tests {
             &read_state,
             tree.clone(),
             PubdataMode::Calldata,
+            PubdataContent::FullPubdata,
         )
         .expect("V8 native batch run failed");
 
@@ -598,6 +605,7 @@ mod tests {
             read_state,
             tree.clone(),
             PubdataMode::Calldata,
+            PubdataContent::FullPubdata,
         )
         .unwrap();
         let (batch_info, blob_sidecar) = PendingBatchInfo::build_from_canonical_output(
@@ -743,6 +751,7 @@ mod tests {
             l1_block_number: 0,
             finalized_l1_block_number: 0,
             da_input_mode: BatchDaInputMode::Rollup,
+            pubdata_content: PubdataContent::FullPubdata,
             l1_chain_id: SL_CHAIN_ID,
         }
     }

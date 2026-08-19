@@ -136,6 +136,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
             };
             let block_output = run_block(
                 block_context,
+                self.pubdata_content,
                 overridden_view.clone(),
                 overridden_view,
                 tx_source,

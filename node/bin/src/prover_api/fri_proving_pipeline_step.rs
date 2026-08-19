@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use zksync_os_batch_types::batcher_model::{FriProof, ProverInput, SignedBatchEnvelope};
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_types::PubdataContent;
 
 /// Pipeline step that waits for batches to be FRI proved.
 ///
@@ -29,6 +30,7 @@ pub struct FriProvingPipelineStep {
 impl FriProvingPipelineStep {
     pub fn new(
         proof_storage: ProofStorage,
+        pubdata_content: PubdataContent,
         last_proved_batch_number: u64,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
@@ -40,6 +42,7 @@ impl FriProvingPipelineStep {
         let fri_job_manager = Arc::new(FriJobManager::new(
             batches_with_proof_sender,
             proof_storage,
+            pubdata_content,
             assignment_timeout,
             max_assigned_batch_range,
         ));

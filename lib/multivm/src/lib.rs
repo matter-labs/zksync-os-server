@@ -20,7 +20,7 @@ mod adapter;
 pub mod apps;
 
 pub use adapter::AbiTxSource;
-use zksync_os_types::{BlockOutput, BlockPubdata, ExecutionVersion};
+use zksync_os_types::{BlockOutput, BlockPubdata, ExecutionVersion, PubdataContent};
 macro_rules! into_legacy_block_output {
     ($o:expr) => {{
         let output = $o;
@@ -51,6 +51,7 @@ macro_rules! into_pubdata_used_block_output {
     }};
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_block<
     Storage: ReadStorage,
     PreimgSrc: PreimageSource,
@@ -60,6 +61,7 @@ pub fn run_block<
     Validator: AnyTxValidator,
 >(
     block_context: BlockContext,
+    pubdata_content: PubdataContent,
     storage: Storage,
     preimage_source: PreimgSrc,
     tx_source: TrSrc,
@@ -141,7 +143,8 @@ pub fn run_block<
                 .map(|o| into_legacy_block_output!(o))
         }
         ExecutionVersion::V7 => {
-            let chain_config = zksync_os_native_pig::v32_chain_config(block_context.chain_id)?;
+            let chain_config =
+                zksync_os_native_pig::v32_chain_config(block_context.chain_id, pubdata_content)?;
             let object = RunBlockForwardV7 {
                 fri_verifier_artifacts: None,
             };
@@ -173,6 +176,7 @@ pub fn simulate_tx<
 >(
     transaction: EncodedTx,
     block_context: BlockContext,
+    pubdata_content: PubdataContent,
     storage: Storage,
     preimage_source: PreimgSrc,
     tracer: &mut Tracer,
@@ -240,7 +244,8 @@ pub fn simulate_tx<
                 .map_err(|err| anyhow::anyhow!(err))
         }
         ExecutionVersion::V7 => {
-            let chain_config = zksync_os_native_pig::v32_chain_config(block_context.chain_id)?;
+            let chain_config =
+                zksync_os_native_pig::v32_chain_config(block_context.chain_id, pubdata_content)?;
             let object = RunBlockForwardV7 {
                 fri_verifier_artifacts: None,
             };

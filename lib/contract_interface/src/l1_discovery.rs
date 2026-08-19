@@ -1,6 +1,6 @@
 use crate::metrics::L1_STATE_METRICS;
-use crate::models::BatchDaInputMode;
-use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
+use crate::models::{BatchDaInputMode, PubdataContent as ChainPubdataContent};
+use crate::{Bridgehub, MultisigCommitter, PubdataContent, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
@@ -37,6 +37,7 @@ pub struct L1State {
     /// Finalized L1 block number that was used to query `last_finalized_executed_batch`.
     pub finalized_l1_block_number: u64,
     pub da_input_mode: BatchDaInputMode,
+    pub pubdata_content: ChainPubdataContent,
     pub l1_chain_id: u64,
 }
 
@@ -125,6 +126,19 @@ impl L1State {
             PubdataPricingMode::Validium => BatchDaInputMode::Validium,
             v => panic!("unexpected pubdata pricing mode: {}", v as u8),
         };
+        let pubdata_content = match diamond_proxy_l1.get_pubdata_content().await {
+            Ok(PubdataContent::FullPubdata) => ChainPubdataContent::FullPubdata,
+            Ok(PubdataContent::LogsOnly) => ChainPubdataContent::LogsOnly,
+            Ok(v) => panic!("unexpected pubdata content: {}", v as u8),
+            // Pre-v32 diamonds have no getter; their pricing mode implies the same content choice.
+            Err(crate::Error::Call(err, _)) if crate::is_method_missing(&err) => {
+                match da_input_mode {
+                    BatchDaInputMode::Rollup => ChainPubdataContent::FullPubdata,
+                    BatchDaInputMode::Validium => ChainPubdataContent::LogsOnly,
+                }
+            }
+            Err(err) => return Err(err.into()),
+        };
 
         let batch_verification = match MultisigCommitter::try_new(
             validator_timelock,
@@ -163,6 +177,7 @@ impl L1State {
             l1_block_number: latest_l1_block_number,
             finalized_l1_block_number,
             da_input_mode,
+            pubdata_content,
             l1_chain_id,
         })
     }
@@ -217,6 +232,7 @@ impl L1State {
             l1_block_number,
             finalized_l1_block_number,
             da_input_mode: this.da_input_mode,
+            pubdata_content: this.pubdata_content,
             l1_chain_id: this.l1_chain_id,
         })
     }

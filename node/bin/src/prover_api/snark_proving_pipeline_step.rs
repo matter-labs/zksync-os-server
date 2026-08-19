@@ -8,6 +8,7 @@ use zksync_os_l1_sender::commands::L1SenderCommand;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
 use zksync_os_observability::ComponentStateReporter;
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
+use zksync_os_types::PubdataContent;
 
 /// Pipeline step that waits for batches to be SNARK proved.
 ///
@@ -29,6 +30,7 @@ pub struct SnarkProvingPipelineStep {
 impl SnarkProvingPipelineStep {
     pub fn new(
         max_fris_per_snark: usize,
+        pubdata_content: PubdataContent,
         last_proved_batch_number: u64,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
@@ -38,6 +40,7 @@ impl SnarkProvingPipelineStep {
         let snark_job_manager = Arc::new(SnarkJobManager::new(
             proof_commands_sender,
             max_fris_per_snark,
+            pubdata_content,
             assignment_timeout,
             max_assigned_batch_range,
         ));

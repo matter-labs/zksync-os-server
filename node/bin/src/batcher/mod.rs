@@ -20,7 +20,7 @@ use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::ReadStateHistory;
-use zksync_os_types::PubdataMode;
+use zksync_os_types::{PubdataContent, PubdataMode};
 
 pub mod batch_builder;
 mod batch_deadline_policy;
@@ -49,6 +49,7 @@ pub struct Batcher<ReadState> {
     pub pubdata_limit_bytes: u64,
     pub batcher_config: BatcherConfig,
     pub pubdata_mode: PubdataMode,
+    pub pubdata_content: PubdataContent,
     pub sidecar_sender: mpsc::Sender<BlobTransactionSidecar>,
     pub committed_batch_provider: CommittedBatchProvider,
     pub read_state: ReadState,
@@ -351,6 +352,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
         let chain_id = self.chain_id;
         let chain_address = self.chain_address;
         let sl_chain_id = self.sl_chain_id;
+        let pubdata_content = self.pubdata_content;
         let read_state = self.read_state.clone();
         let merkle_tree = self.merkle_tree.clone();
         tokio::task::spawn_blocking(move || {
@@ -361,6 +363,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
                 chain_id,
                 chain_address,
                 pubdata_mode,
+                pubdata_content,
                 sl_chain_id,
                 &read_state,
                 &merkle_tree,

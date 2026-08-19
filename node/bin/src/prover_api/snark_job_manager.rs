@@ -11,7 +11,7 @@ use zksync_os_batch_types::batcher_model::{
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::{ProvingVersion, PubdataContent};
 
 /// Job manager for SNARK proving.
 ///
@@ -30,12 +30,14 @@ pub struct SnarkJobManager {
     prove_batches_sender: mpsc::Sender<ProofCommand>,
     // config
     max_fris_per_snark: usize,
+    pubdata_content: PubdataContent,
 }
 
 impl SnarkJobManager {
     pub fn new(
         prove_batches_sender: mpsc::Sender<ProofCommand>,
         max_fris_per_snark: usize,
+        pubdata_content: PubdataContent,
         assignment_timeout: Duration,
         max_assigned_batch_range: usize,
     ) -> Self {
@@ -48,6 +50,7 @@ impl SnarkJobManager {
             jobs,
             prove_batches_sender,
             max_fris_per_snark,
+            pubdata_content,
         }
     }
 
@@ -152,7 +155,8 @@ impl SnarkJobManager {
             .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedReal))
             .collect();
 
-        let chain_config_hash = proof_chain_config_hash(&consumed_batches_proven)?;
+        let chain_config_hash =
+            proof_chain_config_hash(&consumed_batches_proven, self.pubdata_content)?;
         permit.send(ProofCommand::new(
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
@@ -234,7 +238,8 @@ impl SnarkJobManager {
                 .map(|batch| batch.with_stage(BatchExecutionStage::SnarkProvedFake))
                 .collect();
 
-            let chain_config_hash = proof_chain_config_hash(&batches_with_fake_proofs)?;
+            let chain_config_hash =
+                proof_chain_config_hash(&batches_with_fake_proofs, self.pubdata_content)?;
             permit.send(ProofCommand::new(
                 batches_with_fake_proofs,
                 SnarkProof::Fake,
@@ -296,6 +301,7 @@ fn proof_chain_config_hash(
     batches: &[zksync_os_batch_types::batcher_model::SignedBatchEnvelope<
         zksync_os_batch_types::batcher_model::FriProof,
     >],
+    pubdata_content: PubdataContent,
 ) -> anyhow::Result<Option<alloy::primitives::B256>> {
     let batch_info = &batches
         .last()
@@ -305,6 +311,7 @@ fn proof_chain_config_hash(
     if batch_info.protocol_version.supports_l1_interop() {
         Ok(Some(zksync_os_native_pig::v32_chain_config_hash(
             batch_info.chain_id,
+            pubdata_content,
         )?))
     } else {
         Ok(None)

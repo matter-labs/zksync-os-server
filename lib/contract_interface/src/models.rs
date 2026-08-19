@@ -53,6 +53,13 @@ pub enum BatchDaInputMode {
     Validium,
 }
 
+/// Which part of a batch's pubdata is committed on L1.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PubdataContent {
+    FullPubdata,
+    LogsOnly,
+}
+
 /// User-friendly version of [`IExecutor::StoredBatchInfo`] containing
 /// fields that are relevant for ZKsync OS.
 #[derive(Debug, Clone, Serialize, Deserialize)]

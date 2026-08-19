@@ -3,7 +3,10 @@ use crate::{NativeBatchBlock, NativeBatchRunOutput};
 use alloy::primitives::{B256, ruint::aliases::B160};
 use anyhow::Context as _;
 use std::collections::VecDeque;
-use zk_ee_0_4_0::common_structs::{ProofData, da_commitment_scheme::DACommitmentScheme};
+use zk_ee_0_4_0::common_structs::{
+    ProofData,
+    da_commitment_scheme::{DACommitmentScheme, PubdataContent as ZkEePubdataContent},
+};
 use zk_ee_0_4_0::system::metadata::chain_config::{ChainConfig, DEFAULT_MAX_TX_GAS_LIMIT};
 use zk_ee_0_4_0::system::metadata::zk_metadata::{BlockHashes, BlockMetadataFromOracle};
 use zk_ee_0_4_0::utils::Bytes32;
@@ -16,17 +19,28 @@ use zk_os_forward_system_0_4_0::run::{
 use zksync_os_interface::traits::TxListSource;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, ViewState};
-use zksync_os_types::{PubdataMode, ZksyncOsEncode};
+use zksync_os_types::{PubdataContent, PubdataMode, ZksyncOsEncode};
 
 /// The chain config all v32 native batch runs are executed with. Its hash is part of the batch
 /// public input, so proof verification must reconstruct it identically.
-pub(crate) fn chain_config(chain_id: u64) -> anyhow::Result<ChainConfig> {
+pub(crate) fn chain_config(
+    chain_id: u64,
+    pubdata_content: PubdataContent,
+) -> anyhow::Result<ChainConfig> {
+    let pubdata_content = match pubdata_content {
+        PubdataContent::FullPubdata => ZkEePubdataContent::FullPubdata,
+        PubdataContent::LogsOnly => ZkEePubdataContent::LogsOnly,
+    };
     ChainConfig::new(chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
+        .map(|config| config.with_pubdata_content(pubdata_content))
         .map_err(|err| anyhow::anyhow!("invalid chain config: {err:?}"))
 }
 
-pub(crate) fn chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
-    Ok(B256::from(chain_config(chain_id)?.hash()))
+pub(crate) fn chain_config_hash(
+    chain_id: u64,
+    pubdata_content: PubdataContent,
+) -> anyhow::Result<B256> {
+    Ok(B256::from(chain_config(chain_id, pubdata_content)?.hash()))
 }
 
 pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
@@ -34,6 +48,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
     read_state: &ReadState,
     merkle_tree: MerkleTree<RocksDBWrapper>,
     pubdata_mode: PubdataMode,
+    pubdata_content: PubdataContent,
 ) -> anyhow::Result<NativeBatchRunOutput> {
     anyhow::ensure!(
         !blocks.is_empty(),
@@ -44,7 +59,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
     // The chain config is frozen for the whole batch; chain id lives there now rather than in
     // per-block metadata. All blocks in a batch share the same chain.
     let chain_id = first_replay_record.block_context.chain_id;
-    let chain_config = chain_config(chain_id)?;
+    let chain_config = chain_config(chain_id, pubdata_content)?;
     let first_state_version = first_replay_record
         .block_context
         .block_number
@@ -139,6 +154,7 @@ pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
             "batch_output.settlement_layer_chain_id",
             batch_output.settlement_layer_chain_id,
         )?,
+        pubdata_content,
         upgrade_tx_hash,
     })
 }
@@ -259,5 +275,23 @@ impl<SV: ViewState> ForwardBatchState for HistoricalBatchState<SV> {
         if self.cursor + 1 < self.state_views.len() {
             self.cursor += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_config_uses_l1_pubdata_content() {
+        let full_pubdata = chain_config(270, PubdataContent::FullPubdata).unwrap();
+        let logs_only = chain_config(270, PubdataContent::LogsOnly).unwrap();
+
+        assert_eq!(
+            full_pubdata.pubdata_content(),
+            ZkEePubdataContent::FullPubdata
+        );
+        assert_eq!(logs_only.pubdata_content(), ZkEePubdataContent::LogsOnly);
+        assert_ne!(full_pubdata.hash(), logs_only.hash());
     }
 }

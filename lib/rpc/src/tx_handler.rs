@@ -17,7 +17,8 @@ use zksync_os_rpc_api::types::ZkTransactionReceipt;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_tx_validators::policy_client::{AccessType, PolicyClient};
 use zksync_os_types::{
-    L2Envelope, L2Transaction, NotAcceptingReason, TransactionAcceptanceState, ZkTransaction,
+    L2Envelope, L2Transaction, NotAcceptingReason, PubdataContent, TransactionAcceptanceState,
+    ZkTransaction,
 };
 
 /// Maximum user provided timeout for `eth_sendRawTransactionSync`. Chosen liberally as waiting is
@@ -32,6 +33,7 @@ pub struct TxHandler<RpcStorage, Mempool> {
     config: RpcConfig,
     storage: RpcStorage,
     chain_id: u64,
+    pubdata_content: PubdataContent,
     mempool: Mempool,
     acceptance_state: watch::Receiver<TransactionAcceptanceState>,
     tx_forwarder: Option<TxForwarder>,
@@ -52,6 +54,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
         config: RpcConfig,
         storage: RpcStorage,
         chain_id: u64,
+        pubdata_content: PubdataContent,
         mempool: Mempool,
         acceptance_state: watch::Receiver<TransactionAcceptanceState>,
         tx_forwarder: Option<TxForwarder>,
@@ -62,6 +65,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             config,
             storage,
             chain_id,
+            pubdata_content,
             mempool,
             acceptance_state,
             tx_forwarder,
@@ -101,6 +105,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             let last_block_ctx = *self.last_constructed_block_context.borrow();
             let storage = self.storage.clone();
             let chain_id = self.chain_id;
+            let pubdata_content = self.pubdata_content;
             let zk_tx: ZkTransaction = l2_tx.clone().into();
             let policy_client = policy_client.clone();
             // `spawn_blocking`: the body has blocking I/O and VM execution.
@@ -122,6 +127,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
                 crate::sandbox::execute_with(
                     zk_tx,
                     block_context,
+                    pubdata_content,
                     storage_view,
                     &mut tracer,
                     &mut policy_session,

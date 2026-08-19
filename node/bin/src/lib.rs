@@ -994,6 +994,7 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.rpc_config.into(),
         rpc_listener,
         chain_id,
+        l1_state.pubdata_content,
         bridgehub_address,
         bytecode_supplier_address,
         rpc_storage,
@@ -1176,6 +1177,7 @@ async fn run_main_node_pipeline(
             block_context_provider,
             state: state.clone(),
             config: config.into(),
+            pubdata_content: node_state_on_startup.l1_state.pubdata_content,
             tx_acceptance_state_sender,
             applied_block_number_receiver,
         })
@@ -1235,6 +1237,7 @@ async fn run_main_node_pipeline(
 
     let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
         proof_storage.clone(),
+        node_state_on_startup.l1_state.pubdata_content,
         node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.fri_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
@@ -1242,6 +1245,7 @@ async fn run_main_node_pipeline(
 
     let (snark_proving_step, snark_job_manager) = SnarkProvingPipelineStep::new(
         config.prover_api_config.max_fris_per_snark,
+        node_state_on_startup.l1_state.pubdata_content,
         node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.snark_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
@@ -1319,6 +1323,7 @@ async fn run_main_node_pipeline(
             pubdata_limit_bytes: config.sequencer_config.block_pubdata_limit_bytes,
             batcher_config: config.batcher_config.clone(),
             pubdata_mode,
+            pubdata_content: node_state_on_startup.l1_state.pubdata_content,
             sidecar_sender,
             committed_batch_provider: committed_batch_provider.clone(),
             read_state: state.clone(),
@@ -1434,6 +1439,7 @@ async fn run_en_pipeline(
             block_context_provider,
             state: state.clone(),
             config: config.into(),
+            pubdata_content: node_state_on_startup.l1_state.pubdata_content,
             tx_acceptance_state_sender,
             applied_block_number_receiver,
         })

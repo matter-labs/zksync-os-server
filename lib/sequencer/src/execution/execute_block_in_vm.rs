@@ -19,7 +19,7 @@ use zksync_os_observability::ComponentStateReporter;
 use zksync_os_storage_api::{
     BlockContext, MeteredViewState, OverriddenStateView, ReplayRecord, ViewState,
 };
-use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
+use zksync_os_types::{PubdataContent, SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 // Note that this is a pure function without a container struct (e.g. `struct BlockExecutor`)
 // MAINTAIN this to ensure the function is completely stateless - explicit or implicit.
 
@@ -28,6 +28,7 @@ use zksync_os_types::{SystemTxType, ZkTransaction, ZkTxType, ZksyncOsEncode};
 
 pub async fn execute_block_in_vm<V: ViewState>(
     mut command: PreparedBlockCommand<'_>,
+    pubdata_content: PubdataContent,
     state_view: V,
     latency_tracker: &ComponentStateReporter,
     tracer: impl AnyTracer + Send + 'static,
@@ -54,7 +55,7 @@ pub async fn execute_block_in_vm<V: ViewState>(
         latency_tracker.clone(),
         state_view_with_force_preimages,
     );
-    let mut runner = VmWrapper::new(ctx, metered_state_view, tracer, validator);
+    let mut runner = VmWrapper::new(ctx, pubdata_content, metered_state_view, tracer, validator);
 
     let mut executed_txs = Vec::<ZkTransaction>::new();
     let mut cumulative_gas_used = 0u64;

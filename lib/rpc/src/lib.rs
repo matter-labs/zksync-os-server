@@ -78,13 +78,14 @@ use zksync_os_rpc_api::web3::Web3ApiServer;
 use zksync_os_rpc_api::zks::ZksApiServer;
 use zksync_os_storage_api::BlockContext;
 use zksync_os_tx_validators::policy_client::PolicyClient;
-use zksync_os_types::TransactionAcceptanceState;
+use zksync_os_types::{PubdataContent, TransactionAcceptanceState};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
     config: RpcConfig,
     listener: tokio::net::TcpListener,
     chain_id: u64,
+    pubdata_content: PubdataContent,
     bridgehub_address: Address,
     bytecode_supplier_address: Address,
     storage: RpcStorage,
@@ -105,6 +106,7 @@ pub async fn spawn<RpcStorage: ReadRpcStorage, Mempool: L2Subpool>(
         config.clone(),
         storage.clone(),
         chain_id,
+        pubdata_content,
         last_constructed_block_context.clone(),
         policy_client.clone(),
     );

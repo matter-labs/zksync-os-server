@@ -8,7 +8,7 @@ use alloy::primitives::{B256, keccak256};
 use zksync_os_batch_types::{BlockMerkleTreeData, CanonicalBatchCommitData, PendingBatchInfo};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataMode};
+use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataContent, PubdataMode};
 
 pub mod tree;
 mod v32;
@@ -43,6 +43,7 @@ pub struct NativeBatchRunOutput {
     pub last_block_timestamp: u64,
     pub chain_id: u64,
     pub sl_chain_id: u64,
+    pub pubdata_content: PubdataContent,
     pub upgrade_tx_hash: Option<B256>,
 }
 
@@ -105,7 +106,7 @@ impl NativeBatchRunOutput {
 
         // Reconstruct the batch public input exactly as `verify_fri_proof_v8` will and compare
         // it with the value the batch program computed; catches batch-output layout drift.
-        let chain_config_hash = v32::chain_config_hash(chain_id)?;
+        let chain_config_hash = v32::chain_config_hash(chain_id, self.pubdata_content)?;
         let reconstructed_public_input_hash = keccak256(
             [
                 self.previous_state_commitment.0,
@@ -129,13 +130,17 @@ impl NativeBatchRunOutput {
 /// the v32 batch public input, so every construction site must go through this function.
 pub fn v32_chain_config(
     chain_id: u64,
+    pubdata_content: PubdataContent,
 ) -> anyhow::Result<zk_ee_0_4_0::system::metadata::chain_config::ChainConfig> {
-    v32::chain_config(chain_id)
+    v32::chain_config(chain_id, pubdata_content)
 }
 
 /// keccak256 commitment of [`v32_chain_config`], as committed to in the v32 batch public input.
-pub fn v32_chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
-    v32::chain_config_hash(chain_id)
+pub fn v32_chain_config_hash(
+    chain_id: u64,
+    pubdata_content: PubdataContent,
+) -> anyhow::Result<B256> {
+    v32::chain_config_hash(chain_id, pubdata_content)
 }
 
 pub fn generate_batch_run<ReadState: ReadStateHistory>(
@@ -144,11 +149,16 @@ pub fn generate_batch_run<ReadState: ReadStateHistory>(
     read_state: &ReadState,
     merkle_tree: MerkleTree<RocksDBWrapper>,
     pubdata_mode: PubdataMode,
+    pubdata_content: PubdataContent,
 ) -> anyhow::Result<NativeBatchRunOutput> {
     match proving_version {
-        ProvingVersion::V8 => {
-            v32::generate_batch_run(blocks, read_state, merkle_tree, pubdata_mode)
-        }
+        ProvingVersion::V8 => v32::generate_batch_run(
+            blocks,
+            read_state,
+            merkle_tree,
+            pubdata_mode,
+            pubdata_content,
+        ),
         ProvingVersion::V6 | ProvingVersion::V7 => {
             anyhow::bail!("native batch proving is unsupported for {proving_version:?}")
         }
@@ -177,6 +187,7 @@ mod tests {
             last_block_timestamp: 200,
             chain_id: 270,
             sl_chain_id: 123,
+            pubdata_content: PubdataContent::FullPubdata,
             upgrade_tx_hash: Some(B256::repeat_byte(0x66)),
         };
 

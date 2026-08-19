@@ -1058,6 +1058,7 @@ impl EvmTracer for JsTracer {
 pub fn trace_block<V: ViewState + 'static>(
     txs: Vec<ZkTransaction>,
     block_context: zksync_os_storage_api::BlockContext,
+    pubdata_content: zksync_os_types::PubdataContent,
     state_view: V,
     js_tracer_config: String,
     limits: JsTracerLimits,
@@ -1069,6 +1070,7 @@ pub fn trace_block<V: ViewState + 'static>(
     };
     let _ = zksync_os_multivm::run_block(
         block_context,
+        pubdata_content,
         state_view.clone(),
         state_view,
         tx_source,

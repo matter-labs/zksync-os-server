@@ -66,6 +66,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> EthNamespace<RpcStorage, Me
             config.clone(),
             storage.clone(),
             chain_id,
+            eth_call_handler.pubdata_content,
             mempool.clone(),
             acceptance_state,
             tx_forwarder,
