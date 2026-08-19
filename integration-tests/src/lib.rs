@@ -35,7 +35,7 @@ use zksync_os_server::config::Config;
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 #[cfg(feature = "prover-tests")]
-use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
+use zksync_os_server::default_protocol_version::{PROTOCOL_VERSION_V30_2, PROTOCOL_VERSION_V31_0};
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
@@ -82,6 +82,12 @@ impl TestCase {
 // A NEXT_TO_L1 lane (fresh chain at `NEXT_PROTOCOL_VERSION`) needs local-chain fixtures for
 // v32.0; reintroduce it once they are generated. Until then v32 is covered via in-test upgrades.
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
+
+/// Fresh chain at v30.2 — the oldest protocol version with live proving support (V6).
+#[cfg(feature = "prover-tests")]
+pub const V30_TO_L1: TestCase = TestCase {
+    protocol_version: PROTOCOL_VERSION_V30_2,
+};
 
 /// Set of private keys for batch verification participants.
 pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
@@ -964,12 +970,16 @@ impl AnvilL1 {
 async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
     let protocol_version = tester.chain_layout.protocol_version();
     let app_bin_path = match protocol_version {
+        PROTOCOL_VERSION_V30_2 => utils::materialize_multiblock_batch_bin(
+            &tester.tempdir.path().join("app_bins"),
+            "v6",
+            zksync_os_multivm::apps::v6::MULTIBLOCK_BATCH,
+        ),
         PROTOCOL_VERSION_V31_0 => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
             "v7",
             zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH,
         ),
-        // V6 (protocol v30.x) proving support was dropped when the 0.4.0 lane became current.
         _ => panic!("unsupported protocol version for prover tests"),
     };
     let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
@@ -1026,6 +1036,7 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
 #[cfg(feature = "prover-tests")]
 fn prover_release_for_protocol(protocol_version: &str) -> &'static str {
     match protocol_version {
+        PROTOCOL_VERSION_V30_2 => "v0.7.1",
         PROTOCOL_VERSION_V31_0 => "v0.8.0",
         _ => {
             panic!("unsupported protocol version `{protocol_version}` for prover binary selection")

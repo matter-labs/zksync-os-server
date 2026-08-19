@@ -34,7 +34,7 @@ pub fn expected_public_input_registers(
                 .concat(),
             )
         }
-        ProvingVersion::V7 => {
+        ProvingVersion::V6 | ProvingVersion::V7 => {
             let stored = batch_metadata.batch_info.clone().into_stored();
             keccak256(
                 [

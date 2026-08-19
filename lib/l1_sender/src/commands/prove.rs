@@ -141,6 +141,7 @@ impl ProofCommand {
         let verifier_version = match self.proof.proving_execution_version() {
             // Use default verifier for fake proofs.
             None => 0,
+            Some(6) => 6,
             Some(7) => 0,
             // Switch to 0 once the L1 default verifier becomes the V8 one (as done for V7).
             Some(8) => 8,

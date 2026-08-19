@@ -23,6 +23,12 @@ fn parse_git_reference(package_id: &PackageId) -> anyhow::Result<String> {
 // Remove entries as the corresponding proving lanes leave the support window.
 fn binary_source_config(reference: &str) -> Option<BinarySourceConfig> {
     match reference {
+        // The V6 VK was generated from the original v0.2.5 binaries; 0.2.x rebuild tags
+        // produce different ones.
+        "v0.2.10-interface-v0.1.3-2026-02-10" => Some(BinarySourceConfig {
+            proving_version: "V6",
+            download_tag: "v0.2.5",
+        }),
         "v0.3.2-interface-v0.1.3" => Some(BinarySourceConfig {
             proving_version: "V7",
             download_tag: "v0.3.1-interface-v0.1.3",

@@ -227,6 +227,7 @@ fn compute_batch_prover_input(
     pubdata_mode: PubdataMode,
     native_batch_run: Option<NativeBatchRunOutput>,
 ) -> anyhow::Result<(ProverInput, Option<BatchPigMeasurement>)> {
+    use zk_os_forward_system_0_2_10::run::generate_batch_proof_input as generate_batch_proof_input_v6;
     use zk_os_forward_system_prev::run::generate_batch_proof_input;
 
     // Pre-V8 batch PIG stitches together the per-block prover inputs, so a single fake block
@@ -241,6 +242,35 @@ fn compute_batch_prover_input(
     }
 
     Ok(match proving_version {
+        ProvingVersion::V6 => {
+            // TODO: in the long-term we should generate proof input per batch
+            let started_at = std::time::Instant::now();
+            let block_inputs = blocks
+                .iter()
+                .map(|block| block.prover_input.unwrap_real())
+                .collect();
+            let blocks_pubdata = blocks
+                .iter()
+                .map(|block| block.output.expect_pubdata_bytes())
+                .collect();
+            let da_commitment_scheme = pubdata_mode.da_commitment_scheme() as u8;
+            let prover_input = generate_batch_proof_input_v6(
+                block_inputs,
+                da_commitment_scheme
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Failed to convert DA commitment scheme"))?,
+                blocks_pubdata,
+            );
+            let prover_input_words = prover_input.len();
+            (
+                ProverInput::Real(prover_input),
+                Some(BatchPigMeasurement {
+                    mode: BatchPigMode::LegacyBatch,
+                    prover_input_words,
+                    elapsed: started_at.elapsed(),
+                }),
+            )
+        }
         ProvingVersion::V7 => {
             // TODO: in the long-term we should generate proof input per batch
             let started_at = std::time::Instant::now();
