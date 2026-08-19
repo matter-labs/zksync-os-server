@@ -503,7 +503,7 @@ mod tests {
     fn create_test_batch_envelope(batch_number: u64) -> SignedBatchEnvelope<Vec<u8>> {
         create_test_batch_envelope_with_protocol_version(
             batch_number,
-            ProtocolSemanticVersion::legacy_genesis_version(),
+            ProtocolSemanticVersion::new(0, 32, 0),
         )
     }
 

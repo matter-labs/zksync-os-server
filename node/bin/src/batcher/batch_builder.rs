@@ -241,14 +241,6 @@ fn compute_batch_prover_input(
     }
 
     Ok(match proving_version {
-        ProvingVersion::V1
-        | ProvingVersion::V2
-        | ProvingVersion::V3
-        | ProvingVersion::V4
-        | ProvingVersion::V5
-        | ProvingVersion::V6 => {
-            panic!("sealing batch with prover version v1-v6 is not supported");
-        }
         ProvingVersion::V7 => {
             // TODO: in the long-term we should generate proof input per batch
             let started_at = std::time::Instant::now();
