@@ -2,6 +2,7 @@ use crate::service::{PeerVerifyBatch, PeerVerifyBatchResult};
 use crate::wire::replays::RecordOverride;
 use alloy::primitives::{Address, BlockNumber};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use zksync_os_storage_api::ReplayRecord;
 
@@ -33,6 +34,10 @@ pub struct ExternalNodeProtocolConfig {
     pub replay_sender: mpsc::Sender<ReplayRecord>,
     /// Optional verifier configuration used to register `zks_2fa` alongside replay sync.
     pub verification: Option<ExternalNodeVerifierConfig>,
+    /// Maximum time to wait without receiving any message on an established replay connection
+    /// before reporting it as stalled (which disconnects the peer and forces a fresh session).
+    /// Must comfortably exceed the chain's block cadence.
+    pub replay_inactivity_timeout: Duration,
 }
 
 /// Verifier identity and channels used by an external node participating in `zks_2fa`.

@@ -67,6 +67,7 @@ impl<State: ReadStateHistory, Repository: ReadRepository> ZkProviderFactory<Stat
                 base_fee_per_gas: None,
                 excess_blob_gas: None,
                 blob_gas_used: None,
+                slot_number: None,
                 number: None,
                 parent_hash: None,
             });
@@ -270,7 +271,7 @@ impl<State: ReadStateHistory> StateProofProvider for ZkProvider<State> {
 }
 
 impl<State: ReadStateHistory> HashedPostStateProvider for ZkProvider<State> {
-    fn hashed_post_state(&self, _bundle_state: &BundleState) -> HashedPostState {
+    fn hashed_post_state(&self, _bundle_state: &BundleState) -> ProviderResult<HashedPostState> {
         todo!()
     }
 }

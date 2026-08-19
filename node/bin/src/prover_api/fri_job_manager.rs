@@ -343,16 +343,11 @@ impl FriJobManager {
         let expected_hash_u32s =
             fri_proof_verifier::expected_public_input_registers(proving_version, batch_metadata)?;
         // TODO: This match is needed for the transition period.
-        // v0.5.2 airbender cannot verify proofs generated with v0.5.1.
-        // Once all networks are protocol upgraded, the code below can be removed.
+        // Protocol 0.30/0.31 proofs use the Airbender 0.5.2 `ProgramProof` format, while
+        // protocol 0.32 proofs use the unified stack's `UnrolledProgramProof`. All these
+        // protocols remain supported, so their incompatible encodings require separate
+        // verifier backends.
         match proving_version {
-            ProvingVersion::V1
-            | ProvingVersion::V2
-            | ProvingVersion::V3
-            | ProvingVersion::V4
-            | ProvingVersion::V5 => Err(SubmitError::Other(
-                "proof verification for v1-v5 is not supported".to_string(),
-            )),
             ProvingVersion::V6 | ProvingVersion::V7 => {
                 tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
                 let program_proof =

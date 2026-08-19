@@ -125,11 +125,11 @@ mod tests {
         let q = query(Some(&format!(
             "{}, {}",
             ProvingVersion::V7.vk_hash(),
-            ProvingVersion::V6.vk_hash()
+            ProvingVersion::V8.vk_hash()
         )));
         assert_eq!(
             q.supported_proving_versions(),
-            Some(vec![ProvingVersion::V7, ProvingVersion::V6])
+            Some(vec![ProvingVersion::V7, ProvingVersion::V8])
         );
     }
 

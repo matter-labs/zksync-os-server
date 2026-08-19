@@ -47,6 +47,7 @@ fn check_call_frame(
             gas: call_frame.gas,
             gas_used: call_frame.gas_used,
             calls: call_frame.calls.clone(),
+            ..Default::default()
         }
     );
     assert_eq!(call_frame.calls.len(), 1, "expected exactly 1 subcall");
@@ -72,6 +73,7 @@ fn check_call_frame(
             // Below is not asserted
             gas: subcall.gas,
             gas_used: subcall.gas_used,
+            ..Default::default()
         }
     );
 }
@@ -173,6 +175,7 @@ async fn call_trace_transaction(tester: Tester) -> anyhow::Result<()> {
             gas: revert_call_frame.gas,
             gas_used: revert_call_frame.gas_used,
             calls: revert_call_frame.calls.clone(),
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -197,6 +200,7 @@ async fn call_trace_transaction(tester: Tester) -> anyhow::Result<()> {
             // Below is not asserted
             gas: revert_subcall.gas,
             gas_used: revert_subcall.gas_used,
+            ..Default::default()
         }
     );
 

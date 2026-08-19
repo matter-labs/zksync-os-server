@@ -7,8 +7,6 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-# Yanked transitives (spin 0.10.0, core2 — no unyanked version exists) are tolerated via the
-# workflow's `--allow yanked`; the config key for this varies across cargo-deny versions.
 ignore = [
     # Marvin timing sidechannel in `rsa` private-key operations. We use `rsa`
     # directly in `replay_archive` for KMS envelope encryption, but production
@@ -17,14 +15,10 @@ ignore = [
     # never locally. Local `RsaPrivateKey` usage is test-only. No patched
     # version exists yet (tracked in RustCrypto/RSA#19).
     "RUSTSEC-2023-0071",
-    # Unmaintained notices on frozen transitive deps, none reachable to fix here.
-    "RUSTSEC-2025-0141", # bincode 1.x unmaintained
-    "RUSTSEC-2026-0247", # bitmaps unmaintained
-    "RUSTSEC-2026-0105", # core2 unmaintained, versions yanked
     # bitmaps (via imbl <- reth-transaction-pool): no fixed release; the unsound
     # TryFrom<&[u8]> constructor is unused on this dependency path.
     "RUSTSEC-2025-0167",
-    # lru (via alloy-provider, pins ^0.16; fixed only in a breaking release): needs a key
+    # lru (via aws-sdk-s3, pins ^0.16): needs a key
     # whose Drop panics during pop() — keys on this path have trivial Drop.
     "RUSTSEC-2026-0253",
 ]

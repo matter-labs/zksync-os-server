@@ -243,7 +243,7 @@ mod tests {
     fn test_protocol_semantic_version_is_live() {
         let test_vector = [
             ((0, 29, 5), false),
-            ((0, 30, 0), true),
+            ((0, 30, 0), false),
             ((0, 30, 1), true),
             ((0, 30, 2), true),
             // Patch versions without a known proving version are not live.

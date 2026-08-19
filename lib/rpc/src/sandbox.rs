@@ -246,6 +246,7 @@ impl CallTracer {
             } else {
                 "CREATE".to_string()
             },
+            ..Default::default()
         })
     }
 
@@ -314,6 +315,7 @@ impl EvmTracer for CallTracer {
                     }
                 }
                 .to_string(),
+                ..Default::default()
             })
         }
 
@@ -602,6 +604,7 @@ impl EvmTracer for CallTracer {
             logs: vec![],
             value: Some(token_value),
             typ: "SELFDESTRUCT".to_string(),
+            ..Default::default()
         };
 
         if let Some(parent_call) = self.unfinished_calls.last_mut() {
@@ -793,6 +796,7 @@ mod tests {
             logs: vec![],
             value: None,
             typ: "CALL".to_string(),
+            ..Default::default()
         }
     }
 
