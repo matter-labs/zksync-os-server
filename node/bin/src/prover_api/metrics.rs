@@ -59,6 +59,9 @@ pub struct ProverApiMetrics {
     /// Latency for job pick requests, including writing the payload to the prover.
     #[metrics(unit = Unit::Seconds, labels = ["stage", "job_result"], buckets = Buckets::LATENCIES)]
     pub pick_job_latency: LabeledFamily<(ProverStage, PickJobResult), Histogram<Duration>, 2>,
+    /// Time hyper spent writing the pick payload. Includes transfers the prover abandoned.
+    #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = Buckets::LATENCIES)]
+    pub pick_job_transfer_latency: LabeledFamily<ProverStage, Histogram<Duration>>,
     /// Latency for proof submission requests
     #[metrics(unit = Unit::Seconds, labels = ["stage"], buckets = Buckets::LATENCIES)]
     pub submit_proof_latency: LabeledFamily<ProverStage, Histogram<Duration>>,

@@ -50,7 +50,8 @@ impl PickJobGuard {
         response.map(|inner| {
             Body::new(GuardedBody {
                 inner,
-                _guard: self,
+                payload_ready: Instant::now(),
+                guard: self,
             })
         })
     }
@@ -65,7 +66,15 @@ impl Drop for PickJobGuard {
 
 struct GuardedBody {
     inner: Body,
-    _guard: PickJobGuard,
+    payload_ready: Instant,
+    guard: PickJobGuard,
+}
+
+impl Drop for GuardedBody {
+    fn drop(&mut self) {
+        PROVER_API_METRICS.pick_job_transfer_latency[&self.guard.stage]
+            .observe(self.payload_ready.elapsed());
+    }
 }
 
 impl HttpBody for GuardedBody {
