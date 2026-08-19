@@ -289,11 +289,11 @@ impl PendingBatchInfo {
         }
     }
 
-    /// Batch output hash exactly as the zksync-os 0.4.0 (proving V8) batch program computes it
-    /// (`BatchOutput::hash` in `basic_bootloader/.../post_tx_op/public_input.rs`): unlike the
-    /// pre-V8 [`Self::public_input_hash`] layout, it does NOT include the leading `chain_id` —
+    /// Batch output hash exactly as the ZKsync OS 0.4 batch program computes it
+    /// (`BatchOutput::hash` in `basic_bootloader/.../post_tx_op/public_input.rs`). Unlike
+    /// [`Self::public_input_hash`], it does not include the leading `chain_id`;
     /// the chain id is committed through the chain config hash in the outer batch public input
-    /// instead. Used for server-side verification of V8 FRI proofs and as the v32 arm of
+    /// instead. Used for server-side verification of unified-layer FRI proofs and as the v32 arm of
     /// [`Self::public_input_hash`] — era-contracts#2323 defines the same layout on-chain.
     pub fn v32_batch_output_hash(&self) -> B256 {
         let commit_info = &self.commit_info;

@@ -26,3 +26,6 @@ serde.workspace = true
 blake2.workspace = true
 time.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

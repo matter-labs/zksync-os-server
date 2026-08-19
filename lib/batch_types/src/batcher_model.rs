@@ -11,7 +11,7 @@ use zksync_os_batcher_metrics::{BATCHER_METRICS, BatchExecutionStage};
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
 use zksync_os_observability::LatencyDistributionTracker;
 use zksync_os_pipeline::HasBlockRangeEnd;
-use zksync_os_types::{ProvingVersion, PubdataMode};
+use zksync_os_types::{ProvingStackConfiguration, PubdataMode, require_proving_config};
 
 /// Information about a batch that is enough for all L1 operations.
 /// Used throughout the batcher subsystem
@@ -56,17 +56,12 @@ pub struct BatchMetadata {
 impl BatchMetadata {
     /// Gets batch metadata verification key hash.
     pub fn verification_key_hash(&self) -> anyhow::Result<&'static str> {
-        Ok(
-            ProvingVersion::try_from(self.batch_info.protocol_version.clone())
-                .context("Failed to get proving version from protocol version")?
-                .vk_hash(),
-        )
+        Ok(self.proving_config()?.verification_key_hash)
     }
 
-    pub fn proving_version(&self) -> anyhow::Result<ProvingVersion> {
-        Ok(ProvingVersion::try_from(
-            self.batch_info.protocol_version.clone(),
-        )?)
+    pub fn proving_config(&self) -> anyhow::Result<&'static ProvingStackConfiguration> {
+        require_proving_config(&self.batch_info.protocol_version, "batch metadata access")
+            .context("Failed to get proving configuration from protocol version")
     }
 }
 
@@ -208,28 +203,29 @@ pub enum FriProof {
     Real(RealFriProof),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 #[serde(untagged)]
 pub enum RealFriProof {
-    V2 {
-        proof: Bytes,
-        proving_execution_version: u32,
-    },
+    V2 { proof: Bytes },
+}
+
+#[derive(Deserialize)]
+struct RealFriProofRepr {
+    proof: Bytes,
+    #[serde(default, rename = "proving_execution_version")]
+    _legacy_proving_ordinal: Option<serde::de::IgnoredAny>,
+}
+
+impl<'de> Deserialize<'de> for RealFriProof {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let repr = RealFriProofRepr::deserialize(deserializer)?;
+        Ok(Self::V2 { proof: repr.proof })
+    }
 }
 
 impl FriProof {
     pub fn is_fake(&self) -> bool {
         matches!(self, FriProof::Fake)
-    }
-
-    pub fn proving_execution_version(&self) -> Option<u32> {
-        match self {
-            FriProof::Real(RealFriProof::V2 {
-                proving_execution_version,
-                ..
-            }) => Some(*proving_execution_version),
-            _ => None,
-        }
     }
 
     pub fn proof(&self) -> Option<&[u8]> {
@@ -253,12 +249,7 @@ impl Debug for FriProof {
         match self {
             FriProof::Fake => write!(f, "Fake"),
             FriProof::AlreadySubmittedToL1 => write!(f, "AlreadySubmittedToL1"),
-            FriProof::Real(_) => write!(
-                f,
-                "Real(proving_execution_version={:?}, len: {:?})",
-                self.proving_execution_version(),
-                self.proof().unwrap().len()
-            ),
+            FriProof::Real(_) => write!(f, "Real(len: {:?})", self.proof().unwrap().len()),
         }
     }
 }
@@ -270,26 +261,27 @@ pub enum SnarkProof {
     Real(RealSnarkProof),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 pub enum RealSnarkProof {
-    V2 {
-        proof: Vec<u8>,
-        proving_execution_version: u32,
-    },
+    V2 { proof: Vec<u8> },
+}
+
+#[derive(Deserialize)]
+struct RealSnarkProofRepr {
+    proof: Vec<u8>,
+    #[serde(default, rename = "proving_execution_version")]
+    _legacy_proving_ordinal: Option<serde::de::IgnoredAny>,
+}
+
+impl<'de> Deserialize<'de> for RealSnarkProof {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let repr = RealSnarkProofRepr::deserialize(deserializer)?;
+        Ok(Self::V2 { proof: repr.proof })
+    }
 }
 
 impl SnarkProof {
-    pub fn proving_execution_version(&self) -> Option<u32> {
-        match self {
-            SnarkProof::Real(RealSnarkProof::V2 {
-                proving_execution_version,
-                ..
-            }) => Some(*proving_execution_version),
-            _ => None,
-        }
-    }
-
     pub fn proof(&self) -> Option<&[u8]> {
         match self {
             SnarkProof::Real(real) => Some(real.proof()),
@@ -315,5 +307,45 @@ impl<E: Send + 'static, S: Send + 'static> HasBlockRangeEnd for BatchEnvelope<E,
     }
     fn batch_number(&self) -> Option<u64> {
         Some(self.batch.batch_info.batch_number)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RealFriProof, RealSnarkProof};
+    use alloy::primitives::Bytes;
+
+    #[test]
+    fn new_proof_envelopes_omit_the_legacy_proving_ordinal() {
+        let fri = RealFriProof::V2 {
+            proof: Bytes::from(vec![1, 2, 3]),
+        };
+        let snark = RealSnarkProof::V2 {
+            proof: vec![4, 5, 6],
+        };
+
+        for value in [
+            serde_json::to_value(fri).unwrap(),
+            serde_json::to_value(snark).unwrap(),
+        ] {
+            assert!(value.get("proving_execution_version").is_none());
+        }
+    }
+
+    #[test]
+    fn legacy_proof_ordinals_are_ignored_while_decoding() {
+        let fri: RealFriProof = serde_json::from_value(serde_json::json!({
+            "proof": "0x010203",
+            "proving_execution_version": 7,
+        }))
+        .unwrap();
+        let snark: RealSnarkProof = serde_json::from_value(serde_json::json!({
+            "proof": [4, 5, 6],
+            "proving_execution_version": 8,
+        }))
+        .unwrap();
+
+        assert_eq!(fri.proof(), &[1, 2, 3]);
+        assert_eq!(snark.proof(), &[4, 5, 6]);
     }
 }

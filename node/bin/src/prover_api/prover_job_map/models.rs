@@ -1,7 +1,9 @@
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use zksync_os_batch_types::batcher_model::SignedBatchEnvelope;
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::{
+    AggregationGroup, ProtocolSemanticVersion, ProvingStackConfiguration, require_proving_config,
+};
 
 #[derive(Debug)]
 pub struct JobEntry<T> {
@@ -12,7 +14,8 @@ pub struct JobEntry<T> {
 #[derive(Clone, Debug)]
 pub struct JobMetadata {
     pub batch_number: u64,
-    pub proving_version: ProvingVersion,
+    pub protocol_version: ProtocolSemanticVersion,
+    pub proving_config: &'static ProvingStackConfiguration,
     pub tx_count: usize,
     pub computational_native_used: Option<u64>,
     pub added_at: Instant,
@@ -54,16 +57,17 @@ impl Debug for QueueStatistics {
 impl JobMetadata {
     pub fn new_from_batch<T>(batch_envelope: &SignedBatchEnvelope<T>) -> Self {
         let batch_number = batch_envelope.batch_number();
-        let proving_version = batch_envelope
-            .batch
-            .proving_version()
-            .expect("Must be valid execution as set by the server");
+        let protocol_version = batch_envelope.batch.batch_info.protocol_version.clone();
+        let proving_config =
+            require_proving_config(&protocol_version, "prover job queue insertion")
+                .expect("batch entering the prover queue must have a registered proving stack");
         let tx_count = batch_envelope.batch.tx_count;
         let computational_native_used = batch_envelope.batch.computational_native_used;
 
         Self {
             batch_number,
-            proving_version,
+            protocol_version,
+            proving_config,
             tx_count,
             computational_native_used,
             added_at: Instant::now(),
@@ -71,6 +75,14 @@ impl JobMetadata {
             assigned_at: None,
             current_attempt: 0,
         }
+    }
+
+    pub fn verification_key_hash(&self) -> &'static str {
+        self.proving_config.verification_key_hash
+    }
+
+    pub fn aggregation_group(&self) -> AggregationGroup {
+        self.proving_config.aggregation_group
     }
 
     /// Assign (or reassign) this job to a prover.
@@ -94,7 +106,9 @@ impl JobMetadata {
 pub struct JobBatchStats {
     pub min_batch_number: u64,
     pub max_batch_number: u64,
-    pub proving_version: ProvingVersion,
+    pub first_protocol_version: ProtocolSemanticVersion,
+    pub last_protocol_version: ProtocolSemanticVersion,
+    pub proving_stack: &'static str,
     pub max_time_since_added: Duration,
     pub total_txs: usize,
     pub total_computational_native_used: Option<u64>,
@@ -138,7 +152,9 @@ impl JobBatchStats {
         JobBatchStats {
             min_batch_number: min_batch.batch_number,
             max_batch_number,
-            proving_version: min_batch.proving_version,
+            first_protocol_version: min_batch.protocol_version.clone(),
+            last_protocol_version: metadata_list.last().unwrap().protocol_version.clone(),
+            proving_stack: min_batch.proving_config.name,
             max_time_since_added: min_batch.added_at.elapsed(),
             total_txs: metadata_list.iter().map(|m| m.tx_count).sum(),
             total_computational_native_used: metadata_list
@@ -175,10 +191,20 @@ impl Debug for JobBatchStats {
                 self.max_batch_number,
             )?;
         }
+        write!(f, " with {} txs", self.total_txs)?;
+        if self.first_protocol_version == self.last_protocol_version {
+            write!(f, ", protocol {}", self.first_protocol_version)?;
+        } else {
+            write!(
+                f,
+                ", protocols {}-{}",
+                self.first_protocol_version, self.last_protocol_version
+            )?;
+        }
         write!(
             f,
-            " with {} txs, proving version {:?}, spent in queue: {:?}",
-            self.total_txs, self.proving_version, self.max_time_since_added
+            ", proving stack {}, spent in queue: {:?}",
+            self.proving_stack, self.max_time_since_added
         )?;
         if let Some(info) = &self.job_with_max_attempts_info {
             write!(

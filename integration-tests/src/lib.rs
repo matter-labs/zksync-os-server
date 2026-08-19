@@ -35,12 +35,14 @@ use zksync_os_server::config::Config;
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 #[cfg(feature = "prover-tests")]
-use zksync_os_server::default_protocol_version::{PROTOCOL_VERSION_V30_2, PROTOCOL_VERSION_V31_0};
+use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V30_2;
 use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
 };
+#[cfg(feature = "prover-tests")]
+use zksync_os_types::{ProtocolSemanticVersion, ProverInputStrategy, require_proving_config};
 
 pub mod assert_traits;
 pub mod config;
@@ -83,7 +85,7 @@ impl TestCase {
 // v32.0; reintroduce it once they are generated. Until then v32 is covered via in-test upgrades.
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
 
-/// Fresh chain at v30.2 — the oldest protocol version with live proving support (V6).
+/// Fresh chain at v30.2 — the oldest protocol version with a registered proving stack.
 #[cfg(feature = "prover-tests")]
 pub const V30_TO_L1: TestCase = TestCase {
     protocol_version: PROTOCOL_VERSION_V30_2,
@@ -96,8 +98,8 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 ];
 /// Shutdown completes in <5 seconds when there is no CPU starvation. But because prover input
 /// generator runs its CPU-bound task on a blocking thread it can significantly slow down graceful
-/// shutdown. Keep 60s until V7 proving support is dropped (V8 generates prover input natively
-/// at batch seal, without the blocking RISC-V simulator).
+/// shutdown. Keep 60s while the ZKsync OS 0.3 proving stack remains supported; the newer native
+/// batch path does not run the blocking RISC-V simulator here.
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
@@ -968,26 +970,41 @@ impl AnvilL1 {
 
 #[cfg(feature = "prover-tests")]
 async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
-    let protocol_version = tester.chain_layout.protocol_version();
-    let app_bin_path = match protocol_version {
-        PROTOCOL_VERSION_V30_2 => utils::materialize_multiblock_batch_bin(
-            &tester.tempdir.path().join("app_bins"),
-            "v6",
-            zksync_os_multivm::apps::v6::MULTIBLOCK_BATCH,
+    let protocol_version_string = tester.chain_layout.protocol_version();
+    let protocol_version = ProtocolSemanticVersion::try_from(protocol_version_string)
+        .expect("local-chain protocol version must be semantic");
+    let proving_config =
+        require_proving_config(&protocol_version, "integration-test prover startup")
+            .expect("prover tests require a registered proving stack");
+    let (app_bin_path, prover_release) = match proving_config.prover_input {
+        ProverInputStrategy::ZksyncOs02BlockInputs => (
+            utils::materialize_multiblock_batch_bin(
+                &tester.tempdir.path().join("app_bins"),
+                "zksync-os-0.2",
+                zksync_os_multivm::apps::os_0_2::MULTIBLOCK_BATCH,
+            ),
+            "v0.7.1",
         ),
-        PROTOCOL_VERSION_V31_0 => utils::materialize_multiblock_batch_bin(
-            &tester.tempdir.path().join("app_bins"),
-            "v7",
-            zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH,
+        ProverInputStrategy::ZksyncOs03BlockInputs => (
+            utils::materialize_multiblock_batch_bin(
+                &tester.tempdir.path().join("app_bins"),
+                "zksync-os-0.3",
+                zksync_os_multivm::apps::os_0_3::MULTIBLOCK_BATCH,
+            ),
+            "v0.8.0",
         ),
-        _ => panic!("unsupported protocol version for prover tests"),
+        ProverInputStrategy::ZksyncOs04NativeBatch => {
+            panic!(
+                "prover-tests has no bundled external prover for stack {}",
+                proving_config.name
+            )
+        }
     };
     let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
     let output_dir = tester.tempdir.path().join("outputs");
     std::fs::create_dir_all(&output_dir).unwrap();
 
-    let path =
-        download_prover_and_unpack(protocol_version, cfg!(feature = "gpu-prover-tests")).await;
+    let path = download_prover_and_unpack(prover_release, cfg!(feature = "gpu-prover-tests")).await;
 
     let mut child = tokio::process::Command::new(&path)
         .arg("--sequencer-urls")
@@ -1034,19 +1051,7 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
 }
 
 #[cfg(feature = "prover-tests")]
-fn prover_release_for_protocol(protocol_version: &str) -> &'static str {
-    match protocol_version {
-        PROTOCOL_VERSION_V30_2 => "v0.7.1",
-        PROTOCOL_VERSION_V31_0 => "v0.8.0",
-        _ => {
-            panic!("unsupported protocol version `{protocol_version}` for prover binary selection")
-        }
-    }
-}
-
-#[cfg(feature = "prover-tests")]
-async fn download_prover_and_unpack(protocol_version: &str, gpu: bool) -> String {
-    let release_version = prover_release_for_protocol(protocol_version);
+async fn download_prover_and_unpack(release_version: &str, gpu: bool) -> String {
     let release_base_url = format!(
         "https://github.com/matter-labs/zksync-airbender-prover/releases/download/{release_version}"
     );
