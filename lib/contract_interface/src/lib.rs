@@ -908,13 +908,23 @@ impl<P: Provider> ZkChain<P> {
     }
 }
 
-/// Returns `true` if the error came from the contract itself (empty return data or a revert),
-/// which is how an EVM reports a call to a function selector that the deployed code does not
-/// implement. Network / transport failures return `false` so they can be propagated.
+/// Returns `true` for an empty contract response or empty EVM revert.
 pub fn is_method_missing(err: &alloy::contract::Error) -> bool {
     match err {
         alloy::contract::Error::ZeroData(..) => true,
-        alloy::contract::Error::TransportError(te) => te.as_error_resp().is_some(),
+        alloy::contract::Error::TransportError(te) => {
+            let Some(response) = te.as_error_resp() else {
+                return false;
+            };
+            // Geth-compatible RPCs report EVM execution reverts with code 3.
+            if response.code != 3 || !response.message.to_ascii_lowercase().contains("revert") {
+                return false;
+            }
+
+            response
+                .as_revert_data()
+                .is_some_and(|data| data.is_empty())
+        }
         _ => false,
     }
 }
@@ -942,5 +952,65 @@ impl<T> Enrich for alloy::contract::Result<T> {
             None => Error::Call(Box::new(e), function_name.to_string()),
             Some(block_id) => Error::CallAtBlock(Box::new(e), function_name.to_string(), block_id),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_method_missing;
+    use alloy::rpc::json_rpc::{ErrorPayload, RpcSend};
+    use alloy::transports::TransportError;
+    use serde::Serialize;
+
+    #[derive(Clone, Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct NestedRevert {
+        original_error: RevertData,
+    }
+
+    #[derive(Clone, Debug, Serialize)]
+    struct RevertData {
+        data: &'static str,
+    }
+
+    fn rpc_error<T: RpcSend>(
+        code: i64,
+        message: &'static str,
+        data: Option<T>,
+    ) -> alloy::contract::Error {
+        let payload = ErrorPayload {
+            code,
+            message: message.into(),
+            data,
+        }
+        .serialize_payload()
+        .unwrap();
+        alloy::contract::Error::TransportError(TransportError::ErrorResp(payload))
+    }
+
+    #[test]
+    fn method_missing_requires_an_empty_revert() {
+        assert!(is_method_missing(&rpc_error(
+            3,
+            "execution reverted",
+            Some("0x"),
+        )));
+        assert!(is_method_missing(&rpc_error(
+            3,
+            "execution reverted",
+            Some(NestedRevert {
+                original_error: RevertData { data: "0x" },
+            }),
+        )));
+        assert!(!is_method_missing(&rpc_error(
+            3,
+            "execution reverted",
+            Some("0xdeadbeef"),
+        )));
+        assert!(!is_method_missing(&rpc_error(
+            -32603,
+            "execution reverted",
+            Option::<&str>::None,
+        )));
     }
 }

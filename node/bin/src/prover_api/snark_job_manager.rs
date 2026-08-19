@@ -1,6 +1,6 @@
 use crate::prover_api::fri_job_manager::FriJob;
 use crate::prover_api::metrics::{ProverStage, ProverType};
-use crate::prover_api::prover_job_map::ProverJobMap;
+use crate::prover_api::prover_job_map::{JobEntry, ProverJobMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -178,6 +178,16 @@ impl SnarkJobManager {
         timeout_for_real_fris: Option<Duration>,
     ) -> anyhow::Result<()> {
         loop {
+            let is_fake_or_timed_out = |job: &JobEntry<FriProof>| {
+                job.batch_envelope.data.is_fake()
+                    || timeout_for_real_fris
+                        .is_some_and(|timeout| job.metadata.added_at.elapsed() >= timeout)
+            };
+            if !self.jobs.has_assignable_job(&is_fake_or_timed_out).await {
+                return Ok(());
+            }
+
+            let permit = self.try_reserve_permit_downstream()?;
             // A SNARK must not span a protocol-version boundary: the verifying executor
             // applies its own PI formula to every batch in the group. The version is pinned
             // only after the fake/timeout check passes — the predicate also runs on head jobs
@@ -186,10 +196,7 @@ impl SnarkJobManager {
             let assigned: Vec<(FriJob, FriProof)> = self
                 .jobs
                 .pick_jobs_while_with_limit(self.max_fris_per_snark, "fake_prover", |job| {
-                    let fake_or_timed_out = job.batch_envelope.data.is_fake()
-                        || timeout_for_real_fris
-                            .is_some_and(|timeout| job.metadata.added_at.elapsed() >= timeout);
-                    if !fake_or_timed_out {
+                    if !is_fake_or_timed_out(job) {
                         return false;
                     }
                     let version = &job.batch_envelope.batch.batch_info.protocol_version;
@@ -214,7 +221,6 @@ impl SnarkJobManager {
 
             let batch_from = assigned.first().unwrap().0.batch_number;
             let batch_to = assigned.last().unwrap().0.batch_number;
-            let permit = self.try_reserve_permit_downstream()?;
             let Some(completed) = self
                 .jobs
                 .complete_many_jobs(batch_from, batch_to, ProverType::Fake, "fake_prover")
@@ -308,5 +314,53 @@ fn proof_chain_config_hash(
         )?))
     } else {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prover_api::test_util::create_test_batch_envelope_with_data;
+    use zksync_os_types::ProtocolSemanticVersion;
+
+    #[tokio::test]
+    async fn backpressure_does_not_lease_fake_jobs() {
+        let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
+        let (sender, mut receiver) = mpsc::channel(1);
+        let capacity_filler = vec![create_test_batch_envelope_with_data(
+            100,
+            protocol_version.clone(),
+            FriProof::Fake,
+        )];
+        let chain_config_hash = proof_chain_config_hash(&capacity_filler).unwrap();
+        sender
+            .try_send(ProofCommand::new(
+                capacity_filler,
+                SnarkProof::Fake,
+                chain_config_hash,
+            ))
+            .unwrap();
+
+        let manager = SnarkJobManager::new(sender, 1, Duration::from_secs(60), 100);
+        manager
+            .add_job(create_test_batch_envelope_with_data(
+                1,
+                protocol_version,
+                FriProof::Fake,
+            ))
+            .await;
+
+        let err = manager.process_pending_fake_fri_proofs().await.unwrap_err();
+        assert_eq!(err.to_string(), "downstream backpressure");
+        let status = manager.jobs.status().await;
+        assert_eq!(status[0].assigned_to_prover_id, None);
+        assert_eq!(status[0].current_attempt, 0);
+
+        receiver.recv().await.unwrap();
+        manager.process_pending_fake_fri_proofs().await.unwrap();
+
+        let command = receiver.recv().await.unwrap();
+        assert_eq!(command.as_ref()[0].batch_number(), 1);
+        assert!(manager.jobs.status().await.is_empty());
     }
 }

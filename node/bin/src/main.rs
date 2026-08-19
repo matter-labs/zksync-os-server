@@ -88,8 +88,27 @@ fn load_config_defaults(config_sources: &mut ConfigSources, config_paths: Option
     load_config_file_sources(config_sources, &config_paths);
 }
 
-#[tokio::main]
-pub async fn main() {
+/// Stack size for tokio worker threads. The v32.0 native batch prover-input generator
+/// overflows the 2 MiB default and aborts the server while sealing its first batch.
+/// Only a ceiling - nothing is allocated up front.
+const WORKER_THREAD_STACK_SIZE: usize = 256 * 1024 * 1024;
+
+pub fn main() {
+    // `RUST_MIN_STACK`, when set, wins, so constrained environments can still lower this.
+    let stack_size = std::env::var("RUST_MIN_STACK")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(WORKER_THREAD_STACK_SIZE);
+
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(stack_size)
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime")
+        .block_on(async_main());
+}
+
+async fn async_main() {
     // Explicitly select the `ring` TLS crypto provider for rustls.
     //
     // Our dependency tree pulls in both `ring` and `aws-lc-rs` as rustls crypto backends

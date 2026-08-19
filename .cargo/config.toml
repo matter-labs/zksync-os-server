@@ -5,5 +5,5 @@ rustflags = ["--cfg", "tokio_unstable"]
 # Workspace directory to properly resolve artifacts relative paths
 # it will always be relative to the workspace and can be rewritten if required
 WORKSPACE_DIR = { value = "./", relative = true, force = false }
-# Proof generation has deep call stacks in debug builds; 16 MiB avoids stack overflows.
-RUST_MIN_STACK = { value = "16777216", force = false }
+# Proof generation has deep call stacks (worst in debug builds); 256 MiB matches WORKER_THREAD_STACK_SIZE in node/bin.
+RUST_MIN_STACK = { value = "268435456", force = false }

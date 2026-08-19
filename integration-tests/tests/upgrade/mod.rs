@@ -2,7 +2,9 @@ use alloy::primitives::{Address, Bytes, U256};
 use alloy::providers::Provider;
 use std::collections::BTreeMap;
 use zksync_os_integration_tests::contracts::SampleForceDeployment;
-use zksync_os_integration_tests::upgrade::UpgradeTester;
+use zksync_os_integration_tests::upgrade::{
+    UpgradeTester, ZKSYNC_OS_TESTNET_VERIFIER_DEPLOYED_BYTECODE,
+};
 use zksync_os_integration_tests::{CURRENT_TO_L1, Tester};
 
 /// Executes the simplest patch protocol upgrade:
@@ -35,7 +37,10 @@ async fn upgrade_patch_no_deployments() -> anyhow::Result<()> {
             deadline,
             upgrade_timestamp,
             true,
+            // A patch upgrade stays on the v31 batch format; the v32 facets and verifier
+            // would break it.
             Vec::new(),
+            None,
         )
         .await?;
 
@@ -79,6 +84,9 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
         .with_timestamp(upgrade_timestamp)
         .build();
 
+    // The upgrade carries the v32 settlement fixtures (facet replace-cuts + the flat-fold
+    // verifier): a v31 Committer/verifier would keep the old batch hashes and fold, which
+    // the v32 server no longer matches.
     let facet_cuts = upgrade_tester.prepare_v32_settlement_fixtures().await?;
 
     upgrade_tester
@@ -88,6 +96,7 @@ async fn upgrade_to_v32_with_predeployed_bytecodes() -> anyhow::Result<()> {
             upgrade_timestamp,
             false,
             facet_cuts,
+            Some(ZKSYNC_OS_TESTNET_VERIFIER_DEPLOYED_BYTECODE.parse::<Bytes>()?),
         )
         .await?;
 
@@ -162,6 +171,7 @@ async fn upgrade_to_v32_with_deployments() -> anyhow::Result<()> {
             upgrade_timestamp,
             false,
             facet_cuts,
+            Some(ZKSYNC_OS_TESTNET_VERIFIER_DEPLOYED_BYTECODE.parse::<Bytes>()?),
         )
         .await?;
 

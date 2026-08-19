@@ -169,11 +169,14 @@ mod v8_verifier {
     use verifier_common::SecurityModel;
     use verifier_common::transcript::Blake2sBufferingTranscript;
 
-    const SECURITY: SecurityModel = SecurityModel::Security80;
+    /// v32 proves at 100-bit; this selects the recursion verifier binaries the chain below is
+    /// continued through, so it must match the prover's `PROVING_SECURITY_LEVEL`.
+    const SECURITY: SecurityModel = SecurityModel::Security100;
 
-    /// `end_params` of the zksync-os v0.4.0 multiblock batch program, built reproducibly from
-    /// draft-0.4.0 @ 8ef47499 (md5 `8128c18a3b7145366b184e027d0e0f34`), computed with the
-    /// airbender `end_params` tool (`tools/cli`) at the pinned tag v0.6.0-rc.1.
+    /// `end_params` of the V8 `multiblock_batch.bin` (md5
+    /// `8128c18a3b7145366b184e027d0e0f34`), from the airbender `end_params` tool (`tools/cli`).
+    /// Derived from the app binary alone, so it is level-independent - unlike `expected_chain`,
+    /// which continues it through the `SECURITY` artifacts above.
     /// Every V8 FRI proof must carry a recursion chain rooted in this program. Must be
     /// regenerated together with `V8_VK_HASH` whenever the V8 app binary or the airbender pin
     /// changes.
@@ -327,8 +330,8 @@ mod tests {
         assert_eq!(
             v8_verifier::unified_level_data().expected_chain,
             [
-                404272789, 3121750659, 852643044, 1762144566, 2420098273, 1372768532, 3381753661,
-                851746963,
+                3908330635, 3818926154, 688684577, 1308736155, 1264132119, 1537631312, 358892107,
+                1291547267,
             ],
         );
     }
