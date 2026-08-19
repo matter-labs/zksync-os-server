@@ -1,9 +1,21 @@
 general:
   zksync_os_version: "0.32.0"
-  verification_key: "TBD"
+  # SNARK VK of the v32.0 / proving-V8 lane, generated with
+  #   zkos-wrapper generate-vk --bin multiblock_batch.bin --text multiblock_batch.text \
+  #     --check-aux-params --trusted-setup setup_compact.key
+  # and registered on the chain's ZKsyncOSDualVerifier at verifier version 8 (the version
+  # the server encodes in `_proof[0]` for V8 proofs).
+  # Regenerated at 100-bit security against multiblock_batch.bin md5
+  # 8128c18a3b7145366b184e027d0e0f34 (zksync-os draft-0.4.0 @ 8ef47499).
+  verification_key: "0xa81dc850a0724bcd62b7e5fbe60c62be32b4b45e33dd0d950f9c313e4684605a"
 
 era-contracts:
-  sha: "62a58d61c46a4681b3da85421081df51d9d086fb"
+  # dz-v32-public-input (era-contracts#2381 head): #2323 (chain config hash in the batch
+  # proof public input, chain-id-less batchOutputHash) + the flat multi-batch fold
+  # (keccak of the concatenated per-batch hashes, hashed once - a rolling fold diverges
+  # from N == 3 on). The previous pin (7644cc62) was an amended-away sibling of this
+  # commit that still carried the rolling fold.
+  sha: "8fb7c29a4e3174335c6480b23f57822e054f9d5f"
 
 zksync-os-integration-tests:
   sha: "16c6a83b4f634609958f347c56549ba19bf9df9b"
