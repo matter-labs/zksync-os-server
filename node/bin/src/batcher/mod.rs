@@ -194,11 +194,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 "Batch da_input",
             );
 
-            if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone() {
-                self.sidecar_sender
-                    .send(sidecar)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to send sidecar: {e}"))?;
+            if let Some(sidecar) = batch_envelope.batch.blob_sidecar.clone()
+                && let Err(err) = self.sidecar_sender.send(sidecar).await
+            {
+                tracing::warn!(%err, "failed to send blob sidecar to gas adjuster");
             }
             output.send_and_record(batch_envelope, &state_reporter)?;
         }
