@@ -3,22 +3,22 @@ general:
   # SNARK VK of the v32.0 / proving-V8 lane, generated with
   #   zkos-wrapper generate-vk --bin multiblock_batch.bin --text multiblock_batch.text \
   #     --check-aux-params --trusted-setup setup_compact.key
-  # and registered on the chain's ZKsyncOSDualVerifier at verifier version 8 (the version
-  # the server encodes in `_proof[0]` for V8 proofs).
-  # Regenerated at 100-bit security against multiblock_batch.bin md5
-  # 8128c18a3b7145366b184e027d0e0f34 (zksync-os draft-0.4.0 @ 8ef47499).
+  # at 100-bit security against multiblock_batch.bin md5 8128c18a3b7145366b184e027d0e0f34
+  # (zksync-os draft-0.4.0 @ 8ef47499). Deployed as the in-tree ZKsyncOSVerifierPlonk and
+  # registered on the chain's ZKsyncOSDualVerifier at verifier version 8 (the version the
+  # server encodes in `_proof[0]` for V8 proofs) as well as the constructor default.
   verification_key: "0xa81dc850a0724bcd62b7e5fbe60c62be32b4b45e33dd0d950f9c313e4684605a"
 
 era-contracts:
-  # dz-v32-public-input (era-contracts#2381 head): #2323 (chain config hash in the batch
-  # proof public input, chain-id-less batchOutputHash) + the flat multi-batch fold
-  # (keccak of the concatenated per-batch hashes, hashed once - a rolling fold diverges
-  # from N == 3 on). The previous pin (7644cc62) was an amended-away sibling of this
-  # commit that still carried the rolling fold.
-  sha: "8fb7c29a4e3174335c6480b23f57822e054f9d5f"
+  # dz-v32-atomic-v8-settlement: the atomic-interop contracts
+  # (ad-atomic-interop-da-v32-genesis, timestamped interop roots, v32 execute wire,
+  # 4-word chain config hash incl. pubdata content) converged with the #2381 V8
+  # settlement layer (flat multi-batch fold, untruncated per-batch public inputs,
+  # NonZeroCarriedHash, 100-bit V8 VK at default verifier version 8).
+  sha: "17c7837ead3da4741b538d369538d48a434008ab"
 
 zksync-os-integration-tests:
   sha: "16c6a83b4f634609958f347c56549ba19bf9df9b"
 
 zksync-os-server:
-  sha: "c8cd48d2d9d407978491872b1fd7e1e4b9612897"
+  sha: "a745e5e485bb84c38fbd62d1b79da1b70dca9f9e"

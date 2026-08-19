@@ -8,24 +8,12 @@ Default single-chain configuration for running ZKsync OS directly against L1 for
 |--------|----------|----------|
 | `config.yaml` | 506 | 3050 |
 
-The ecosystem and chain were deployed with `zk-deployer`. No Gateway chain,
+The ecosystem and chain were deployed with `zk-deployer` from the era-contracts
+revision recorded in [versions.yaml](../versions.yaml): the atomic-interop
+contracts converged with the V8 settlement layer (flat multi-batch public-input
+fold, 100-bit V8 SNARK VK registered at verifier version 8). No Gateway chain,
 Gateway database, or pre-generated node database is included. The L1 snapshot
-contains 129 transaction blocks and no interval-mined empty blocks.
-
-The snapshot has since been upgraded in place so the chain can verify V8
-(proving version 8) proofs, which the original deployment could not:
-
-- `ZKsyncOSVerifierPlonk` for the v32.0 VK deployed and registered on the chain's
-  `ZKsyncOSDualVerifier` at **verifier version 8** — the version the server encodes in
-  `_proof[0]` for V8 proofs. Version 0 still holds the V7 verifier.
-- `ExecutorFacet` and `CommitterFacet` replaced via diamond cut with builds from
-  era-contracts [`7644cc62`](https://github.com/matter-labs/era-contracts/pull/2381):
-  era-contracts#2323 (chain config hash in the batch proof public input, chain-id-less
-  `batchOutputHash`) plus the full-hash multi-batch fold.
-- `ZKsyncOSDualVerifier` code replaced in place with the same build, preserving its
-  verifier mappings.
-
-Regenerate with `local-chains/v32.0/regenerate.sh` after bumping the contracts.
+contains 126 transactions and no interval-mined empty blocks.
 
 ## Quick Start
 
