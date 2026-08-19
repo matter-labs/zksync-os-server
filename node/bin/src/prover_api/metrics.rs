@@ -56,7 +56,7 @@ pub struct ProverMetrics {
 #[derive(Debug, Metrics)]
 #[metrics(prefix = "prover_api")]
 pub struct ProverApiMetrics {
-    /// Latency for job pick requests
+    /// Latency for job pick requests, including writing the payload to the prover.
     #[metrics(unit = Unit::Seconds, labels = ["stage", "job_result"], buckets = Buckets::LATENCIES)]
     pub pick_job_latency: LabeledFamily<(ProverStage, PickJobResult), Histogram<Duration>, 2>,
     /// Latency for proof submission requests
@@ -90,7 +90,8 @@ pub enum PickJobResult {
     NoJob,
     /// Request failed with error
     Error,
-    /// Client disconnected before the response was sent
+    /// Client disconnected while the request was being handled. A disconnect during the payload
+    /// transfer is reported as `new_job`.
     Cancelled,
 }
 
