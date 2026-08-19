@@ -1,9 +1,8 @@
 #![cfg(feature = "prover-tests")]
 
-use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, test_multisetup};
+use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, V30_TO_L1, test_multisetup};
 
-// V6 (protocol v30.x) proving support was dropped, so only the v31 lane is provable here.
-#[test_multisetup([CURRENT_TO_L1])]
+#[test_multisetup([CURRENT_TO_L1, V30_TO_L1])]
 async fn prover(env: TestEnvironment) -> anyhow::Result<()> {
     // Test that prover can successfully prove at least one batch
     let mut config = env.default_config().await?;

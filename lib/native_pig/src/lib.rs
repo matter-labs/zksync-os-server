@@ -149,7 +149,7 @@ pub fn generate_batch_run<ReadState: ReadStateHistory>(
         ProvingVersion::V8 => {
             v32::generate_batch_run(blocks, read_state, merkle_tree, pubdata_mode)
         }
-        ProvingVersion::V7 => {
+        ProvingVersion::V6 | ProvingVersion::V7 => {
             anyhow::bail!("native batch proving is unsupported for {proving_version:?}")
         }
     }

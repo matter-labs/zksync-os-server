@@ -10,6 +10,7 @@ use super::ProtocolSemanticVersion;
 #[derive(Debug, Clone, Copy, TryFromPrimitive, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ProvingVersion {
+    V6 = 6,
     V7 = 7,
     V8 = 8,
 }
@@ -19,6 +20,7 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
 
     fn try_from(version: ProtocolSemanticVersion) -> Result<Self, Self::Error> {
         match (version.major, version.minor, version.patch) {
+            (0, 30, 1) | (0, 30, 2) => Ok(ProvingVersion::V6),
             (0, 31, 0) | (0, 31, 1) => Ok(ProvingVersion::V7),
             (0, 32, 0) => Ok(ProvingVersion::V8),
             _ => Err(ProvingVersionError::UnsupportedVersion(version)),
@@ -27,6 +29,10 @@ impl TryFrom<ProtocolSemanticVersion> for ProvingVersion {
 }
 
 impl ProvingVersion {
+    /// verification key hash generated from zksync-os v0.2.5, zksync-airbender v0.5.2 and zkos-wrapper v0.5.4
+    const V6_VK_HASH: &'static str =
+        "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
+
     /// verification key hash generated from zksync-os v0.3.0, zksync-airbender v0.5.2 and zkos-wrapper v0.5.5
     const V7_VK_HASH: &'static str =
         "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
@@ -41,6 +47,7 @@ impl ProvingVersion {
     /// Get the verification key hash associated with this execution version.
     pub fn vk_hash(&self) -> &'static str {
         match self {
+            Self::V6 => Self::V6_VK_HASH,
             Self::V7 => Self::V7_VK_HASH,
             Self::V8 => Self::V8_VK_HASH,
         }
@@ -49,6 +56,7 @@ impl ProvingVersion {
     /// Try to get ExecutionVersion from verification key hash.
     pub fn try_from_vk_hash(vk_hash: &str) -> Result<Self, ProvingVersionError> {
         match vk_hash {
+            Self::V6_VK_HASH => Ok(Self::V6),
             Self::V7_VK_HASH => Ok(Self::V7),
             Self::V8_VK_HASH => Ok(Self::V8),
             val => Err(ProvingVersionError::UnsupportedVkHash(val.to_string())),
@@ -72,6 +80,8 @@ mod tests {
     #[test]
     fn version_mapping() {
         let test_vector = [
+            ((0, 30, 1), ProvingVersion::V6),
+            ((0, 30, 2), ProvingVersion::V6),
             ((0, 31, 0), ProvingVersion::V7),
             ((0, 31, 1), ProvingVersion::V7),
             ((0, 32, 0), ProvingVersion::V8),
@@ -87,10 +97,10 @@ mod tests {
         let unknown_versions = [
             (0, 29, 1),
             (0, 30, 0),
-            (0, 30, 1),
-            (0, 30, 2),
+            (0, 30, 3),
             (0, 32, 1),
             (0, 33, 0),
+            (1, 30, 1),
             (1, 31, 0),
         ];
 
@@ -107,6 +117,7 @@ mod tests {
     #[test]
     fn vk_hash_mapping() {
         let test_vector = [
+            (ProvingVersion::V6, ProvingVersion::V6_VK_HASH),
             (ProvingVersion::V7, ProvingVersion::V7_VK_HASH),
             (ProvingVersion::V8, ProvingVersion::V8_VK_HASH),
         ];
