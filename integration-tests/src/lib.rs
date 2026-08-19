@@ -971,7 +971,13 @@ impl AnvilL1 {
 #[cfg(feature = "prover-tests")]
 async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
     let protocol_version_string = tester.chain_layout.protocol_version();
-    let protocol_version = ProtocolSemanticVersion::try_from(protocol_version_string)
+    let semantic_protocol_version = format!(
+        "0.{}",
+        protocol_version_string
+            .strip_prefix('v')
+            .expect("local-chain protocol directory must start with `v`")
+    );
+    let protocol_version = ProtocolSemanticVersion::try_from(semantic_protocol_version.as_str())
         .expect("local-chain protocol version must be semantic");
     let proving_config =
         require_proving_config(&protocol_version, "integration-test prover startup")
