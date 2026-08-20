@@ -750,8 +750,10 @@ mod tests {
     async fn build_genesis_state_for_test(
         protocol_version: &ProtocolSemanticVersion,
     ) -> GenesisState {
-        let genesis_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../local-chains/v31.0/default/genesis.json");
+        // Must be the v32.0 genesis: the zksync-os 0.4.0 STF calls the L2AssetTracker in
+        // every block and fails fatally on the v31.0 genesis's uninitialized predeploy.
+        let genesis_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-chains/v32.0/genesis.json");
         let source = FileGenesisInputSource::new(genesis_path);
         build_genesis(&source, CHAIN_ID, protocol_version)
             .await
