@@ -111,6 +111,7 @@ smart-config = { workspace = true, features = ["primitive-types", "alloy"] }
 smart-config-commands.workspace = true
 axum.workspace = true
 http.workspace = true
+http-body.workspace = true
 async-trait.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = [
     "client",

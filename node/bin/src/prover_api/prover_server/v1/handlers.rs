@@ -1,12 +1,16 @@
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Instant;
 
 use axum::{
     Json,
+    body::{Body, Bytes},
     extract::{Path, Query, State},
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
+use http_body::{Body as HttpBody, Frame, SizeHint};
 use zksync_os_batch_types::batcher_model::{FriProof, ProverInput};
 use zksync_os_types::ProvingVersion;
 
@@ -41,12 +45,56 @@ impl PickJobGuard {
     fn finish(&mut self, result: PickJobResult) {
         self.result = Some(result);
     }
+
+    fn record_after_write(self, response: Response) -> Response {
+        response.map(|inner| {
+            Body::new(GuardedBody {
+                inner,
+                payload_ready: Instant::now(),
+                guard: self,
+            })
+        })
+    }
 }
 
 impl Drop for PickJobGuard {
     fn drop(&mut self) {
         let result = self.result.unwrap_or(PickJobResult::Cancelled);
         PROVER_API_METRICS.pick_job_latency[&(self.stage, result)].observe(self.started.elapsed());
+    }
+}
+
+struct GuardedBody {
+    inner: Body,
+    payload_ready: Instant,
+    guard: PickJobGuard,
+}
+
+impl Drop for GuardedBody {
+    fn drop(&mut self) {
+        PROVER_API_METRICS.pick_job_transfer_latency[&self.guard.stage]
+            .observe(self.payload_ready.elapsed());
+    }
+}
+
+impl HttpBody for GuardedBody {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    /// Never true: hyper releases a finished body once the last frame is buffered, before the write.
+    fn is_end_stream(&self) -> bool {
+        false
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
     }
 }
 
@@ -99,12 +147,14 @@ pub(super) async fn pick_fri_job(
             };
             let prover_input = general_purpose::STANDARD.encode(&bytes);
             guard.finish(PickJobResult::NewJob);
-            Json(BatchDataPayload {
-                batch_number: fri_job.batch_number,
-                vk_hash: fri_job.vk_hash,
-                prover_input,
-            })
-            .into_response()
+            guard.record_after_write(
+                Json(BatchDataPayload {
+                    batch_number: fri_job.batch_number,
+                    vk_hash: fri_job.vk_hash,
+                    prover_input,
+                })
+                .into_response(),
+            )
         }
         None => {
             guard.finish(PickJobResult::NoJob);
@@ -223,13 +273,15 @@ pub(super) async fn pick_snark_job(
                 .collect();
 
             guard.finish(PickJobResult::NewJob);
-            Json(NextSnarkProverJobPayload {
-                from_batch_number: from,
-                to_batch_number: to,
-                vk_hash,
-                fri_proofs,
-            })
-            .into_response()
+            guard.record_after_write(
+                Json(NextSnarkProverJobPayload {
+                    from_batch_number: from,
+                    to_batch_number: to,
+                    vk_hash,
+                    fri_proofs,
+                })
+                .into_response(),
+            )
         }
         Ok(None) => {
             guard.finish(PickJobResult::NoJob);
