@@ -27,7 +27,9 @@ use zksync_os_batch_types::batcher_model::{
     BatchMetadata, FriProof, ProverInput, RealFriProof, SignedBatchEnvelope,
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::{
+    FriProofConfiguration, ProtocolSemanticVersion, ProvingConfiguration, require_proving_config,
+};
 
 #[derive(Error, Debug)]
 pub enum SubmitError {
@@ -40,9 +42,10 @@ pub enum SubmitError {
     UnknownJob(u64),
     #[error("deserialization failed: {0:?}")]
     DeserializationFailed(bincode::error::DecodeError),
-    // server execution version, prover execution version
-    #[error("execution error mismatch - server expects {0:?}, but got {1:?} from prover")]
-    ProvingVersionMismatch(ProvingVersion, ProvingVersion),
+    #[error(
+        "verification key mismatch - server expects {expected}, but prover submitted {submitted}"
+    )]
+    VerificationKeyMismatch { expected: String, submitted: String },
     #[error("server is shutting down")]
     ShuttingDown,
     #[error("internal error: {0}")]
@@ -132,18 +135,21 @@ impl FriJobManager {
     /// `min_age` is used for fake provers to avoid taking fresh items,
     /// letting real provers race first.
     ///
-    /// `supported_proving_versions` restricts assignment to batches of these versions;
+    /// `supported_vk_hashes` restricts assignment to batches with these verification keys;
     /// `None` means the prover declared nothing and any batch qualifies.
     pub async fn pick_next_job(
         &self,
         min_age: Duration,
         prover_id: String,
-        supported_proving_versions: Option<&[ProvingVersion]>,
+        supported_vk_hashes: Option<&[&'static str]>,
     ) -> Option<(FriJob, ProverInput)> {
         self.jobs
             .pick_job(min_age, &prover_id, |job| {
-                supported_proving_versions
-                    .is_none_or(|versions| versions.contains(&job.metadata.proving_version))
+                supported_vk_hashes.is_none_or(|hashes| {
+                    hashes
+                        .iter()
+                        .any(|&hash| hash == job.metadata.verification_key_hash())
+                })
             })
             .await
     }
@@ -154,7 +160,7 @@ impl FriJobManager {
         &self,
         batch_number: u64,
         proof_bytes: Bytes,
-        proving_version: ProvingVersion,
+        submitted_vk_hash: &str,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
         // Snapshot the assigned job entry (if any).
@@ -163,25 +169,21 @@ impl FriJobManager {
             None => return Err(SubmitError::UnknownJob(batch_number)),
         };
 
-        // Prover should generate the proof with VK received from server. These must always match.
-        // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
-        //
-        // This should never happen, but we double-check to guarantee it's the case.
-        //
-        // NOTE: We don't check the actual values, but the value that server believes the prover should use.
-        let server_proving_version = batch_metadata
-            .proving_version()
-            .expect("Must be valid execution as set by the server");
-
-        let verdict = if server_proving_version != proving_version {
-            Err(SubmitError::ProvingVersionMismatch(
-                server_proving_version,
-                proving_version,
-            ))
-        } else {
-            self.verify_proof(&batch_metadata, &proof_bytes, batch_number, prover_id)
-                .await
-        };
+        let verdict = async {
+            let proving_config = validate_submitted_verification_key(
+                &batch_metadata.batch_info.protocol_version,
+                submitted_vk_hash,
+            )?;
+            self.verify_proof(
+                proving_config,
+                &batch_metadata,
+                &proof_bytes,
+                batch_number,
+                prover_id,
+            )
+            .await
+        }
+        .await;
         if let Err(err) = verdict {
             // Definitive rejection: release the assignment so the job can be re-picked
             // immediately instead of waiting out the assignment timeout (which is set
@@ -210,10 +212,7 @@ impl FriJobManager {
         };
 
         // Prepare the envelope and send it downstream.
-        let proof = RealFriProof::V2 {
-            proof: proof_bytes,
-            proving_execution_version: proving_version as u32,
-        };
+        let proof = RealFriProof { proof: proof_bytes };
         let envelope = removed_job
             .with_data(FriProof::Real(proof))
             .with_stage(BatchExecutionStage::FriProvedReal);
@@ -227,16 +226,12 @@ impl FriJobManager {
     /// Returns Ok(()) if the proof is valid, or an error if verification fails.
     async fn verify_proof(
         &self,
+        proving_config: &'static ProvingConfiguration,
         batch_metadata: &BatchMetadata,
         proof_bytes: &Bytes,
         batch_number: u64,
         prover_id: &str,
     ) -> Result<(), SubmitError> {
-        let proving_version = batch_metadata
-            .proving_version()
-            // should be safe to unwrap, as it's been checked before this call
-            .expect("invalid proving version");
-
         // Deserialization + cryptographic verification are CPU-heavy (seconds of work) -
         // run them on a blocking thread so prover API requests don't stall the runtime.
         // `spawn_blocking` also catches panics that escape the verifiers' own `catch_unwind`.
@@ -245,7 +240,7 @@ impl FriJobManager {
             let proof_bytes = proof_bytes.clone();
             move || {
                 Self::verify_proof_blocking(
-                    proving_version,
+                    proving_config,
                     &batch_metadata,
                     &proof_bytes,
                     batch_number,
@@ -266,7 +261,7 @@ impl FriJobManager {
                 // The verifier died before producing register values; still report the
                 // expected hash so the persisted proof stays diagnosable.
                 let expected_hash_u32s = fri_proof_verifier::expected_public_input_registers(
-                    proving_version,
+                    proving_config,
                     batch_metadata,
                 )
                 .unwrap_or([0u32; 8]);
@@ -303,10 +298,7 @@ impl FriJobManager {
                         .last_block_timestamp,
                     expected_hash_u32s,
                     proof_final_register_values,
-                    vk_hash: batch_metadata
-                        .verification_key_hash()
-                        .expect("VK must exist")
-                        .to_string(),
+                    vk_hash: proving_config.verification_key_hash.to_string(),
                     proof_bytes: proof_bytes.clone(),
                 };
 
@@ -335,20 +327,15 @@ impl FriJobManager {
     /// CPU-heavy and may panic on malformed input - always call via `spawn_blocking`
     /// (see `verify_proof`).
     fn verify_proof_blocking(
-        proving_version: ProvingVersion,
+        proving_config: &'static ProvingConfiguration,
         batch_metadata: &BatchMetadata,
         proof_bytes: &Bytes,
         batch_number: u64,
     ) -> Result<(), SubmitError> {
         let expected_hash_u32s =
-            fri_proof_verifier::expected_public_input_registers(proving_version, batch_metadata)?;
-        // TODO: This match is needed for the transition period.
-        // Protocol 0.30/0.31 proofs use the Airbender 0.5.2 `ProgramProof` format, while
-        // protocol 0.32 proofs use the unified stack's `UnrolledProgramProof`. All these
-        // protocols remain supported, so their incompatible encodings require separate
-        // verifier backends.
-        match proving_version {
-            ProvingVersion::V6 | ProvingVersion::V7 => {
+            fri_proof_verifier::expected_public_input_registers(proving_config, batch_metadata)?;
+        match proving_config.fri {
+            FriProofConfiguration::ProgramProof => {
                 tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
                 let program_proof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
@@ -363,13 +350,10 @@ impl FriJobManager {
                     batch_number,
                 )
             }
-            ProvingVersion::V8 => {
-                // V8 provers (airbender unrolled stack) submit `UnrolledProgramProof`,
-                // which is a different wire format and proof system than the 0.5.2 lane.
-                tracing::debug!(
-                    "Using airbender unified-layer proof verifier for batch {}",
-                    batch_number
-                );
+            FriProofConfiguration::UnrolledProof {
+                application_end_params,
+            } => {
+                tracing::debug!("Using V8 proof verifier for batch {}", batch_number);
                 let program_proof: execution_utils::unrolled::UnrolledProgramProof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
                         .map_err(|err| {
@@ -381,6 +365,7 @@ impl FriJobManager {
                     expected_hash_u32s,
                     &program_proof,
                     batch_number,
+                    application_end_params,
                 )
             }
         }
@@ -428,5 +413,55 @@ impl FriJobManager {
             }
             Err(mpsc::error::TrySendError::Closed(_)) => Err(SubmitError::ShuttingDown),
         }
+    }
+}
+
+fn validate_submitted_verification_key(
+    protocol_version: &ProtocolSemanticVersion,
+    submitted_vk_hash: &str,
+) -> Result<&'static ProvingConfiguration, SubmitError> {
+    let proving_config = require_proving_config(protocol_version, "FRI proof submission")
+        .map_err(|err| SubmitError::Other(err.to_string()))?;
+    if proving_config.verification_key_hash != submitted_vk_hash {
+        return Err(SubmitError::VerificationKeyMismatch {
+            expected: proving_config.verification_key_hash.to_string(),
+            submitted: submitted_vk_hash.to_string(),
+        });
+    }
+    Ok(proving_config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zksync_os_types::proving_registry;
+
+    #[test]
+    fn proof_submission_rejects_vk_not_registered_for_batch_protocol() {
+        let registry = proving_registry();
+        let (batch_entry, submitted_entry) = registry
+            .iter()
+            .find_map(|batch_entry| {
+                registry
+                    .iter()
+                    .find(|submitted_entry| {
+                        submitted_entry.verification_key_hash != batch_entry.verification_key_hash
+                    })
+                    .map(|submitted_entry| (batch_entry, submitted_entry))
+            })
+            .expect("production proving registry must contain distinct verification keys");
+
+        let error = validate_submitted_verification_key(
+            &batch_entry.protocol_version,
+            submitted_entry.verification_key_hash,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SubmitError::VerificationKeyMismatch { expected, submitted }
+                if expected == batch_entry.verification_key_hash
+                    && submitted == submitted_entry.verification_key_hash
+        ));
     }
 }

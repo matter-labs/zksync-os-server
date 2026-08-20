@@ -5,10 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, ops::Deref, str::FromStr};
 
 mod execution_version;
-mod proving_version;
+mod proving_registry;
 
 pub use self::execution_version::{ExecutionVersion, ExecutionVersionError};
-pub use self::proving_version::{ProvingVersion, ProvingVersionError};
+pub use self::proving_registry::{
+    FriProofConfiguration, ProverInputStrategy, ProvingConfiguration, ProvingRegistry,
+    UnsupportedProtocolForProving, proving_registry, require_proving_config,
+};
 
 const PACKED_SEMVER_PATCH_MASK: u32 = 0xFFFFFFFF;
 const PACKED_SEMVER_MINOR_OFFSET: u32 = 32;
@@ -59,19 +62,9 @@ impl ProtocolSemanticVersion {
         })
     }
 
-    /// Returns `true` if the system is live (or expected to be live) on any of the existing envs.
-    /// Must be updated when a new version is ready to be released.
-    pub fn is_live(&self) -> bool {
-        if self.major != 0 {
-            return false;
-        }
-        // A patch version can change the proving harness, so a version is only live once it
-        // maps to a `ProvingVersion` known to this server release.
-        match self.minor {
-            30..=32 => ProvingVersion::try_from(self.clone()).is_ok(),
-            // When updating this function, make sure to insert the new non-live version here.
-            _ => false,
-        }
+    /// Returns `true` when this exact protocol version has a registered proving stack.
+    pub fn is_supported_for_proving(&self) -> bool {
+        proving_registry().get(self).is_some()
     }
 
     pub fn is_post_v31(&self) -> bool {
@@ -240,22 +233,23 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_semantic_version_is_live() {
+    fn test_protocol_semantic_version_is_supported_for_proving() {
         let test_vector = [
             ((0, 29, 5), false),
             ((0, 30, 0), false),
             ((0, 30, 1), true),
             ((0, 30, 2), true),
-            // Patch versions without a known proving version are not live.
+            // Patch versions without a registered proving stack are unsupported.
             ((0, 30, 99), false),
             ((0, 31, 0), true),
             ((0, 32, 0), true),
             ((0, 32, 1), false),
-            ((0, 33, 0), false), // When updating this test, make sure to insert the new non-live version here.
+            // Execution compatibility does not imply support without an exact registry entry.
+            ((0, 33, 0), false),
         ];
         for ((major, minor, patch), expected) in test_vector.iter() {
             let version = ProtocolSemanticVersion::new(*major, *minor, *patch);
-            assert_eq!(version.is_live(), *expected);
+            assert_eq!(version.is_supported_for_proving(), *expected);
         }
     }
 
