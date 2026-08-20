@@ -25,19 +25,6 @@ The snapshot has since been upgraded in place so the chain can verify V8
 - `ZKsyncOSDualVerifier` code replaced in place with the same build, preserving its
   verifier mappings.
 
-Updated again for the zksync-os v0.4.0 release binary (VK provenance in
-`../versions.yaml`), by direct state edits — no new L1 blocks:
-
-- Verifier version 8 re-registered with a `ZKsyncOSVerifierPlonk` for the
-  v0.4.0-binary VK (`0x9f7576b9…`).
-- The L2 genesis (`../genesis.json`) deploys an initialized v0.4.0-layout
-  `L2AssetTracker` (the 0.4.0 STF calls it every block and fails fatally otherwise);
-  `genesis_root` and the batch-0 hash on the diamond and CTM updated to match.
-- Dual verifier code swapped to the `ZKsyncOSTestnetVerifier` build (storage
-  preserved) so the fake provers' mock proofs can settle.
-- Block records truncated to 128, the last block with a persisted historical state,
-  to keep watcher startup probes off stateless blocks.
-
 Regenerate with `local-chains/v32.0/regenerate.sh` after bumping the contracts.
 
 ## Quick Start
