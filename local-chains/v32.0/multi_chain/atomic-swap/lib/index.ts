@@ -29,6 +29,8 @@ export {
   INTEROP_BUNDLE_TUPLE,
   commitmentTreeContract,
   atomicBundleAttr,
+  interopBundleSaltAttr,
+  randomSalt,
   computeFlowId,
   commitValue,
   sortLegs,

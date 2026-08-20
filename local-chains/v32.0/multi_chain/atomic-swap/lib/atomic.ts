@@ -86,8 +86,10 @@ export const INTEROP_BUNDLE_TUPLE =
 const IMT_PROOF_TUPLE =
   'tuple(uint256 sourceChainId, uint256 batchNumber, bytes32 chainImtRoot, bool provesAgainstBeginRoot, bytes32[] settlementProof, tuple(uint256 value, uint256 nextIndex, uint256 nextValue) leaf, uint256 imtLeafIndex, bytes32[] imtProof)';
 
+// AtomicFlow is `flowId` + the NESTED AtomicFlowPreimage — not a flat field list. The contracts
+// recompute flowId from the preimage and match it, so the nesting must be exact.
 const ATOMIC_FLOW_TUPLE =
-  'tuple(bytes32 flowId, uint64 deadline, uint256 settlementLayerChainId, bytes32[] legBundleHashes, uint256[] legSourceChainIds)';
+  'tuple(bytes32 flowId, tuple(uint64 deadline, uint256 settlementLayerChainId, bytes32[] legBundleHashes, uint256[] legSourceChainIds) preimage)';
 
 const ATOMIC_FINALITY_TUPLE = `tuple(${ATOMIC_FLOW_TUPLE} flow, ${IMT_PROOF_TUPLE}[] proofs)`;
 
@@ -134,9 +136,17 @@ export const ATOMIC_COMMIT_LEAF_TAG: string = ethers
   .keccak256(ethers.toUtf8Bytes('AtomicInterop.commit.v1'))
   .slice(0, 10);
 
-/** ERC-7786 `atomicBundle(bytes32,uint64,uint256)` attribute selector. */
+/**
+ * ERC-7786 `atomicBundle(AtomicFlowPreimage,uint256)` attribute selector.
+ *
+ * The attribute carries the flow PREIMAGE, not a precomputed flowId: the contracts recompute
+ * `flowId = keccak256(abi.encode(preimage))` themselves and match it. The struct is
+ * `(uint64 deadline, uint256 settlementLayerChainId, bytes32[] legBundleHashes, uint256[] legSourceChainIds)`
+ * — note the field order differs from the legacy flat `(flowId, deadline, lowNullifier)` form.
+ */
+export const ATOMIC_FLOW_PREIMAGE_TUPLE = 'tuple(uint64,uint256,bytes32[],uint256[])';
 export const ATOMIC_BUNDLE_SELECTOR: string = ethers
-  .id('atomicBundle(bytes32,uint64,uint256)')
+  .id(`atomicBundle(${ATOMIC_FLOW_PREIMAGE_TUPLE.replace(/tuple/, '')},uint256)`)
   .slice(0, 10);
 
 /** Indexed-tree leaf, fields as uint256 (string) in on-chain field order. */
@@ -181,17 +191,58 @@ export interface AtomicFinalityProof extends AtomicFlow {
 }
 
 /**
- * Encode the ERC-7786 `atomicBundle(flowId, deadline, lowNullifierIndex)` attribute:
- * `selector(4) || abi.encode(bytes32, uint64, uint256)`.
+ * Encode the ERC-7786 `atomicBundle(flowPreimage, lowNullifierIndex)` attribute:
+ * `selector(4) || abi.encode(AtomicFlowPreimage, uint256)`.
  */
-export function atomicBundleAttr(flowId: string, deadline: number, lowNullifierIndex: bigint | number): string {
+export function atomicBundleAttr(
+  preimage: {
+    deadline: number;
+    settlementLayerChainId: bigint | number | string;
+    legBundleHashes: string[];
+    legSourceChainIds: (bigint | number | string)[];
+  },
+  lowNullifierIndex: bigint | number
+): string {
   return ethers.concat([
     ATOMIC_BUNDLE_SELECTOR,
     ethers.AbiCoder.defaultAbiCoder().encode(
-      ['bytes32', 'uint64', 'uint256'],
-      [flowId, deadline, lowNullifierIndex]
+      [ATOMIC_FLOW_PREIMAGE_TUPLE, 'uint256'],
+      [
+        [
+          preimage.deadline,
+          BigInt(preimage.settlementLayerChainId),
+          preimage.legBundleHashes,
+          preimage.legSourceChainIds.map((c) => BigInt(c)),
+        ],
+        lowNullifierIndex,
+      ]
     ),
   ]);
+}
+
+/** ERC-7786 `interopBundleSalt(bytes32)` attribute selector. */
+export const INTEROP_BUNDLE_SALT_SELECTOR: string = ethers.id('interopBundleSalt(bytes32)').slice(0, 10);
+
+/**
+ * Encode the ERC-7786 `interopBundleSalt(salt)` attribute.
+ *
+ * Required in practice for any sender that sends more than one bundle on a chain: the old
+ * auto-incrementing nonce is deprecated (`__DEPRECATED_interopBundleNonce`), so the salt is the
+ * only thing making bundle hashes unique. `InteropCenter` reverts with `InteropBundleSaltAlreadyUsed`
+ * if a `(sender, salt)` pair repeats — omitting the attribute means salt `0x0`, which works exactly once.
+ *
+ * NOTE: the salt feeds the bundle hash, so a leg must be PREDICTED and SENT with the same salt.
+ */
+export function interopBundleSaltAttr(salt: string): string {
+  return ethers.concat([
+    INTEROP_BUNDLE_SALT_SELECTOR,
+    ethers.AbiCoder.defaultAbiCoder().encode(['bytes32'], [salt]),
+  ]);
+}
+
+/** A fresh random 32-byte salt. */
+export function randomSalt(): string {
+  return ethers.hexlify(ethers.randomBytes(32));
 }
 
 /** The value inserted into a chain's IMT for a leg (a bytes32, also a valid uint256). */
@@ -215,10 +266,11 @@ export function computeFlowId(
   deadline: number,
   settlementLayerChainId: bigint | number | string
 ): string {
+  // keccak256(abi.encode(AtomicFlowPreimage)) — struct field order, NOT the legacy flat order.
   return ethers.keccak256(
     ethers.AbiCoder.defaultAbiCoder().encode(
-      ['bytes32[]', 'uint256[]', 'uint64', 'uint256'],
-      [bundleHashes, chainIds.map((c) => BigInt(c)), deadline, BigInt(settlementLayerChainId)]
+      [ATOMIC_FLOW_PREIMAGE_TUPLE],
+      [[deadline, BigInt(settlementLayerChainId), bundleHashes, chainIds.map((c) => BigInt(c))]]
     )
   );
 }
@@ -281,10 +333,12 @@ export function proofTuple(p: ImtProof): unknown[] {
 export function atomicFlowTuple(f: AtomicFlow): unknown[] {
   return [
     f.flowId,
-    f.deadline,
-    BigInt(f.settlementLayerChainId),
-    f.legBundleHashes,
-    f.legSourceChainIds.map((c) => BigInt(c)),
+    [
+      f.deadline,
+      BigInt(f.settlementLayerChainId),
+      f.legBundleHashes,
+      f.legSourceChainIds.map((c) => BigInt(c)),
+    ],
   ];
 }
 

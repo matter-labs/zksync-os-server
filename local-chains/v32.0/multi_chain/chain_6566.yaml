@@ -1,8 +1,8 @@
 general:
   ephemeral: true
 genesis:
-  bridgehub_address: '0xf08df9c8084ebca5b619cc8d119146de3e1e292f'
-  bytecode_supplier_address: '0x7c1dd051cfa43a37d62d65d72e460569400c336d'
+  bridgehub_address: '0x2a692b9f11f54858994ba8b5feac804aab380198'
+  bytecode_supplier_address: '0x5e0ebb5c40144dd59f756270b8e3ce042fb82789'
   genesis_input_path: ./local-chains/v32.0/genesis.json
   chain_id: 6566
 l1_sender:

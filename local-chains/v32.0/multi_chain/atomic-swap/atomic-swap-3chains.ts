@@ -52,6 +52,8 @@ import {
   AtomicFlowManagerAbi,
   INTEROP_BUNDLE_TUPLE,
   atomicBundleAttr,
+  interopBundleSaltAttr,
+  randomSalt,
   computeFlowId,
   commitValue,
   sortLegs,
@@ -77,10 +79,20 @@ interface ChainCtx {
   wallet: ethers.Wallet;
   chainId: bigint;
   token: string; // native token deployed on this chain
+  /// `interopProtocolFee` READ FROM THIS CHAIN. It is per-chain state on each chain's own
+  /// InteropCenter, so a leg must pay its SOURCE chain's fee — reusing one chain's value for
+  /// both legs silently works only while the two happen to be equal (e.g. both 0).
+  fee: bigint;
 }
 
 /** Deploy + register + approve a fresh ERC20 on a chain (mirrors bundle-transfer.ts setup). */
-async function setupToken(name: string, rpc: string, pk: string, approveAmount: bigint): Promise<ChainCtx> {
+async function setupToken(
+  name: string,
+  rpc: string,
+  pk: string,
+  approveAmount: bigint,
+  interopCenterAddr: string
+): Promise<ChainCtx> {
   const provider = new ethers.JsonRpcProvider(rpc);
   const wallet = new ethers.Wallet(pk, provider);
   const chainId = (await provider.getNetwork()).chainId;
@@ -103,7 +115,15 @@ async function setupToken(name: string, rpc: string, pk: string, approveAmount: 
   await (await erc20.approve(L2_NATIVE_TOKEN_VAULT_ADDRESS, approveAmount)).wait();
   console.log(`[${name}] registered + approved NTV`);
 
-  return { name, provider, wallet, chainId, token };
+  // Per-chain fee: read from THIS chain's InteropCenter, not a peer's.
+  const fee: bigint = await new ethers.Contract(
+    interopCenterAddr,
+    AtomicInteropCenterAbi,
+    provider
+  ).interopProtocolFee();
+  console.log(`[${name}] interopProtocolFee (per call): ${fee.toString()}`);
+
+  return { name, provider, wallet, chainId, token, fee };
 }
 
 /** A token-transfer call starter, sending `amount` of `source`'s token to `recipient` on dest. */
@@ -121,14 +141,16 @@ async function predictBundleHash(
   amount: bigint,
   recipient: string,
   interopCenterAddr: string,
-  value: bigint
+  value: bigint,
+  salt: string
 ): Promise<string> {
   const ic = new ethers.Contract(interopCenterAddr, AtomicInteropCenterAbi, source.wallet);
   const builder = new BundleBuilder(dest.chainId).addCall(legCall(source, amount, recipient));
+  // The salt feeds the bundle hash, so predict with the same salt the send will use.
   return ic.sendBundle.staticCall(
     builder.getEncodedDestination(),
     builder.getCalls(),
-    builder.getBundleAttributes(),
+    [...builder.getBundleAttributes(), interopBundleSaltAttr(salt)],
     { value }
   );
 }
@@ -141,12 +163,19 @@ async function sendAtomicLeg(params: {
   recipient: string;
   flowId: string;
   deadline: number;
+  preimage: {
+    deadline: number;
+    settlementLayerChainId: bigint | number | string;
+    legBundleHashes: string[];
+    legSourceChainIds: (bigint | number | string)[];
+  };
+  salt: string;
   predictedHash: string;
   interopCenterAddr: string;
   commitmentTreeAddr: string;
   value: bigint;
 }): Promise<{ bundleData: string; bundleHash: string; txHash: string; sendBlock: number }> {
-  const { source, dest, amount, recipient, flowId, deadline, predictedHash, interopCenterAddr, commitmentTreeAddr, value } =
+  const { source, dest, amount, recipient, flowId, preimage, salt, predictedHash, interopCenterAddr, value } =
     params;
 
   // Low-nullifier index from the server's IMT engine (zks_getImtLowNullifierIndex). The atomic
@@ -165,7 +194,7 @@ async function sendAtomicLeg(params: {
   const tx = await ic.sendBundle(
     builder.getEncodedDestination(),
     builder.getCalls(),
-    [atomicBundleAttr(flowId, deadline, lowNull)],
+    [atomicBundleAttr(preimage, lowNull), interopBundleSaltAttr(salt)],
     { value }
   );
   const receipt = await tx.wait();
@@ -307,25 +336,49 @@ async function main() {
   console.log('Atomic built-ins detected on both chains. Proceeding.');
 
   // ── Token setup ──────────────────────────────────────────────────────────────
-  const user = new ethers.Wallet(PRIVATE_KEY).address;
-  const a = await setupToken('A', RPC_A, PRIVATE_KEY, aAmount);
-  const b = await setupToken('B', RPC_B, PRIVATE_KEY, bAmount);
+  // A genuine two-party swap: Alice owns the token on chain A, Bob owns the token on chain B,
+  // and each sends the leg that burns THEIR OWN tokens. (Set both keys to the same value for the
+  // old self-swap behaviour.) Both accounts must be funded for gas on the chain they act on —
+  // COUNTERPARTY_PRIVATE_KEY defaults to the second well-known dev wallet, funded by `apply`.
+  const COUNTERPARTY_PRIVATE_KEY =
+    process.env.COUNTERPARTY_PRIVATE_KEY ??
+    '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+  const alice = new ethers.Wallet(PRIVATE_KEY).address;
+  const bob = new ethers.Wallet(COUNTERPARTY_PRIVATE_KEY).address;
+  console.log(`Alice (chain A sender): ${alice}`);
+  console.log(`Bob   (chain B sender): ${bob}`);
+
+  const a = await setupToken('A', RPC_A, PRIVATE_KEY, aAmount, layout.interopCenter);
+  const b = await setupToken('B', RPC_B, COUNTERPARTY_PRIVATE_KEY, bAmount, layout.interopCenter);
 
   // Bundle send value = interopProtocolFee * callCount. Each leg has one call, so
-  // value == interopProtocolFee (0 when fees are disabled). InteropCenter reverts
+  // value == that chain's interopProtocolFee (0 when fees are disabled). InteropCenter reverts
   // with MsgValueMismatch otherwise.
-  const fee: bigint = await new ethers.Contract(layout.interopCenter, AtomicInteropCenterAbi, providerA).interopProtocolFee();
-  console.log('interopProtocolFee (per call):', fee.toString());
+  if (a.fee !== b.fee) {
+    console.log(`note: chains disagree on interopProtocolFee (A=${a.fee} B=${b.fee}); each leg pays its own.`);
+  }
 
   // ── Predict bundle hashes + compute flowId ───────────────────────────────────
   console.log('\n=== PREDICT LEG HASHES + FLOW ID ===');
-  const hAB = await predictBundleHash(a, b, aAmount, user, layout.interopCenter, fee);
-  const hBA = await predictBundleHash(b, a, bAmount, user, layout.interopCenter, fee);
+  // One fresh salt per leg: the sender may only use a given salt once per chain, so without this
+  // a second run against the same (persistent) chains reverts with InteropBundleSaltAlreadyUsed.
+  const saltAB = randomSalt();
+  const saltBA = randomSalt();
+  // A->B pays Bob (on B); B->A pays Alice (on A). Each leg pays its own source chain's fee.
+  const hAB = await predictBundleHash(a, b, aAmount, bob, layout.interopCenter, a.fee, saltAB);
+  const hBA = await predictBundleHash(b, a, bAmount, alice, layout.interopCenter, b.fee, saltBA);
   const { legBundleHashes, chainIds } = sortLegs([
     { bundleHash: hAB, chainId: a.chainId },
     { bundleHash: hBA, chainId: b.chainId },
   ]);
   const flowId = computeFlowId(legBundleHashes, chainIds, deadline, l1ChainId);
+  // The `atomicBundle` attribute now carries this preimage; the contracts recompute flowId from it.
+  const preimage = {
+    deadline,
+    settlementLayerChainId: l1ChainId,
+    legBundleHashes,
+    legSourceChainIds: chainIds,
+  };
   console.log('hAB:', hAB);
   console.log('hBA:', hBA);
   console.log('flowId:', flowId, 'deadline:', deadline);
@@ -336,25 +389,29 @@ async function main() {
     source: a,
     dest: b,
     amount: aAmount,
-    recipient: user,
+    recipient: bob,
     flowId,
     deadline,
+    preimage,
+    salt: saltAB,
     predictedHash: hAB,
     interopCenterAddr: layout.interopCenter,
     commitmentTreeAddr: layout.commitmentTree,
-    value: fee,
+    value: a.fee,
   });
   const ba = await sendAtomicLeg({
     source: b,
     dest: a,
     amount: bAmount,
-    recipient: user,
+    recipient: alice,
     flowId,
     deadline,
+    preimage,
+    salt: saltBA,
     predictedHash: hBA,
     interopCenterAddr: layout.interopCenter,
     commitmentTreeAddr: layout.commitmentTree,
-    value: fee,
+    value: b.fee,
   });
 
   // ── Assert both legs Committed ───────────────────────────────────────────────
@@ -439,10 +496,11 @@ async function main() {
   );
   const wrappedAonB = await ntvB.tokenAddress(assetAonB);
   const wrappedBonA = await ntvA.tokenAddress(assetBonA);
-  const balAonB = await new ethers.Contract(wrappedAonB, ERC20Abi, b.provider).balanceOf(user);
-  const balBonA = await new ethers.Contract(wrappedBonA, ERC20Abi, a.provider).balanceOf(user);
-  console.log(`wrapped A on B balance: ${ethers.formatUnits(balAonB, 18)}`);
-  console.log(`wrapped B on A balance: ${ethers.formatUnits(balBonA, 18)}`);
+  // Each leg pays the COUNTERPARTY: A's token lands on B for Bob, B's token lands on A for Alice.
+  const balAonB = await new ethers.Contract(wrappedAonB, ERC20Abi, b.provider).balanceOf(bob);
+  const balBonA = await new ethers.Contract(wrappedBonA, ERC20Abi, a.provider).balanceOf(alice);
+  console.log(`wrapped A on B, Bob   (${bob}): ${ethers.formatUnits(balAonB, 18)}`);
+  console.log(`wrapped B on A, Alice (${alice}): ${ethers.formatUnits(balBonA, 18)}`);
   if (balAonB < aAmount || balBonA < bAmount) {
     throw new Error('atomic swap did not mint both legs');
   }

@@ -17,8 +17,11 @@
 //! Hashing must match the contract bit-for-bit:
 //! - leaf hash:  `keccak256(abi.encode(value, nextIndex, nextValue))` — three left-padded 32-byte words
 //! - node hash:  `keccak256(left ++ right)` (`Merkle.sol`'s `efficientHash`)
-//! - empty subtrees use lazily grown `zeros[level]`, with `zeros[0] = leafHash({0,0,0})` and
-//!   `zeros[i+1] = efficientHash(zeros[i], zeros[i])`.
+//! - empty subtrees use lazily grown `zeros[level]`, with
+//!   `zeros[0] = keccak256("zkSync:IndexedMerkleTree:emptyLeaf")` and
+//!   `zeros[i+1] = efficientHash(zeros[i], zeros[i])`. NOTE this padding value is deliberately
+//!   NOT `leafHash({0,0,0})`: `IndexedMerkleTree.setup` seeds the tree with `IMT_EMPTY_LEAF_HASH`
+//!   and only then pushes `leafHash({0,0,0})` as the real head leaf at index 0.
 
 // The engine's public API is consumed by the atomic-interop proof RPC; allow until every helper is
 // wired so an unused helper doesn't trip `-D warnings`.
@@ -51,7 +54,17 @@ fn efficient_hash(left: B256, right: B256) -> B256 {
     keccak256(buf)
 }
 
-/// The leaf hash of the `{0,0,0}` sentinel — `zeros[0]` in the FullMerkle sense.
+/// `IMT_EMPTY_LEAF_HASH` from `Config.sol` — the padding value for empty positions (`zeros[0]`).
+///
+/// Distinct from [`zero_leaf_hash`]: the head leaf at index 0 is a real `{0,0,0}` leaf, while empty
+/// slots are padded with this domain-separated constant. Using the head-leaf hash for padding gives
+/// a tree that is self-consistent but diverges from the on-chain root as soon as a leaf has an empty
+/// sibling (i.e. from the 3rd leaf onward).
+fn imt_empty_leaf_hash() -> B256 {
+    keccak256(b"zkSync:IndexedMerkleTree:emptyLeaf")
+}
+
+/// The leaf hash of the `{0,0,0}` sentinel occupying index 0.
 fn zero_leaf_hash() -> B256 {
     indexed_leaf_hash(&ImtLeaf {
         value: U256::ZERO,
@@ -108,11 +121,11 @@ impl IndexedMerkleTree {
             leaf_number: 0,
         };
 
-        // Mirror IndexedMerkleTree.setup: FullMerkle.setup(zeroLeafHash) seeds zeros[0] + nodes[0]=[zero],
-        // then pushNewLeaf(zeroLeafHash) inserts the sentinel {0,0,0} at index 0.
-        let zero_leaf = zero_leaf_hash();
-        tree.setup(zero_leaf);
-        tree.push_new_leaf(zero_leaf);
+        // Mirror IndexedMerkleTree.setup exactly: FullMerkle.setup(IMT_EMPTY_LEAF_HASH) seeds the
+        // PADDING value into zeros[0] + nodes[0], then pushNewLeaf(leafHash({0,0,0})) inserts the
+        // real sentinel head leaf at index 0. These are two different hashes — see imt_empty_leaf_hash.
+        tree.setup(imt_empty_leaf_hash());
+        tree.push_new_leaf(zero_leaf_hash());
 
         // `setup`/`push_new_leaf` above seed index 0 from a pristine {0,0,0} sentinel. In a live tree
         // the head leaf has been repointed (its nextIndex/nextValue splice to the smallest inserted
@@ -332,6 +345,36 @@ mod tests {
                 "path for leaf {i} must recompute the root"
             );
         }
+    }
+
+    /// Regression: the engine must reproduce the ON-CHAIN root, not merely be self-consistent.
+    ///
+    /// Leaves and root captured from a live `L2InteropCommitmentTree` (chain 6565) after two
+    /// atomic swaps — i.e. the head plus two inserted commit values. The engine diverged here
+    /// while its own path/root round-trip still passed, which is exactly the case
+    /// `get_imt_inclusion_proof_impl`'s cross-check against the slot-0 cache catches.
+    #[test]
+    fn engine_root_matches_onchain_three_leaves() {
+        let v1 = U256::from_str_radix(
+            "14130805656534241063280235770500331991154524866514311239415087727538607552564",
+            10,
+        )
+        .unwrap();
+        let v2 = U256::from_str_radix(
+            "100686205808240215924159587937452993358630551323020887458088708229808431584645",
+            10,
+        )
+        .unwrap();
+        let leaves = vec![
+            ImtLeaf { value: U256::ZERO, next_index: U256::from(1u64), next_value: v1 },
+            ImtLeaf { value: v1, next_index: U256::from(2u64), next_value: v2 },
+            ImtLeaf { value: v2, next_index: U256::ZERO, next_value: U256::ZERO },
+        ];
+        let tree = IndexedMerkleTree::new(leaves);
+        let onchain: B256 = "0xd51cb7896e0e629e7693fd8e06a25150a239016bb364e20d38e1a74f45dd1fac"
+            .parse()
+            .unwrap();
+        assert_eq!(tree.root(), onchain, "engine root must equal the on-chain root");
     }
 
     #[test]
