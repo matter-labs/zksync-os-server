@@ -747,15 +747,11 @@ mod tests {
         }
     }
 
-    /// The L2AssetTracker predeploy (proxy at this address is part of the genesis file).
     async fn build_genesis_state_for_test(
         protocol_version: &ProtocolSemanticVersion,
     ) -> GenesisState {
-        // The v32.0 genesis: since zksync-os v0.4.0 every block's pre-tx loop
-        // synthetically calls `L2AssetTracker.handleFinalizeBaseTokenBridgingOnL2` with
-        // amount 1 (`prewarm_l1_postprocessing`), which reverts fatally unless the
-        // genesis carries an initialized tracker with the v0.4.0 storage layout — the
-        // v31.0 genesis does not.
+        // Must be the v32.0 genesis: the zksync-os 0.4.0 STF calls the L2AssetTracker in
+        // every block and fails fatally on the v31.0 genesis's uninitialized predeploy.
         let genesis_path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local-chains/v32.0/genesis.json");
         let source = FileGenesisInputSource::new(genesis_path);
@@ -782,12 +778,10 @@ mod tests {
         tree
     }
 
-    /// The genesis state commitment as recorded in `genesis_root`:
-    /// `blake2s(tree_root || leaf_count || block_number || blake2s(last 256 block hashes) || timestamp)`.
-    fn genesis_state_commitment(
+    fn genesis_stored_batch_info(
         genesis_state: &GenesisState,
         tree: &MerkleTree<RocksDBWrapper>,
-    ) -> B256 {
+    ) -> StoredBatchInfo {
         let (genesis_root_hash, genesis_root_leaves) = tree.root_info(0).unwrap().unwrap();
 
         let last_256_block_hashes_blake = {
@@ -805,37 +799,8 @@ mod tests {
         hasher.update(0u64.to_be_bytes());
         hasher.update(last_256_block_hashes_blake);
         hasher.update(0u64.to_be_bytes());
-        B256::from_slice(&hasher.finalize())
-    }
+        let state_commitment = B256::from_slice(&hasher.finalize());
 
-    /// Utility (not a real test): recomputes the `genesis_root` for a genesis input
-    /// file after its `initial_contracts`/`additional_storage` changed (the field must
-    /// then be updated by hand, see `local-chains/README.md`).
-    ///
-    /// Run with:
-    ///   GENESIS_INPUT=$PWD/local-chains/v32.0/genesis.json \
-    ///   cargo test -p zksync_os_batch_verification recompute_genesis_root -- --ignored --nocapture
-    #[tokio::test]
-    #[ignore = "utility: prints the recomputed genesis_root for GENESIS_INPUT"]
-    async fn recompute_genesis_root() {
-        let genesis_path =
-            std::env::var("GENESIS_INPUT").expect("set GENESIS_INPUT to the genesis.json path");
-        let source = FileGenesisInputSource::new(PathBuf::from(&genesis_path));
-        let protocol_version = ProtocolSemanticVersion::new(0, 32, 0);
-        let genesis_state = build_genesis(&source, CHAIN_ID, &protocol_version)
-            .await
-            .unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let tree = genesis_tree(&genesis_state, temp_dir.path());
-        println!("genesis_root for {genesis_path}:");
-        println!("{:?}", genesis_state_commitment(&genesis_state, &tree));
-    }
-
-    fn genesis_stored_batch_info(
-        genesis_state: &GenesisState,
-        tree: &MerkleTree<RocksDBWrapper>,
-    ) -> StoredBatchInfo {
-        let state_commitment = genesis_state_commitment(genesis_state, tree);
         assert_eq!(genesis_state.expected_genesis_root, state_commitment);
 
         StoredBatchInfo {
