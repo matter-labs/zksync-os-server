@@ -203,24 +203,18 @@ pub enum FriProof {
     Real(RealFriProof),
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealFriProof {
-    V2 { proof: Bytes },
-}
-
-#[derive(Deserialize)]
-struct RealFriProofRepr {
-    proof: Bytes,
-    #[serde(default, rename = "proving_execution_version")]
-    _legacy_proving_ordinal: Option<serde::de::IgnoredAny>,
-}
-
-impl<'de> Deserialize<'de> for RealFriProof {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let repr = RealFriProofRepr::deserialize(deserializer)?;
-        Ok(Self::V2 { proof: repr.proof })
-    }
+    V2 {
+        proof: Bytes,
+        #[serde(
+            default,
+            rename = "proving_execution_version",
+            skip_serializing_if = "Option::is_none"
+        )]
+        legacy_proof_envelope_ordinal: Option<u32>,
+    },
 }
 
 impl FriProof {
@@ -261,24 +255,18 @@ pub enum SnarkProof {
     Real(RealSnarkProof),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RealSnarkProof {
-    V2 { proof: Vec<u8> },
-}
-
-#[derive(Deserialize)]
-struct RealSnarkProofRepr {
-    proof: Vec<u8>,
-    #[serde(default, rename = "proving_execution_version")]
-    _legacy_proving_ordinal: Option<serde::de::IgnoredAny>,
-}
-
-impl<'de> Deserialize<'de> for RealSnarkProof {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let repr = RealSnarkProofRepr::deserialize(deserializer)?;
-        Ok(Self::V2 { proof: repr.proof })
-    }
+    V2 {
+        proof: Vec<u8>,
+        #[serde(
+            default,
+            rename = "proving_execution_version",
+            skip_serializing_if = "Option::is_none"
+        )]
+        legacy_proof_envelope_ordinal: Option<u32>,
+    },
 }
 
 impl SnarkProof {
@@ -313,24 +301,6 @@ impl<E: Send + 'static, S: Send + 'static> HasBlockRangeEnd for BatchEnvelope<E,
 #[cfg(test)]
 mod tests {
     use super::{RealFriProof, RealSnarkProof};
-    use alloy::primitives::Bytes;
-
-    #[test]
-    fn new_proof_envelopes_omit_the_legacy_proving_ordinal() {
-        let fri = RealFriProof::V2 {
-            proof: Bytes::from(vec![1, 2, 3]),
-        };
-        let snark = RealSnarkProof::V2 {
-            proof: vec![4, 5, 6],
-        };
-
-        for value in [
-            serde_json::to_value(fri).unwrap(),
-            serde_json::to_value(snark).unwrap(),
-        ] {
-            assert!(value.get("proving_execution_version").is_none());
-        }
-    }
 
     #[test]
     fn legacy_proof_ordinals_are_ignored_while_decoding() {

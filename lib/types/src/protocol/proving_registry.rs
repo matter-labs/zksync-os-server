@@ -64,6 +64,9 @@ pub struct ProvingStackConfiguration {
     pub aggregation_group: AggregationGroup,
     /// Numeric selector encoded in the existing L1 proof calldata.
     pub l1_verifier_selector: u32,
+    /// Serialized into internal proof envelopes so they remain readable by pre-registry servers.
+    /// Remove once those binaries are no longer supported rollback targets.
+    pub legacy_proof_envelope_ordinal: u32,
 }
 
 impl ProvingStackConfiguration {
@@ -74,6 +77,7 @@ impl ProvingStackConfiguration {
             && self.fri == other.fri
             && self.aggregation_group == other.aggregation_group
             && self.l1_verifier_selector == other.l1_verifier_selector
+            && self.legacy_proof_envelope_ordinal == other.legacy_proof_envelope_ordinal
     }
 }
 
@@ -234,6 +238,7 @@ const ZKSYNC_OS_0_2_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfi
     },
     aggregation_group: ZKSYNC_OS_0_2_AGGREGATION_GROUP,
     l1_verifier_selector: 6,
+    legacy_proof_envelope_ordinal: 6,
 };
 
 // VK generated from ZKsync OS 0.3, Airbender 0.5.2, and zkos-wrapper 0.5.5.
@@ -247,6 +252,7 @@ const ZKSYNC_OS_0_3_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfi
     },
     aggregation_group: ZKSYNC_OS_0_3_AGGREGATION_GROUP,
     l1_verifier_selector: 0,
+    legacy_proof_envelope_ordinal: 7,
 };
 
 /// `end_params` of the ZKsync OS 0.4 multiblock batch program, built from draft-0.4.0 @ 8ef47499
@@ -271,6 +277,7 @@ const ZKSYNC_OS_0_4_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfi
     },
     aggregation_group: ZKSYNC_OS_0_4_AGGREGATION_GROUP,
     l1_verifier_selector: 8,
+    legacy_proof_envelope_ordinal: 8,
 };
 
 static REGISTRY_ENTRIES: [ProvingRegistryEntry; 5] = [

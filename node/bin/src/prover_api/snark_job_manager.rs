@@ -104,6 +104,7 @@ impl SnarkJobManager {
         //
         // This should never happen, but we double-check to guarantee it's the case.
         let mut aggregation_group = None;
+        let mut legacy_proof_envelope_ordinal = None;
         for batch_number in batch_from..=batch_to {
             let Some(batch_metadata) = self.jobs.get_job_batch_metadata(batch_number).await else {
                 anyhow::bail!("race condition: some batches were completed earlier")
@@ -121,8 +122,11 @@ impl SnarkJobManager {
                 );
             } else {
                 aggregation_group = Some(proving_config.aggregation_group);
+                legacy_proof_envelope_ordinal = Some(proving_config.legacy_proof_envelope_ordinal);
             }
         }
+        let legacy_proof_envelope_ordinal = legacy_proof_envelope_ordinal
+            .ok_or_else(|| anyhow::anyhow!("SNARK proof range must not be empty"))?;
 
         // Ensure we can send downstream before consuming jobs from the retryable map.
         let permit = self.try_reserve_permit_downstream()?;
@@ -143,7 +147,10 @@ impl SnarkJobManager {
 
         permit.send(ProofCommand::new(
             consumed_batches_proven,
-            SnarkProof::Real(RealSnarkProof::V2 { proof: payload }),
+            SnarkProof::Real(RealSnarkProof::V2 {
+                proof: payload,
+                legacy_proof_envelope_ordinal: Some(legacy_proof_envelope_ordinal),
+            }),
         ));
         Ok(())
     }

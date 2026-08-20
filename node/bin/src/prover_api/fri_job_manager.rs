@@ -175,8 +175,8 @@ impl FriJobManager {
             submitted_vk_hash,
         );
         let verdict = match proving_config {
-            Ok(proving_config) => {
-                self.verify_proof(
+            Ok(proving_config) => self
+                .verify_proof(
                     proving_config,
                     &batch_metadata,
                     &proof_bytes,
@@ -184,16 +184,19 @@ impl FriJobManager {
                     prover_id,
                 )
                 .await
-            }
+                .map(|()| proving_config),
             Err(err) => Err(err),
         };
-        if let Err(err) = verdict {
-            // Definitive rejection: release the assignment so the job can be re-picked
-            // immediately instead of waiting out the assignment timeout (which is set
-            // to many hours for slow CPU provers).
-            self.jobs.unassign_job(batch_number, prover_id).await;
-            return Err(err);
-        }
+        let proving_config = match verdict {
+            Ok(proving_config) => proving_config,
+            Err(err) => {
+                // Definitive rejection: release the assignment so the job can be re-picked
+                // immediately instead of waiting out the assignment timeout (which is set
+                // to many hours for slow CPU provers).
+                self.jobs.unassign_job(batch_number, prover_id).await;
+                return Err(err);
+            }
+        };
 
         // We want to ensure we can send the result downstream before we remove the job from queue
         let permit = self.try_reserve_permit_downstream()?;
@@ -215,7 +218,10 @@ impl FriJobManager {
         };
 
         // Prepare the envelope and send it downstream.
-        let proof = RealFriProof::V2 { proof: proof_bytes };
+        let proof = RealFriProof::V2 {
+            proof: proof_bytes,
+            legacy_proof_envelope_ordinal: Some(proving_config.legacy_proof_envelope_ordinal),
+        };
         let envelope = removed_job
             .with_data(FriProof::Real(proof))
             .with_stage(BatchExecutionStage::FriProvedReal);
