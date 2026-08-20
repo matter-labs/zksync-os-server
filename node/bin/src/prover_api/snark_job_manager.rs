@@ -11,7 +11,6 @@ use zksync_os_batch_types::batcher_model::{
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_l1_sender::commands::prove::ProofCommand;
-use zksync_os_types::ProvingVersion;
 
 /// Job manager for SNARK proving.
 ///
@@ -59,7 +58,7 @@ impl SnarkJobManager {
     pub async fn pick_real_job(
         &self,
         prover_id: String,
-        supported_proving_versions: Option<&[ProvingVersion]>,
+        supported_vk_hashes: Option<&[String]>,
     ) -> anyhow::Result<Option<Vec<(FriJob, FriProof)>>> {
         // consume/remove all fake jobs that may be in the front of the queue
         self.process_pending_fake_fri_proofs().await?;
@@ -68,8 +67,11 @@ impl SnarkJobManager {
             .jobs
             .pick_jobs_while_with_limit(self.max_fris_per_snark, &prover_id, |job| {
                 !job.batch_envelope.data.is_fake()
-                    && supported_proving_versions
-                        .is_none_or(|versions| versions.contains(&job.metadata.proving_version))
+                    && supported_vk_hashes.is_none_or(|hashes| {
+                        hashes
+                            .iter()
+                            .any(|hash| hash == job.metadata.verification_key_hash())
+                    })
             })
             .await;
 
@@ -85,7 +87,7 @@ impl SnarkJobManager {
         &self,
         batch_from: u64,
         batch_to: u64,
-        proving_version: ProvingVersion,
+        submitted_vk_hash: &str,
         payload: Vec<u8>,
         prover_id: String,
     ) -> anyhow::Result<()> {
@@ -101,17 +103,30 @@ impl SnarkJobManager {
         // If they don't, proof won't be accepted, validation will fail, therefore it's pointless to proceed.
         //
         // This should never happen, but we double-check to guarantee it's the case.
-        let Some(batch_metadata) = self.jobs.get_job_batch_metadata(batch_from).await else {
-            anyhow::bail!("race condition: some batches were completed earlier")
-        };
-        let server_vk = batch_metadata
-            .verification_key_hash()
-            .expect("verification key hash must be present as it was set by server");
-        let prover_vk = proving_version.vk_hash();
-        anyhow::ensure!(
-            server_vk == prover_vk,
-            "Verification key hash mismatch: server got {server_vk}, prover got {prover_vk}"
-        );
+        let mut aggregation_group = None;
+        let mut legacy_proof_envelope_ordinal = None;
+        for batch_number in batch_from..=batch_to {
+            let Some(batch_metadata) = self.jobs.get_job_batch_metadata(batch_number).await else {
+                anyhow::bail!("race condition: some batches were completed earlier")
+            };
+            let proving_config = batch_metadata.proving_config()?;
+            anyhow::ensure!(
+                proving_config.verification_key_hash == submitted_vk_hash,
+                "verification key hash mismatch for batch {batch_number}: server expects {}, prover submitted {submitted_vk_hash}",
+                proving_config.verification_key_hash,
+            );
+            if let Some(expected) = aggregation_group {
+                anyhow::ensure!(
+                    proving_config.aggregation_group == expected,
+                    "batches {batch_from}-{batch_to} are not aggregation-compatible"
+                );
+            } else {
+                aggregation_group = Some(proving_config.aggregation_group);
+                legacy_proof_envelope_ordinal = Some(proving_config.legacy_proof_envelope_ordinal);
+            }
+        }
+        let legacy_proof_envelope_ordinal = legacy_proof_envelope_ordinal
+            .ok_or_else(|| anyhow::anyhow!("SNARK proof range must not be empty"))?;
 
         // Ensure we can send downstream before consuming jobs from the retryable map.
         let permit = self.try_reserve_permit_downstream()?;
@@ -134,7 +149,7 @@ impl SnarkJobManager {
             consumed_batches_proven,
             SnarkProof::Real(RealSnarkProof::V2 {
                 proof: payload,
-                proving_execution_version: proving_version as u32,
+                legacy_proof_envelope_ordinal: Some(legacy_proof_envelope_ordinal),
             }),
         ));
         Ok(())

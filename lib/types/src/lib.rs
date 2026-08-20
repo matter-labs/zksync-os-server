@@ -37,8 +37,11 @@ pub use node::NodeRole;
 
 mod protocol;
 pub use protocol::{
-    ExecutionVersion, ExecutionVersionError, ProtocolSemanticVersion, ProtocolSemanticVersionError,
-    ProvingVersion, ProvingVersionError,
+    AggregationGroup, ExecutionVersion, ExecutionVersionError, FriProofConfiguration,
+    FriPublicInputLayout, FriVerificationStrategy, ProtocolSemanticVersion,
+    ProtocolSemanticVersionError, ProverInputStrategy, ProvingRegistry, ProvingRegistryEntry,
+    ProvingStackConfiguration, UnsupportedProtocolForProving, proving_registry,
+    require_proving_config,
 };
 
 mod block_start_cursors;

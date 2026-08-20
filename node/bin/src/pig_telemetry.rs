@@ -1,11 +1,11 @@
 use std::time::Duration;
 use vise::{Buckets, EncodeLabelValue, Histogram, LabeledFamily, Metrics, Unit};
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::ProtocolSemanticVersion;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EncodeLabelValue)]
 #[metrics(label = "mode", rename_all = "snake_case")]
 pub enum BatchPigMode {
-    LegacyBatch,
+    AggregatedBlockInputs,
     NativeBatch,
 }
 
@@ -15,7 +15,9 @@ pub struct BatchPigTelemetry {
     pub chain_id: u64,
     pub first_block_number: u64,
     pub last_block_number: u64,
-    pub proving_version: ProvingVersion,
+    pub protocol_version: ProtocolSemanticVersion,
+    pub proving_stack: &'static str,
+    pub verification_key_hash: &'static str,
     pub mode: BatchPigMode,
     pub prover_input_words: usize,
     pub computational_native_used: u64,
@@ -26,7 +28,9 @@ pub struct BatchPigTelemetry {
 pub struct BlockPigTelemetry {
     pub chain_id: u64,
     pub block_number: u64,
-    pub proving_version: ProvingVersion,
+    pub protocol_version: ProtocolSemanticVersion,
+    pub proving_stack: &'static str,
+    pub verification_key_hash: &'static str,
     pub prover_input_words: usize,
     pub elapsed: Duration,
 }
@@ -69,7 +73,9 @@ pub(crate) fn record_batch_pig_telemetry(telemetry: BatchPigTelemetry) {
         chain_id = telemetry.chain_id,
         first_block_number = telemetry.first_block_number,
         last_block_number = telemetry.last_block_number,
-        ?telemetry.proving_version,
+        protocol_version = %telemetry.protocol_version,
+        proving_stack = telemetry.proving_stack,
+        vk_hash = telemetry.verification_key_hash,
         pig_mode = ?telemetry.mode,
         prover_input_words = telemetry.prover_input_words,
         computational_native_used = telemetry.computational_native_used,
@@ -89,7 +95,9 @@ pub(crate) fn record_block_pig_telemetry(telemetry: BlockPigTelemetry) {
     tracing::info!(
         chain_id = telemetry.chain_id,
         block_number = telemetry.block_number,
-        ?telemetry.proving_version,
+        protocol_version = %telemetry.protocol_version,
+        proving_stack = telemetry.proving_stack,
+        vk_hash = telemetry.verification_key_hash,
         prover_input_words = telemetry.prover_input_words,
         elapsed_ms = telemetry.elapsed.as_millis(),
         "Block PIG completed",

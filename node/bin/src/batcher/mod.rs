@@ -338,7 +338,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
     }
 
     /// Runs [`batch_builder::seal_batch`] on a blocking thread: sealing runs batch PIG
-    /// (for V8 - a full native re-execution of the batch), which must not stall the
+    /// (for native batch PIG, a full re-execution of the batch), which must not stall the
     /// async runtime.
     async fn seal_batch_blocking(
         &self,

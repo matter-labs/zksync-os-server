@@ -131,7 +131,7 @@ impl<T: Clone> ProverJobMap<T> {
     }
 
     /// Picks multiple consecutive jobs that satisfy the predicate.
-    /// Only returns consecutive batch ranges with no gaps, and all jobs must have the same prover_version.
+    /// Only returns consecutive batch ranges with no gaps and aggregation-compatible stacks.
     ///
     /// The predicate receives (batch_number, &JobEntry<T>) and should return true for jobs that should be picked.
     ///
@@ -189,7 +189,7 @@ impl<T: Clone> ProverJobMap<T> {
                 (
                     FriJob {
                         batch_number: metadata.batch_number,
-                        vk_hash: metadata.proving_version.vk_hash().to_string(),
+                        vk_hash: metadata.verification_key_hash().to_string(),
                     },
                     entry.batch_envelope.data.clone(),
                 )
@@ -211,7 +211,7 @@ impl<T: Clone> ProverJobMap<T> {
     /// - Not exceeding the limit of selected jobs
     /// - Being either pending or timed out
     /// - Passing the external predicate
-    /// - Maintaining consecutive batch numbers and matching proving version
+    /// - Maintaining consecutive batch numbers and aggregation compatibility
     fn is_job_eligible<F>(
         &self,
         already_selected_jobs: &[JobMetadata],
@@ -242,12 +242,14 @@ impl<T: Clone> ProverJobMap<T> {
             return false;
         }
 
-        // No gaps in batch numbers and all have the same proving version
+        // No gaps in batch numbers and all stacks must be aggregation-compatible.
         match already_selected_jobs.last() {
             None => true,
             Some(last) => {
                 last.batch_number + 1 == next_job_entry.metadata.batch_number
-                    && next_job_entry.metadata.proving_version == last.proving_version
+                    && next_job_entry.metadata.aggregation_group() == last.aggregation_group()
+                    && next_job_entry.metadata.verification_key_hash()
+                        == last.verification_key_hash()
             }
         }
     }
@@ -458,7 +460,7 @@ impl<T: Clone> ProverJobMap<T> {
             .map(|(batch_number, entry)| JobState {
                 fri_job: FriJob {
                     batch_number: *batch_number,
-                    vk_hash: entry.metadata.proving_version.vk_hash().to_string(),
+                    vk_hash: entry.metadata.verification_key_hash().to_string(),
                 },
                 assigned_seconds_ago: entry
                     .metadata
@@ -505,7 +507,61 @@ mod tests {
         create_test_batch_envelope, create_test_batch_envelope_with_protocol_version,
     };
     use std::time::Duration;
-    use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
+    use zksync_os_types::{ProtocolSemanticVersion, proving_registry};
+
+    fn protocols_with_distinct_verification_keys() -> (
+        ProtocolSemanticVersion,
+        ProtocolSemanticVersion,
+        &'static str,
+    ) {
+        let registry = proving_registry();
+        for target in registry.iter() {
+            for other in registry.iter() {
+                if target.configuration.verification_key_hash
+                    != other.configuration.verification_key_hash
+                {
+                    return (
+                        target.protocol_version.clone(),
+                        other.protocol_version.clone(),
+                        target.configuration.verification_key_hash,
+                    );
+                }
+            }
+        }
+        panic!("production proving registry must contain distinct verification keys");
+    }
+
+    fn aggregation_group_boundary() -> (
+        ProtocolSemanticVersion,
+        ProtocolSemanticVersion,
+        ProtocolSemanticVersion,
+    ) {
+        let registry = proving_registry();
+        for first in registry.iter() {
+            for compatible in registry.iter() {
+                if first.protocol_version == compatible.protocol_version
+                    || first.configuration.aggregation_group
+                        != compatible.configuration.aggregation_group
+                    || first.configuration.verification_key_hash
+                        != compatible.configuration.verification_key_hash
+                {
+                    continue;
+                }
+                if let Some(incompatible) = registry.iter().find(|entry| {
+                    entry.configuration.aggregation_group != first.configuration.aggregation_group
+                }) {
+                    return (
+                        first.protocol_version.clone(),
+                        compatible.protocol_version.clone(),
+                        incompatible.protocol_version.clone(),
+                    );
+                }
+            }
+        }
+        panic!(
+            "production proving registry must contain compatible protocol patches and an incompatible stack"
+        );
+    }
 
     #[tokio::test]
     async fn test_add_and_complete_job() {
@@ -552,26 +608,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pick_job_with_proving_version_filter() {
+    async fn test_pick_job_with_verification_key_filter() {
         let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
+        let (target_protocol, other_protocol, target_vk) =
+            protocols_with_distinct_verification_keys();
 
-        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            1,
+            other_protocol,
+        ))
+        .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             2,
-            ProtocolSemanticVersion::new(0, 31, 0),
+            target_protocol,
         ))
         .await;
 
         let job = map
-            .pick_job(Duration::ZERO, "prover-v7", |job| {
-                job.metadata.proving_version == ProvingVersion::V7
+            .pick_job(Duration::ZERO, "prover-for-vk", |job| {
+                job.metadata.verification_key_hash() == target_vk
             })
             .await;
 
         assert!(job.is_some());
         let (fri_job, _data) = job.unwrap();
         assert_eq!(fri_job.batch_number, 2);
-        assert_eq!(fri_job.vk_hash, ProvingVersion::V7.vk_hash());
+        assert_eq!(fri_job.vk_hash, target_vk);
 
         let status = map.status().await;
         assert_eq!(status[0].fri_job.batch_number, 1);
@@ -579,7 +641,7 @@ mod tests {
         assert_eq!(status[1].fri_job.batch_number, 2);
         assert_eq!(
             status[1].assigned_to_prover_id,
-            Some("prover-v7".to_string())
+            Some("prover-for-vk".to_string())
         );
     }
 
@@ -638,45 +700,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pick_multiple_jobs_with_proving_version_filter() {
+    async fn test_pick_multiple_jobs_with_verification_key_filter() {
         let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+        let (target_protocol, other_protocol, target_vk) =
+            protocols_with_distinct_verification_keys();
+        let compatible_protocol = proving_registry()
+            .iter()
+            .find(|entry| {
+                entry.protocol_version != target_protocol
+                    && entry.configuration.verification_key_hash == target_vk
+            })
+            .expect("production registry must contain protocol patches sharing a proving stack")
+            .protocol_version
+            .clone();
 
-        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            1,
+            other_protocol,
+        ))
+        .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             2,
-            ProtocolSemanticVersion::new(0, 31, 0),
+            target_protocol,
         ))
         .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             3,
-            ProtocolSemanticVersion::new(0, 31, 0),
+            compatible_protocol,
         ))
         .await;
 
         let jobs = map
-            .pick_jobs_while_with_limit(5, "prover-v7", |job| {
-                job.metadata.proving_version == ProvingVersion::V7
+            .pick_jobs_while_with_limit(5, "prover-for-vk", |job| {
+                job.metadata.verification_key_hash() == target_vk
             })
             .await;
 
         assert_eq!(jobs.len(), 2);
         assert_eq!(jobs[0].0.batch_number, 2);
         assert_eq!(jobs[1].0.batch_number, 3);
-        assert!(
-            jobs.iter()
-                .all(|(fri_job, _)| fri_job.vk_hash == ProvingVersion::V7.vk_hash())
-        );
+        assert!(jobs.iter().all(|(fri_job, _)| fri_job.vk_hash == target_vk));
 
         let status = map.status().await;
         assert_eq!(status[0].fri_job.batch_number, 1);
         assert_eq!(status[0].assigned_to_prover_id, None);
         assert_eq!(
             status[1].assigned_to_prover_id,
-            Some("prover-v7".to_string())
+            Some("prover-for-vk".to_string())
         );
         assert_eq!(
             status[2].assigned_to_prover_id,
-            Some("prover-v7".to_string())
+            Some("prover-for-vk".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_snark_grouping_follows_aggregation_group() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+        let (first_protocol, compatible_protocol, incompatible_protocol) =
+            aggregation_group_boundary();
+
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            1,
+            first_protocol,
+        ))
+        .await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            2,
+            compatible_protocol,
+        ))
+        .await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            3,
+            incompatible_protocol,
+        ))
+        .await;
+
+        let jobs = map
+            .pick_jobs_while_with_limit(5, "prover-1", |_| true)
+            .await;
+
+        assert_eq!(
+            jobs.iter()
+                .map(|(job, _)| job.batch_number)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
         );
     }
 

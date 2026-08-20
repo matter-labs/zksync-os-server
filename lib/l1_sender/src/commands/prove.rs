@@ -8,6 +8,7 @@ use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::IExecutor;
 use zksync_os_contract_interface::IExecutor::{proofPayloadCall, proveBatchesSharedBridgeCall};
 use zksync_os_contract_interface::models::StoredBatchInfo;
+use zksync_os_types::{FriPublicInputLayout, require_proving_config};
 
 const OHBENDER_PROOF_TYPE: u32 = 2;
 const FAKE_PROOF_TYPE: u32 = 3;
@@ -183,42 +184,47 @@ impl ProofCommand {
             .iter()
             .map(|batch| batch.batch.batch_info.clone().into_stored())
             .collect();
-        // todo: awful and temporary
-        let verifier_version = match self.proof.proving_execution_version() {
-            // Use default verifier for fake proofs.
-            None => 0,
-            Some(6) => 6,
-            Some(7) => 0,
-            // Switch to 0 once the L1 default verifier becomes the V8 one (as done for V7).
-            Some(8) => 8,
-            Some(execution_version) => panic!(
-                "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
-            ),
+        let first_batch_info = &self.batches[0].batch.batch_info;
+        let first_config =
+            require_proving_config(&first_batch_info.protocol_version, "L1 proof submission")
+                .expect("proof batch must have a registered proving stack");
+        for batch in &self.batches[1..] {
+            let config = require_proving_config(
+                &batch.batch.batch_info.protocol_version,
+                "L1 proof submission",
+            )
+            .expect("proof batch must have a registered proving stack");
+            assert_eq!(
+                config.aggregation_group, first_config.aggregation_group,
+                "L1 proof range contains aggregation-incompatible proving stacks"
+            );
+            assert_eq!(
+                config.l1_verifier_selector, first_config.l1_verifier_selector,
+                "aggregation-compatible proving stacks use different L1 verifier selectors"
+            );
+            assert_eq!(
+                config.fri.public_input_layout, first_config.fri.public_input_layout,
+                "aggregation-compatible proving stacks use different public-input layouts"
+            );
+        }
+
+        let verifier_selector = match &self.proof {
+            SnarkProof::Fake => 0,
+            SnarkProof::Real(_) => first_config.l1_verifier_selector,
         };
 
-        // todo: remove tostring
-        // v32.0 (proving V8) folds the chain config hash into the batch public input.
-        let chain_config_hash = if self
-            .batches
-            .first()
-            .unwrap()
-            .batch
-            .batch_info
-            .protocol_version
-            .minor
-            >= 32
-        {
-            Some(Self::zksync_os_chain_config_hash(
-                self.batches
-                    .first()
-                    .unwrap()
-                    .batch
-                    .batch_info
-                    .commit_info
-                    .chain_id,
-            ))
-        } else {
-            None
+        let chain_config_hash = match first_config.fri.public_input_layout {
+            FriPublicInputLayout::StateTransitionAndBatchOutput => None,
+            FriPublicInputLayout::StateTransitionChainConfigAndBatchOutput => {
+                let chain_id = first_batch_info.commit_info.chain_id;
+                assert!(
+                    self.batches
+                        .iter()
+                        .all(|batch| batch.batch.batch_info.commit_info.chain_id == chain_id),
+                    "L1 proof range contains batches from different chains"
+                );
+                Some(Self::zksync_os_chain_config_hash(chain_id))
+            }
         };
         let public_input =
             Self::snark_public_input(previous_batch_info, &stored_batch_infos, chain_config_hash);
@@ -251,7 +257,7 @@ impl ProofCommand {
                     .collect();
                 vec![
                     // Real proof versioned with a specific verifier
-                    U256::from(OHBENDER_PROOF_TYPE | (verifier_version << 8)),
+                    U256::from(OHBENDER_PROOF_TYPE | (verifier_selector << 8)),
                     // we generate SNARK proofs to always match the range perfectly.
                     U256::from(0),
                 ]

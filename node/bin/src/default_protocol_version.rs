@@ -14,7 +14,7 @@ pub const PROTOCOL_VERSION_V31_0: &str = "v31.0";
 pub const PROTOCOL_VERSION_V32_0: &str = "v32.0";
 
 /// Current default protocol version for local chain configuration.
-/// v30.x can no longer be launched with default settings: V6 proving support was dropped.
+/// v30.x remains available through its explicit local-chain fixture and prover-test lane.
 pub const PROTOCOL_VERSION: &str = PROTOCOL_VERSION_V31_0;
 
 /// Next protocol version for local chain configuration.

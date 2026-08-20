@@ -1,5 +1,4 @@
-//! Live end-to-end test for the zksync-os 0.4.0 lane (protocol v32.0, execution V7,
-//! proving V8, native batch PIG):
+//! Live end-to-end test for the registered ZKsync OS 0.4 stack using native batch PIG.
 //!
 //! 1. Start a v31.0 chain settling on L1 with fake FRI/SNARK provers, then perform
 //!    a protocol upgrade to v32.0.
@@ -11,11 +10,11 @@
 //!    proven+executed on L1.
 //!
 //! Required environment:
-//!   V8_FRI_PROVER_BIN        path to the `zksync_os_fri_prover` binary (may be a wrapper script)
-//!   V8_APP_BIN               path to the V8 `multiblock_batch.bin` app binary
+//!   UNIFIED_FRI_PROVER_BIN   path to the `zksync_os_fri_prover` binary (may be a wrapper script)
+//!   NATIVE_BATCH_APP_BIN     path to the registered `multiblock_batch.bin` app binary
 //! Optional:
-//!   V8_PROVING_TIMEOUT_SECS  how long to wait for the real proof (default 4h; CPU proving is slow)
-//!   V8_PROVER_CPU_THREADS    forwarded as `--cpu-worker-threads` (bounds prover memory)
+//!   REAL_FRI_TIMEOUT_SECS    how long to wait for the real proof (default 4h; CPU proving is slow)
+//!   FRI_PROVER_CPU_THREADS   forwarded as `--cpu-worker-threads` (bounds prover memory)
 
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
@@ -30,19 +29,19 @@ use zksync_os_integration_tests::upgrade::UpgradeTester;
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
 
 #[test_log::test(tokio::test)]
-#[ignore = "requires an externally built V8 zksync_os_fri_prover binary; run manually"]
-async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
-    let prover_bin = std::env::var("V8_FRI_PROVER_BIN")
-        .expect("set V8_FRI_PROVER_BIN to the zksync_os_fri_prover binary path");
-    let app_bin =
-        std::env::var("V8_APP_BIN").expect("set V8_APP_BIN to the V8 multiblock_batch.bin path");
+#[ignore = "requires an externally built zksync_os_fri_prover binary; run manually"]
+async fn native_batch_real_fri_proof_e2e() -> anyhow::Result<()> {
+    let prover_bin = std::env::var("UNIFIED_FRI_PROVER_BIN")
+        .expect("set UNIFIED_FRI_PROVER_BIN to the zksync_os_fri_prover binary path");
+    let app_bin = std::env::var("NATIVE_BATCH_APP_BIN")
+        .expect("set NATIVE_BATCH_APP_BIN to the multiblock_batch.bin path");
     let proving_timeout = Duration::from_secs(
-        std::env::var("V8_PROVING_TIMEOUT_SECS")
+        std::env::var("REAL_FRI_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(4 * 3600),
     );
-    let cpu_worker_threads = std::env::var("V8_PROVER_CPU_THREADS").ok();
+    let cpu_worker_threads = std::env::var("FRI_PROVER_CPU_THREADS").ok();
 
     // Phase 1: v31.0 chain settling on L1; fake FRI + SNARK provers keep the
     // pipeline moving.
@@ -54,7 +53,7 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
     .launch_default()
     .await?;
 
-    // Upgrade v31.0 -> v32.0 (execution V7 / proving V8).
+    // Upgrade v31.0 -> v32.0, which retains historical V7 execution semantics.
     {
         let upgrade_tester = UpgradeTester::for_default_upgrade(&tester).await?;
         let protocol_upgrade = upgrade_tester
@@ -96,7 +95,7 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
 
     // Phase 2: restart the node with real FRI proving. Fake SNARK provers stay on
     // (no GPU/CRS here), so finalization of the probe tx requires exactly one real
-    // V8 FRI proof.
+    // unified-layer FRI proof.
     let tester = tester
         .stop()
         .await?
@@ -114,7 +113,7 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
         })
         .await?;
 
-    // The tx we expect to finalize through a real V8 FRI proof. Poll for the receipt
+    // The tx we expect to finalize through a real unified-layer FRI proof. Poll for the receipt
     // manually instead of using the pending-tx watcher: right after a node restart the
     // watcher's subscription can miss the inclusion notification and time out even though
     // the tx was mined within seconds.
@@ -152,7 +151,7 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
     tracing::info!(
         prover_api_url,
         block_number,
-        "starting external V8 FRI prover"
+        "starting external unified-layer FRI prover"
     );
 
     let mut cmd = tokio::process::Command::new(&prover_bin);
@@ -161,7 +160,7 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
         .arg("--app-bin-path")
         .arg(&app_bin)
         .arg("--prover-name")
-        .arg("v8-e2e-cpu-prover")
+        .arg("unified-e2e-cpu-prover")
         .arg("--prometheus-port")
         .arg("24123")
         // 2 iterations as headroom in case an empty batch sealed ahead of the probe tx.
@@ -191,7 +190,7 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
             tracing::info!(
                 ?finalized,
                 block_number,
-                "probe tx block finalized on L1 via real V8 FRI proof"
+                "probe tx block finalized on L1 via real unified-layer FRI proof"
             );
             break;
         }

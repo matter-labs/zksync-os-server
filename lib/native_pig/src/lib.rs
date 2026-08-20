@@ -8,7 +8,7 @@ use alloy::primitives::{B256, keccak256};
 use zksync_os_batch_types::{BlockMerkleTreeData, CanonicalBatchCommitData, PendingBatchInfo};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataMode};
+use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
 
 pub mod tree;
 mod v32;
@@ -103,7 +103,7 @@ impl NativeBatchRunOutput {
             self.canonical_commit_data(first_block_number, last_block_number),
         )?;
 
-        // Reconstruct the batch public input exactly as `verify_fri_proof_v8` will and compare
+        // Reconstruct the batch public input exactly as the unified FRI verifier will and compare
         // it with the value the batch program computed; catches batch-output layout drift.
         let chain_config_hash = v32::chain_config_hash(chain_id)?;
         let reconstructed_public_input_hash = keccak256(
@@ -139,20 +139,12 @@ pub fn v32_chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
 }
 
 pub fn generate_batch_run<ReadState: ReadStateHistory>(
-    proving_version: ProvingVersion,
     blocks: &[NativeBatchBlock<'_>],
     read_state: &ReadState,
     merkle_tree: MerkleTree<RocksDBWrapper>,
     pubdata_mode: PubdataMode,
 ) -> anyhow::Result<NativeBatchRunOutput> {
-    match proving_version {
-        ProvingVersion::V8 => {
-            v32::generate_batch_run(blocks, read_state, merkle_tree, pubdata_mode)
-        }
-        ProvingVersion::V6 | ProvingVersion::V7 => {
-            anyhow::bail!("native batch proving is unsupported for {proving_version:?}")
-        }
-    }
+    v32::generate_batch_run(blocks, read_state, merkle_tree, pubdata_mode)
 }
 
 #[cfg(test)]

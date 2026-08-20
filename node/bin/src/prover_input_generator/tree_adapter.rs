@@ -7,7 +7,7 @@ use zksync_os_native_pig::tree::{EfficientTreeAdapter, RawLeafProof};
 
 pub(super) use zksync_os_native_pig::tree::VersionedMerkleTree;
 
-/// [`EfficientTreeAdapter`] wrapper implementing the V6 and V7 lanes' zksync-os storage traits.
+/// [`EfficientTreeAdapter`] wrapper implementing the ZKsync OS 0.2 and 0.3 storage traits.
 #[derive(Debug)]
 pub(super) struct LaneTreeAdapter(EfficientTreeAdapter);
 
