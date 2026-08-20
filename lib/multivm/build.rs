@@ -5,7 +5,9 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use url::Url;
 
 struct BinarySourceConfig {
-    proving_version: &'static str,
+    /// zksync-os release series the binaries belong to, as used in the
+    /// `ZK_OS_<series>_SOURCE_PATH` env var and the `apps::v<series>` module.
+    release_series: &'static str,
     download_tag: &'static str,
 }
 
@@ -23,14 +25,14 @@ fn parse_git_reference(package_id: &PackageId) -> anyhow::Result<String> {
 // Remove entries as the corresponding proving lanes leave the support window.
 fn binary_source_config(reference: &str) -> Option<BinarySourceConfig> {
     match reference {
-        // The V6 VK was generated from the original v0.2.5 binaries; 0.2.x rebuild tags
+        // The 0.2.x lane VK was generated from the original v0.2.5 binaries; 0.2.x rebuild tags
         // produce different ones.
         "v0.2.10-interface-v0.1.3-2026-02-10" => Some(BinarySourceConfig {
-            proving_version: "V6",
+            release_series: "0_2",
             download_tag: "v0.2.5",
         }),
         "v0.3.2-interface-v0.1.3" => Some(BinarySourceConfig {
-            proving_version: "V7",
+            release_series: "0_3",
             download_tag: "v0.3.1-interface-v0.1.3",
         }),
         _ => None,
@@ -144,8 +146,8 @@ fn main() {
             }
 
             println!(
-                "cargo:rustc-env=ZKSYNC_OS_{}_SOURCE_PATH={dir}",
-                config.proving_version
+                "cargo:rustc-env=ZK_OS_{}_SOURCE_PATH={dir}",
+                config.release_series
             );
             continue;
         }

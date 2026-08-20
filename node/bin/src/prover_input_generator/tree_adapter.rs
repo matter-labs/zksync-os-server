@@ -1,5 +1,5 @@
 use zk_ee_prev::utils::Bytes32;
-use zk_os_basic_system_0_2_10::system_implementation::flat_storage_model::FlatStorageLeaf as FlatStorageLeafV6;
+use zk_os_basic_system_0_2_10::system_implementation::flat_storage_model::FlatStorageLeaf as FlatStorageLeafZkOs0_2;
 use zk_os_basic_system_prev::system_implementation::flat_storage_model::FlatStorageLeaf;
 use zk_os_forward_system_prev::run::{LeafProof, ReadStorage, ReadStorageTree};
 use zksync_os_batch_types::BlockMerkleTreeData;
@@ -7,7 +7,8 @@ use zksync_os_native_pig::tree::{EfficientTreeAdapter, RawLeafProof};
 
 pub(super) use zksync_os_native_pig::tree::VersionedMerkleTree;
 
-/// [`EfficientTreeAdapter`] wrapper implementing the V6 and V7 lanes' zksync-os storage traits.
+/// [`EfficientTreeAdapter`] wrapper implementing the zksync-os 0.2.x and 0.3.x lanes' storage
+/// traits.
 #[derive(Debug)]
 pub(super) struct LaneTreeAdapter(EfficientTreeAdapter);
 
@@ -60,7 +61,7 @@ impl zk_os_forward_system_0_2_10::run::ReadStorageTree for LaneTreeAdapter {
 
     fn merkle_proof(&mut self, tree_index: u64) -> zk_os_forward_system_0_2_10::run::LeafProof {
         let proof = self.0.merkle_proof(tree_index);
-        let leaf = FlatStorageLeafV6 {
+        let leaf = FlatStorageLeafZkOs0_2 {
             key: proof.key.0.into(),
             value: proof.value.0.into(),
             next: proof.next_index,

@@ -522,13 +522,13 @@ mod tests {
     use std::time::Duration;
     use zksync_os_types::{ProtocolSemanticVersion, require_proving_config};
 
-    const V6_PROTOCOL_1: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 1);
-    const V6_PROTOCOL_2: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 2);
-    const V7_PROTOCOL: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
+    const PROTOCOL_VERSION_V30_1: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 1);
+    const PROTOCOL_VERSION_V30_2: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 2);
+    const PROTOCOL_VERSION_V31_0: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
 
-    fn v6_verification_key_hash() -> &'static str {
-        require_proving_config(&V6_PROTOCOL_1, "prover job-map test fixture")
-            .expect("V6 test fixture must be registered for proving")
+    fn v30_verification_key_hash() -> &'static str {
+        require_proving_config(&PROTOCOL_VERSION_V30_1, "prover job-map test fixture")
+            .expect("v30.1 test fixture must be registered for proving")
             .verification_key_hash
     }
 
@@ -592,16 +592,16 @@ mod tests {
     #[tokio::test]
     async fn test_pick_job_with_verification_key_filter() {
         let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
-        let target_vk = v6_verification_key_hash();
+        let target_vk = v30_verification_key_hash();
 
         map.add_job(create_test_batch_envelope_with_protocol_version(
             1,
-            V7_PROTOCOL,
+            PROTOCOL_VERSION_V31_0,
         ))
         .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             2,
-            V6_PROTOCOL_1,
+            PROTOCOL_VERSION_V30_1,
         ))
         .await;
 
@@ -683,21 +683,21 @@ mod tests {
     #[tokio::test]
     async fn test_pick_multiple_jobs_with_verification_key_filter() {
         let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
-        let target_vk = v6_verification_key_hash();
+        let target_vk = v30_verification_key_hash();
 
         map.add_job(create_test_batch_envelope_with_protocol_version(
             1,
-            V7_PROTOCOL,
+            PROTOCOL_VERSION_V31_0,
         ))
         .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             2,
-            V6_PROTOCOL_1,
+            PROTOCOL_VERSION_V30_1,
         ))
         .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             3,
-            V6_PROTOCOL_2,
+            PROTOCOL_VERSION_V30_2,
         ))
         .await;
 
@@ -731,17 +731,17 @@ mod tests {
 
         map.add_job(create_test_batch_envelope_with_protocol_version(
             1,
-            V6_PROTOCOL_1,
+            PROTOCOL_VERSION_V30_1,
         ))
         .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             2,
-            V6_PROTOCOL_2,
+            PROTOCOL_VERSION_V30_2,
         ))
         .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             3,
-            V7_PROTOCOL,
+            PROTOCOL_VERSION_V31_0,
         ))
         .await;
 

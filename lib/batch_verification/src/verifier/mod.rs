@@ -122,8 +122,10 @@ impl<Finality: ReadFinality, ReadState: ReadStateHistory + Clone>
                 .map_err(anyhow::Error::from)?;
 
         let uses_native_batch = match proving_config.prover_input {
-            ProverInputStrategy::V6BlockInputs | ProverInputStrategy::V7BlockInputs => false,
-            ProverInputStrategy::V8NativeBatch => true,
+            ProverInputStrategy::ZkOs0_2BlockInputs | ProverInputStrategy::ZkOs0_3BlockInputs => {
+                false
+            }
+            ProverInputStrategy::ZkOs0_4NativeBatch => true,
         };
         let (batch_info, _) = if uses_native_batch {
             // Native batch PIG re-executes the whole batch - run it on a blocking
@@ -327,7 +329,7 @@ mod tests {
     const SL_CHAIN_ID: u64 = 9;
     const BATCH_NUMBER: u64 = 1;
     const REQUEST_ID: u64 = 4242;
-    const V8_PROTOCOL_VERSION: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 32, 0);
+    const PROTOCOL_VERSION_V32_0: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 32, 0);
     const PRIVATE_KEY: &str = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
     const DIAMOND_PROXY_SL: Address = address!("0x00000000000000000000000000000000000000d1");
     const VALIDATOR_TIMELOCK: Address = address!("0x00000000000000000000000000000000000000e1");
@@ -397,8 +399,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v8_verifier_approves_batch_built_from_native_run() {
-        let protocol_version = V8_PROTOCOL_VERSION;
+    async fn v32_verifier_approves_batch_built_from_native_run() {
+        let protocol_version = PROTOCOL_VERSION_V32_0;
         let genesis_state = build_genesis_state_for_test(&protocol_version).await;
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
@@ -407,7 +409,7 @@ mod tests {
         let prev_batch_info = genesis_stored_batch_info(&genesis_state, &tree);
         let tree_block = empty_tree_block(&tree, protocol_version.clone());
 
-        let batch_envelope = v8_batch_for_signing(
+        let batch_envelope = v32_batch_for_signing(
             &tree_block,
             prev_batch_info,
             &read_state,
@@ -464,13 +466,13 @@ mod tests {
         assert_eq!(*validated.signer(), expected_signer);
     }
 
-    /// The server-side V8 batch public-input reconstruction (used to verify V8 FRI proofs in
-    /// `fri_proof_verifier::verify_fri_proof_v8`) must match the public input the zksync-os
-    /// 0.4.0 batch program computes natively:
+    /// The server-side v32 batch public-input reconstruction (used to verify unrolled FRI proofs
+    /// in `fri_proof_verifier::verify_unrolled_program_proof`) must match the public input the
+    /// zksync-os 0.4.0 batch program computes natively:
     /// `keccak(state_before || state_after || chain_config_hash || batch_output)`.
     #[tokio::test]
-    async fn v8_public_input_reconstruction_matches_native_run() {
-        let protocol_version = V8_PROTOCOL_VERSION;
+    async fn v32_public_input_reconstruction_matches_native_run() {
+        let protocol_version = PROTOCOL_VERSION_V32_0;
         let genesis_state = build_genesis_state_for_test(&protocol_version).await;
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
@@ -511,23 +513,23 @@ mod tests {
 
         assert_eq!(
             reconstructed, native_batch_run.batch_public_input_hash,
-            "server-side V8 public input reconstruction diverges from the batch program"
+            "server-side v32 public input reconstruction diverges from the batch program"
         );
     }
 
-    /// Utility (not a real test): runs the V8 native batch PIG for the simplest possible batch
+    /// Utility (not a real test): runs the v32 native batch PIG for the simplest possible batch
     /// and dumps the resulting prover input in the
     /// formats the `zksync-airbender` CLI understands, so it can be proven/verified on CPU
     /// elsewhere (e.g. `cli prove --bin multiblock_batch.bin --input-file <hex> --backend cpu`).
     ///
     /// Run with:
-    ///   V8_PROVER_INPUT_OUT=/tmp/v8-prover-input \
-    ///   cargo test -p zksync_os_batch_verification dump_v8_simplest_batch_prover_input \
+    ///   V32_PROVER_INPUT_OUT=/tmp/v32-prover-input \
+    ///   cargo test -p zksync_os_batch_verification dump_v32_simplest_batch_prover_input \
     ///     -- --ignored --nocapture
     #[tokio::test]
-    #[ignore = "utility: dumps the V8 simplest-batch prover input to files"]
-    async fn dump_v8_simplest_batch_prover_input() {
-        let protocol_version = V8_PROTOCOL_VERSION;
+    #[ignore = "utility: dumps the v32 simplest-batch prover input to files"]
+    async fn dump_v32_simplest_batch_prover_input() {
+        let protocol_version = PROTOCOL_VERSION_V32_0;
         let genesis_state = build_genesis_state_for_test(&protocol_version).await;
         let read_state = MemoryStateHistory::from_genesis_state(&genesis_state);
 
@@ -544,28 +546,26 @@ mod tests {
             tree.clone(),
             PubdataMode::Calldata,
         )
-        .expect("V8 native batch run failed");
+        .expect("v32 native batch run failed");
 
         let words = native_batch_run.prover_input;
 
-        let out_dir = std::env::var("V8_PROVER_INPUT_OUT")
-            .expect("set V8_PROVER_INPUT_OUT to the output directory for the dumped files");
+        let out_dir = std::env::var("V32_PROVER_INPUT_OUT")
+            .expect("set V32_PROVER_INPUT_OUT to the output directory for the dumped files");
         std::fs::create_dir_all(&out_dir).unwrap();
 
         // `--input-type hex` (the CLI default): each u32 word as 8 lowercase hex chars, concatenated.
         let hex: String = words.iter().map(|w| format!("{w:08x}")).collect();
-        let hex_path = format!("{out_dir}/v8_simplest_prover_input.hex");
+        let hex_path = format!("{out_dir}/v32_simplest_prover_input.hex");
         std::fs::write(&hex_path, &hex).unwrap();
 
         // Raw little-endian words (useful for other tooling / re-encoding as base64 prover-input-json).
         let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let bin_path = format!("{out_dir}/v8_simplest_prover_input.le.bin");
+        let bin_path = format!("{out_dir}/v32_simplest_prover_input.le.bin");
         std::fs::write(&bin_path, &bytes).unwrap();
 
-        println!("=== V8 simplest-batch prover input ===");
-        println!(
-            "protocol_version: {protocol_version}  proving_version: V8  pubdata_mode: Calldata"
-        );
+        println!("=== v32 simplest-batch prover input ===");
+        println!("protocol_version: {protocol_version}  pubdata_mode: Calldata");
         println!(
             "prover_input words: {}  ({} bytes)",
             words.len(),
@@ -581,7 +581,7 @@ mod tests {
         println!("wrote bin : {bin_path}");
     }
 
-    fn v8_batch_for_signing<ReadState: ReadStateHistory>(
+    fn v32_batch_for_signing<ReadState: ReadStateHistory>(
         tree_block: &TreeBlock,
         prev_batch_info: StoredBatchInfo,
         read_state: &ReadState,
@@ -697,7 +697,7 @@ mod tests {
                 blob_fee: U256::ONE,
             },
             // A fresh chain establishes the settlement-layer chain id in its first block
-            // (see the sequencer's SetSLChainId injection); the V8 batch program reads it
+            // (see the sequencer's SetSLChainId injection); the v32 batch program reads it
             // from state, and batch-info construction cross-checks it against the node.
             vec![ZkTransaction::from(SystemTxEnvelope::set_sl_chain_id(
                 SL_CHAIN_ID,

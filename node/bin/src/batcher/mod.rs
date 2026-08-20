@@ -338,8 +338,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> Batcher<ReadState> {
     }
 
     /// Runs [`batch_builder::seal_batch`] on a blocking thread: sealing runs batch PIG
-    /// (for V8 - a full native re-execution of the batch), which must not stall the
-    /// async runtime.
+    /// (for the zksync-os 0.4.x lane - a full native re-execution of the batch), which
+    /// must not stall the async runtime.
     async fn seal_batch_blocking(
         &self,
         blocks: Vec<ProverBlock>,

@@ -84,7 +84,8 @@ impl TestCase {
 // v32.0; reintroduce it once they are generated. Until then v32 is covered via in-test upgrades.
 pub const CURRENT_TO_L1: TestCase = TestCase::current_to_l1();
 
-/// Fresh chain at v30.2 — the oldest protocol version with live proving support (V6).
+/// Fresh chain at v30.2 — the oldest protocol version with live proving support
+/// (the zksync-os 0.2.x stack).
 #[cfg(feature = "prover-tests")]
 pub const V30_TO_L1: TestCase = TestCase {
     protocol_version: PROTOCOL_VERSION_V30_2,
@@ -97,8 +98,8 @@ pub const BATCH_VERIFICATION_KEYS: [&str; 2] = [
 ];
 /// Shutdown completes in <5 seconds when there is no CPU starvation. But because prover input
 /// generator runs its CPU-bound task on a blocking thread it can significantly slow down graceful
-/// shutdown. Keep 60s until V7 proving support is dropped (V8 generates prover input natively
-/// at batch seal, without the blocking RISC-V simulator).
+/// shutdown. Keep 60s until the per-block-input proving lanes are dropped (the native-batch lane
+/// generates prover input at batch seal, without the blocking RISC-V simulator).
 const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 /// Set of addresses (i.e. public keys) expected by batch verification. Derived from [`BATCH_VERIFICATION_KEYS`].
 static BATCH_VERIFICATION_ADDRESSES: LazyLock<Vec<String>> = LazyLock::new(|| {
@@ -979,12 +980,12 @@ fn prover_service_fixture(protocol_directory: &str) -> ProverServiceFixture {
     match protocol_directory {
         PROTOCOL_VERSION_V30_2 => ProverServiceFixture {
             protocol_version: ProtocolSemanticVersion::new(0, 30, 2),
-            expected_prover_input: ProverInputStrategy::V6BlockInputs,
+            expected_prover_input: ProverInputStrategy::ZkOs0_2BlockInputs,
             prover_release: "v0.7.1",
         },
         PROTOCOL_VERSION_V31_0 => ProverServiceFixture {
             protocol_version: ProtocolSemanticVersion::new(0, 31, 0),
-            expected_prover_input: ProverInputStrategy::V7BlockInputs,
+            expected_prover_input: ProverInputStrategy::ZkOs0_3BlockInputs,
             prover_release: "v0.8.0",
         },
         _ => panic!("no real-prover test fixture for local chain `{protocol_directory}`"),
@@ -1002,17 +1003,17 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
         "real-prover test fixture does not match the registered proving stack"
     );
     let app_bin_path = match proving_config.prover_input {
-        ProverInputStrategy::V6BlockInputs => utils::materialize_multiblock_batch_bin(
+        ProverInputStrategy::ZkOs0_2BlockInputs => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
-            "v6",
-            zksync_os_multivm::apps::v6::MULTIBLOCK_BATCH,
+            "v0_2",
+            zksync_os_multivm::apps::v0_2::MULTIBLOCK_BATCH,
         ),
-        ProverInputStrategy::V7BlockInputs => utils::materialize_multiblock_batch_bin(
+        ProverInputStrategy::ZkOs0_3BlockInputs => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
-            "v7",
-            zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH,
+            "v0_3",
+            zksync_os_multivm::apps::v0_3::MULTIBLOCK_BATCH,
         ),
-        ProverInputStrategy::V8NativeBatch => {
+        ProverInputStrategy::ZkOs0_4NativeBatch => {
             panic!(
                 "prover-tests has no bundled external prover for stack {}",
                 proving_config.name
