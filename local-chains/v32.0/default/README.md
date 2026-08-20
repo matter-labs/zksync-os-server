@@ -25,6 +25,32 @@ The snapshot has since been upgraded in place so the chain can verify V8
 - `ZKsyncOSDualVerifier` code replaced in place with the same build, preserving its
   verifier mappings.
 
+Updated again for the zksync-os v0.4.0 release binary (see `../versions.yaml` for the
+VK provenance), by direct state edits — no new L1 blocks, so historical states stay 1:1
+with block records:
+
+- The verifier version 8 `ZKsyncOSVerifierPlonk` replaced with one generated from the
+  v0.4.0-binary VK (`0x9f7576b9…`); the old registration verified the superseded
+  draft-binary VK.
+- The L2 genesis (`../genesis.json`) now deploys the v0.4.0-layout `L2AssetTracker`
+  with its base-token asset id, L1 chain id, registration and migration-number slots
+  initialized — since zksync-os v0.4.0 every block's pre-tx loop calls the tracker and
+  fails fatally on an uninitialized or old-layout deployment. Its `genesis_root` was
+  recalculated (see the `recompute_genesis_root` utility test in
+  `zksync_os_batch_verification`), and the batch-0 hash stored on the diamond and the
+  CTM (`storedBatchZero`) updated to match.
+- `ZKsyncOSDualVerifier` code swapped to the `ZKsyncOSTestnetVerifier` build (storage,
+  including verifier registrations, preserved): the previous in-place replacement used
+  the production build, whose `mockVerify` reverts `MockVerifierNotSupported` — fake
+  (mock) proofs from `local_dev.yaml`'s fake provers could never settle.
+- Block records truncated to block 128, the last block with a persisted historical
+  state (earlier regenerations added block records without states, making watcher
+  startup probes fail nondeterministically with `BlockOutOfRangeError`). The dropped
+  blocks' effects live in the current account state.
+
+Validated end-to-end on this snapshot: the node starts from genesis, seals blocks, and
+batches 1-2 were committed, (fake-)proved and executed on L1.
+
 Regenerate with `local-chains/v32.0/regenerate.sh` after bumping the contracts.
 
 ## Quick Start
