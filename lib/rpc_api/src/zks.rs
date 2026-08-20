@@ -68,8 +68,12 @@ pub trait ZksApi {
     #[method(name = "getBatchByNumber")]
     fn get_batch_by_number(&self, batch_number: u64) -> RpcResult<Option<PersistedBatch>>;
 
-    #[method(name = "getLatestBatchNumber")]
-    fn get_latest_batch_number(&self) -> RpcResult<u64>;
+    /// Stable replacement for `unstable_getBatchByBlockNumber`, which stays supported for now.
+    #[method(name = "getBatchByBlockNumber")]
+    fn get_batch_by_block_number(&self, block_number: u64) -> RpcResult<Option<PersistedBatch>>;
+
+    #[method(name = "batchNumber")]
+    fn batch_number(&self) -> RpcResult<u64>;
 
     #[method(name = "getProof", blocking)]
     fn get_proof(

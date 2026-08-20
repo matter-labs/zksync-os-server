@@ -21,7 +21,7 @@ async fn enumerate_batches(tester: Tester) -> anyhow::Result<()> {
         .wait_batch_number_by_block_number(deploy_block_number)
         .await?;
 
-    let latest_batch_number = tester.l2_zk_provider.get_latest_batch_number().await?;
+    let latest_batch_number = tester.l2_zk_provider.get_batch_number().await?;
     assert!(
         latest_batch_number >= batch_number,
         "latest batch {latest_batch_number} is behind finalized batch {batch_number}"
