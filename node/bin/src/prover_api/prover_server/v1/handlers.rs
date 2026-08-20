@@ -12,7 +12,6 @@ use base64::{Engine, engine::general_purpose};
 use http::StatusCode;
 use http_body::{Body as HttpBody, Frame, SizeHint};
 use zksync_os_batch_types::batcher_model::{FriProof, ProverInput};
-use zksync_os_types::ProvingVersion;
 
 use crate::prover_api::fri_job_manager::SubmitError;
 use crate::prover_api::{
@@ -128,7 +127,7 @@ pub(super) async fn pick_fri_job(
         "Received FRI job pick request from prover with ID: {}",
         query.id
     );
-    let supported_proving_versions = query.supported_proving_versions();
+    let supported_vk_hashes = query.supported_vk_hashes();
     // for real provers, we return the next job immediately -
     // see `FakeProversPool` for fake provers implementation
     match state
@@ -136,7 +135,7 @@ pub(super) async fn pick_fri_job(
         .pick_next_job(
             std::time::Duration::from_secs(0),
             query.id,
-            supported_proving_versions.as_deref(),
+            supported_vk_hashes.as_deref(),
         )
         .await
     {
@@ -178,28 +177,23 @@ pub(super) async fn submit_fri_proof(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
 
     let prover_id = query.id;
-    let proving_version = ProvingVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("no Proving Version matches the provided Verification Key: {e}"),
-        )
-    })?;
     match state
         .fri_job_manager
-        .submit_proof(payload.batch_number, proof_bytes.into(), proving_version, &prover_id)
+        .submit_proof(
+            payload.batch_number,
+            proof_bytes.into(),
+            &payload.vk_hash,
+            &prover_id,
+        )
         .await
     {
         Ok(()) => Ok((StatusCode::NO_CONTENT, "proof accepted".to_string()).into_response()),
-        Err(SubmitError::ProvingVersionMismatch(server_execution_version, prover_execution_version)) => {
-            Err((
+        Err(SubmitError::VerificationKeyMismatch { expected, submitted }) => Err((
             StatusCode::BAD_REQUEST,
             format!(
-                "execution error mismatch: server has {server_execution_version:?} (vk = {}), prover used {prover_execution_version:?} (vk = {})",
-                server_execution_version.vk_hash(),
-                prover_execution_version.vk_hash()
-            )
-            .to_string(),
-        ))}
+                "verification key mismatch: server expects {expected}, prover submitted {submitted}"
+            ),
+        )),
         Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
             proof_final_register_values,
@@ -234,10 +228,10 @@ pub(super) async fn pick_snark_job(
         "Received SNARK job pick request from prover with ID: {}",
         query.id
     );
-    let supported_proving_versions = query.supported_proving_versions();
+    let supported_vk_hashes = query.supported_vk_hashes();
     match state
         .snark_job_manager
-        .pick_real_job(query.id, supported_proving_versions.as_deref())
+        .pick_real_job(query.id, supported_vk_hashes.as_deref())
         .await
     {
         Ok(Some(batches)) => {
@@ -308,18 +302,12 @@ pub(super) async fn submit_snark_proof(
     let proof_bytes = general_purpose::STANDARD
         .decode(&payload.proof)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
-    let proving_version = ProvingVersion::try_from_vk_hash(&payload.vk_hash).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("no Proving Version matches the provided verification key: {e}"),
-        )
-    })?;
     match state
         .snark_job_manager
         .submit_proof(
             payload.from_batch_number,
             payload.to_batch_number,
-            proving_version,
+            &payload.vk_hash,
             proof_bytes,
             query.id,
         )

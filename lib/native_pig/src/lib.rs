@@ -6,14 +6,14 @@
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{B256, keccak256};
 use zksync_os_batch_types::{BlockMerkleTreeData, CanonicalBatchCommitData, PendingBatchInfo};
-use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
-use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
-use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataMode};
+use zksync_os_storage_api::ReplayRecord;
+use zksync_os_types::{ProtocolSemanticVersion, PubdataMode};
 
 pub mod tree;
 mod v32;
+pub use v32::generate_batch_run as generate_v32_batch_run;
 
-/// Per-block input to [`generate_batch_run`].
+/// Per-block input to [`generate_v32_batch_run`].
 #[derive(Debug, Clone, Copy)]
 pub struct NativeBatchBlock<'a> {
     pub replay_record: &'a ReplayRecord,
@@ -136,23 +136,6 @@ pub fn v32_chain_config(
 /// keccak256 commitment of [`v32_chain_config`], as committed to in the v32 batch public input.
 pub fn v32_chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
     v32::chain_config_hash(chain_id)
-}
-
-pub fn generate_batch_run<ReadState: ReadStateHistory>(
-    proving_version: ProvingVersion,
-    blocks: &[NativeBatchBlock<'_>],
-    read_state: &ReadState,
-    merkle_tree: MerkleTree<RocksDBWrapper>,
-    pubdata_mode: PubdataMode,
-) -> anyhow::Result<NativeBatchRunOutput> {
-    match proving_version {
-        ProvingVersion::V8 => {
-            v32::generate_batch_run(blocks, read_state, merkle_tree, pubdata_mode)
-        }
-        ProvingVersion::V6 | ProvingVersion::V7 => {
-            anyhow::bail!("native batch proving is unsupported for {proving_version:?}")
-        }
-    }
 }
 
 #[cfg(test)]

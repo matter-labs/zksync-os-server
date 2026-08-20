@@ -111,6 +111,7 @@ pub enum JobMapMethod {
     PickJobsWhile,
     CompleteManyJobs,
     GetJobBatchMetadata,
+    GetJobProvingConfigs,
     GetProverInput,
     UnassignJob,
     Status,
