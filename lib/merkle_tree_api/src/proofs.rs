@@ -337,6 +337,12 @@ impl BatchTreeProof {
         let mut node_hashes: Vec<_> = sorted_leaves
             .map(|(idx, leaf)| (idx, hasher.hash_leaf(leaf)))
             .collect();
+        // This fold reconstructs the root from touched leaves; callers with
+        // an empty proof must handle it before folding.
+        anyhow::ensure!(
+            !node_hashes.is_empty(),
+            "cannot fold zero leaves; an empty batch proof must be handled by the caller"
+        );
         let mut last_idx_on_level = leaf_count - 1;
 
         for depth in 0..tree_depth {

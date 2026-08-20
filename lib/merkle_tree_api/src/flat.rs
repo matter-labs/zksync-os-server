@@ -140,15 +140,19 @@ impl BatchTreeProof {
         leaf_count_before_update: u64,
     ) -> impl Iterator<Item = ((u8, u64), B256)> {
         let mut sibling_hashes = vec![];
-        Self::zip_leaves(
-            &Blake2Hasher,
-            tree_depth,
-            leaf_count_before_update,
-            self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
-            self.hashes.iter(),
-            Some(&mut sibling_hashes),
-        )
-        .expect("invalid batch tree proof");
+        // A proof with no touched leaves has no Merkle paths to fill, and the
+        // fold below cannot reconstruct a root without leaves.
+        if !self.sorted_leaves.is_empty() {
+            Self::zip_leaves(
+                &Blake2Hasher,
+                tree_depth,
+                leaf_count_before_update,
+                self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
+                self.hashes.iter(),
+                Some(&mut sibling_hashes),
+            )
+            .expect("invalid batch tree proof");
+        }
 
         sibling_hashes
             .into_iter()
@@ -169,15 +173,17 @@ impl BatchTreeProof {
         // in the same way they will be queried below; the order correctness is asserted
         // (see the `get_sibling_hash` closure).
         let mut sibling_hashes = vec![];
-        Self::zip_leaves(
-            &Blake2Hasher,
-            tree_depth,
-            leaf_count,
-            self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
-            self.hashes.iter(),
-            Some(&mut sibling_hashes),
-        )
-        .expect("invalid batch tree proof");
+        if !self.sorted_leaves.is_empty() {
+            Self::zip_leaves(
+                &Blake2Hasher,
+                tree_depth,
+                leaf_count,
+                self.sorted_leaves.iter().map(|(idx, leaf)| (*idx, leaf)),
+                self.hashes.iter(),
+                Some(&mut sibling_hashes),
+            )
+            .expect("invalid batch tree proof");
+        }
 
         let proof_entries = self.sorted_leaves.iter().map(|(&index, leaf)| {
             let proof_entry = StorageSlotProofEntry {
@@ -283,6 +289,18 @@ mod tests {
                 .map(|_| B256::random_with(rng))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn empty_batch_proof_yields_no_paths() {
+        let proof = BatchTreeProof {
+            operations: vec![],
+            read_operations: vec![],
+            sorted_leaves: BTreeMap::new(),
+            hashes: vec![],
+        };
+        assert_eq!(proof.sibling_hashes(64, 1_000).count(), 0);
+        assert_eq!(proof.to_flat(64, 1_000).count(), 0);
     }
 
     #[test]
