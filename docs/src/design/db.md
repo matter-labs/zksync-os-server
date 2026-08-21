@@ -3,9 +3,9 @@
 All persistent data is stored across multiple RocksDB databases:
 
 - block_replay_wal
-- preimages
+- preimages_full_diffs
 - repository
-- state
+- state_full_diffs
 - tree
 - proofs (JSON files, not RocksDB)
 
@@ -13,7 +13,7 @@ All persistent data is stored across multiple RocksDB databases:
 
 ## 1. block_replay_wal
 
-Write-ahead log containing recent (non-compacted) block data.
+Write-ahead log containing recent block data.
 
 | Column | Key | Value |
 |--------|-----|--------|
@@ -26,11 +26,10 @@ Write-ahead log containing recent (non-compacted) block data.
 
 ---
 
-## 2. preimages
+## 2. preimages_full_diffs
 
 | Column | Key | Value |
 |--------|-----|--------|
-| meta | 'block' | Latest block ID |
 | storage | hash | Preimage for the hash |
 
 ---
@@ -51,14 +50,15 @@ Canonical blocks and transactions.
 
 ---
 
-## 4. state
+## 4. state_full_diffs
 
-Data compacted from the write-ahead log.
+Every storage write, keyed by hashed key and block number: a read at block B is a single
+reverse seek from `hashed_key || B`.
 
 | Column | Key | Value |
 |--------|-----|--------|
-| meta | 'base_block' | Base block number for this state snapshot |
-| storage | key | Value (compacted storage) |
+| data | hashed_key (32 bytes) \|\| block number (8 bytes, big-endian) | Storage value |
+| meta | 'latest_block' | Latest block number |
 
 ---
 

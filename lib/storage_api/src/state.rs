@@ -67,8 +67,6 @@ pub type StateResult<Ok> = Result<Ok, StateError>;
 /// Error variants thrown by state readers.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum StateError {
-    #[error("block {0} is compacted")]
-    Compacted(BlockNumber),
     #[error("block {0} not found")]
     NotFound(BlockNumber),
 }
