@@ -265,7 +265,6 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             &prev_batch_info.state_commitment,
             &batch_info,
             chain_id,
-            second_proof.chain_config,
             shadow.halt_on_mismatch,
             &pairs,
         )?;

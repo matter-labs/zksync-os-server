@@ -17665,7 +17665,7 @@ source = "git+https://github.com/0xPolygonHermez/zisk.git?tag=v0.18.0#790f9e28a6
 [[package]]
 name = "zisk-verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-zisk?rev=c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b#c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b"
+source = "git+https://github.com/matter-labs/zksync-os-zisk?rev=055e720c22e969ce239fbd5c6eab36804045e646#055e720c22e969ce239fbd5c6eab36804045e646"
 dependencies = [
  "proofman-verifier",
  "ruint",
@@ -17697,6 +17697,7 @@ dependencies = [
  "zksync-os-zisk-lib",
  "zksync_os_batch_types",
  "zksync_os_contract_interface",
+ "zksync_os_native_pig",
  "zksync_os_storage_api",
  "zksync_os_types",
 ]
@@ -17897,7 +17898,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-zisk-guest-aggregator"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-zisk?rev=c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b#c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b"
+source = "git+https://github.com/matter-labs/zksync-os-zisk?rev=055e720c22e969ce239fbd5c6eab36804045e646#055e720c22e969ce239fbd5c6eab36804045e646"
 dependencies = [
  "alloy-primitives",
  "tiny-keccak",
@@ -17907,7 +17908,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-zisk-lib"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-zisk?rev=c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b#c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b"
+source = "git+https://github.com/matter-labs/zksync-os-zisk?rev=055e720c22e969ce239fbd5c6eab36804045e646#055e720c22e969ce239fbd5c6eab36804045e646"
 dependencies = [
  "alloy-consensus 1.7.3",
  "alloy-eips 1.7.3",

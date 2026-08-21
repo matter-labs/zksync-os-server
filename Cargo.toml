@@ -380,9 +380,9 @@ zksync_os_server = { version = "=0.22.0", path = "node/bin" }
 #zksync_os_evm_errors = { path = "../zksync-os-interface/crates/evm-errors" }
 #zksync_os_interface = { path = "../zksync-os-interface/crates/interface" }
 
-zksync-os-zisk-lib = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b" }
+zksync-os-zisk-lib = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "055e720c22e969ce239fbd5c6eab36804045e646" }
 zisk_witness = { version = "=0.22.0", path = "lib/zisk_witness" }
-zisk-verifier = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "c753fe60ed2b7416a1ad9c94185a08d13cc0ad6b", default-features = false }
+zisk-verifier = { git = "https://github.com/matter-labs/zksync-os-zisk", rev = "055e720c22e969ce239fbd5c6eab36804045e646", default-features = false }
 zisk_prover_lane = { version = "=0.22.0", path = "lib/zisk_prover_lane" }
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu

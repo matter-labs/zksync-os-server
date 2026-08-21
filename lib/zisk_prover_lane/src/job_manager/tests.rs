@@ -77,10 +77,6 @@ fn job_data_versioned(
 }
 
 const TEST_CHAIN_ID: u64 = 270;
-const TEST_CHAIN_CONFIG: ZiskChainConfig = ZiskChainConfig {
-    fri_proof_verification_enabled: false,
-    max_tx_gas_limit: 1 << 24,
-};
 
 fn manager(expected_vk: Option<B256>) -> ZiskJobManager {
     // A configured program VK arms the drift tripwire for the fixture's v31
@@ -105,7 +101,6 @@ fn manager(expected_vk: Option<B256>) -> ZiskJobManager {
             assignment_timeout: Duration::from_secs(60),
             expected_vks,
             chain_id: TEST_CHAIN_ID,
-            chain_config: TEST_CHAIN_CONFIG,
             proof_verification_enabled: true,
         },
         ZiskLaneWiring {
@@ -245,7 +240,6 @@ fn manager_with_sink_armed_of_range(
             assignment_timeout: Duration::from_secs(60),
             expected_vks,
             chain_id: TEST_CHAIN_ID,
-            chain_config: TEST_CHAIN_CONFIG,
             proof_verification_enabled: false,
         },
         ZiskLaneWiring {
@@ -273,14 +267,18 @@ fn mismatching_vadcop_stream() -> Vec<u8> {
 }
 
 fn expected_commitment(data: &ZiskJobData) -> B256 {
-    let stored = data.batch_metadata.batch_info.clone().into_stored();
+    let proving_version = data
+        .batch_metadata
+        .proving_version()
+        .expect("fixture protocol version has a proving version");
     let prev = &data.batch_metadata.previous_stored_batch_info;
     crate::commitment::expected_zisk_public_input(
+        proving_version,
         &prev.state_commitment,
-        &stored,
+        &data.batch_metadata.batch_info,
         TEST_CHAIN_ID,
-        TEST_CHAIN_CONFIG,
     )
+    .expect("fixture public input")
 }
 
 /// A `vadcop_final` stream whose commitment matches the job's batch
@@ -362,7 +360,6 @@ async fn pick_timeout_reassigns_job() {
             assignment_timeout: Duration::ZERO,
             expected_vks: HashMap::new(),
             chain_id: TEST_CHAIN_ID,
-            chain_config: TEST_CHAIN_CONFIG,
             proof_verification_enabled: true,
         },
         ZiskLaneWiring {
@@ -799,7 +796,6 @@ async fn vadcop_vk_drift_rejects_submit_and_keeps_job_assigned() {
                 },
             )]),
             chain_id: TEST_CHAIN_ID,
-            chain_config: TEST_CHAIN_CONFIG,
             proof_verification_enabled: false,
         },
         ZiskLaneWiring {
@@ -849,7 +845,9 @@ async fn vadcop_vk_drift_rejects_submit_and_keeps_job_assigned() {
 /// version is a config-only change.
 #[tokio::test]
 async fn vk_selected_per_protocol_version() {
-    const V30: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 0);
+    // 0.30.1, not 0.30.0: the expected-public-input derivation maps protocol
+    // versions to proving versions, and only the released 0.30.x patches map.
+    const V30: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 1);
     const V31: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
     const V32: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 32, 0);
     let limbs_v30 = [0x30u64, 0x30, 0x30, 0x30];
@@ -877,7 +875,6 @@ async fn vk_selected_per_protocol_version() {
                 ),
             ]),
             chain_id: TEST_CHAIN_ID,
-            chain_config: TEST_CHAIN_CONFIG,
             proof_verification_enabled: false,
         },
         ZiskLaneWiring {
@@ -1133,7 +1130,6 @@ async fn a_full_ready_channel_delays_the_notice_rather_than_dropping_it() {
                 },
             )]),
             chain_id: TEST_CHAIN_ID,
-            chain_config: TEST_CHAIN_CONFIG,
             proof_verification_enabled: false,
         },
         ZiskLaneWiring {
@@ -1198,7 +1194,6 @@ async fn a_cancelled_ready_notice_keeps_the_job_retryable() {
                 },
             )]),
             chain_id: TEST_CHAIN_ID,
-            chain_config: TEST_CHAIN_CONFIG,
             proof_verification_enabled: false,
         },
         ZiskLaneWiring {
@@ -1265,7 +1260,6 @@ async fn a_superseded_submission_cannot_complete_a_newer_lease() {
                 },
             )]),
             chain_id: TEST_CHAIN_ID,
-            chain_config: TEST_CHAIN_CONFIG,
             proof_verification_enabled: false,
         },
         ZiskLaneWiring {

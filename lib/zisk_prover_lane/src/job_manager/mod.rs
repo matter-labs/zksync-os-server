@@ -22,7 +22,6 @@ use alloy::primitives::B256;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tokio::sync::Mutex;
-use zisk_witness::ZiskChainConfig;
 use zksync_os_batch_types::batcher_model::BatchMetadata;
 use zksync_os_types::ProtocolSemanticVersion;
 
@@ -188,6 +187,8 @@ pub enum ZiskSubmitError {
          the second proof system gates settlement, so an unpinned guest build is not accepted"
     )]
     MissingVersionKeys { version: ProtocolSemanticVersion },
+    #[error("cannot derive the expected batch public input: {0}")]
+    PublicInputUnderivable(String),
 }
 
 /// Everything the lane judges a commitment mismatch on: what the prover
@@ -340,10 +341,8 @@ pub struct ZiskLaneConfig {
     pub assignment_timeout: Duration,
     /// Expected ZiSK verification keys per protocol version.
     pub expected_vks: HashMap<ProtocolSemanticVersion, ZiskVkSet>,
-    /// Chain id + chain config: preimage of the `chain_config_hash` word in
-    /// the guest's batch public input.
+    /// Needed for the `chain_config_hash` word of the v32 batch public input.
     pub chain_id: u64,
-    pub chain_config: ZiskChainConfig,
     /// Run the native verifier on each submission.
     pub proof_verification_enabled: bool,
 }
@@ -418,10 +417,8 @@ pub struct ZiskJobManager {
     /// manager buffers them as range input, and discards are forwarded so
     /// broken ranges are dropped. See `aggregation_job_manager.rs`.
     aggregation_sink: std::sync::Arc<crate::aggregation_job_manager::ZiskAggregationJobManager>,
-    /// Chain id + chain config: preimage of the `chain_config_hash` word in
-    /// the guest's batch public input, needed to compute the expected value.
+    /// Needed for the `chain_config_hash` word of the v32 batch public input.
     chain_id: u64,
-    chain_config: ZiskChainConfig,
     /// Whether to run the off-chain proof verification on each submission.
     /// True (the production default) runs the native verifier: the per-batch
     /// PLONK wire/binding check, and the full vadcop_final STARK check on the
@@ -451,7 +448,6 @@ impl ZiskJobManager {
             assignment_timeout,
             expected_vks,
             chain_id,
-            chain_config,
             proof_verification_enabled,
         } = config;
         let ZiskLaneWiring {
@@ -473,7 +469,6 @@ impl ZiskJobManager {
             expected_vks,
             aggregation_sink,
             chain_id,
-            chain_config,
             proof_verification_enabled,
             verification_slots: tokio::sync::Semaphore::new(MAX_CONCURRENT_VERIFICATIONS),
             multi_proof_mode,
@@ -1129,15 +1124,19 @@ impl ZiskJobManager {
         let (expected_commitment, job_age) = {
             let state = self.state.lock().await;
             let (job_data, _) = Self::assigned_for_generation(&state, batch_number, generation)?;
-            let stored = job_data.batch_metadata.batch_info.clone().into_stored();
+            let proving_version = job_data
+                .batch_metadata
+                .proving_version()
+                .map_err(|e| ZiskSubmitError::PublicInputUnderivable(format!("{e:#}")))?;
             let prev = &job_data.batch_metadata.previous_stored_batch_info;
             (
                 crate::commitment::expected_zisk_public_input(
+                    proving_version,
                     &prev.state_commitment,
-                    &stored,
+                    &job_data.batch_metadata.batch_info,
                     self.chain_id,
-                    self.chain_config,
-                ),
+                )
+                .map_err(|e| ZiskSubmitError::PublicInputUnderivable(format!("{e:#}")))?,
                 job_data.added_at.elapsed(),
             )
         };

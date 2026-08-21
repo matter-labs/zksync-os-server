@@ -152,7 +152,6 @@ impl SecondProofRuntime {
                 assignment_timeout: config.prover_api_config.snark_job_timeout,
                 expected_vks,
                 chain_id,
-                chain_config,
                 proof_verification_enabled: verify,
             },
             ZiskLaneWiring {

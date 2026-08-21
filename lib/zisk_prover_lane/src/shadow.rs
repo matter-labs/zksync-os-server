@@ -10,10 +10,10 @@
 use crate::commitment::expected_zisk_public_input;
 use crate::metrics::ZISK_LANE_METRICS;
 use alloy::primitives::B256;
-use zisk_witness::ZiskChainConfig;
+use anyhow::Context;
 use zksync_os_batch_types::PendingBatchInfo;
 use zksync_os_storage_api::ReplayRecord;
-use zksync_os_types::BlockOutput;
+use zksync_os_types::{BlockOutput, ProvingVersion};
 
 /// Re-execute the batch's assembled `BatchInput` and compare the computed batch
 /// public input against the expected one. Returns an error only under
@@ -31,18 +31,19 @@ pub fn shadow_execute_zisk_batch(
     previous_state_commitment: &B256,
     batch_info: &PendingBatchInfo,
     chain_id: u64,
-    zisk_chain_config: ZiskChainConfig,
     halt_on_shadow_mismatch: bool,
     blocks: &[(&BlockOutput, &ReplayRecord)],
 ) -> anyhow::Result<Option<B256>> {
     let batch_number = batch_info.commit_info.batch_number;
     let stored = batch_info.clone().into_stored();
+    let proving_version = ProvingVersion::try_from(batch_info.protocol_version.clone())
+        .context("cannot derive the proving version for the shadow batch")?;
     let expected = expected_zisk_public_input(
+        proving_version,
         previous_state_commitment,
-        &stored,
+        batch_info,
         chain_id,
-        zisk_chain_config,
-    );
+    )?;
 
     let started = std::time::Instant::now();
     // The guest executor asserts internally (header hashes, tree roots, log
@@ -72,18 +73,12 @@ pub fn shadow_execute_zisk_batch(
         }
         Ok(Ok((_, commitment))) => {
             // Component-level diagnostics: re-run the debug variant to see
-            // which PI word drifted (state commitments, chain config, batch
-            // output hash).
+            // which PI word drifted (state commitments, batch output hash).
             if let Ok(input) =
                 zksync_os_zisk_lib::wire::decode::<zksync_os_zisk_lib::types::BatchInput>(zisk_data)
             {
                 let (_, _, g_before, g_after, g_batch) =
                     zksync_os_zisk_lib::executor::execute_and_commit_debug(&input);
-                let chain_config_hash = zksync_os_zisk_lib::commitment::chain_config_hash(
-                    chain_id,
-                    zisk_chain_config.fri_proof_verification_enabled,
-                    zisk_chain_config.max_tx_gas_limit,
-                );
                 tracing::error!(
                     batch_number,
                     guest_state_before = %g_before,
@@ -92,7 +87,6 @@ pub fn shadow_execute_zisk_batch(
                     server_state_after = %stored.state_commitment,
                     guest_batch_output_hash = %g_batch,
                     server_batch_commitment = %stored.commitment,
-                    %chain_config_hash,
                     "ZiSK shadow execution PI components"
                 );
             }
