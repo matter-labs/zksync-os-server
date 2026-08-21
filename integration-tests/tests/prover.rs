@@ -78,6 +78,12 @@ mod real_provers {
         );
         let deadline = std::time::Instant::now() + MULTI_PROOF_SETTLEMENT_TIMEOUT;
         loop {
+            // A dead node would otherwise burn the whole deadline while the
+            // prover services spin on connection errors.
+            anyhow::ensure!(
+                !tester.has_crashed(),
+                "node crashed while waiting for the multi-proof settle"
+            );
             let state = fetch_l1_state(tester).await?;
             if state.last_executed_batch >= batches {
                 tracing::info!(batches, "the multi-proof settled on L1");

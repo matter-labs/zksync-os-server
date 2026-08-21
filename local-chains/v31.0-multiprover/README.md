@@ -15,14 +15,19 @@ differs from the v31.0 one in the genesis path only.
 | `MultiProofVerifier` | `0xB82008565FdC7e44609fA118A4a681E92581e680` |
 | `ZiskVerifier` | `0x5fc748f1FEb28d7b76fa1c6B07D8ba2d5535177c` |
 | `ZiskSnarkPlonkVerifier` | `0x38a024C0b412B9d1db8BC398140D00F5Af3093D4` |
-| Airbender PLONK verifier (from v31.0) | `0x40C2a18C576B4864b2cf3A458499137EE96057aA` |
+| ZKsyncOSDualVerifier (from v31.0, wrapped as the Airbender inner) | `0x8B444Bb0aA8aea2d242d5B4449bff609eF3D4710` |
+| its PLONK sub-verifier (version 0) | `0x40C2a18C576B4864b2cf3A458499137EE96057aA` |
 
 `MultiProofTestnetVerifier` accepts an empty proof and a mock (type 3) proof,
 so the fake provers settle here exactly as they do on v31.0. It delegates every
 other proof to `MultiProofVerifier`, which accepts the combined type-5 payload
 only and requires an Airbender proof and an aggregated ZiSK proof of the same
-range. The Airbender half keeps the v31.0 PLONK verifier, so Airbender
-verification is byte-for-byte the v31.0 check.
+range. The Airbender half wraps the v31.0 ZKsyncOSDualVerifier — the dual
+parses the two-word sub-proof envelope and routes to its registered
+sub-verifiers, so Airbender verification is byte-for-byte the v31.0 check.
+Wiring the bare PLONK sub-verifier instead feeds it the envelope words and
+rejects every proof ('loadProof: Proof is invalid'); the bake script asserts
+dual-ness so that cannot bake again.
 
 `ZiskVerifier` pins the ZiSK guest keys as compile-time constants:
 
