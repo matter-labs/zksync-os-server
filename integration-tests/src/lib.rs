@@ -1125,6 +1125,18 @@ impl AnvilL1 {
     }
 }
 
+/// How the Airbender service leaves its FRI loop for the SNARK stage. The
+/// loop breaks ONLY on its configured limit: with `MaxFrisPerSnark(n)` and
+/// fewer than `n` FRI jobs ever arriving, the service polls FRI work forever
+/// and never reaches the SNARK pick — so a run whose FRIs are already proven
+/// (the multi-proof settle stage) must use `SnarkOnly`, which bounds the FRI
+/// loop by time (`--max-snark-latency 1`) instead of by count.
+#[cfg(feature = "prover-tests")]
+pub enum AirbenderMode {
+    MaxFrisPerSnark(usize),
+    SnarkOnly,
+}
+
 /// Spawn the real Airbender prover service for a specific protocol version
 /// (the app binary and the service release are version-specific). Returns
 /// the child so the caller can await its exit or kill it — the tests that
@@ -1138,6 +1150,26 @@ pub async fn spawn_airbender_prover(
     sequencer_urls: &[String],
     iterations: usize,
     max_fris_per_snark: usize,
+) -> tokio::process::Child {
+    spawn_airbender_prover_with_mode(
+        tester,
+        protocol_version,
+        sequencer_urls,
+        iterations,
+        AirbenderMode::MaxFrisPerSnark(max_fris_per_snark),
+    )
+    .await
+}
+
+/// See [`spawn_airbender_prover`]; `mode` picks how the service's FRI loop
+/// yields to the SNARK stage.
+#[cfg(feature = "prover-tests")]
+pub async fn spawn_airbender_prover_with_mode(
+    tester: &Tester,
+    protocol_version: &str,
+    sequencer_urls: &[String],
+    iterations: usize,
+    mode: AirbenderMode,
 ) -> tokio::process::Child {
     let app_bin_path = match protocol_version {
         PROTOCOL_VERSION_V30_2 => utils::materialize_multiblock_batch_bin(
@@ -1172,8 +1204,14 @@ pub async fn spawn_airbender_prover(
         .arg(trusted_setup_file)
         .arg("--iterations")
         .arg(iterations.to_string())
-        .arg("--max-fris-per-snark")
-        .arg(max_fris_per_snark.to_string())
+        .args(match mode {
+            AirbenderMode::MaxFrisPerSnark(n) => {
+                ["--max-fris-per-snark".to_string(), n.to_string()]
+            }
+            // The FRI loop yields after one second whether or not FRI work
+            // exists, so the SNARK pick is reached with zero FRI jobs.
+            AirbenderMode::SnarkOnly => ["--max-snark-latency".to_string(), "1".to_string()],
+        })
         .arg("--disable-zk")
         // Without this the prover keeps running after a panic: the wait-task below is
         // dropped on runtime shutdown without ever signalling the child.

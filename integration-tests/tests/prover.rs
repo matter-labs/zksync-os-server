@@ -12,9 +12,9 @@ mod real_provers {
     use std::time::Duration;
     use zksync_os_integration_tests::l1_helpers::{assert_settled_with_multiproof, fetch_l1_state};
     use zksync_os_integration_tests::{
-        CURRENT_TO_L1, CURRENT_TO_MULTIPROVER_L1, Tester, assert_zisk_lane_accepted,
-        run_zisk_gpu_prover, spawn_airbender_prover, wait_for_zisk_aggregation_ranges,
-        zisk_gpu_artifacts_available,
+        AirbenderMode, CURRENT_TO_L1, CURRENT_TO_MULTIPROVER_L1, Tester, assert_zisk_lane_accepted,
+        run_zisk_gpu_prover, spawn_airbender_prover, spawn_airbender_prover_with_mode,
+        wait_for_zisk_aggregation_ranges, zisk_gpu_artifacts_available,
     };
     use zksync_os_server::config::ZiskVkConfigEntry;
     use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
@@ -56,16 +56,19 @@ mod real_provers {
     async fn settle_multi_proof_on_l1(
         tester: &Tester,
         prover_api_urls: &[String],
-        max_fris_per_snark: usize,
         batches: u64,
     ) -> anyhow::Result<()> {
+        // SnarkOnly: every FRI of the range is already proven, and the FRI
+        // loop only breaks on a count it would never reach — the service must
+        // go straight to the SNARK pick (the first settle attempt deadlocked
+        // exactly here, polling FRI work forever).
         let mut airbender = KillOnDrop(
-            spawn_airbender_prover(
+            spawn_airbender_prover_with_mode(
                 tester,
                 PROTOCOL_VERSION_V31_0,
                 prover_api_urls,
                 1000,
-                max_fris_per_snark,
+                AirbenderMode::SnarkOnly,
             )
             .await,
         );
@@ -323,7 +326,7 @@ mod real_provers {
         run_zisk_gpu_prover(&prover_api_url, RANGE_PROOFS as usize).await;
         assert_zisk_lane_accepted(&prover_api_url, BATCHES, RANGE_PROOFS).await?;
 
-        settle_multi_proof_on_l1(&tester, &urls, MAX_FRIS_PER_SNARK, BATCHES).await?;
+        settle_multi_proof_on_l1(&tester, &urls, BATCHES).await?;
 
         Ok(())
     }
@@ -463,7 +466,7 @@ mod real_provers {
         run_zisk_gpu_prover(&prover_api_url, (BATCHES + RANGE_PROOFS) as usize).await;
         assert_zisk_lane_accepted(&prover_api_url, BATCHES, RANGE_PROOFS).await?;
 
-        settle_multi_proof_on_l1(&tester, &urls, MAX_FRIS_PER_SNARK, BATCHES).await?;
+        settle_multi_proof_on_l1(&tester, &urls, BATCHES).await?;
 
         Ok(())
     }
