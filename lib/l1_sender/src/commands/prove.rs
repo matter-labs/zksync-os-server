@@ -358,10 +358,7 @@ impl ProofCommand {
             proof,
         };
 
-        /// Current commitment encoding version as per protocol.
-        const SUPPORTED_ENCODING_VERSION: u8 = 1;
-
-        let mut proof_data = vec![SUPPORTED_ENCODING_VERSION];
+        let mut proof_data = vec![zksync_os_contract_interface::calldata::PROOF_ENCODING_VERSION];
         proof_payload.abi_encode_raw(&mut proof_data);
         Ok(proof_data)
     }

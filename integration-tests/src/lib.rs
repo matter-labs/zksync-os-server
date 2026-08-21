@@ -1238,23 +1238,37 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
     });
 }
 
+/// Whether this run is the one that is meant to prove the ZiSK lane. The GPU
+/// CI job sets `ZISK_GPU_TESTS_REQUIRED=1`: under it a missing artifact or VK
+/// is a test FAILURE, never a skip — a green job that silently skipped the
+/// lane is worse than no job, and it is one unset env var away at all times.
+#[cfg(feature = "gpu-prover-tests")]
+pub fn zisk_gpu_tests_required() -> bool {
+    std::env::var("ZISK_GPU_TESTS_REQUIRED").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
 /// Entry guard for every path that drives the real ZiSK GPU daemon. The daemon
 /// needs a guest ELF and a prover binary that only a ZiSK-provisioned runner
 /// holds. When they are absent this prints a loud note that names them and
 /// returns `false`, so a green run on a bare runner never reads as coverage of
-/// the ZiSK lane.
+/// the ZiSK lane — and under [`zisk_gpu_tests_required`] it panics instead,
+/// so the job that exists to prove the lane cannot skip it.
 #[cfg(feature = "gpu-prover-tests")]
 pub fn zisk_gpu_artifacts_available(skipped: &str) -> bool {
     if std::env::var("ZISK_ELF").is_ok() && std::env::var("ZISK_AGG_ELF").is_ok() {
         return true;
     }
-    eprintln!(
-        "NOTE: {skipped} SKIPPED. ZISK_ELF or ZISK_AGG_ELF is not set, so this \
+    let note = format!(
+        "{skipped}: ZISK_ELF or ZISK_AGG_ELF is not set, so this \
          run checked NOTHING of the ZiSK lane. Set ZISK_ELF (path to the ZiSK \
          guest ELF), ZISK_AGG_ELF (path to the ZiSK aggregator guest ELF) and \
          ZISK_PROVER_BIN (path to the zksync-os-zisk-prover-service binary) on \
          a runner that holds the ZiSK artifacts."
     );
+    if zisk_gpu_tests_required() {
+        panic!("ZISK_GPU_TESTS_REQUIRED is set but the artifacts are missing. {note}");
+    }
+    eprintln!("NOTE: {note} SKIPPED.");
     false
 }
 

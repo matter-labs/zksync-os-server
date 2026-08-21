@@ -10,7 +10,7 @@ mod real_provers {
     use alloy::rpc::types::TransactionRequest;
     use base64::Engine;
     use std::time::Duration;
-    use zksync_os_integration_tests::l1_helpers::fetch_l1_state;
+    use zksync_os_integration_tests::l1_helpers::{assert_settled_with_multiproof, fetch_l1_state};
     use zksync_os_integration_tests::{
         CURRENT_TO_L1, CURRENT_TO_MULTIPROVER_L1, Tester, assert_zisk_lane_accepted,
         run_zisk_gpu_prover, spawn_airbender_prover, wait_for_zisk_aggregation_ranges,
@@ -75,6 +75,10 @@ mod real_provers {
             if state.last_executed_batch >= batches {
                 tracing::info!(batches, "the multi-proof settled on L1");
                 airbender.0.kill().await.ok();
+                // Executed on L1 is not enough: the fixture's testnet verifier
+                // also accepts empty and mock proofs, so assert on what was
+                // actually submitted.
+                assert_settled_with_multiproof(tester).await?;
                 return Ok(());
             }
             anyhow::ensure!(
@@ -94,7 +98,9 @@ mod real_provers {
     /// reproducible-build keys, arming the per-batch drift tripwire for each
     /// protocol version the test proves. An entry pins both keys, so both
     /// `ZISK_PROGRAM_VK` and `ZISK_VADCOP_VK` must be set to arm it; otherwise
-    /// the list stays empty and the reported VKs are only logged.
+    /// the list stays empty and the reported VKs are only logged — which the
+    /// required mode refuses: `config.validate()` never runs in these tests,
+    /// so nothing else notices a lane running with its VK tripwire disarmed.
     fn zisk_vks_from_env(
         versions: &[ProtocolSemanticVersion],
     ) -> anyhow::Result<Vec<ZiskVkConfigEntry>> {
@@ -102,6 +108,11 @@ mod real_provers {
             std::env::var("ZISK_PROGRAM_VK"),
             std::env::var("ZISK_VADCOP_VK"),
         ) else {
+            anyhow::ensure!(
+                !zksync_os_integration_tests::zisk_gpu_tests_required(),
+                "ZISK_GPU_TESTS_REQUIRED is set but ZISK_PROGRAM_VK or ZISK_VADCOP_VK is not: \
+                 the run would prove the lane with its VK drift tripwire disarmed"
+            );
             return Ok(Vec::new());
         };
         let program_vk: B256 = program.parse()?;
@@ -330,6 +341,12 @@ mod real_provers {
             zisk_vks_from_env(&[ProtocolSemanticVersion::new(0, 31, 0)])?;
         if let Ok(vk) = std::env::var("ZISK_AGG_PROGRAM_VK") {
             config.prover_api_config.zisk_aggregation.program_vk = Some(vk.parse()?);
+        } else {
+            anyhow::ensure!(
+                !zksync_os_integration_tests::zisk_gpu_tests_required(),
+                "ZISK_GPU_TESTS_REQUIRED is set but ZISK_AGG_PROGRAM_VK is not: the aggregator \
+                 lane would run with its VK tripwire disarmed"
+            );
         }
         let tester = env.launch_without_provers(config).await?;
         let prover_api_url = tester

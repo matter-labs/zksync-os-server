@@ -36,6 +36,20 @@ threads-required = 3
 filter = 'test(~consensus)'
 threads-required = 6
 
+# Profile for the GPU prover job (runbook: the two-lane v31 e2e tests). The
+# tests hold two 3600s internal deadlines plus ~25 minutes of one-time SNARK
+# warmup per Airbender run, so the default 45-minute prover budget and the
+# 1-hour global timeout would kill a HEALTHY run. Scoped to its own profile so
+# ordinary CI keeps the tight default budget.
+# Usage: cargo nextest run -p zksync_os_integration_tests --profile gpu
+[profile.gpu]
+global-timeout = "6h"
+
+[[profile.gpu.overrides]]
+filter = 'binary(prover)'
+slow-timeout = { period = "30m", terminate-after = 10 }
+test-group = 'prover-serial'
+
 # Fast profile for local development — excludes the slowest integration tests.
 # Usage: cargo nextest run -p zksync_os_integration_tests --profile fast
 [profile.fast]
