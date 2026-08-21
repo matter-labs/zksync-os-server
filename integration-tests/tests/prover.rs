@@ -228,9 +228,8 @@ mod real_provers {
     /// The two-lane flow with REAL provers on the multiprover v31 chain, with
     /// the MultiProofVerifier armed (`multi_proof_verifier`): the Airbender
     /// range SNARK settles only together with the aggregated ZiSK proof of the
-    /// same range. One FRI per SNARK, so the range is a single batch — the
-    /// width the aggregator guest and the L1 verifier must accept alongside
-    /// wider ones (`two_lane_multibatch_e2e` covers a four-batch range).
+    /// same range, here a two-batch range (`two_lane_multibatch_e2e` covers a
+    /// four-batch one).
     ///
     /// Both lanes share one GPU — shivini statically claims most of the VRAM
     /// per process — so they run one after the other, and the order follows
@@ -244,19 +243,22 @@ mod real_provers {
     /// for the aggregation. A final Airbender run settles the range on L1 as
     /// one multi-proof.
     ///
-    /// One batch, deliberately: with `max_fris_per_snark = 1` every range is a
-    /// single batch, and each additional batch would need its own full
-    /// ZiSK-Airbender-ZiSK cycle. Sequential multi-range settlement is real
-    /// coverage, but it belongs in its own test, not hidden inside this one.
+    /// Two batches in ONE range, deliberately: chain boot itself seals two
+    /// batches (the upgrade-tx batch and the first block batch), so a
+    /// single-batch chain does not exist, and with `max_fris_per_snark = 1`
+    /// every extra batch would need its own full ZiSK-Airbender-ZiSK cycle.
+    /// This is the minimal single-cycle settle; sequential single-batch
+    /// (width-1) ranges are real coverage, but they belong in their own test,
+    /// not hidden inside this one.
     #[test_log::test(tokio::test)]
-    async fn two_lane_per_batch_e2e() -> anyhow::Result<()> {
-        const BATCHES: u64 = 1;
-        // The daemon proves the batch to a `vadcop_final` stream and collapses
+    async fn two_lane_single_range_e2e() -> anyhow::Result<()> {
+        const BATCHES: u64 = 2;
+        // The daemon proves each batch to a `vadcop_final` stream and collapses
         // the formed range into one aggregated proof.
         const RANGE_PROOFS: u64 = 1;
-        const MAX_FRIS_PER_SNARK: usize = 1;
+        const MAX_FRIS_PER_SNARK: usize = 2;
 
-        if !zisk_gpu_artifacts_available("two_lane_per_batch_e2e") {
+        if !zisk_gpu_artifacts_available("two_lane_single_range_e2e") {
             return Ok(());
         }
 
@@ -264,8 +266,10 @@ mod real_provers {
         let mut config = env.default_config().await?;
         config.prover_api_config.fake_fri_provers.enabled = false;
         config.prover_api_config.fake_snark_provers.enabled = false;
-        // Real-prover path: turn the ZiSK lane on (`max_fris_per_snark = 1`).
+        // Real-prover path: turn the ZiSK lane on.
         zksync_os_integration_tests::test_config::enable_second_proof_system(&mut config);
+        // Both boot batches fit one SNARK range, so one cycle settles them.
+        config.prover_api_config.max_fris_per_snark = MAX_FRIS_PER_SNARK;
         // The production shape: an Airbender range settles only as a
         // MultiProof, so the ZiSK range proof gates it.
         config.prover_input_generator_config.multi_proof_verifier = true;
