@@ -1377,9 +1377,15 @@ pub async fn run_zisk_gpu_prover(sequencer_url: &str, iterations: usize) {
         .spawn()
         .expect("failed to spawn ZiSK prover service");
 
-    let code = child
-        .wait()
+    // Bounded wait: the daemon exits on its own after `iterations` accepted
+    // submissions, and a per-batch proof or an aggregation takes ~1-2 minutes
+    // on the CI GPU runner. Without a deadline a wedged daemon stage would
+    // announce itself only at the harness's hours-long cap.
+    let code = tokio::time::timeout(std::time::Duration::from_secs(1800), child.wait())
         .await
+        .unwrap_or_else(|_| {
+            panic!("ZiSK GPU prover service did not finish {iterations} submissions within 1800s")
+        })
         .expect("failed to wait for ZiSK prover service");
     if code.success() {
         tracing::info!("ZiSK GPU prover service finished running");

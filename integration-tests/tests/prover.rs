@@ -21,16 +21,20 @@ mod real_provers {
     use zksync_os_types::ProtocolSemanticVersion;
 
     /// How long to allow the Airbender lane to prove every FRI of a range and
-    /// pick the range's SNARK job with real (GPU) proving in the loop: prover
-    /// warmup (one-time SNARK precomputations — observed up to ~25 minutes) +
-    /// commit + FRI proving.
-    const AIRBENDER_SNARK_RANGE_TIMEOUT: Duration = Duration::from_secs(3600);
+    /// pick the range's SNARK job with real (GPU) proving in the loop. On the
+    /// CI GPU runner the whole stage takes ~4 minutes (SNARK precomputations
+    /// ~2 minutes, one FRI ~90 seconds), so half an hour is an order of
+    /// magnitude of headroom while still failing a wedged stage the same
+    /// hour it wedges.
+    const AIRBENDER_SNARK_RANGE_TIMEOUT: Duration = Duration::from_secs(1800);
 
     /// How long to allow the range to settle on L1 once the ZiSK range proof is
     /// parked: the abandoned SNARK job's lease has to expire
     /// (`snark_job_timeout`), the second Airbender run pays the SNARK warmup
-    /// again, and the multi-proof then commits, proves and executes.
-    const MULTI_PROOF_SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(3600);
+    /// again (~2 minutes on the CI GPU runner), and the multi-proof then
+    /// proves and executes. Generously bounded at half an hour so a wedge
+    /// reports within the run, not at the harness cap.
+    const MULTI_PROOF_SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(1800);
 
     /// Kills the wrapped prover service when dropped, so a failing test does
     /// not leak a GPU-holding orphan process.
