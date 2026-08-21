@@ -717,6 +717,15 @@ impl<CF: NamedColumnFamily> RocksDB<CF> {
         self.inner.db.raw_iterator_cf_opt(cf, options)
     }
 
+    /// Forces compaction of all data in the specified column family, reclaiming space from deleted
+    /// entries. This is a blocking operation that may take a long time on large databases.
+    pub fn compact_cf(&self, cf: CF) {
+        let cf_handle = self.column_family(cf);
+        self.inner
+            .db
+            .compact_range_cf::<&[u8], &[u8]>(cf_handle, None, None);
+    }
+
     /// Creates a new profiled operation.
     pub fn new_profiled_operation(&self, name: &'static str) -> ProfiledOperation {
         ProfiledOperation {
