@@ -28,10 +28,10 @@ verification is byte-for-byte the v31.0 check.
 
 | Pin | Value |
 |---|---|
-| `innerProgramVK` | `0x1d16f620e2bc7e58044df7ee8d4284422a0dd37cf151cf79ecf324c131e50468` |
+| `innerProgramVK` | `0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec` |
 | `aggregatorProgramVK` | `0x4c3d7317a62f651d813ba6afbbce59e45eaa7c009ab2a9b51d2f0fb3e7987254` |
 | `rootCVadcopFinal` | `0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d` |
-| `verificationKeyHash()` | `0xd261b4cb68d1c58d0539e1364ba93fe65f6d009bb268a8de1ec68535f0ebe5a0` |
+| `verificationKeyHash()` | `0x718bdb59530514f9a62f16b2ba912de17188615d82aa31ec681be4b9cd332888` |
 
 A guest ELF rotation rotates these pins, which means a regeneration of
 `ZiskVerifier` in era-contracts and a rebake here.

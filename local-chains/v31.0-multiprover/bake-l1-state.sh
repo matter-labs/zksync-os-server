@@ -40,10 +40,10 @@ VERIFIER_SLOT=10
 AIRBENDER_VERIFIER=0x40c2a18c576b4864b2cf3a458499137ee96057aa
 
 # ZiSK pins baked into the generated `ZiskVerifier`.
-EXPECTED_INNER_PROGRAM_VK=0x1d16f620e2bc7e58044df7ee8d4284422a0dd37cf151cf79ecf324c131e50468
+EXPECTED_INNER_PROGRAM_VK=0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec
 EXPECTED_AGGREGATOR_PROGRAM_VK=0x4c3d7317a62f651d813ba6afbbce59e45eaa7c009ab2a9b51d2f0fb3e7987254
 EXPECTED_ROOT_C_VADCOP_FINAL=0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d
-EXPECTED_ZISK_VK_HASH=0xd261b4cb68d1c58d0539e1364ba93fe65f6d009bb268a8de1ec68535f0ebe5a0
+EXPECTED_ZISK_VK_HASH=0x718bdb59530514f9a62f16b2ba912de17188615d82aa31ec681be4b9cd332888
 
 WORK_DIR="$(mktemp -d)"
 ANVIL_PID=""
@@ -58,7 +58,9 @@ trap cleanup EXIT
 
 expect_equal() {
     local what="$1" got="$2" want="$3"
-    if [[ "${got,,}" != "${want,,}" ]]; then
+    # tr, not ${var,,}: the case-insensitive compare must also work on the
+    # bash 3.2 that macOS ships.
+    if [[ "$(tr '[:upper:]' '[:lower:]' <<<"${got}")" != "$(tr '[:upper:]' '[:lower:]' <<<"${want}")" ]]; then
         echo "${what}: got ${got}, expected ${want}" >&2
         exit 1
     fi
