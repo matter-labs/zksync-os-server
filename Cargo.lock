@@ -17133,6 +17133,7 @@ dependencies = [
  "zksync_os_server",
  "zksync_os_state_full_diffs",
  "zksync_os_status_server",
+ "zksync_os_storage_api",
  "zksync_os_tx_validators",
  "zksync_os_types",
  "zksync_os_verify_storage_proof",
