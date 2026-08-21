@@ -134,8 +134,8 @@ echo "==> checking the wiring"
 expect_equal "chain verifier" \
     "$(cast call "${DIAMOND}" 'getVerifier()(address)' --rpc-url "${RPC}")" \
     "${MULTI_PROOF_TESTNET_VERIFIER}"
-expect_equal "MultiProofTestnetVerifier.innerVerifier" \
-    "$(cast call "${MULTI_PROOF_TESTNET_VERIFIER}" 'innerVerifier()(address)' --rpc-url "${RPC}")" \
+expect_equal "MultiProofTestnetVerifier.INNER_VERIFIER" \
+    "$(cast call "${MULTI_PROOF_TESTNET_VERIFIER}" 'INNER_VERIFIER()(address)' --rpc-url "${RPC}")" \
     "${MULTI_PROOF_VERIFIER}"
 expect_equal "MultiProofVerifier.airbenderVerifier" \
     "$(cast call "${MULTI_PROOF_VERIFIER}" 'airbenderVerifier()(address)' --rpc-url "${RPC}")" \
