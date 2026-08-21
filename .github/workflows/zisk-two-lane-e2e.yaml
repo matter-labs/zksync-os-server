@@ -186,7 +186,6 @@ jobs:
           ZISK_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest
           ZISK_AGG_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest-aggregator
           ZISK_PROVER_BIN: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-prover-service
-          ZISK_BINARY: cargo-zisk
           # Runbook section 4: the v31 pin set.
           ZISK_PROGRAM_VK: "0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec"
           ZISK_VADCOP_VK: "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
@@ -194,6 +193,9 @@ jobs:
         run: |
           export ZISK_PK="$HOME/.zisk/provingKey"
           export ZISK_SK="$HOME/.zisk/provingKeySnark"
+          # The daemon validates --zisk-binary as a filesystem path, not a
+          # PATH-resolvable name.
+          export ZISK_BINARY="$HOME/.zisk/bin/cargo-zisk"
           chmod +x zisk-artifacts/*
           ulimit -s 300000
           echo "running: ${E2E_TEST_FILTER}"
