@@ -208,9 +208,19 @@ mod real_provers {
         let inputs = seal_batches_and_peek_inputs(&tester, &prover_api_url, BATCHES).await?;
         std::fs::create_dir_all(&dir)?;
         for (i, input) in inputs.iter().enumerate() {
+            // ziskemu framing, as the prover daemon's write_input and the
+            // guest repo's dump_to_batchinput produce it: [len u64 LE][wire
+            // bytes][zero pad to 8]. cargo-zisk rejects unframed inputs
+            // (EmuContext requires a multiple of 8).
+            let mut framed = Vec::with_capacity(8 + input.len() + 8);
+            framed.extend_from_slice(&(input.len() as u64).to_le_bytes());
+            framed.extend_from_slice(input);
+            let padding = (8 - ((8 + input.len()) % 8)) % 8;
+            framed.extend(std::iter::repeat_n(0u8, padding));
+            assert_eq!(framed.len() % 8, 0);
             let path = format!("{dir}/batch-{}.bin", i + 1);
-            std::fs::write(&path, input)?;
-            eprintln!("wrote {} bytes to {path}", input.len());
+            std::fs::write(&path, &framed)?;
+            eprintln!("wrote {} bytes to {path}", framed.len());
         }
         Ok(())
     }
