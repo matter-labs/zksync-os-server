@@ -40,7 +40,7 @@ jobs:
 
       - name: Configure git auth for private repos
         run: |
-          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/".insteadOf "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
@@ -71,7 +71,7 @@ jobs:
 
       - name: Configure git auth for private repos
         run: |
-          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/".insteadOf "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
@@ -95,7 +95,7 @@ jobs:
 
       - name: Configure git auth for private repos
         run: |
-          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/".insteadOf "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
@@ -132,7 +132,7 @@ jobs:
 
       - name: Configure git auth for private repos
         run: |
-          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/".insteadOf "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
@@ -198,7 +198,7 @@ jobs:
 
       - name: Configure git auth for private repos
         run: |
-          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/".insteadOf "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
@@ -239,7 +239,7 @@ jobs:
 
       - name: Configure git auth for private repos
         run: |
-          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/".insteadOf "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
@@ -295,7 +295,7 @@ jobs:
 
       - name: Configure git auth for private repos
         run: |
-          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/".insteadOf "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner

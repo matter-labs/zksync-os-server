@@ -55,4 +55,4 @@ jobs:
           command: check
           command-arguments: "--allow unmaintained --hide-inclusion-graph"
           # Needed to fetch the private fix/87680 git dependencies (see Cargo.toml).
-          credentials: "https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com"
+          credentials: "https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com"
