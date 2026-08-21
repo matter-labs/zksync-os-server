@@ -12,12 +12,10 @@ use zksync_os_metadata::NODE_VERSION;
 use zksync_os_observability::prometheus::PrometheusExporterConfig;
 use zksync_os_server::config::{
     Config, ConfigArgs, ConfigValidate, PrometheusConfig, ProofStorageConfig, RebuildBounds,
-    RebuildConfig, StateBackendConfig, build_external_config, load_config_file_sources,
+    RebuildConfig, build_external_config, load_config_file_sources,
 };
 use zksync_os_server::default_protocol_version::{DEFAULT_ROCKS_DB_PATH, PROTOCOL_VERSION};
 use zksync_os_server::{INTERNAL_CONFIG_FILE_NAME, run};
-use zksync_os_state::StateHandle;
-use zksync_os_state_full_diffs::FullDiffsState;
 
 #[cfg(all(feature = "jemalloc", target_family = "unix"))]
 #[global_allocator]
@@ -202,10 +200,7 @@ async fn async_main() {
     let prometheus_config = config.observability_config.prometheus.clone();
     let prometheus_port = prometheus_config.port;
 
-    match config.general_config.state_backend {
-        StateBackendConfig::FullDiffs => run::<FullDiffsState>(&runtime, config).await,
-        StateBackendConfig::Compacted => run::<StateHandle>(&runtime, config).await,
-    };
+    run(&runtime, config).await;
 
     let prometheus_push_shutdown = if ephemeral_enabled {
         tracing::info!("Ephemeral mode enabled, skipping Prometheus push exporter");
