@@ -27,6 +27,16 @@ env:
   PROVER_GPU_TESTS: 'zisk-two-lane-e2e-tests'
   CUDAARCHS: '80;89;90'
   ZISK_VERSION: "0.18.0"
+  # The iteration knob: which prover tests this push runs. The ladder is
+  # climbed one rung per edit — each rung is the cheapest test that can
+  # falsify the next assumption, so a failure costs minutes, not hours:
+  #   rung 1: test(zisk_lane_on_sealed_batches)  — armed lane, real proofs,
+  #           commitment + VK binding (first live check of the three-word
+  #           public input), ~20 min, no Airbender, no L1
+  #   rung 2: test(two_lane_per_batch_e2e)       — the first real settle
+  #   rung 3: test(two_lane_multibatch_e2e)      — the 4-batch range
+  #   final:  binary(prover)                     — the full ci.yml shape
+  E2E_TEST_FILTER: "test(zisk_lane_on_sealed_batches)"
 
 jobs:
   build:
@@ -186,6 +196,7 @@ jobs:
           export ZISK_SK="$HOME/.zisk/provingKeySnark"
           chmod +x zisk-artifacts/*
           ulimit -s 300000
-          cargo nextest run -E 'binary(prover)' --no-capture --profile gpu \
+          echo "running: ${E2E_TEST_FILTER}"
+          cargo nextest run -E "${E2E_TEST_FILTER}" --no-capture --profile gpu \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE}
