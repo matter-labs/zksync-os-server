@@ -228,22 +228,31 @@ mod real_provers {
     /// The two-lane flow with REAL provers on the multiprover v31 chain, with
     /// the MultiProofVerifier armed (`multi_proof_verifier`): the Airbender
     /// range SNARK settles only together with the aggregated ZiSK proof of the
-    /// same range. One FRI per SNARK, so each range is a single batch — the
+    /// same range. One FRI per SNARK, so the range is a single batch — the
     /// width the aggregator guest and the L1 verifier must accept alongside
     /// wider ones (`two_lane_multibatch_e2e` covers a four-batch range).
     ///
     /// Both lanes share one GPU — shivini statically claims most of the VRAM
-    /// per process — so they run one after the other. Airbender runs first and
-    /// registers its SNARK range with the ZiSK aggregation stage when it picks
-    /// the job. Its own submission is then rejected while the ZiSK range proof
-    /// is missing, which is exactly what keeps the range and its per-batch ZiSK
-    /// jobs alive while the GPU moves to the ZiSK daemon. A third stage brings
-    /// Airbender back to settle the range on L1 as one multi-proof.
+    /// per process — so they run one after the other, and the order follows
+    /// the Required-mode commit gate: a batch's data commits only once BOTH
+    /// proof systems proved it, and the SNARK job that registers the
+    /// aggregation range only exists after the commit. So ZiSK proves the
+    /// batch first; Airbender then proves the FRI, the gate releases, the
+    /// batch commits, and the SNARK pick registers the range — its own
+    /// submission is rejected while the ZiSK range proof is missing, which is
+    /// what keeps the range alive while the GPU moves back to the ZiSK daemon
+    /// for the aggregation. A final Airbender run settles the range on L1 as
+    /// one multi-proof.
+    ///
+    /// One batch, deliberately: with `max_fris_per_snark = 1` every range is a
+    /// single batch, and each additional batch would need its own full
+    /// ZiSK-Airbender-ZiSK cycle. Sequential multi-range settlement is real
+    /// coverage, but it belongs in its own test, not hidden inside this one.
     #[test_log::test(tokio::test)]
     async fn two_lane_per_batch_e2e() -> anyhow::Result<()> {
-        const BATCHES: u64 = 2;
-        // The daemon proves each batch to a `vadcop_final` stream and collapses
-        // the first formed range into one aggregated proof.
+        const BATCHES: u64 = 1;
+        // The daemon proves the batch to a `vadcop_final` stream and collapses
+        // the formed range into one aggregated proof.
         const RANGE_PROOFS: u64 = 1;
         const MAX_FRIS_PER_SNARK: usize = 1;
 
@@ -269,8 +278,23 @@ mod real_provers {
             .expect("prover API must be bound for prover tests");
         let urls = vec![prover_api_url.clone()];
 
-        // Huge iteration budget: the service is killed once the ZiSK lane has
-        // its range.
+        // Produce EXACTLY `BATCHES` batches. Their ZiSK per-batch jobs are
+        // created at seal, so the daemon has work before any prover runs.
+        tester.drive_to_exact_sealed_batches(BATCHES).await?;
+
+        // ZiSK first: the Required-mode gate holds the data commit until the
+        // second proof exists, and the SNARK job (whose pick registers the
+        // aggregation range) is created downstream of the commit. Airbender
+        // first would deadlock: no commit without ZiSK, no SNARK pick without
+        // commit, and this test starts ZiSK only after the pick.
+        run_zisk_gpu_prover(&prover_api_url, BATCHES as usize).await;
+        assert_zisk_lane_accepted(&prover_api_url, BATCHES, 0).await?;
+
+        // Airbender: FRI proofs release the gate, the batch commits, and the
+        // SNARK pick registers the range with the ZiSK aggregation stage. Huge
+        // iteration budget: the service is killed once the range registers —
+        // its own SNARK submission is rejected while the ZiSK range proof is
+        // missing, which keeps the job re-offerable for the settle stage.
         let mut airbender = KillOnDrop(
             spawn_airbender_prover(
                 &tester,
@@ -281,11 +305,6 @@ mod real_provers {
             )
             .await,
         );
-
-        // Produce EXACTLY `BATCHES` batches, then let the Airbender lane reach
-        // the SNARK stage: picking the job registers the range with the ZiSK
-        // aggregation stage.
-        tester.drive_to_exact_sealed_batches(BATCHES).await?;
         wait_for_zisk_aggregation_ranges(
             &prover_api_url,
             RANGE_PROOFS,
@@ -293,13 +312,11 @@ mod real_provers {
         )
         .await?;
 
-        // The range is registered — free the GPU for ZiSK.
+        // The range is registered — free the GPU for the ZiSK aggregation.
         airbender.0.kill().await.ok();
-        tracing::info!("Airbender SNARK range registered — starting ZiSK lane");
+        tracing::info!("Airbender SNARK range registered — aggregating on the ZiSK lane");
 
-        // ZiSK lane: the per-batch jobs were created at batch seal, and the
-        // range forms as soon as its batches' streams are buffered.
-        run_zisk_gpu_prover(&prover_api_url, (BATCHES + RANGE_PROOFS) as usize).await;
+        run_zisk_gpu_prover(&prover_api_url, RANGE_PROOFS as usize).await;
         assert_zisk_lane_accepted(&prover_api_url, BATCHES, RANGE_PROOFS).await?;
 
         settle_multi_proof_on_l1(&tester, &urls, MAX_FRIS_PER_SNARK, BATCHES).await?;
