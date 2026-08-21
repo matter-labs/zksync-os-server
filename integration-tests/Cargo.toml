@@ -23,7 +23,6 @@ zksync_os_types.workspace = true
 zksync_os_rpc_api.workspace = true
 zksync_os_storage_api.workspace = true
 zksync_os_merkle_tree_api.workspace = true
-zksync_os_state_full_diffs.workspace = true
 zksync_os_multivm.workspace = true
 zksync_os_network.workspace = true
 zksync_os_replay_archive.workspace = true
