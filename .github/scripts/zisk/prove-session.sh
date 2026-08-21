@@ -24,9 +24,10 @@ set -euo pipefail
 : "${TOOLS_DIR:?}" "${SESSION_DIR:?}"
 : "${EXPECTED_GUEST_PROGRAM_VK:?}" "${EXPECTED_AGG_PROGRAM_VK:?}" "${EXPECTED_ROOT_C:?}"
 
-# The ASM emulator needs a high memlock limit; fall back silently, the run
-# fails loudly later if the limit is genuinely too low.
-ulimit -l unlimited 2>/dev/null || true
+# The ASM emulator needs a memlock hard limit the runner does not grant
+# (mmap(rom) fails with EAGAIN), so every prove uses the standard emulator —
+# the same choice the prover daemon makes with asm_emulator=false. Slower,
+# runs anywhere.
 
 vk_of_setup_dir() {
     # program-setup writes <blake3>_..._.verkey.bin: 32 bytes, four LE u64
@@ -62,12 +63,12 @@ calibrate aggregator "${AGG_ELF}" "${EXPECTED_AGG_PROGRAM_VK}"
 echo "==> proving the four per-batch vadcop_final streams"
 for n in 1 2 3 4; do
     "${CARGO_ZISK}" prove -e "${GUEST_ELF}" -i "${SESSION_DIR}/batch-${n}.bin" \
-        -k "${ZISK_PK}" -y -o "${SESSION_DIR}/vadcop-batch-${n}.bin" -g
+        -k "${ZISK_PK}" -y -o "${SESSION_DIR}/vadcop-batch-${n}.bin" -g --emulator
 done
 
 echo "==> PLONK-wrapping batch 1 (the BATCH fixture)"
 "${CARGO_ZISK}" prove -e "${GUEST_ELF}" -i "${SESSION_DIR}/batch-1.bin" \
-    -k "${ZISK_PK}" -w "${ZISK_SK}" --plonk -y -o "${SESSION_DIR}/batch1-plonk.bin" -g
+    -k "${ZISK_PK}" -w "${ZISK_SK}" --plonk -y -o "${SESSION_DIR}/batch1-plonk.bin" -g --emulator
 
 echo "==> aggregating the range"
 "${TOOLS_DIR}/aggregator_input" -o "${SESSION_DIR}/agg-input.bin" \
@@ -75,7 +76,7 @@ echo "==> aggregating the range"
 cat "${SESSION_DIR}/aggregator-input.txt"
 
 "${CARGO_ZISK}" prove -e "${AGG_ELF}" -i "${SESSION_DIR}/agg-input.bin" \
-    -k "${ZISK_PK}" -w "${ZISK_SK}" --plonk -y -o "${SESSION_DIR}/aggregated-plonk.bin" -g
+    -k "${ZISK_PK}" -w "${ZISK_SK}" --plonk -y -o "${SESSION_DIR}/aggregated-plonk.bin" -g --emulator
 
 echo "==> extracting the wire fixtures"
 "${TOOLS_DIR}/inspect_proof" "${SESSION_DIR}/batch1-plonk.bin" | tee "${SESSION_DIR}/batch1-inspect.txt"
