@@ -175,6 +175,46 @@ mod real_provers {
         Ok(inputs)
     }
 
+    /// Dump a fresh four-batch session's ZiSK `BatchInput`s for fixture
+    /// regeneration (runbook step 6): the zisk-fixture-session workflow runs
+    /// this on a CPU runner, then proves and aggregates the dumped inputs on a
+    /// GPU runner to re-derive the real-proof fixtures and the binding vector
+    /// after a guest rotation. Sealing needs no prover and no GPU. Gated on
+    /// `ZISK_SESSION_DUMP_DIR` so ordinary prover-test runs skip it; the skip
+    /// is loud but harmless — this test asserts nothing, it produces inputs.
+    #[test_log::test(tokio::test)]
+    async fn zisk_dump_session_inputs() -> anyhow::Result<()> {
+        let Ok(dir) = std::env::var("ZISK_SESSION_DUMP_DIR") else {
+            eprintln!(
+                "NOTE: zisk_dump_session_inputs SKIPPED: ZISK_SESSION_DUMP_DIR is not set. \
+                 This test only feeds the fixture-regeneration workflow."
+            );
+            return Ok(());
+        };
+        const BATCHES: u64 = 4;
+
+        let env = CURRENT_TO_MULTIPROVER_L1.environment().await?;
+        let mut config = env.default_config().await?;
+        // Fakes off: a fake FRI/SNARK pass would finalize and discard the
+        // sealed batches' ZiSK jobs before the inputs are peeked.
+        config.prover_api_config.fake_fri_provers.enabled = false;
+        config.prover_api_config.fake_snark_provers.enabled = false;
+        zksync_os_integration_tests::test_config::enable_second_proof_system(&mut config);
+        let tester = env.launch_without_provers(config).await?;
+        let prover_api_url = tester
+            .prover_api_url()
+            .expect("prover API must be bound for prover tests");
+
+        let inputs = seal_batches_and_peek_inputs(&tester, &prover_api_url, BATCHES).await?;
+        std::fs::create_dir_all(&dir)?;
+        for (i, input) in inputs.iter().enumerate() {
+            let path = format!("{dir}/batch-{}.bin", i + 1);
+            std::fs::write(&path, input)?;
+            eprintln!("wrote {} bytes to {path}", input.len());
+        }
+        Ok(())
+    }
+
     /// The two-lane flow with REAL provers on the multiprover v31 chain, with
     /// the MultiProofVerifier armed (`multi_proof_verifier`): the Airbender
     /// range SNARK settles only together with the aggregated ZiSK proof of the

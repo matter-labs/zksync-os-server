@@ -1,0 +1,171 @@
+name: ZiSK fixture session
+
+# Runbook step 6: regenerate the real-proof fixtures and the binding vector
+# from a fresh four-batch session against the pinned guest. A CPU job seals
+# the batches and builds every artifact; the GPU job only proves. The session
+# is self-calibrating: both programVKs must reproduce the pins before any
+# fixture is emitted, and every derived VK is checked again on the way out.
+#
+# TESTING TRIGGER: pull_request while this workflow is being developed (the
+# regular workflows are parked in .github/workflows-parked meanwhile).
+# Switch to workflow_dispatch and restore the parked workflows before merging.
+on:
+  pull_request:
+
+concurrency:
+  group: zisk-fixture-session-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ZISK_VERSION: "0.18.0"
+  # The v31 pin set this session must reproduce (runbook section 4).
+  EXPECTED_GUEST_PROGRAM_VK: "0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec"
+  EXPECTED_AGG_PROGRAM_VK: "0x4c3d7317a62f651d813ba6afbbce59e45eaa7c009ab2a9b51d2f0fb3e7987254"
+  EXPECTED_ROOT_C: "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
+
+jobs:
+  prepare:
+    name: seal batches, build ELFs and tools (no GPU)
+    runs-on: matterlabs-ci-runner-ultra-performance
+    timeout-minutes: 90
+    steps:
+      - name: Checkout server
+        uses: actions/checkout@v4
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
+
+      # The guest checkout follows the server's own pin, so the fixtures can
+      # never be produced from a guest the server does not actually run.
+      - name: Resolve the pinned guest rev
+        id: guest
+        run: |
+          rev="$(grep -m1 'zksync-os-zisk-lib' Cargo.toml | sed -E 's/.*rev = "([0-9a-f]+)".*/\1/')"
+          echo "resolved guest rev: ${rev}"
+          echo "rev=${rev}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the guest repo at the pinned rev
+        uses: actions/checkout@v4
+        with:
+          repository: matter-labs/zksync-os-zisk
+          ref: ${{ steps.guest.outputs.rev }}
+          path: zisk-guest
+
+      - name: Build both guest ELFs (pinned container, recorded-hash verified)
+        working-directory: zisk-guest
+        run: |
+          ./build-guest.sh
+          ./build-aggregator.sh
+
+      - name: Build the host tools (aggregator_input, inspect_proof)
+        working-directory: zisk-guest/prover
+        run: cargo build --release --bin aggregator_input --bin inspect_proof
+
+      - name: Seal four batches and dump the ZiSK inputs
+        env:
+          ZISK_SESSION_DUMP_DIR: ${{ github.workspace }}/session
+        run: |
+          cargo nextest run -p zksync_os_integration_tests \
+            --features prover-tests,gpu-prover-tests \
+            -E 'test(zisk_dump_session_inputs)' --no-capture
+
+      - name: Assemble the session bundle
+        run: |
+          mkdir -p session/tools
+          cp zisk-guest/out/zksync-os-zisk-guest session/
+          cp zisk-guest/out/zksync-os-zisk-guest-aggregator session/
+          cp zisk-guest/prover/target/release/aggregator_input session/tools/
+          cp zisk-guest/prover/target/release/inspect_proof session/tools/
+          ls -la session session/tools
+
+      - name: Upload the session bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: zisk-session-prep
+          path: session
+          if-no-files-found: error
+          retention-days: 3
+
+  prove:
+    name: prove and aggregate the session (GPU)
+    runs-on: [matterlabs-ci-hetzner-rtx6000-gpu]
+    needs: prepare
+    timeout-minutes: 240
+    steps:
+      - name: Checkout server (scripts only)
+        uses: actions/checkout@v4
+
+      - name: Check Nvidia driver version
+        run: nvidia-smi
+
+      - name: Download the session bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: zisk-session-prep
+          path: session
+
+      - name: Install ZiSK system dependencies
+        run: |
+          SUDO=""
+          [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update
+          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xz-utils jq curl build-essential qemu-system libomp-dev libgmp-dev \
+            nlohmann-json3-dev protobuf-compiler uuid-dev libgrpc++-dev \
+            libsecp256k1-dev libsodium-dev libpqxx-dev nasm libopenmpi-dev \
+            openmpi-bin openmpi-common libclang-dev clang gcc-riscv64-unknown-elf \
+            python3
+
+      - name: Install rustup (cargo-zisk toolchain install links into it)
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      # GPU variant, STARK key; setup_snark adds the PLONK key. ziskup skips
+      # pieces that are already installed, so a persistent runner pays the
+      # multi-GB downloads once.
+      - name: Install ZiSK toolchain and both proving keys
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/0xPolygonHermez/zisk/v${ZISK_VERSION}/ziskup/install.sh" -o /tmp/ziskup-install.sh
+          bash /tmp/ziskup-install.sh -v "${ZISK_VERSION}" --provingkey --gpu -y
+          echo "$HOME/.zisk/bin" >> "$GITHUB_PATH"
+          "$HOME/.zisk/bin/ziskup" setup_snark
+
+      - name: Prove the session
+        env:
+          CARGO_ZISK: cargo-zisk
+          GUEST_ELF: ${{ github.workspace }}/session/zksync-os-zisk-guest
+          AGG_ELF: ${{ github.workspace }}/session/zksync-os-zisk-guest-aggregator
+          TOOLS_DIR: ${{ github.workspace }}/session/tools
+          SESSION_DIR: ${{ github.workspace }}/session
+        run: |
+          export ZISK_PK="$HOME/.zisk/provingKey"
+          export ZISK_SK="$HOME/.zisk/provingKeySnark"
+          chmod +x session/tools/* .github/scripts/zisk/prove-session.sh
+          .github/scripts/zisk/prove-session.sh
+
+      - name: Publish the summary
+        if: always()
+        run: |
+          if [ -f session/SUMMARY.md ]; then cat session/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Upload the session artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zisk-fixture-session
+          path: |
+            session/SUMMARY.md
+            session/*-inspect.txt
+            session/aggregator-input.txt
+            session/vadcop-batch-*.bin
+            session/batch1-plonk.bin
+            session/aggregated-plonk.bin
+            session/batch-*.bin
+          if-no-files-found: error
+          retention-days: 14
