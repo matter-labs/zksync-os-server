@@ -62,7 +62,13 @@ jobs:
 
       - name: Build the host tools (aggregator_input, inspect_proof)
         working-directory: zisk-guest/prover
-        run: cargo build --release --bin aggregator_input --bin inspect_proof
+        run: |
+          # The guest checkout nests inside the server workspace, so cargo
+          # would otherwise walk up and bind this standalone crate to the
+          # server's workspace manifest. The ELFs were already built above
+          # (in the pinned container, from the unmodified tree).
+          grep -q '^\[workspace\]' Cargo.toml || printf '\n[workspace]\n' >> Cargo.toml
+          cargo build --release --bin aggregator_input --bin inspect_proof
 
       - name: Seal four batches and dump the ZiSK inputs
         env:
