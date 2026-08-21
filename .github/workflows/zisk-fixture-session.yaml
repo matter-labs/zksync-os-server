@@ -6,11 +6,12 @@ name: ZiSK fixture session
 # is self-calibrating: both programVKs must reproduce the pins before any
 # fixture is emitted, and every derived VK is checked again on the way out.
 #
-# TESTING TRIGGER: pull_request while this workflow is being developed (the
-# regular workflows are parked in .github/workflows-parked meanwhile).
-# Switch to workflow_dispatch and restore the parked workflows before merging.
+# The session this workflow exists for has been run and its fixtures are
+# landed (era-contracts#2419, zksync-os-zisk#11), so it is dispatch-only now:
+# rerun it on the next guest rotation. Restore the parked workflows before
+# merging this branch.
 on:
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: zisk-fixture-session-${{ github.ref }}
