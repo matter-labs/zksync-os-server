@@ -3,12 +3,12 @@ use crate::{NativeBatchBlock, NativeBatchRunOutput};
 use alloy::primitives::{B256, ruint::aliases::B160};
 use anyhow::Context as _;
 use std::collections::VecDeque;
-use zk_ee_0_4_0::common_structs::{ProofData, da_commitment_scheme::DACommitmentScheme};
-use zk_ee_0_4_0::system::metadata::chain_config::{ChainConfig, DEFAULT_MAX_TX_GAS_LIMIT};
-use zk_ee_0_4_0::system::metadata::zk_metadata::{BlockHashes, BlockMetadataFromOracle};
-use zk_ee_0_4_0::utils::Bytes32;
-use zk_os_basic_system_0_4_0::system_implementation::flat_storage_model::FlatStorageLeaf;
-use zk_os_forward_system_0_4_0::run::{
+use zk_ee_0_5_0::common_structs::{ProofData, da_commitment_scheme::DACommitmentScheme};
+use zk_ee_0_5_0::system::metadata::chain_config::{ChainConfig, DEFAULT_MAX_TX_GAS_LIMIT};
+use zk_ee_0_5_0::system::metadata::zk_metadata::{BlockHashes, BlockMetadataFromOracle};
+use zk_ee_0_5_0::utils::Bytes32;
+use zk_os_basic_system_0_5_0::system_implementation::flat_storage_model::FlatStorageLeaf;
+use zk_os_forward_system_0_5_0::run::{
     BatchBlockInput, BatchState as ForwardBatchState, LeafProof,
     PreimageSource as ForwardPreimageSource, ReadStorage as ForwardReadStorage, ReadStorageTree,
     StorageCommitment, generate_batch_proof_input,
@@ -254,7 +254,7 @@ fn map_leaf_proof(proof: RawLeafProof) -> LeafProof {
 impl<SV: ViewState> ForwardBatchState for HistoricalBatchState<SV> {
     fn apply_block_output(
         &mut self,
-        _block_output: &zk_os_forward_system_0_4_0::run::output::BlockOutput,
+        _block_output: &zk_os_forward_system_0_5_0::run::output::BlockOutput,
     ) {
         if self.cursor + 1 < self.state_views.len() {
             self.cursor += 1;

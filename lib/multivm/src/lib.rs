@@ -6,7 +6,7 @@ use zk_os_forward_system::run::RunBlockForward as RunBlockForwardV6;
 use zk_os_forward_system_0_0_28::run::RunBlockForward as RunBlockForwardV3;
 use zk_os_forward_system_0_1_2::run::RunBlockForward as RunBlockForwardV4;
 use zk_os_forward_system_0_2_10::run::RunBlockForward as RunBlockForwardV5;
-use zk_os_forward_system_0_4_0::run::RunBlockForward as RunBlockForwardV7;
+use zk_os_forward_system_0_5_0::run::RunBlockForward as RunBlockForwardV7;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{AnyTracer, AnyTxValidator};
 use zksync_os_interface::traits::{

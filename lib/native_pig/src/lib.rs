@@ -129,7 +129,7 @@ impl NativeBatchRunOutput {
 /// the v32 batch public input, so every construction site must go through this function.
 pub fn v32_chain_config(
     chain_id: u64,
-) -> anyhow::Result<zk_ee_0_4_0::system::metadata::chain_config::ChainConfig> {
+) -> anyhow::Result<zk_ee_0_5_0::system::metadata::chain_config::ChainConfig> {
     v32::chain_config(chain_id)
 }
 

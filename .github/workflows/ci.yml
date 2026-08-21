@@ -38,6 +38,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Configure git auth for private repos
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
+
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
@@ -64,6 +69,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Configure git auth for private repos
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
+
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
@@ -82,6 +92,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Configure git auth for private repos
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
@@ -114,6 +129,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Configure git auth for private repos
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
@@ -176,6 +196,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Configure git auth for private repos
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
+
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
@@ -211,6 +236,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Configure git auth for private repos
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
@@ -262,6 +292,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Configure git auth for private repos
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
