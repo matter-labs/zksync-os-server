@@ -47,7 +47,6 @@ use crate::metrics::L1_SENDER_METRICS;
 use crate::pipeline_component::L1Sender;
 use crate::{FeeParams, L1SenderState, METHOD_NOT_FOUND_CODE, PreparedSidecar, SimPrefixEntry};
 use alloy::consensus::Transaction as ConsensusTransaction;
-use alloy::eips::BlockId;
 use alloy::network::{Ethereum, Network, TransactionResponse};
 use alloy::primitives::{Address, B256};
 use alloy::providers::Provider;
@@ -150,13 +149,19 @@ where
         mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
         outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
         state_reporter: ComponentStateReporter,
+        latest_nonce: u64,
     ) -> anyhow::Result<()> {
         let command_name = Input::COMPONENT_ID.as_str();
         let operator_address = self.operator_address().await?;
         let window = self.config.command_limit.max(1);
 
         let start = self
-            .plan_pipelined_recovery(&mut inbound, &state_reporter, operator_address)
+            .plan_pipelined_recovery(
+                &mut inbound,
+                &state_reporter,
+                operator_address,
+                latest_nonce,
+            )
             .await?
             .context("inbound channel closed during in-flight recovery")?;
 
@@ -776,30 +781,9 @@ where
         inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
         state_reporter: &ComponentStateReporter,
         operator_address: Address,
+        latest_nonce: u64,
     ) -> anyhow::Result<Option<PipelinedStart<Input>>> {
         let command_name = Input::COMPONENT_ID.as_str();
-        // The pinned block can age out of provider history before this lazy query runs; `latest` is safe, the pairing below is calldata-checked.
-        let latest_nonce = match self
-            .provider
-            .get_transaction_count(operator_address)
-            .block_id(BlockId::number(self.l1_block_number))
-            .await
-        {
-            Ok(nonce) => nonce,
-            Err(err) => {
-                tracing::warn!(
-                    %err,
-                    l1_block_number = self.l1_block_number,
-                    "confirmed-nonce baseline block is no longer available; \
-                     falling back to the latest block"
-                );
-                self.provider
-                    .get_transaction_count(operator_address)
-                    .latest()
-                    .await
-                    .context("get confirmed transaction count (latest fallback)")?
-            }
-        };
         let pending_nonce = self
             .provider
             .get_transaction_count(operator_address)
