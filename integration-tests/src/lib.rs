@@ -1057,6 +1057,14 @@ impl AnvilL1 {
                         .arg(&l1_state_path)
                         .arg("--slots-in-an-epoch")
                         .arg("10")
+                        // Without this Anvil keeps only the last 256 block
+                        // states. At 4 blocks/s that is ~64 seconds of
+                        // history, and the L1 senders lazily query state at
+                        // their boot-time block on FIRST send — the prove
+                        // sender's first send in a real-prover test comes
+                        // ~25 minutes in, and the node dies on
+                        // BlockOutOfRangeError.
+                        .arg("--preserve-historical-states")
                 })?;
             let address = provider.inner().anvil().endpoint();
 
