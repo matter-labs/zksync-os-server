@@ -17,6 +17,7 @@ env:
   RUST_BACKTRACE: 1
   TEST_RESULTS_XML: 'test-results.xml'
   PROVER_GPU_TESTS: 'prover-gpu-tests'
+  ZISK_VERSION: '0.18.0'
   CUDAARCHS: '80;89;90'
   # Run tests 10 times in case of push to main branch to catch possible flakiness
   NEXTEST_ITERATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '--stress-count 10' || '' }}
@@ -179,6 +180,44 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
+      # The ZiSK artifacts follow the server's own guest pin, so they can never drift from it.
+      - name: Resolve the pinned guest rev
+        id: guest
+        run: |
+          rev="$(grep -m1 'zksync-os-zisk-lib' Cargo.toml | sed -E 's/.*rev = "([0-9a-f]+)".*/\1/')"
+          echo "rev=${rev}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the guest repo at the pinned rev
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: matter-labs/zksync-os-zisk
+          ref: ${{ steps.guest.outputs.rev }}
+          path: zisk-guest
+
+      - name: Build both guest ELFs (pinned container, recorded-hash verified)
+        working-directory: zisk-guest
+        run: |
+          ./build-guest.sh
+          ./build-aggregator.sh
+
+      - name: Build the ZiSK prover service
+        working-directory: zisk-guest/prover
+        run: |
+          # Unbind the nested crate from the server workspace cargo would otherwise resolve it against.
+          grep -q '^\[workspace\]' Cargo.toml || printf '\n[workspace]\n' >> Cargo.toml
+          cargo build --release --bin zksync-os-zisk-prover-service
+
+      - name: Upload the ZiSK artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zisk-e2e-artifacts
+          path: |
+            zisk-guest/out/zksync-os-zisk-guest
+            zisk-guest/out/zksync-os-zisk-guest-aggregator
+            zisk-guest/prover/target/release/zksync-os-zisk-prover-service
+          if-no-files-found: error
+          retention-days: 1
+
       # Build and archive tests to execute on another machine.
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
       - name: Build and archive test
@@ -226,6 +265,40 @@ jobs:
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
 
+      - name: Download the ZiSK artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: zisk-e2e-artifacts
+          path: zisk-artifacts
+
+      - name: Install ZiSK system dependencies
+        run: |
+          SUDO=""
+          [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update
+          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xz-utils jq curl build-essential qemu-system libomp-dev libgmp-dev \
+            nlohmann-json3-dev protobuf-compiler uuid-dev libgrpc++-dev \
+            libsecp256k1-dev libsodium-dev libpqxx-dev nasm libopenmpi-dev \
+            openmpi-bin openmpi-common libclang-dev clang gcc-riscv64-unknown-elf \
+            python3
+
+      # cargo-zisk's toolchain install links into rustup and errors if the binary is absent.
+      - name: Install rustup
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      # ziskup skips already-installed pieces, so the persistent runner pays the key downloads once.
+      - name: Install ZiSK toolchain and both proving keys
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/0xPolygonHermez/zisk/v${ZISK_VERSION}/ziskup/install.sh" -o /tmp/ziskup-install.sh
+          bash /tmp/ziskup-install.sh -v "${ZISK_VERSION}" --provingkey --gpu -y
+          echo "$HOME/.zisk/bin" >> "$GITHUB_PATH"
+          "$HOME/.zisk/bin/ziskup" setup_snark
+
       - name: Download CRS setup file
         if: steps.cache-crs.outputs.cache-hit != 'true'
         env:
@@ -244,12 +317,26 @@ jobs:
 
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
+      # The ZiSK lane is ARMED: a silent artifact skip or a disarmed VK tripwire is a failure.
+      # The gpu nextest profile carries budgets a healthy two-lane run actually fits.
       - name: Run prover tests on GPU
         env:
           COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
+          ZISK_GPU_TESTS_REQUIRED: "1"
+          ZISK_ELF: ${{ github.workspace }}/zisk-artifacts/out/zksync-os-zisk-guest
+          ZISK_AGG_ELF: ${{ github.workspace }}/zisk-artifacts/out/zksync-os-zisk-guest-aggregator
+          ZISK_PROVER_BIN: ${{ github.workspace }}/zisk-artifacts/prover/target/release/zksync-os-zisk-prover-service
+          # Runbook section 4: the v31 pin set.
+          ZISK_PROGRAM_VK: "0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec"
+          ZISK_VADCOP_VK: "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
+          ZISK_AGG_PROGRAM_VK: "0x4c3d7317a62f651d813ba6afbbce59e45eaa7c009ab2a9b51d2f0fb3e7987254"
         run: |
+          export ZISK_PK="$HOME/.zisk/provingKey"
+          export ZISK_SK="$HOME/.zisk/provingKeySnark"
+          export ZISK_BINARY="$HOME/.zisk/bin/cargo-zisk"
+          chmod +x "${ZISK_PROVER_BIN}"
           ulimit -s 300000
-          cargo nextest run -E 'binary(prover)' --no-capture \
+          cargo nextest run -E 'binary(prover)' --no-capture --profile gpu \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE}
 
