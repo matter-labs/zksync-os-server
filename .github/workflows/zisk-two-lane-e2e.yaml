@@ -36,7 +36,7 @@ env:
   #   rung 2: test(two_lane_single_range_e2e)    — the first real settle
   #   rung 3: test(two_lane_multibatch_e2e)      — the 4-batch range
   #   final:  binary(prover)                     — the full ci.yml shape
-  E2E_TEST_FILTER: "test(two_lane_multibatch_e2e)"
+  E2E_TEST_FILTER: "binary(prover)"
 
 jobs:
   build:
