@@ -18,7 +18,6 @@ env:
   TEST_RESULTS_XML: 'test-results.xml'
   PROVER_GPU_TESTS: 'prover-gpu-tests'
   ZISK_VERSION: '0.18.0'
-  # Assets of the pinned guest (Cargo.toml rev 055e720 = tag 0.0.2; 0.0.3 ships the identical byte-frozen ELFs, re-verified below).
   ZISK_RELEASE: '0.0.3'
   CUDAARCHS: '80;89;90'
   # Run tests 10 times in case of push to main branch to catch possible flakiness
@@ -182,34 +181,6 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
-      # Prebuilt ZiSK artifacts from the pinned release. The ELF hashes are re-verified against
-      # the same recorded pins the reproducible source builds enforce, so a release asset can
-      # never silently diverge from the byte-frozen guest sources.
-      - name: Download and verify the ZiSK release artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ZISK_GUEST_ELF_SHA256: '80b841c76445dd3c411cc1f11447cc85285521541378821442aef1f7262da932'
-          ZISK_AGG_ELF_SHA256: 'f96f9285ca87083f322569d72fd379b67b1ee2ea3286c078c26e313acd27e7ae'
-        run: |
-          mkdir -p zisk-artifacts && cd zisk-artifacts
-          gh release download "${ZISK_RELEASE}" -R matter-labs/zksync-os-zisk
-          sha256sum -c SHA256SUMS
-          tar xzf "zksync-os-zisk-guest-elfs-${ZISK_RELEASE}.tar.gz"
-          tar xzf "zksync-os-zisk-prover-${ZISK_RELEASE}-x86_64-unknown-linux-gnu.tar.gz"
-          echo "${ZISK_GUEST_ELF_SHA256}  zksync-os-zisk-guest" | sha256sum -c
-          echo "${ZISK_AGG_ELF_SHA256}  zksync-os-zisk-guest-aggregator" | sha256sum -c
-
-      - name: Upload the ZiSK artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: zisk-e2e-artifacts
-          path: |
-            zisk-artifacts/zksync-os-zisk-guest
-            zisk-artifacts/zksync-os-zisk-guest-aggregator
-            zisk-artifacts/zksync-os-zisk-prover-service
-          if-no-files-found: error
-          retention-days: 1
-
       # Build and archive tests to execute on another machine.
       # Use `cargo nextest archive` to make sure that all dependencies are included properly.
       - name: Build and archive test
@@ -257,31 +228,30 @@ jobs:
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
 
-      - name: Download the ZiSK artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: zisk-e2e-artifacts
-          path: zisk-artifacts
+      # ELF hashes are re-verified against the same recorded pins the reproducible source builds enforce.
+      - name: Download and verify the ZiSK release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZISK_GUEST_ELF_SHA256: '80b841c76445dd3c411cc1f11447cc85285521541378821442aef1f7262da932'
+          ZISK_AGG_ELF_SHA256: 'f96f9285ca87083f322569d72fd379b67b1ee2ea3286c078c26e313acd27e7ae'
+        run: |
+          mkdir -p zisk-artifacts && cd zisk-artifacts
+          gh release download "${ZISK_RELEASE}" -R matter-labs/zksync-os-zisk
+          sha256sum -c SHA256SUMS
+          tar xzf "zksync-os-zisk-guest-elfs-${ZISK_RELEASE}.tar.gz"
+          tar xzf "zksync-os-zisk-prover-${ZISK_RELEASE}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZISK_GUEST_ELF_SHA256}  zksync-os-zisk-guest" | sha256sum -c
+          echo "${ZISK_AGG_ELF_SHA256}  zksync-os-zisk-guest-aggregator" | sha256sum -c
 
-      - name: Install ZiSK system dependencies
+      # cargo-zisk's runtime set, per docker/zksync-os-zisk-prover in the guest repo (program-setup assembles and links at runtime).
+      - name: Install ZiSK runtime dependencies
         run: |
           SUDO=""
           [ "$(id -u)" -ne 0 ] && SUDO="sudo"
           $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update
-          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            xz-utils jq curl build-essential qemu-system libomp-dev libgmp-dev \
-            nlohmann-json3-dev protobuf-compiler uuid-dev libgrpc++-dev \
-            libsecp256k1-dev libsodium-dev libpqxx-dev nasm libopenmpi-dev \
-            openmpi-bin openmpi-common libclang-dev clang gcc-riscv64-unknown-elf \
-            python3
-
-      # cargo-zisk's toolchain install links into rustup and errors if the binary is absent.
-      - name: Install rustup
-        run: |
-          if ! command -v rustup >/dev/null; then
-            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-          fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            curl ca-certificates xz-utils build-essential libgmp-dev \
+            openmpi-bin libopenmpi-dev libsodium-dev libomp-dev
 
       # ziskup skips already-installed pieces, so the persistent runner pays the key downloads once.
       - name: Install ZiSK toolchain and both proving keys
