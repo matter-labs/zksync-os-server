@@ -251,12 +251,13 @@ jobs:
           echo "$HOME/.zisk/bin" >> "$GITHUB_PATH"
           "$HOME/.zisk/bin/ziskup" setup_snark
 
+      # Cached in the persistent runner home, like the ZiSK proving keys.
       - name: Download CRS setup file
-        if: steps.cache-crs.outputs.cache-hit != 'true'
         env:
-          # Download CRS file from EU storage for GPU runner
           CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key
-        run: wget -q --show-progress "${CRS_FILE_URL}"
+        run: |
+          [ -f "$HOME/setup_compact.key" ] || wget -q -O "$HOME/setup_compact.key" "${CRS_FILE_URL}"
+          ln -sf "$HOME/setup_compact.key" setup_compact.key
 
       - name: Decompress L1 state fixtures
         run: |
@@ -270,10 +271,11 @@ jobs:
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
       # The ZiSK lane is ARMED: a silent artifact skip or a disarmed VK tripwire is a failure.
-      # The gpu nextest profile carries budgets a healthy two-lane run actually fits.
+      # PRs run one real two-lane settle; the four-batch variant joins on main pushes.
       - name: Run prover tests on GPU
         env:
           COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
+          NEXTEST_FILTER: ${{ github.event_name == 'pull_request' && 'binary(prover) - test(two_lane_multibatch_e2e)' || 'binary(prover)' }}
           ZISK_GPU_TESTS_REQUIRED: "1"
           ZISK_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest
           ZISK_AGG_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest-aggregator
@@ -288,7 +290,7 @@ jobs:
           export ZISK_BINARY="$HOME/.zisk/bin/cargo-zisk"
           chmod +x "${ZISK_PROVER_BIN}"
           ulimit -s 300000
-          cargo nextest run -E 'binary(prover)' --no-capture --profile gpu \
+          cargo nextest run -E "${NEXTEST_FILTER}" --no-capture --profile gpu \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE}
 
