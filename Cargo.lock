@@ -17683,7 +17683,7 @@ dependencies = [
 
 [[package]]
 name = "zisk_prover_lane"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17704,7 +17704,7 @@ dependencies = [
 
 [[package]]
 name = "zisk_witness"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "alloy",
  "anyhow",
