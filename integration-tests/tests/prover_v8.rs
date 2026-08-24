@@ -1,21 +1,23 @@
-//! Live end-to-end test for the zksync-os 0.4.0 lane (protocol v32.0, execution V7,
+#![cfg(feature = "gpu-prover-tests")]
+//! Live end-to-end test for the zksync-os 0.5.0 lane (protocol v32.0, execution V7,
 //! proving V8, native batch PIG):
 //!
 //! 1. Start a v31.0 chain settling on L1 with fake FRI/SNARK provers, then perform
 //!    a protocol upgrade to v32.0.
 //! 2. Wait for the fake pipeline to settle everything produced so far.
-//! 3. Restart the node with fake FRI provers disabled and spawn an externally built
-//!    `zksync_os_fri_prover` (zksync-airbender-prover) against the node's prover API.
+//! 3. Restart the node with fake FRI provers disabled and spawn the released
+//!    `zksync-os-prover-service` (zksync-airbender-prover) against the node's prover API.
 //! 4. Success when a post-restart transaction's block is finalized — i.e. its batch was
 //!    committed, FRI-proven for real (proof verified by the server), fake-SNARKed and
 //!    proven+executed on L1.
 //!
 //! Required environment:
-//!   V8_FRI_PROVER_BIN        path to the `zksync_os_fri_prover` binary (may be a wrapper script)
-//!   V8_APP_BIN               path to the V8 `multiblock_batch.bin` app binary
+//!   COMPACT_CRS_FILE         path to the compact CRS (the prover service demands it up front)
 //! Optional:
-//!   V8_PROVING_TIMEOUT_SECS  how long to wait for the real proof (default 4h; CPU proving is slow)
-//!   V8_PROVER_CPU_THREADS    forwarded as `--cpu-worker-threads` (bounds prover memory)
+//!   V8_PROVING_TIMEOUT_SECS  how long to wait for the real proof (default 30m, GPU-shaped)
+//!   V8_FRI_PROVER_BIN        prover service binary to use instead of the released one
+//!   V8_APP_BIN               V8 `multiblock_batch.bin` to use instead of the released one
+//!                            (its `.text` sibling must sit next to it)
 
 use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
@@ -30,19 +32,13 @@ use zksync_os_integration_tests::upgrade::UpgradeTester;
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
 
 #[test_log::test(tokio::test)]
-#[ignore = "requires an externally built V8 zksync_os_fri_prover binary; run manually"]
 async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
-    let prover_bin = std::env::var("V8_FRI_PROVER_BIN")
-        .expect("set V8_FRI_PROVER_BIN to the zksync_os_fri_prover binary path");
-    let app_bin =
-        std::env::var("V8_APP_BIN").expect("set V8_APP_BIN to the V8 multiblock_batch.bin path");
     let proving_timeout = Duration::from_secs(
         std::env::var("V8_PROVING_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(4 * 3600),
+            .unwrap_or(30 * 60),
     );
-    let cpu_worker_threads = std::env::var("V8_PROVER_CPU_THREADS").ok();
 
     // Phase 1: v31.0 chain settling on L1; fake FRI + SNARK provers keep the
     // pipeline moving.
@@ -155,33 +151,17 @@ async fn v8_native_pig_real_fri_proof_e2e() -> anyhow::Result<()> {
         "starting external V8 FRI prover"
     );
 
-    let mut cmd = tokio::process::Command::new(&prover_bin);
-    cmd.arg("--sequencer-urls")
-        .arg(&prover_api_url)
-        .arg("--app-bin-path")
-        .arg(&app_bin)
-        .arg("--prover-name")
-        .arg("v8-e2e-cpu-prover")
-        .arg("--prometheus-port")
-        .arg("24123")
-        // 2 iterations as headroom in case an empty batch sealed ahead of the probe tx.
-        .arg("--iterations")
-        .arg("2");
-    if let Some(threads) = &cpu_worker_threads {
-        cmd.arg("--cpu-worker-threads").arg(threads);
-    }
-    let mut prover = cmd.kill_on_drop(true).spawn()?;
+    let output_dir = tempfile::tempdir()?;
+    let mut prover =
+        zksync_os_integration_tests::spawn_v8_prover_service(&prover_api_url, output_dir.path())
+            .await;
 
     // Wait until the probe tx's block is executed on L1 (`finalized` maps to executed).
     let deadline = Instant::now() + proving_timeout;
     loop {
+        // The service is spawned without `--iterations`, so it never exits on its own.
         if let Some(status) = prover.try_wait()? {
-            // With --iterations 2 the prover only exits on its own after two accepted
-            // proofs; treat any earlier non-success exit as a hard failure.
-            anyhow::ensure!(
-                status.success(),
-                "external FRI prover exited prematurely with {status}"
-            );
+            anyhow::bail!("external FRI prover exited prematurely with {status}");
         }
         let finalized = tester
             .l2_provider

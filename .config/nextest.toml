@@ -14,9 +14,10 @@ path = "test-results.xml"
 prover-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]
-# Tests in `prover.rs` rely on prover (CPU or GPU). CPU prover can take >10m to prove one batch, so we give these tests
-# a longer timeout. They also need to run one at a time.
-filter = 'binary(prover)'
+# Tests in `prover.rs`/`prover_v8.rs` rely on prover (CPU or GPU). CPU prover can take >10m to prove one batch, so we
+# give these tests a longer timeout. They also need to run one at a time.
+# `binary()` matches exactly, so `prover_v8` needs its own term.
+filter = 'binary(prover) | binary(prover_v8)'
 slow-timeout = { period = "15m", terminate-after = 3 }
 test-group = 'prover-serial'
 

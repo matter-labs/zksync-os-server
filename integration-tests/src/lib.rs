@@ -35,7 +35,9 @@ use zksync_os_server::config::Config;
 pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 #[cfg(feature = "prover-tests")]
-use zksync_os_server::default_protocol_version::{PROTOCOL_VERSION_V30_2, PROTOCOL_VERSION_V31_0};
+use zksync_os_server::default_protocol_version::{
+    PROTOCOL_VERSION_V30_2, PROTOCOL_VERSION_V31_0, PROTOCOL_VERSION_V32_0,
+};
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
@@ -1032,11 +1034,101 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
     });
 }
 
+/// Downloads the released V8 prover service and spawns it against `prover_api_url`.
+///
+/// Only usable on the GPU build: the CPU backend cannot report the app program's commitment,
+/// which the service requires before it will prove anything.
+///
+/// `V8_FRI_PROVER_BIN` and `V8_APP_BIN` override the two downloads for manual runs.
+#[cfg(feature = "gpu-prover-tests")]
+pub async fn spawn_v8_prover_service(
+    prover_api_url: &str,
+    output_dir: &std::path::Path,
+) -> tokio::process::Child {
+    let prover_bin = match std::env::var("V8_FRI_PROVER_BIN") {
+        Ok(path) => path,
+        Err(_) => download_prover_and_unpack(PROTOCOL_VERSION_V32_0, true).await,
+    };
+    let app_bin = match std::env::var("V8_APP_BIN") {
+        Ok(path) => std::path::PathBuf::from(path),
+        Err(_) => download_v8_app_bin().await,
+    };
+    // Mandatory CLI argument even though the server's fake SNARK pool takes every SNARK job.
+    let trusted_setup_file =
+        std::env::var("COMPACT_CRS_FILE").expect("set COMPACT_CRS_FILE to the compact CRS path");
+    std::fs::create_dir_all(output_dir).expect("failed to create prover output dir");
+
+    let child = tokio::process::Command::new(&prover_bin)
+        .arg("--sequencer-urls")
+        .arg(prover_api_url)
+        .arg("--app-bin-path")
+        .arg(&app_bin)
+        .arg("--output-dir")
+        .arg(output_dir)
+        .arg("--trusted-setup-file")
+        .arg(trusted_setup_file)
+        .arg("--prometheus-port")
+        .arg("24123")
+        // Submit each FRI proof immediately, and bounce straight back to FRI proving instead
+        // of idling on a SNARK job the fake pool already owns.
+        .arg("--max-fris-per-snark")
+        .arg("1")
+        .arg("--snark-acquire-timeout-secs")
+        .arg("1")
+        .arg("--disable-zk")
+        // Without this the prover keeps running after the test task is dropped.
+        .kill_on_drop(true)
+        .spawn()
+        .expect("failed to spawn V8 prover service");
+    let pid = child
+        .id()
+        .expect("newly spawned V8 prover service has no process ID");
+    // `kill_on_drop` never fires if the test process is SIGKILLed or aborts, and an orphaned
+    // prover holds the GPU for the rest of the CI job.
+    leash::attach(pid, "zksync-os-prover-service").expect("failed to attach leash to prover");
+    child
+}
+
+/// Downloads the V8 app program and returns the `.bin` path.
+///
+/// Both halves come from the prover release's source tree: the `.text` section that
+/// `create_prover` requires next to the `.bin` is not published as a release asset (and
+/// neither is it published by zksync-os, which ships only the `.bin`).
+#[cfg(feature = "gpu-prover-tests")]
+async fn download_v8_app_bin() -> std::path::PathBuf {
+    let release_version = prover_release_for_protocol(PROTOCOL_VERSION_V32_0);
+    let dir = std::path::Path::new("prover-binaries").join(format!("app-bin-{release_version}"));
+    std::fs::create_dir_all(dir.as_path()).expect("failed to create app bin dir");
+
+    for extension in ["bin", "text"] {
+        let path = dir.join(format!("multiblock_batch.{extension}"));
+        if std::fs::exists(path.as_path()).expect("failed to check app bin existence") {
+            continue;
+        }
+        let url = format!(
+            "https://raw.githubusercontent.com/matter-labs/zksync-airbender-prover/{release_version}/multiblock_batch.{extension}"
+        );
+        tracing::info!("downloading V8 app binary from {url} to {}", path.display());
+        let body = download_prover_binary(&url)
+            .await
+            .expect("failed to download V8 app binary")
+            .bytes()
+            .await
+            .expect("failed to read V8 app binary body");
+        std::fs::write(path.as_path(), body).expect("failed to write V8 app binary");
+    }
+
+    dir.join("multiblock_batch.bin")
+}
+
 #[cfg(feature = "prover-tests")]
 fn prover_release_for_protocol(protocol_version: &str) -> &'static str {
     match protocol_version {
         PROTOCOL_VERSION_V30_2 => "v0.7.1",
         PROTOCOL_VERSION_V31_0 => "v0.8.0",
+        // Built from the fix/87680 private FRI-fix pins. Its `SupportedProtocolVersions` is
+        // V8-only, so it never picks up jobs from the two lanes above.
+        PROTOCOL_VERSION_V32_0 => "v0.9.0-private-crypto",
         _ => {
             panic!("unsupported protocol version `{protocol_version}` for prover binary selection")
         }
