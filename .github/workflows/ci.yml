@@ -17,6 +17,8 @@ env:
   RUST_BACKTRACE: 1
   TEST_RESULTS_XML: 'test-results.xml'
   PROVER_GPU_TESTS: 'prover-gpu-tests'
+  ZISK_VERSION: '0.18.0'
+  ZISK_RELEASE: '0.0.3'
   CUDAARCHS: '80;89;90'
   # Run tests 10 times in case of push to main branch to catch possible flakiness
   NEXTEST_ITERATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '--stress-count 10' || '' }}
@@ -226,12 +228,36 @@ jobs:
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
 
-      - name: Download CRS setup file
-        if: steps.cache-crs.outputs.cache-hit != 'true'
+      # ELF hashes are re-verified against the same recorded pins the reproducible source builds enforce.
+      - name: Download and verify the ZiSK release artifacts
         env:
-          # Download CRS file from EU storage for GPU runner
+          GH_TOKEN: ${{ github.token }}
+          ZISK_GUEST_ELF_SHA256: '80b841c76445dd3c411cc1f11447cc85285521541378821442aef1f7262da932'
+          ZISK_AGG_ELF_SHA256: 'f96f9285ca87083f322569d72fd379b67b1ee2ea3286c078c26e313acd27e7ae'
+        run: |
+          mkdir -p zisk-artifacts && cd zisk-artifacts
+          gh release download "${ZISK_RELEASE}" -R matter-labs/zksync-os-zisk
+          sha256sum -c SHA256SUMS
+          tar xzf "zksync-os-zisk-guest-elfs-${ZISK_RELEASE}.tar.gz"
+          tar xzf "zksync-os-zisk-prover-${ZISK_RELEASE}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZISK_GUEST_ELF_SHA256}  zksync-os-zisk-guest" | sha256sum -c
+          echo "${ZISK_AGG_ELF_SHA256}  zksync-os-zisk-guest-aggregator" | sha256sum -c
+
+      # ziskup skips already-installed pieces, so the persistent runner pays the key downloads once.
+      - name: Install ZiSK toolchain and both proving keys
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/0xPolygonHermez/zisk/v${ZISK_VERSION}/ziskup/install.sh" -o /tmp/ziskup-install.sh
+          bash /tmp/ziskup-install.sh -v "${ZISK_VERSION}" --provingkey --gpu -y
+          echo "$HOME/.zisk/bin" >> "$GITHUB_PATH"
+          "$HOME/.zisk/bin/ziskup" setup_snark
+
+      # Cached in the persistent runner home, like the ZiSK proving keys.
+      - name: Download CRS setup file
+        env:
           CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key
-        run: wget -q --show-progress "${CRS_FILE_URL}"
+        run: |
+          [ -f "$HOME/setup_compact.key" ] || wget -q -O "$HOME/setup_compact.key" "${CRS_FILE_URL}"
+          ln -sf "$HOME/setup_compact.key" setup_compact.key
 
       - name: Decompress L1 state fixtures
         run: |
@@ -244,12 +270,27 @@ jobs:
 
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
+      # The ZiSK lane is ARMED: a silent artifact skip or a disarmed VK tripwire is a failure.
+      # PRs run one real two-lane settle; the four-batch variant joins on main pushes.
       - name: Run prover tests on GPU
         env:
           COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
+          NEXTEST_FILTER: ${{ github.event_name == 'pull_request' && 'binary(prover) - test(two_lane_multibatch_e2e)' || 'binary(prover)' }}
+          ZISK_GPU_TESTS_REQUIRED: "1"
+          ZISK_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest
+          ZISK_AGG_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest-aggregator
+          ZISK_PROVER_BIN: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-prover-service
+          # Runbook section 4: the v31 pin set.
+          ZISK_PROGRAM_VK: "0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec"
+          ZISK_VADCOP_VK: "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
+          ZISK_AGG_PROGRAM_VK: "0x4c3d7317a62f651d813ba6afbbce59e45eaa7c009ab2a9b51d2f0fb3e7987254"
         run: |
+          export ZISK_PK="$HOME/.zisk/provingKey"
+          export ZISK_SK="$HOME/.zisk/provingKeySnark"
+          export ZISK_BINARY="$HOME/.zisk/bin/cargo-zisk"
+          chmod +x "${ZISK_PROVER_BIN}"
           ulimit -s 300000
-          cargo nextest run -E 'binary(prover)' --no-capture \
+          cargo nextest run -E "${NEXTEST_FILTER}" --no-capture --profile gpu \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE}
 

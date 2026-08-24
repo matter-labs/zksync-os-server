@@ -35,9 +35,6 @@ DIAMOND=0xb573DfdA099F9567c8E20d924A32A75bF834A5ef
 # `verifier` in the diamond's ZKChainStorage. The script asserts the slot holds
 # the v31.0 verifier before it writes, and asserts `getVerifier()` afterwards.
 VERIFIER_SLOT=10
-# The PLONK verifier that checks Airbender proofs on the v31.0 chain.
-# `MultiProofVerifier` keeps it, so Airbender verification is unchanged.
-AIRBENDER_VERIFIER=0x40c2a18c576b4864b2cf3a458499137ee96057aa
 
 # ZiSK pins baked into the generated `ZiskVerifier`.
 EXPECTED_INNER_PROGRAM_VK=0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec
@@ -107,9 +104,18 @@ echo "==> v31.0 verifier ${BASE_VERIFIER}"
 expect_equal "diamond slot ${VERIFIER_SLOT}" \
     "$(cast parse-bytes32-address "$(cast storage "${DIAMOND}" "${VERIFIER_SLOT}" --rpc-url "${RPC}")")" \
     "${BASE_VERIFIER}"
+# The Airbender inner verifier MUST be the chain's ZKsyncOSDualVerifier, not
+# its bare PLONK sub-verifier: MultiProofVerifier prepends the two-word
+# sub-proof envelope the dual verifier parses, and a bare verifier fed the
+# envelope words rejects every proof with 'loadProof: Proof is invalid'
+# (observed on the first real settle). The dual-ness check below is what
+# makes that miswiring impossible to bake again.
+AIRBENDER_DUAL_VERIFIER="${BASE_VERIFIER}"
+PLONK_SUB_V0="$(cast call "${AIRBENDER_DUAL_VERIFIER}" 'plonkVerifiers(uint32)(address)' 0 --rpc-url "${RPC}")"
+echo "==> dual verifier's PLONK sub-verifier (version 0) ${PLONK_SUB_V0}"
 expect_equal "Airbender verification key hash" \
-    "$(cast call "${AIRBENDER_VERIFIER}" 'verificationKeyHash()(bytes32)' --rpc-url "${RPC}")" \
-    "$(cast call "${BASE_VERIFIER}" 'verificationKeyHash()(bytes32)' --rpc-url "${RPC}")"
+    "$(cast call "${PLONK_SUB_V0}" 'verificationKeyHash()(bytes32)' --rpc-url "${RPC}")" \
+    "$(cast call "${AIRBENDER_DUAL_VERIFIER}" 'verificationKeyHash()(bytes32)' --rpc-url "${RPC}")"
 
 echo "==> deploying the multiprover verifier set"
 ZISK_PLONK_VERIFIER="$(deploy \
@@ -119,7 +125,7 @@ ZISK_VERIFIER="$(deploy \
     --constructor-args "${ZISK_PLONK_VERIFIER}")"
 MULTI_PROOF_VERIFIER="$(deploy \
     contracts/state-transition/verifiers/MultiProofVerifier.sol:MultiProofVerifier \
-    --constructor-args "${AIRBENDER_VERIFIER}" "${DEPLOYER}")"
+    --constructor-args "${AIRBENDER_DUAL_VERIFIER}" "${DEPLOYER}")"
 cast send "${MULTI_PROOF_VERIFIER}" 'setZiskRangeVerifier(address)' "${ZISK_VERIFIER}" \
     --rpc-url "${RPC}" --private-key "${DEPLOYER_KEY}" >/dev/null
 MULTI_PROOF_TESTNET_VERIFIER="$(deploy \
@@ -139,9 +145,12 @@ expect_equal "chain verifier" \
 expect_equal "MultiProofTestnetVerifier.INNER_VERIFIER" \
     "$(cast call "${MULTI_PROOF_TESTNET_VERIFIER}" 'INNER_VERIFIER()(address)' --rpc-url "${RPC}")" \
     "${MULTI_PROOF_VERIFIER}"
-expect_equal "MultiProofVerifier.airbenderVerifier" \
+expect_equal "MultiProofVerifier.airbenderVerifier (the dual)" \
     "$(cast call "${MULTI_PROOF_VERIFIER}" 'airbenderVerifier()(address)' --rpc-url "${RPC}")" \
-    "${AIRBENDER_VERIFIER}"
+    "${AIRBENDER_DUAL_VERIFIER}"
+expect_equal "introspection forwards to the dual's registry" \
+    "$(cast call "${MULTI_PROOF_TESTNET_VERIFIER}" 'plonkVerifiers(uint32)(address)' 0 --rpc-url "${RPC}")" \
+    "${PLONK_SUB_V0}"
 expect_equal "MultiProofVerifier.ziskRangeVerifier" \
     "$(cast call "${MULTI_PROOF_VERIFIER}" 'ziskRangeVerifier()(address)' --rpc-url "${RPC}")" \
     "${ZISK_VERIFIER}"
@@ -180,5 +189,6 @@ Baked ${FIXTURE_DIR}/l1-state.json.gz
   MultiProofVerifier                         ${MULTI_PROOF_VERIFIER}
   ZiskVerifier                               ${ZISK_VERIFIER}
   ZiskSnarkPlonkVerifier                     ${ZISK_PLONK_VERIFIER}
-  Airbender PLONK verifier (from v31.0)      ${AIRBENDER_VERIFIER}
+  ZKsyncOSDualVerifier (from v31.0, wrapped) ${AIRBENDER_DUAL_VERIFIER}
+  its PLONK sub-verifier (version 0)         ${PLONK_SUB_V0}
 EOF
