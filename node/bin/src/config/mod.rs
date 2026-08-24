@@ -6,7 +6,6 @@ use alloy::primitives::{Address, B256, BlockHash, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
 use reth_net_nat::net_if::resolve_net_if_ip;
 use reth_network_peers::TrustedPeer;
-use serde::{Deserialize, Serialize};
 use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
 use smart_config::{
@@ -392,13 +391,12 @@ pub struct GeneralConfig {
 
     /// Min number of blocks to replay on restart
     /// Depending on L1/persistence state, we may need to replay more blocks than this number
-    /// In some cases, we need to replay the whole blockchain (e.g. switching state backends) -
+    /// In some cases, we need to replay the whole blockchain -
     /// in such cases a warning is logged.
     #[config(default_t = 10)]
     pub min_blocks_to_replay: usize,
 
     /// Force a block number to start replaying from.
-    /// Only FullDiffs backend is supported:
     ///     On EN: can be any historical block number;
     ///     On Main Node: any historical block number up to the last l1 executed one.
     #[config(default_t = None)]
@@ -408,17 +406,8 @@ pub struct GeneralConfig {
     #[config(default_t = DEFAULT_ROCKS_DB_PATH.into())]
     pub rocks_db_path: PathBuf,
 
-    /// State backend to use. When changed, a replay of all blocks may be needed.
-    #[config(default_t = StateBackendConfig::FullDiffs)]
-    #[config(with = Serde![str])]
-    pub state_backend: StateBackendConfig,
-
-    /// Min number of blocks to retain in memory
-    /// it defines the blocks for which the node can handle API requests
-    /// older blocks will be compacted into RocksDb - and thus unavailable for `eth_call`.
-    ///
-    /// Currently, it affects both the storage logs (for Compacted state impl - see `state` crate for details)
-    /// and repositories (see `repositories` package in this crate)
+    /// Min number of blocks the repositories retain in memory before persisting to RocksDB
+    /// (see `repositories` package in this crate).
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
 
@@ -644,12 +633,6 @@ impl ConsensusConfig {
             storage_path,
         })
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum StateBackendConfig {
-    FullDiffs,
-    Compacted,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]

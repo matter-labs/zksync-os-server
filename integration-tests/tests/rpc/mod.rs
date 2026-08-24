@@ -1,4 +1,5 @@
 mod api;
+mod batches;
 mod call;
 mod debug;
 mod deployment_filter;

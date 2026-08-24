@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.23.0](https://github.com/matter-labs/zksync-os-server/compare/v0.22.0...v0.23.0) (2026-08-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove the Compacted state backend ([#1538](https://github.com/matter-labs/zksync-os-server/issues/1538))
+* **prover_api:** move the V8 lane to the zksync-os v0.4.0 release ([#1532](https://github.com/matter-labs/zksync-os-server/issues/1532))
+
+### Features
+
+* bump alloy to v2.4.1 and reth to v2.5.0 ([#1518](https://github.com/matter-labs/zksync-os-server/issues/1518)) ([8f17d02](https://github.com/matter-labs/zksync-os-server/commit/8f17d02a886f051dcff5da5e2a5ac29393748052))
+* **prover_api:** move the V8 lane to the zksync-os v0.4.0 release ([#1532](https://github.com/matter-labs/zksync-os-server/issues/1532)) ([cceb02c](https://github.com/matter-labs/zksync-os-server/commit/cceb02c8215036eb96fcf719c343594c2da41bd0))
+* **prover_api:** v32.0 / proving V8 - make real proofs settle on L1 ([#1510](https://github.com/matter-labs/zksync-os-server/issues/1510)) ([0bafb13](https://github.com/matter-labs/zksync-os-server/commit/0bafb13d89d7da2f7adb9bad6c12d5301351a80d))
+* **prover:** bring back v30.x (V6) proving support ([#1527](https://github.com/matter-labs/zksync-os-server/issues/1527)) ([308f6d5](https://github.com/matter-labs/zksync-os-server/commit/308f6d57626f0ccff1aa70f1a366b40ed0fc7101))
+* **prover:** drop pre-0.3 proving support ([#1525](https://github.com/matter-labs/zksync-os-server/issues/1525)) ([d89f354](https://github.com/matter-labs/zksync-os-server/commit/d89f354216da4f1f2887e6a496744c7deefa4d84))
+* remove the Compacted state backend ([#1538](https://github.com/matter-labs/zksync-os-server/issues/1538)) ([9656632](https://github.com/matter-labs/zksync-os-server/commit/9656632e6415c7626585abb3c45d515a6ae4e0a1))
+* **zks:** add stable getBatchByNumber and getLatestBatchNumber RPC ([#1484](https://github.com/matter-labs/zksync-os-server/issues/1484)) ([0852ab2](https://github.com/matter-labs/zksync-os-server/commit/0852ab276891b7f2dd00af2d2f92b0be74bcc43c))
+* zksync-os-revm v0.2.0 ([#1528](https://github.com/matter-labs/zksync-os-server/issues/1528)) ([3f6eff0](https://github.com/matter-labs/zksync-os-server/commit/3f6eff0343bd08b7930a6ddca0443738825f2275))
+
+
+### Bug Fixes
+
+* **batch_verification:** park instead of crashing when no signatures ([#1509](https://github.com/matter-labs/zksync-os-server/issues/1509)) ([f3117c8](https://github.com/matter-labs/zksync-os-server/commit/f3117c8560c7ccf8654afed18ab146b8231e1cb1))
+* **l1_sender:** capture confirmed nonce before waiting for commands ([#1543](https://github.com/matter-labs/zksync-os-server/issues/1543)) ([ef9ca49](https://github.com/matter-labs/zksync-os-server/commit/ef9ca4927ba4c2fc1a5bfc1a78d52ec28288f291))
+* **l1_watcher:** recognize pre-v31 supplier getter reverts ([#1523](https://github.com/matter-labs/zksync-os-server/issues/1523)) ([5a51cb4](https://github.com/matter-labs/zksync-os-server/commit/5a51cb45ae44f01406b6ead84d005e0ae4af5447))
+* **merkle_tree:** handle empty batch proofs ([#1535](https://github.com/matter-labs/zksync-os-server/issues/1535)) ([0b97156](https://github.com/matter-labs/zksync-os-server/commit/0b97156fe230853a42bb15ddc1a11e9c2116ff9b))
+* **network:** disconnect and re-request when the EN replay stream stalls ([#1513](https://github.com/matter-labs/zksync-os-server/issues/1513)) ([3319561](https://github.com/matter-labs/zksync-os-server/commit/331956187080e35cb3be3f237510d087d9f3e041))
+* **pipeline:** make graceful shutdown race-free ([#1521](https://github.com/matter-labs/zksync-os-server/issues/1521)) ([4578a8c](https://github.com/matter-labs/zksync-os-server/commit/4578a8c898b4dd6772c44eee5815cd0f8e4560d6))
+* **prover_api:** measure the payload transfer in pick_job_latency ([#1526](https://github.com/matter-labs/zksync-os-server/issues/1526)) ([e9efb14](https://github.com/matter-labs/zksync-os-server/commit/e9efb145facf008ccdbe050bfbffa842a915024d))
+* **prover_api:** reserve capacity before fake SNARK assignment ([#1522](https://github.com/matter-labs/zksync-os-server/issues/1522)) ([8f6f645](https://github.com/matter-labs/zksync-os-server/commit/8f6f6457fb77743ba4785e2b77a4175365cc72cd))
+* **prover_api:** widen prover histogram buckets so quantiles stop clipping ([#1505](https://github.com/matter-labs/zksync-os-server/issues/1505)) ([defc056](https://github.com/matter-labs/zksync-os-server/commit/defc056477786c58db89f38b0921a3fa443f20be))
+* **sequencer:** seal block instead of crashing on pubdata limit ([#1517](https://github.com/matter-labs/zksync-os-server/issues/1517)) ([ad3bf26](https://github.com/matter-labs/zksync-os-server/commit/ad3bf2616ca76f21c083142c70318e68edb97fe7))
+* **sequencer:** update default values for gas rate limiter ([#1514](https://github.com/matter-labs/zksync-os-server/issues/1514)) ([258423a](https://github.com/matter-labs/zksync-os-server/commit/258423a47508e9f28513afa89ee1aa696f73989f))
+
 ## [0.22.0](https://github.com/matter-labs/zksync-os-server/compare/v0.21.0...v0.22.0) (2026-08-07)
 
 

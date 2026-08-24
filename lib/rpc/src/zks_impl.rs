@@ -24,7 +24,7 @@ use zksync_os_rpc_api::{
     },
     zks::ZksApiServer,
 };
-use zksync_os_storage_api::{RepositoryError, StateError, read_multichain_root};
+use zksync_os_storage_api::{PersistedBatch, RepositoryError, StateError, read_multichain_root};
 use zksync_os_types::{L2_TO_L1_TREE_SIZE, ProtocolSemanticVersion};
 
 pub struct ZksNamespace<RpcStorage> {
@@ -213,6 +213,20 @@ impl<RpcStorage: ReadRpcStorage> ZksNamespace<RpcStorage> {
             native_price,
             execution_version,
         }))
+    }
+
+    fn get_batch_by_number_impl(&self, batch_number: u64) -> ZksResult<Option<PersistedBatch>> {
+        Ok(self.storage.batch().get_batch_by_number(batch_number)?)
+    }
+
+    fn get_batch_by_block_number_impl(
+        &self,
+        block_number: u64,
+    ) -> ZksResult<Option<PersistedBatch>> {
+        Ok(self
+            .storage
+            .batch()
+            .get_batch_by_block_number(block_number)?)
     }
 
     fn get_proof_impl(
@@ -410,6 +424,19 @@ impl<RpcStorage: ReadRpcStorage> ZksApiServer for ZksNamespace<RpcStorage> {
     fn get_block_metadata_by_number(&self, block_number: u64) -> RpcResult<Option<BlockMetadata>> {
         self.get_block_metadata_by_number_impl(block_number)
             .to_rpc_result()
+    }
+
+    fn get_batch_by_number(&self, batch_number: u64) -> RpcResult<Option<PersistedBatch>> {
+        self.get_batch_by_number_impl(batch_number).to_rpc_result()
+    }
+
+    fn get_batch_by_block_number(&self, block_number: u64) -> RpcResult<Option<PersistedBatch>> {
+        self.get_batch_by_block_number_impl(block_number)
+            .to_rpc_result()
+    }
+
+    fn batch_number(&self) -> RpcResult<u64> {
+        Ok(self.storage.batch().latest_batch())
     }
 
     fn get_proof(

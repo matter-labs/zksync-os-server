@@ -9,6 +9,7 @@ use alloy::rpc::types::Index;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 use zksync_os_genesis::GenesisInput;
+use zksync_os_storage_api::PersistedBatch;
 
 #[cfg_attr(not(feature = "server"), rpc(client, namespace = "zks"))]
 #[cfg_attr(feature = "server", rpc(server, client, namespace = "zks"))]
@@ -63,6 +64,16 @@ pub trait ZksApi {
 
     #[method(name = "getBlockMetadataByNumber")]
     fn get_block_metadata_by_number(&self, block_number: u64) -> RpcResult<Option<BlockMetadata>>;
+
+    #[method(name = "getBatchByNumber")]
+    fn get_batch_by_number(&self, batch_number: u64) -> RpcResult<Option<PersistedBatch>>;
+
+    /// Stable replacement for `unstable_getBatchByBlockNumber`, which stays supported for now.
+    #[method(name = "getBatchByBlockNumber")]
+    fn get_batch_by_block_number(&self, block_number: u64) -> RpcResult<Option<PersistedBatch>>;
+
+    #[method(name = "batchNumber")]
+    fn batch_number(&self) -> RpcResult<u64>;
 
     #[method(name = "getProof", blocking)]
     fn get_proof(

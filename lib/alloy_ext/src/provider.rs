@@ -46,21 +46,26 @@ pub trait ZksyncApi: Provider<Zksync> {
             .await
     }
 
+    async fn get_batch_number(&self) -> TransportResult<u64> {
+        self.client().request("zks_batchNumber", ()).await
+    }
+
     async fn get_batch_number_by_block_number(
         &self,
         block_number: BlockNumber,
-    ) -> TransportResult<u64> {
+    ) -> TransportResult<Option<u64>> {
         #[derive(Debug, Deserialize)]
         struct CommittedBatchView {
             batch_info: StoredBatchInfo,
         }
 
-        let CommittedBatchView { batch_info } = self
+        let batch: Option<CommittedBatchView> = self
             .client()
-            .request("unstable_getBatchByBlockNumber", (block_number,))
+            .request("zks_getBatchByBlockNumber", (block_number,))
             .await?;
+        let batch_info = batch.map(|batch| batch.batch_info);
         tracing::debug!(block_number, ?batch_info, "got batch info for block");
-        Ok(batch_info.batch_number)
+        Ok(batch_info.map(|batch_info| batch_info.batch_number))
     }
 
     async fn wait_batch_number_by_block_number(
@@ -68,18 +73,14 @@ pub trait ZksyncApi: Provider<Zksync> {
         block_number: BlockNumber,
     ) -> TransportResult<u64> {
         loop {
-            match self.get_batch_number_by_block_number(block_number).await {
-                Ok(number) => return Ok(number),
-                Err(err)
-                    if err.as_error_resp().is_some_and(|err| {
-                        err.code == -32603 && err.message.contains("has not been finalized")
-                    }) =>
-                {
-                    tracing::info!(block_number, %err, "batch corresponding to block isn't finalized; waiting");
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-                Err(err) => return Err(err),
+            if let Some(number) = self.get_batch_number_by_block_number(block_number).await? {
+                return Ok(number);
             }
+            tracing::info!(
+                block_number,
+                "batch corresponding to block isn't finalized; waiting"
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }
 }

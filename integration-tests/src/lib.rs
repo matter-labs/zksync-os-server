@@ -36,7 +36,6 @@ pub use zksync_os_server::config::{DeploymentFilterConfig, PolicyServiceConfig};
 use zksync_os_server::default_protocol_version::PROTOCOL_VERSION;
 #[cfg(feature = "prover-tests")]
 use zksync_os_server::default_protocol_version::{PROTOCOL_VERSION_V30_2, PROTOCOL_VERSION_V31_0};
-use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
@@ -809,7 +808,7 @@ impl Tester {
             role = %node_role,
         );
         tracing::info!(parent: &node_span, "Launching test node");
-        let bound_ports = zksync_os_server::run::<FullDiffsState>(&runtime, config.clone())
+        let bound_ports = zksync_os_server::run(&runtime, config.clone())
             .instrument(node_span)
             .await;
         let task_manager_handle = runtime

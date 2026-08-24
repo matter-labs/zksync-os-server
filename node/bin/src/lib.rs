@@ -20,7 +20,6 @@ mod prover_block;
 mod prover_input_generator;
 mod provider;
 mod second_proof_runtime;
-mod state_initializer;
 pub mod tree_manager;
 pub mod util;
 mod zisk_bytes;
@@ -50,7 +49,6 @@ use crate::prover_api::range_proving_pipeline_step::RangeProvingPipelineStep;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::provider::{ProviderKind, build_node_provider};
-use crate::state_initializer::StateInitializer;
 use crate::tree_manager::TreeManager;
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{Address, BlockNumber};
@@ -111,6 +109,7 @@ use zksync_os_revm_consistency_checker::node::RevmConsistencyChecker;
 use zksync_os_rpc::RpcStorage;
 use zksync_os_sequencer::execution::block_context_provider::BlockContextProvider;
 use zksync_os_sequencer::execution::{BlockApplier, BlockCanonizer, BlockExecutor, FeeProvider};
+use zksync_os_state_full_diffs::FullDiffsState;
 use zksync_os_status_server::{StatusServerState, run_status_server};
 use zksync_os_storage::db::{BlockReplayStorage, ExecutedBatchStorage};
 use zksync_os_storage::in_memory::Finality;
@@ -132,10 +131,7 @@ const REPOSITORY_DB_NAME: &str = "repository";
 const BATCH_DB_NAME: &str = "batch";
 pub const INTERNAL_CONFIG_FILE_NAME: &str = "internal_config.json";
 
-pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone>(
-    runtime: &Runtime,
-    config: Config,
-) -> ServerPorts {
+pub async fn run(runtime: &Runtime, config: Config) -> ServerPorts {
     let BoundListeners {
         rpc: rpc_listener,
         status: prebound_status_listener,
@@ -346,7 +342,9 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .await
     .expect("failed to init CommittedBatchProvider");
 
-    let state = State::new(&config.general_config, &genesis).await;
+    let state = FullDiffsState::new(config.general_config.rocks_db_path.clone(), &genesis)
+        .await
+        .expect("Failed to initialize full diffs state");
 
     tracing::info!("Initializing mempools");
     let zk_provider_factory = ZkProviderFactory::new(state.clone(), repositories.clone(), chain_id);
@@ -855,12 +853,6 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         "repository persist loop",
         repositories_clone.run_persist_loop(),
     );
-    let state_clone = state.clone();
-    runtime.spawn_critical_task(
-        "state compact loop",
-        state_clone.compact_periodically_optional(),
-    );
-
     let replay_archive =
         init_replay_archive(config.replay_archive_config.clone().into(), runtime).await;
     if let (Some((replay_archive_sender, _)), Some(inserted_genesis_replay_record)) =
@@ -1791,9 +1783,7 @@ fn determine_starting_block(
         "No batches committed to L1 yet - start with block/batch 1"
     );
 
-    let desired_starting_block = if let Some(forced_starting_block_number) =
-        config.general_config.force_starting_block_number
-    {
+    if let Some(forced_starting_block_number) = config.general_config.force_starting_block_number {
         forced_starting_block_number
     } else {
         // Start with the oldest block from:
@@ -1809,8 +1799,7 @@ fn determine_starting_block(
             // In the current tree implementation this will always be ahead of `last_l1_executed_block`,
             // but this may change if we make tree persistence async (like elsewhere)
             node_startup_state.tree_last_block,
-            // For compacted state, we need to replay all blocks that were not persisted yet.
-            // For FullDiffs state (default) - this is always ahead of `last_l1_executed_block`.
+            // The last block available in state - this is always ahead of `last_l1_executed_block`.
             *state.block_range_available().end(),
             // If block rebuild (aka block reversion) is configured, we should ensure we replay
             // all the blocks we are rebuilding
@@ -1829,24 +1818,7 @@ fn determine_starting_block(
         }
 
         last_matching_block.min(want_to_start_from)
-    };
-
-    // Ignore genesis here as we never actually run it in sequencer
-    if desired_starting_block > 0
-        && desired_starting_block < state.block_range_available().start() + 1
-    {
-        // This may only happen with Compacted State. This means that the block we want to rerun was already compacted.
-        // This can be fixed by manually removing the storage persistence - which will force the node to start from block 1.
-
-        // Alternatively, we can clear storage programmatically here and start from 1 - this is not currently implemented
-        panic!(
-            "Cannot start: desired_starting_block < state.block_range_available().start() + 1: {} < {}",
-            desired_starting_block,
-            state.block_range_available().start() + 1
-        );
     }
-
-    desired_starting_block
 }
 
 /// Finds the last block number where the local node's block hash matches the main node's block hash.
