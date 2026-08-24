@@ -137,10 +137,10 @@ In order, and every failure below leaves the job retryable:
 1. **Wire shape** — proof and public-values lengths, and for ZiSK the
    `vadcop_final` stream parses.
 2. **Key drift** — the program VK and inner vadcop VK the prover reports must
-   match the entries pinned for *that batch's protocol version*
-   (`zisk_vks`). In Required a version with no pinned entry is rejected
-   outright: startup cannot know the versions a future upgrade brings, so the
-   check has to be per batch.
+   match the versioned ZiSK release manifest compiled for *that batch's
+   protocol version*. A version with no compiled manifest is rejected in both
+   Shadow and Required; the check remains per batch so an upgrade that arrives
+   after startup also fails closed.
 3. **Cryptographic verification** (`zisk_proof_verification_enabled`) — the
    native verifier runs on the blocking pool, bounded to four at a time, with
    verifier panics contained. Note the pinned `zisk-verifier` checks the STARK
@@ -177,44 +177,44 @@ prover can still land the proof without a restart.
 ## Protocol upgrades
 
 An upgrade raises the batches' semantic protocol version, and both systems have
-to keep proving across the boundary. They do it by different mechanisms, and the
-difference is the second system's sharpest edge.
+to keep proving across the boundary. Both proving registries are compiled into
+the server binary: `ProvingVersion` for Airbender and `ZiskProvingVersion` for
+the second lane.
 
 ### What the server already handles
 
 **Range formation cuts at the boundary.** Airbender needs one *proving* version
 per range, and two protocol versions can share one — 0.31.0 and 0.31.1 are both
-V7. The second system is keyed more finely: its guest build, and so its keys,
-are pinned per protocol version, and the aggregator refuses a range whose inputs
-mix key sets. A range straddling an upgrade would therefore be Airbender-valid
-and deterministically unaggregatable, so `SnarkJobManager` cuts the range at the
-change whenever the second lane runs. The cut is off when the lane is off,
+V7. ZiSK likewise maps both patches to its V1 manifest, but ranges still cut on
+the semantic protocol change so future releases cannot silently aggregate
+across incompatible identities. The cut is off when the second lane is off,
 leaving the Airbender-only shape unchanged.
 
-**Keys are pinned per version.** `zisk_vks` holds one entry per protocol
-version; each batch is validated against the entry for its own version, and the
-aggregation stage checks every buffered input's inner vadcop VK against the same
-map. An upgrade window in which two versions coexist keeps both tripwires armed.
+**A complete release is pinned per proving version.** The vendored manifest
+binds the inner guest ELF and program VK, aggregator ELF and program VK,
+recursive `rootCVadcopFinal`, host prover binary, release archives, toolchain,
+Git commit, and the combined verification-key hash enforced by L1. CI downloads
+artifacts from that manifest and verifies every SHA-256 digest before GPU tests.
 
-**A version with no entry is refused in Required.** Startup cannot know the
-versions a later upgrade brings, so the check is per batch rather than per
-process, and the commit gate holds the batch until the operator configures it.
+**Unknown versions never lease or submit.** Both ZiSK pick endpoints filter on
+the prover's declared combined hash before assigning work. Even an older daemon
+that omits the capability query can only lease a protocol version known to the
+compiled registry. Submission repeats the per-batch check so a live protocol
+upgrade cannot bypass startup validation.
 
 ### Where the two lanes differ
 
 | Aspect | Airbender | ZiSK |
 |---|---|---|
-| Key source | compiled in (`ProvingVersion::try_from` → `vk_hash`) | configuration (`zisk_vks`) |
-| Adding a version | binary release | config change |
-| `pick` filters by prover-declared version | yes (`supported_vk_hashes`) | no — the parameter is accepted and ignored |
+| Key source | compiled in (`ProvingVersion`) | compiled versioned release manifest (`ZiskProvingVersion`) |
+| Adding a version | binary release | manifest plus binary release |
+| `pick` filters by prover-declared version | yes (`supported_vk_hashes`) | yes, using the combined ZiSK L1 identity |
 | Per-batch lease timeout | `fri_job_timeout` | `snark_job_timeout` |
 
-Nothing checks the two key sets against each other, so a version can be pinned
-in `zisk_vks` that the binary cannot derive a proving version for.
-
-The missing `pick` filter matters most in an upgrade window: a ZiSK fleet on one
-guest build can be handed a batch of the other version, reject it on VK drift,
-and be handed the same batch again once the lease times out.
+At main-node startup, an enabled second lane checks the current L1 protocol
+against the compiled ZiSK registry. Required mode additionally resolves
+`getVerifier()` through the production or testnet multiproof wrapper and
+compares `ZiskVerifier.verificationKeyHash()` with the manifest's combined hash.
 
 ### Settling across an upgrade (unresolved)
 
@@ -233,15 +233,6 @@ contract pinned to another. The same fixture wires a fixed Airbender verifier
 address into `MultiProofVerifier`, so neither half of a type-5 payload is
 version-routed.
 
-Two consequences follow, and neither is solved today:
-
-- `zisk_vks` is a map, but only the version whose keys match the deployed
-  contract's pins can actually settle. Multi-version support is real in Shadow
-  and nominal in Required, and nothing validates the configured keys against L1.
-- `zisk_aggregation.program_vk` is a single value rather than a per-version map,
-  so it could not express a second aggregator build even if the contract took
-  one.
-
 **Before Required is enabled on a chain that will ever upgrade**, the rotation
 procedure has to be agreed with era-contracts: specifically, what happens to
 batches of the outgoing version that are committed but not yet proved when a new
@@ -251,18 +242,9 @@ transaction lands, unless the contracts gain a way to address the outgoing
 verifier — either way an operational requirement the Airbender-only path never
 had.
 
-### Diagnosing an upgrade that went wrong
-
-A missing `zisk_vks` entry is the most likely upgrade failure and is currently
-hard to see in metrics:
-
-- the per-batch refusal counts on `zisk_lane_vk_drift` — the same metric as "this
-  prover runs a different guest build";
-- the aggregation-side refusal (`MissingVersionKeys`) counts on nothing at all
-  and only logs.
-
-Read the log line, which names the protocol version, rather than trusting the
-metric to tell the two causes apart.
+Until type-5 verification is version-routed on L1, a new ZiSK manifest must not
+be activated merely by adding its protocol mapping. The outgoing lane must be
+drained before the deployed verifier and server binary rotate together.
 
 ## Configuration
 
@@ -275,16 +257,15 @@ prover_input_generator:
   halt_on_zisk_commitment_mismatch: false
   multi_proof_verifier: false     # true = Required (see below)
 prover_api:
-  zisk_vks:                       # one entry per protocol version
-    - protocol_version: "0.31.0"
-      program_vk: "0x..."         # ZiSK STF guest build
-      vadcop_vk: "0x..."          # rootCVadcopFinal
   zisk_proof_verification_enabled: true
   zisk_aggregation:
-    program_vk: "0x..."           # aggregator guest build
     job_timeout: 600s
     verification_timeout: 60s      # native server-side verification
 ```
+
+The proving identities are not operator configuration. They live in the
+versioned manifests under `lib/zisk_prover_lane/manifests/` and changing them
+requires a reviewed server binary.
 
 ### Required mode is validated fail-closed
 
@@ -296,7 +277,8 @@ commit gate on its first batch rather than settling half-proved:
 - `enable_input_generation: true` — a fake prover input builds no ZiSK witness;
 - `prover_api.enabled: true` — the API is the only route a ZiSK proof arrives by;
 - `zisk_proof_verification_enabled: true`;
-- a non-empty `zisk_vks` and a set `zisk_aggregation.program_vk`;
+- the current L1 protocol maps to a compiled ZiSK manifest and the deployed
+  `ZiskVerifier.verificationKeyHash()` matches it;
 - both fake pools off — a fake Airbender proof cannot compose into a MultiProof;
 - `1 ≤ commit_gate_admission_window ≤ 50`.
 

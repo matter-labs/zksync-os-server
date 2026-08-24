@@ -1,4 +1,6 @@
+use alloy::primitives::B256;
 use serde::{Deserialize, Serialize};
+use zisk_prover_lane::ZiskProvingVersion;
 use zksync_os_types::ProvingVersion;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -17,6 +19,15 @@ pub(super) struct ProverQuery {
 }
 
 impl ProverQuery {
+    fn declared_vk_hashes(&self) -> Vec<&str> {
+        self.supported_vk_hashes
+            .iter()
+            .flat_map(|hashes| hashes.split(','))
+            .map(str::trim)
+            .filter(|hash| !hash.is_empty())
+            .collect()
+    }
+
     /// Proving versions this prover declared support for.
     ///
     /// `None` means no declaration and the caller must not filter jobs. This is a
@@ -33,13 +44,7 @@ impl ProverQuery {
     /// is recognized, this returns `Some(vec![])` so that such a prover gets *no*
     /// jobs rather than any jobs.
     pub fn supported_proving_versions(&self) -> Option<Vec<ProvingVersion>> {
-        let hashes: Vec<&str> = self
-            .supported_vk_hashes
-            .iter()
-            .flat_map(|hashes| hashes.split(','))
-            .map(str::trim)
-            .filter(|hash| !hash.is_empty())
-            .collect();
+        let hashes = self.declared_vk_hashes();
 
         if hashes.is_empty() {
             return None;
@@ -61,6 +66,35 @@ impl ProverQuery {
             .collect();
 
         Some(versions)
+    }
+
+    /// Complete ZiSK proving identities this prover declared. The same query
+    /// field is endpoint-specific: Airbender hashes select `ProvingVersion`,
+    /// while ZiSK hashes bind the inner guest, aggregator and recursive setup.
+    pub fn supported_zisk_vk_hashes(&self) -> Option<Vec<B256>> {
+        let hashes = self.declared_vk_hashes();
+        if hashes.is_empty() {
+            return None;
+        }
+
+        let hashes = hashes
+            .into_iter()
+            .filter_map(|hash| {
+                hash.parse::<B256>()
+                    .ok()
+                    .and_then(|hash| ZiskProvingVersion::try_from_vk_hash(hash).ok())
+                    .map(ZiskProvingVersion::verification_key_hash)
+                    .or_else(|| {
+                        tracing::warn!(
+                            prover_id = self.id,
+                            vk_hash = hash,
+                            "prover declared a ZiSK vk_hash unknown to this server; ignoring it"
+                        );
+                        None
+                    })
+            })
+            .collect();
+        Some(hashes)
     }
 }
 
@@ -100,6 +134,7 @@ pub(super) struct FailedProofResponse {
 #[cfg(test)]
 mod tests {
     use super::ProverQuery;
+    use zisk_prover_lane::ZiskProvingVersion;
     use zksync_os_types::ProvingVersion;
 
     const UNKNOWN_VK_HASH: &str =
@@ -110,6 +145,16 @@ mod tests {
             id: "test_prover".to_string(),
             supported_vk_hashes: supported_vk_hashes.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn zisk_capabilities_use_the_combined_zisk_vk_hash() {
+        let zisk = ZiskProvingVersion::V1.verification_key_hash();
+        let declared = query(Some(&format!("{},{}", ProvingVersion::V7.vk_hash(), zisk)))
+            .supported_zisk_vk_hashes()
+            .unwrap();
+
+        assert_eq!(declared, vec![zisk]);
     }
 
     #[test]

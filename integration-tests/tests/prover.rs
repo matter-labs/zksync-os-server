@@ -5,7 +5,7 @@ use zksync_os_integration_tests::{CURRENT_TO_L1, TestEnvironment, V30_TO_L1, tes
 #[cfg(feature = "gpu-prover-tests")]
 mod real_provers {
     use alloy::network::TransactionBuilder;
-    use alloy::primitives::{Address, B256, U256};
+    use alloy::primitives::{Address, U256};
     use alloy::providers::Provider;
     use alloy::rpc::types::TransactionRequest;
     use base64::Engine;
@@ -16,9 +16,7 @@ mod real_provers {
         run_zisk_gpu_prover, spawn_airbender_prover, spawn_airbender_prover_with_mode,
         wait_for_zisk_aggregation_ranges, zisk_gpu_artifacts_available,
     };
-    use zksync_os_server::config::ZiskVkConfigEntry;
     use zksync_os_server::default_protocol_version::PROTOCOL_VERSION_V31_0;
-    use zksync_os_types::ProtocolSemanticVersion;
 
     /// How long to allow the Airbender lane to prove every FRI of a range and
     /// pick the range's SNARK job with real (GPU) proving in the loop. On the
@@ -105,39 +103,6 @@ mod real_provers {
             );
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
-    }
-
-    /// Build the version-keyed ZiSK VK config from the recorded
-    /// reproducible-build keys, arming the per-batch drift tripwire for each
-    /// protocol version the test proves. An entry pins both keys, so both
-    /// `ZISK_PROGRAM_VK` and `ZISK_VADCOP_VK` must be set to arm it; otherwise
-    /// the list stays empty and the reported VKs are only logged — which the
-    /// required mode refuses: `config.validate()` never runs in these tests,
-    /// so nothing else notices a lane running with its VK tripwire disarmed.
-    fn zisk_vks_from_env(
-        versions: &[ProtocolSemanticVersion],
-    ) -> anyhow::Result<Vec<ZiskVkConfigEntry>> {
-        let (Ok(program), Ok(vadcop)) = (
-            std::env::var("ZISK_PROGRAM_VK"),
-            std::env::var("ZISK_VADCOP_VK"),
-        ) else {
-            anyhow::ensure!(
-                !zksync_os_integration_tests::zisk_gpu_tests_required(),
-                "ZISK_GPU_TESTS_REQUIRED is set but ZISK_PROGRAM_VK or ZISK_VADCOP_VK is not: \
-                 the run would prove the lane with its VK drift tripwire disarmed"
-            );
-            return Ok(Vec::new());
-        };
-        let program_vk: B256 = program.parse()?;
-        let vadcop_vk: B256 = vadcop.parse()?;
-        Ok(versions
-            .iter()
-            .map(|v| ZiskVkConfigEntry {
-                protocol_version: v.clone(),
-                program_vk,
-                vadcop_vk,
-            })
-            .collect())
     }
 
     /// Drive one transfer per batch and return each sealed batch's ZiSK input,
@@ -236,9 +201,6 @@ mod real_provers {
         // The production shape: an Airbender range settles only as a
         // MultiProof, so the ZiSK range proof gates it.
         config.prover_input_generator_config.multi_proof_verifier = true;
-        // Every batch proves under the chain's single protocol version.
-        config.prover_api_config.zisk_vks =
-            zisk_vks_from_env(&[ProtocolSemanticVersion::new(0, 31, 0)])?;
         let tester = env.launch_without_provers(config).await?;
         let prover_api_url = tester
             .prover_api_url()
@@ -314,9 +276,6 @@ mod real_provers {
         config.prover_api_config.fake_snark_provers.enabled = false;
         // Real-prover path: turn the ZiSK lane on (`max_fris_per_snark = 1`).
         zksync_os_integration_tests::test_config::enable_second_proof_system(&mut config);
-        // Every batch proves under the chain's single protocol version.
-        config.prover_api_config.zisk_vks =
-            zisk_vks_from_env(&[ProtocolSemanticVersion::new(0, 31, 0)])?;
         let tester = env.launch_without_provers(config).await?;
         let prover_api_url = tester
             .prover_api_url()
@@ -345,8 +304,8 @@ mod real_provers {
     /// valid driver).
     ///
     /// Env: ZISK_AGG_ELF (aggregator guest ELF path) + the usual
-    /// gpu-prover-tests set; ZISK_PROGRAM_VK + ZISK_VADCOP_VK (per-batch lane)
-    /// and ZISK_AGG_PROGRAM_VK (aggregator) arm the per-lane VK tripwires.
+    /// gpu-prover-tests set; the compiled ZiSK release manifest arms both VK
+    /// tripwires and the L1 identity used by the capability query.
     #[test_log::test(tokio::test)]
     async fn two_lane_multibatch_e2e() -> anyhow::Result<()> {
         const BATCHES: u64 = 4;
@@ -370,18 +329,6 @@ mod real_provers {
         // The production shape: an Airbender range settles only as a
         // MultiProof, so the ZiSK range proof gates it.
         config.prover_input_generator_config.multi_proof_verifier = true;
-        // Every batch proves under the chain's single protocol version.
-        config.prover_api_config.zisk_vks =
-            zisk_vks_from_env(&[ProtocolSemanticVersion::new(0, 31, 0)])?;
-        if let Ok(vk) = std::env::var("ZISK_AGG_PROGRAM_VK") {
-            config.prover_api_config.zisk_aggregation.program_vk = Some(vk.parse()?);
-        } else {
-            anyhow::ensure!(
-                !zksync_os_integration_tests::zisk_gpu_tests_required(),
-                "ZISK_GPU_TESTS_REQUIRED is set but ZISK_AGG_PROGRAM_VK is not: the aggregator \
-                 lane would run with its VK tripwire disarmed"
-            );
-        }
         let tester = env.launch_without_provers(config).await?;
         let prover_api_url = tester
             .prover_api_url()

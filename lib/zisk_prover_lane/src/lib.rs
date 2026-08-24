@@ -19,6 +19,7 @@ mod combine;
 mod commitment;
 mod job_manager;
 mod metrics;
+mod proving_version;
 mod range;
 mod shadow;
 mod vadcop_stream;
@@ -42,6 +43,9 @@ pub use job_manager::{
 };
 pub use job_manager::{ZiskLaneConfig, ZiskLaneMode, ZiskLaneWiring};
 pub use metrics::ZISK_LANE_METRICS;
+pub use proving_version::{
+    ZiskProvingVersion, ZiskProvingVersionError, ZiskReleaseManifest, ZiskVersionKeys,
+};
 pub use range::{BatchRange, InvalidBatchRange};
 pub use shadow::shadow_execute_zisk_batch;
 

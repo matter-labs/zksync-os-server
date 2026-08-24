@@ -30,6 +30,7 @@ use tokio::sync::Mutex;
 use crate::commitment::ZISK_PUBLIC_VALUES_BYTES;
 use crate::job_manager::{MultiProofMode, ZiskVkSet};
 use crate::metrics::ZISK_LANE_METRICS;
+use crate::proving_version::ZiskProvingVersion;
 use crate::range::BatchRange;
 use zksync_os_batch_types::batcher_model::ZISK_SNARK_PROOF_BYTES;
 use zksync_os_types::ProtocolSemanticVersion;
@@ -135,6 +136,7 @@ pub enum AggregationInputOutcome {
 pub struct ZiskAggregationJob {
     pub from_batch: u64,
     pub to_batch: u64,
+    pub vk_hash: String,
     pub streams: Vec<(u64, Vec<u8>)>,
 }
 
@@ -195,8 +197,8 @@ pub enum ZiskAggregationSubmitError {
     #[error("aggregated range proof verification failed: {0}")]
     ProofVerificationFailed(String),
     #[error(
-        "no ZiSK verification keys configured for protocol version {version} in this range; \
-         the second proof system gates settlement, so an unpinned guest build is not accepted"
+        "this server binary has no compiled ZiSK release manifest for protocol version {version} \
+         in this range"
     )]
     MissingVersionKeys { version: ProtocolSemanticVersion },
 }
@@ -458,8 +460,8 @@ pub struct ZiskAggregationLaneConfig {
     /// If server-side verification does not finish within this, its range is
     /// re-offered independently of the external prover lease timeout.
     pub verification_timeout: Duration,
-    /// Expected AGGREGATOR guest program VK.
-    pub expected_program_vk: Option<B256>,
+    /// Expected AGGREGATOR guest program VK per protocol version.
+    pub expected_program_vks: HashMap<ProtocolSemanticVersion, B256>,
     /// Expected INNER per-batch VK sets per protocol version.
     pub expected_inner_vks: HashMap<ProtocolSemanticVersion, ZiskVkSet>,
     pub proof_verification_enabled: bool,
@@ -503,11 +505,10 @@ pub struct ZiskAggregationJobManager {
     range_size: u64,
     assignment_timeout: Duration,
     verification_timeout: Duration,
-    /// Expected AGGREGATOR guest program VK (`public_values[0..32]` of an
-    /// aggregated proof). When set, a submission with a different VK is
-    /// rejected and counted — the prover runs a different aggregator
-    /// build. Unset: the reported VK is only logged.
-    expected_program_vk: Option<B256>,
+    /// Expected AGGREGATOR guest program VK (`public_values[0..32]`) per
+    /// protocol version. A submission with a different VK is rejected and
+    /// counted, so two compiled releases can coexist during an upgrade.
+    expected_program_vks: HashMap<ProtocolSemanticVersion, B256>,
     /// Expected INNER per-batch VK sets per protocol version — the same map the
     /// per-batch lane checks against. Every buffered input of a range is
     /// checked against the vadcop-final VK (`rootCVadcopFinal`) of its own
@@ -539,7 +540,7 @@ impl ZiskAggregationJobManager {
             range_size,
             assignment_timeout,
             verification_timeout,
-            expected_program_vk,
+            expected_program_vks,
             expected_inner_vks,
             proof_verification_enabled,
             mode,
@@ -558,7 +559,7 @@ impl ZiskAggregationJobManager {
             range_size: range_size as u64,
             assignment_timeout,
             verification_timeout,
-            expected_program_vk,
+            expected_program_vks,
             expected_inner_vks,
             proof_verification_enabled,
             verification_slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_VERIFICATIONS)),
@@ -770,6 +771,18 @@ impl ZiskAggregationJobManager {
     /// Pick the next aggregation job: first re-offer timed-out
     /// assignments, then the oldest formed range.
     pub async fn pick_next_job(&self, prover_id: &str) -> Option<ZiskAggregationJob> {
+        self.pick_next_job_with_capabilities(prover_id, None).await
+    }
+
+    /// Capability-aware aggregation picker. A range is eligible only when
+    /// every buffered batch maps to one ZiSK proving version advertised by
+    /// the daemon. Range formation normally cuts on protocol changes; the
+    /// all-equal check here keeps that invariant fail-closed at the lease.
+    pub async fn pick_next_job_with_capabilities(
+        &self,
+        prover_id: &str,
+        supported_vk_hashes: Option<&[B256]>,
+    ) -> Option<ZiskAggregationJob> {
         let now = Instant::now();
         let mut state = self.state.lock().await;
         state.recover_expired_verifications(now, self.verification_timeout);
@@ -801,9 +814,30 @@ impl ZiskAggregationJobManager {
         state.form_ready_ranges();
 
         // Lowest pending range first: that is the order they settle in.
-        let range = state
-            .ranges_in(|job| matches!(job, RangeJob::Pending { .. }))
-            .next()?;
+        let range_vk_hash = |range: BatchRange| {
+            let mut range_version = None;
+            for batch in range.batches() {
+                let input = state.inputs.get(&batch)?;
+                let version = ZiskProvingVersion::try_from(input.protocol_version.clone()).ok()?;
+                if range_version.is_some_and(|current| current != version) {
+                    return None;
+                }
+                range_version = Some(version);
+            }
+            range_version.map(ZiskProvingVersion::verification_key_hash)
+        };
+        let range = state.ranges.iter().find_map(|(&range, job)| {
+            if !matches!(job, RangeJob::Pending { .. }) {
+                return None;
+            }
+            let hash = range_vk_hash(range);
+            match supported_vk_hashes {
+                Some(supported) if !hash.is_some_and(|hash| supported.contains(&hash)) => None,
+                _ if hash.is_some() => Some(range),
+                _ => None,
+            }
+        })?;
+        let vk_hash = range_vk_hash(range).map_or_else(String::new, |hash| hash.to_string());
         let Some(RangeJob::Pending { failures }) = state.ranges.remove(&range) else {
             unreachable!("filtered to pending ranges");
         };
@@ -839,6 +873,7 @@ impl ZiskAggregationJobManager {
         Some(ZiskAggregationJob {
             from_batch: from,
             to_batch: to,
+            vk_hash,
             streams,
         })
     }
@@ -869,16 +904,14 @@ impl ZiskAggregationJobManager {
         &self,
         range: BatchRange,
         prover_id: &str,
+        protocol_version: &ProtocolSemanticVersion,
         public_values: &[u8],
     ) -> Result<B256, ZiskAggregationSubmitError> {
         let reported_vk = B256::from_slice(&public_values[..32]);
-        let Some(expected) = self.expected_program_vk else {
-            tracing::info!(
-                %range,
-                %reported_vk,
-                "aggregator program VK reported (no expected VK configured)"
-            );
-            return Ok(reported_vk);
+        let Some(expected) = self.expected_program_vks.get(protocol_version).copied() else {
+            return Err(ZiskAggregationSubmitError::MissingVersionKeys {
+                version: protocol_version.clone(),
+            });
         };
         if reported_vk != expected {
             ZISK_LANE_METRICS.aggregated_vk_drift.inc();
@@ -943,11 +976,8 @@ impl ZiskAggregationJobManager {
         prover_id: &str,
     ) -> Result<(), ZiskAggregationSubmitError> {
         let (from_batch, to_batch) = (range.from(), range.to());
-        // 1. Wire shape and the aggregator guest build, both checked before
-        //    the lease is touched so a rejection leaves the range assigned to
-        //    time out for another prover.
+        // 1. Wire shape is checked before any state lookup.
         Self::check_wire_shape(&proof, &public_values)?;
-        let reported_vk = self.check_aggregator_vk(range, prover_id, &public_values)?;
 
         let mut state = self.state.lock().await;
         // Borrow the assignment while validating. It remains intact while
@@ -980,6 +1010,13 @@ impl ZiskAggregationJobManager {
                 });
             }
         };
+        let protocol_version = inputs
+            .first()
+            .expect("an assigned range is never empty")
+            .protocol_version
+            .clone();
+        let reported_vk =
+            self.check_aggregator_vk(range, prover_id, &protocol_version, &public_values)?;
         // 3. Everything derivable from the buffered inputs alone: the binding
         //    digest, the inner vadcop tripwire, and whether every input's
         //    protocol version is pinned. Pure, so the `inputs` borrow ends
@@ -990,8 +1027,8 @@ impl ZiskAggregationJobManager {
                 tracing::error!(
                     %range,
                     %version,
-                    "no ZiSK VKs configured for a protocol version in this range — refusing to \
-                     accept its aggregated proof. Configure `prover_api.zisk_vks` for the version."
+                    "this server binary has no compiled ZiSK manifest for a protocol version in \
+                     the range — refusing its aggregated proof"
                 );
                 state.requeue_or_abandon(range, failures, self.multi_proof_mode);
                 return Err(ZiskAggregationSubmitError::MissingVersionKeys { version });

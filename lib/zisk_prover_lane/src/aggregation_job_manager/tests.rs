@@ -28,13 +28,13 @@ fn manager_with_verification_timeout(
     // The submitted aggregated-range proofs are well-shaped SNARK
     // artifacts, which pass the wire-form verification, so proof
     // verification stays on here.
-    // Required refuses to aggregate over a protocol version whose keys are
-    // not pinned, so the fixture pins the one its inputs carry.
+    // Aggregation refuses a protocol version whose keys are not compiled, so
+    // the fixture pins the one its inputs carry.
     ZiskAggregationJobManager::new(ZiskAggregationLaneConfig {
         range_size: K,
         assignment_timeout: Duration::from_secs(60),
         verification_timeout,
-        expected_program_vk: None,
+        expected_program_vks: HashMap::from([(TEST_PROTOCOL_VERSION, B256::ZERO)]),
         expected_inner_vks: HashMap::from([(
             TEST_PROTOCOL_VERSION,
             ZiskVkSet {
@@ -74,6 +74,29 @@ fn input_of_version(
 
 async fn feed(manager: &ZiskAggregationJobManager, batch: u64) {
     manager.on_proof_completed(batch, input(batch as u8)).await;
+}
+
+#[tokio::test]
+async fn pick_filters_aggregation_ranges_before_leasing() {
+    let manager = manager(MultiProofMode::Required);
+    manager.note_snark_range(BatchRange::of(1, 4)).await;
+    for batch in 1..=4 {
+        feed(&manager, batch).await;
+    }
+
+    assert!(
+        manager
+            .pick_next_job_with_capabilities("wrong-agg", Some(&[B256::repeat_byte(0xEE)]))
+            .await
+            .is_none()
+    );
+
+    let supported = crate::ZiskProvingVersion::V1.verification_key_hash();
+    let job = manager
+        .pick_next_job_with_capabilities("right-agg", Some(&[supported]))
+        .await
+        .expect("the incompatible request must leave the range pending");
+    assert_eq!(job.vk_hash, supported.to_string());
 }
 
 /// Aggregated public values for a range: the given digest at [32..64].
@@ -142,15 +165,14 @@ fn single_batch_digest_seeds_with_first_public_input() {
 
 /// The upgrade-window seam of the inner vadcop tripwire: with an entry per
 /// protocol version, a range of EITHER version whose buffered inputs carry
-/// a foreign vadcop VK is rejected before the digest comparison, and a
-/// range whose version has no entry is not checked (log-only, so a correct
-/// digest is accepted). Inputs carry vadcop VK 0xB2 (see `input`), which
-/// matches neither configured entry.
+/// a foreign vadcop VK is rejected before the digest comparison, and a range
+/// whose version has no compiled entry is never leased. Inputs carry vadcop VK
+/// 0xB2 (see `input`), which matches neither configured entry.
 #[tokio::test]
 async fn inner_vadcop_vk_drift_rejects_range_of_either_version() {
-    const NEXT_PROTOCOL_VERSION: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 32, 0);
+    const NEXT_PROTOCOL_VERSION: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 1);
     const UNMAPPED_PROTOCOL_VERSION: ProtocolSemanticVersion =
-        ProtocolSemanticVersion::new(0, 33, 0);
+        ProtocolSemanticVersion::new(0, 32, 0);
     // Both versions are configured throughout; a rejected range is
     // requeued, so each case runs on its own manager to keep the picked
     // range unambiguous.
@@ -163,7 +185,10 @@ async fn inner_vadcop_vk_drift_rejects_range_of_either_version() {
             range_size: K,
             assignment_timeout: Duration::from_secs(60),
             verification_timeout: Duration::from_secs(60),
-            expected_program_vk: None,
+            expected_program_vks: HashMap::from([
+                (TEST_PROTOCOL_VERSION, B256::ZERO),
+                (NEXT_PROTOCOL_VERSION, B256::ZERO),
+            ]),
             expected_inner_vks: HashMap::from([
                 (TEST_PROTOCOL_VERSION, vk_set(0xCC)),
                 (NEXT_PROTOCOL_VERSION, vk_set(0xDD)),
@@ -197,9 +222,8 @@ async fn inner_vadcop_vk_drift_rejects_range_of_either_version() {
         );
     }
 
-    // A range whose protocol version has no entry cannot be checked
-    // against any pinned guest build. In Required its aggregated proof
-    // still goes on L1, so the range is refused instead of waved through.
+    // A range whose protocol version has no compiled manifest cannot be
+    // checked against an L1 identity, so it remains pending without a lease.
     let manager = manager_with_both_versions();
     manager.note_snark_range(BatchRange::of(1, 4)).await;
     for batch in 1..=4u64 {
@@ -210,21 +234,7 @@ async fn inner_vadcop_vk_drift_rejects_range_of_either_version() {
             )
             .await;
     }
-    manager.pick_next_job("agg-1").await.expect("range 1..4");
-    let digest = expected_digest(&manager, 1, 4).await;
-    let err = manager
-        .submit_proof(
-            BatchRange::of(1, 4),
-            vec![0; ZISK_SNARK_PROOF_BYTES],
-            aggregated_pv(digest),
-            "agg-1",
-        )
-        .await
-        .expect_err("an unpinned protocol version is refused in Required");
-    assert!(
-        matches!(err, ZiskAggregationSubmitError::MissingVersionKeys { .. }),
-        "{err}"
-    );
+    assert!(manager.pick_next_job("agg-1").await.is_none());
 }
 
 #[test]
@@ -408,7 +418,7 @@ async fn timeout_reassigns_range() {
         range_size: K,
         assignment_timeout: Duration::ZERO,
         verification_timeout: Duration::from_secs(60),
-        expected_program_vk: None,
+        expected_program_vks: HashMap::new(),
         expected_inner_vks: HashMap::new(),
         proof_verification_enabled: true,
         mode: aggregation_mode(MultiProofMode::Required),
@@ -440,7 +450,7 @@ async fn submit_validation() {
         range_size: K,
         assignment_timeout: Duration::from_secs(60),
         verification_timeout: Duration::from_secs(60),
-        expected_program_vk: Some(expected_vk),
+        expected_program_vks: HashMap::from([(TEST_PROTOCOL_VERSION, expected_vk)]),
         expected_inner_vks: HashMap::from([(
             TEST_PROTOCOL_VERSION,
             ZiskVkSet {

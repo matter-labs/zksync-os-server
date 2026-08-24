@@ -2,12 +2,12 @@
 //! manager's logic and its coverage had both outgrown one screenful.
 
 use super::*;
+use crate::ZiskProvingVersion;
 use crate::commitment::ZISK_PUBLIC_VALUES_BYTES;
 use crate::test_util::create_test_batch_envelope;
 use crate::vadcop_stream::synthetic_stream;
 use zksync_os_batch_types::batcher_model::FriProof;
 use zksync_os_batch_types::batcher_model::ZISK_SNARK_PROOF_BYTES;
-use zksync_os_types::ProvingVersion;
 
 const TEST_PROTOCOL_VERSION: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
 
@@ -147,7 +147,7 @@ fn test_sink(
                 range_size,
                 assignment_timeout: Duration::from_secs(60),
                 verification_timeout: Duration::from_secs(60),
-                expected_program_vk: None,
+                expected_program_vks: HashMap::new(),
                 expected_inner_vks: HashMap::new(),
                 proof_verification_enabled: false,
                 mode: aggregation_mode(multi_proof_mode),
@@ -208,7 +208,7 @@ fn manager_with_sink_armed_of_range(
     ZiskJobManager,
     std::sync::Arc<crate::aggregation_job_manager::ZiskAggregationJobManager>,
 ) {
-    // Required refuses a submission whose protocol version has no pinned
+    // Every mode refuses a submission whose protocol version has no compiled
     // keys, so the fixture always pins one. `None` pins exactly what the
     // synthetic streams report, which is the "keys agree" case; `Some`
     // pins a different program VK to exercise the drift tripwire.
@@ -228,7 +228,7 @@ fn manager_with_sink_armed_of_range(
                 range_size,
                 assignment_timeout: Duration::from_secs(60),
                 verification_timeout: Duration::from_secs(60),
-                expected_program_vk: None,
+                expected_program_vks: HashMap::new(),
                 expected_inner_vks: HashMap::new(),
                 proof_verification_enabled: false,
                 mode: aggregation_mode(multi_proof_mode),
@@ -388,9 +388,9 @@ async fn pick_timeout_reassigns_job() {
     );
 }
 
-/// Wire form of the picked job's VK hash. The daemon's `--supported-vk`
-/// filter strips exactly one `0x` prefix before it compares, so a doubled
-/// prefix makes every batch fail the filter and be skipped.
+/// Wire form of the picked job's ZiSK VK hash. It binds the inner guest, the
+/// aggregator and the recursive setup, rather than leaking Airbender's
+/// proving identity through the second lane.
 #[tokio::test]
 async fn pick_reports_a_single_0x_prefixed_vk_hash() {
     let manager = manager(None);
@@ -402,12 +402,36 @@ async fn pick_reports_a_single_0x_prefixed_vk_hash() {
         .expect("job available");
     assert_eq!(
         picked.vk_hash,
-        ProvingVersion::V7.vk_hash(),
-        "the pick reports the batch's VK hash verbatim"
+        ZiskProvingVersion::V1.verification_key_hash().to_string(),
+        "the pick reports the complete ZiSK proving identity"
     );
     assert!(picked.vk_hash.starts_with("0x"), "{}", picked.vk_hash);
     assert!(!picked.vk_hash.starts_with("0x0x"), "{}", picked.vk_hash);
     assert_eq!(picked.vk_hash.len(), 66, "{}", picked.vk_hash);
+}
+
+/// Capability filtering must happen while the job is still pending. A
+/// client-side check after `pick` leaves an incompatible lease parked until
+/// timeout and repeatedly starves the compatible fleet during an upgrade.
+#[tokio::test]
+async fn pick_filters_by_zisk_vk_hash_before_leasing() {
+    let manager = manager(None);
+    manager.add_job(7, job_data(7, vec![0xAB; 32])).await;
+
+    assert!(
+        manager
+            .pick_next_job_with_capabilities("wrong-prover", Some(&[B256::repeat_byte(0xEE)]))
+            .await
+            .is_none()
+    );
+
+    let supported = ZiskProvingVersion::V1.verification_key_hash();
+    let picked = manager
+        .pick_next_job_with_capabilities("right-prover", Some(&[supported]))
+        .await
+        .expect("an incompatible pick must not lease the pending job");
+    assert_eq!(picked.batch_number, 7);
+    assert_eq!(picked.vk_hash, supported.to_string());
 }
 
 /// The fake-SNARK pass cleanup: discarding a range removes pending,
@@ -837,21 +861,17 @@ async fn vadcop_vk_drift_rejects_submit_and_keeps_job_assigned() {
     assert_eq!(manager.batch_status(7).await, ZiskBatchStatus::Unknown);
 }
 
-/// The upgrade-window seam: two protocol versions with DIFFERENT
-/// configured program VKs each drift-check against their OWN VK (a batch
-/// proven under the other version's key is rejected), and a batch whose
-/// protocol version has no configured entry is accepted with the VK only
-/// logged. So two guest builds can be validated at once and adding a
-/// version is a config-only change.
+/// The upgrade-window seam: two protocol versions with DIFFERENT compiled
+/// program VKs each drift-check against their OWN VK (a batch proven under the
+/// other version's key is rejected), while a batch whose protocol version has
+/// no registry entry fails closed.
 #[tokio::test]
 async fn vk_selected_per_protocol_version() {
-    // 0.30.1, not 0.30.0: the expected-public-input derivation maps protocol
-    // versions to proving versions, and only the released 0.30.x patches map.
-    const V30: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 1);
-    const V31: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
+    const V31_0: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
+    const V31_1: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 1);
     const V32: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 32, 0);
-    let limbs_v30 = [0x30u64, 0x30, 0x30, 0x30];
-    let limbs_v31 = [0x31u64, 0x31, 0x31, 0x31];
+    let limbs_v31_0 = [0x30u64, 0x30, 0x30, 0x30];
+    let limbs_v31_1 = [0x31u64, 0x31, 0x31, 0x31];
     // The vadcop expectation matches the fixture limbs, so only the
     // program VK is exercised. V32 has no entry: in Required its batches
     // are refused rather than waved through.
@@ -860,16 +880,16 @@ async fn vk_selected_per_protocol_version() {
             assignment_timeout: Duration::from_secs(60),
             expected_vks: HashMap::from([
                 (
-                    V30,
+                    V31_0,
                     ZiskVkSet {
-                        program_vk: vk_bytes(limbs_v30),
+                        program_vk: vk_bytes(limbs_v31_0),
                         vadcop_vk: vk_bytes([5, 6, 7, 8]),
                     },
                 ),
                 (
-                    V31,
+                    V31_1,
                     ZiskVkSet {
-                        program_vk: vk_bytes(limbs_v31),
+                        program_vk: vk_bytes(limbs_v31_1),
                         vadcop_vk: vk_bytes([5, 6, 7, 8]),
                     },
                 ),
@@ -884,27 +904,27 @@ async fn vk_selected_per_protocol_version() {
         },
     );
 
-    // A v30 batch proven under the v30 key is accepted.
-    let d30 = job_data_versioned(1, vec![0xAB; 8], V30);
-    let s30 = synthetic_stream(limbs_v30, [5, 6, 7, 8], expected_commitment(&d30).0);
-    manager.add_job(1, d30).await;
+    // A v31.0 batch proven under the v31.0 key is accepted.
+    let d31_0 = job_data_versioned(1, vec![0xAB; 8], V31_0);
+    let s31_0 = synthetic_stream(limbs_v31_0, [5, 6, 7, 8], expected_commitment(&d31_0).0);
+    manager.add_job(1, d31_0).await;
     manager.pick_next_job("p").await.expect("job 1");
     manager
-        .submit_proof(1, s30, vec![], "p")
+        .submit_proof(1, s31_0, vec![], "p")
         .await
-        .expect("v30 key accepted for a v30 batch");
+        .expect("v31.0 key accepted for a v31.0 batch");
     assert_eq!(manager.batch_status(1).await, ZiskBatchStatus::Unknown);
 
-    // A v31 batch is checked against ITS key (vk_v31): the v30 key drifts,
-    // and the v31 key from the same assignment is then accepted.
-    let d31 = job_data_versioned(2, vec![0xCD; 8], V31);
-    let c31 = expected_commitment(&d31).0;
-    manager.add_job(2, d31).await;
+    // A v31.1 batch is checked against ITS key: the v31.0 key drifts, and the
+    // v31.1 key from the same assignment is then accepted.
+    let d31_1 = job_data_versioned(2, vec![0xCD; 8], V31_1);
+    let c31_1 = expected_commitment(&d31_1).0;
+    manager.add_job(2, d31_1).await;
     manager.pick_next_job("p").await.expect("job 2");
     let err = manager
         .submit_proof(
             2,
-            synthetic_stream(limbs_v30, [5, 6, 7, 8], c31),
+            synthetic_stream(limbs_v31_0, [5, 6, 7, 8], c31_1),
             vec![],
             "p",
         )
@@ -914,40 +934,50 @@ async fn vk_selected_per_protocol_version() {
     manager
         .submit_proof(
             2,
-            synthetic_stream(limbs_v31, [5, 6, 7, 8], c31),
+            synthetic_stream(limbs_v31_1, [5, 6, 7, 8], c31_1),
             vec![],
             "p",
         )
         .await
-        .expect("v31 key accepted for a v31 batch");
+        .expect("v31.1 key accepted for a v31.1 batch");
     assert_eq!(manager.batch_status(2).await, ZiskBatchStatus::Unknown);
 
-    // A v32 batch has no configured entry. Its proof would go on L1
-    // unchecked against any pinned guest build, so Required refuses it —
-    // an upgrade brings versions startup validation could not know about,
-    // which is why the check has to be here and not only at startup. The
-    // job survives the rejection and the batch stays gated.
+    // A v32 batch has no compiled entry and cannot be leased, including to a
+    // legacy daemon that did not advertise capabilities.
     let d32 = job_data_versioned(3, vec![0xEE; 8], V32);
-    let s32 = synthetic_stream(
-        [0xAA, 0xAA, 0xAA, 0xAA],
-        [5, 6, 7, 8],
-        expected_commitment(&d32).0,
-    );
     manager.add_job(3, d32).await;
-    manager.pick_next_job("p").await.expect("job 3");
-    let err = manager
-        .submit_proof(3, s32, vec![], "p")
-        .await
-        .expect_err("an unpinned protocol version is refused in Required");
-    assert!(
-        matches!(err, ZiskSubmitError::MissingVersionKeys { .. }),
-        "{err}"
-    );
+    assert!(manager.pick_next_job("p").await.is_none());
     assert_eq!(
         manager.batch_status(3).await,
         ZiskBatchStatus::InFlight,
-        "the rejection must not consume the job"
+        "an unsupported job remains pending without being leased"
     );
+}
+
+#[tokio::test]
+async fn shadow_mode_rejects_protocols_without_a_compiled_manifest() {
+    let manager = ZiskJobManager::new(
+        ZiskLaneConfig {
+            assignment_timeout: Duration::from_secs(60),
+            expected_vks: HashMap::new(),
+            chain_id: TEST_CHAIN_ID,
+            proof_verification_enabled: false,
+        },
+        ZiskLaneWiring {
+            aggregation_sink: test_sink(1, MultiProofMode::Shadow),
+            mode: lane_mode(MultiProofMode::Shadow),
+            halt_on_mismatch: None,
+        },
+    );
+    let data = job_data(1, vec![0xAB; 8]);
+    let proof = synthetic_stream([1, 2, 3, 4], [5, 6, 7, 8], expected_commitment(&data).0);
+    manager.add_job(1, data).await;
+    manager.pick_next_job("p").await.unwrap();
+
+    assert!(matches!(
+        manager.submit_proof(1, proof, vec![], "p").await,
+        Err(ZiskSubmitError::MissingVersionKeys { .. })
+    ));
 }
 
 /// A full active queue parks new inputs instead of dropping them, then

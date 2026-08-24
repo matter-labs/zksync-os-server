@@ -17,6 +17,7 @@
 
 use crate::aggregation_job_manager::{AggregationInput, AggregationInputOutcome};
 use crate::metrics::{ZISK_LANE_METRICS, ZiskBacklogEvictionReason};
+use crate::proving_version::ZiskProvingVersion;
 use crate::vadcop_stream::{ZISK_VADCOP_STREAM_BYTES, parse_vadcop_final_stream};
 use alloy::primitives::B256;
 use std::collections::{BTreeMap, HashMap};
@@ -183,8 +184,7 @@ pub enum ZiskSubmitError {
     #[error("ZiSK proof verification failed: {0}")]
     ProofVerificationFailed(String),
     #[error(
-        "no ZiSK verification keys configured for protocol version {version}; \
-         the second proof system gates settlement, so an unpinned guest build is not accepted"
+        "this server binary has no compiled ZiSK release manifest for protocol version {version}"
     )]
     MissingVersionKeys { version: ProtocolSemanticVersion },
     #[error("cannot derive the expected batch public input: {0}")]
@@ -674,8 +674,41 @@ impl ZiskJobManager {
             .map(|job| job.data().zisk_data.clone())
     }
 
+    /// Debug view of one held job with the same ZiSK identity exposed by
+    /// `pick`, so the peek endpoint cannot accidentally report Airbender's VK.
+    pub async fn peek_job(&self, batch_number: u64) -> Option<ZiskJob> {
+        let state = self.state.lock().await;
+        let data = state.jobs.get(&batch_number)?.data();
+        Some(ZiskJob {
+            batch_number,
+            vk_hash: Self::vk_hash(data),
+            zisk_data: data.zisk_data.clone(),
+        })
+    }
+
+    fn vk_hash(data: &ZiskJobData) -> String {
+        let protocol_version = data.batch_metadata.batch_info.protocol_version.clone();
+        ZiskProvingVersion::try_from(protocol_version.clone())
+            .map(|version| version.verification_key_hash().to_string())
+            .unwrap_or_else(|_| {
+                tracing::warn!(%protocol_version, "ZiSK proving version missing");
+                String::new()
+            })
+    }
+
     /// Pick the next available ZiSK job for a prover.
     pub async fn pick_next_job(&self, prover_id: &str) -> Option<ZiskJob> {
+        self.pick_next_job_with_capabilities(prover_id, None).await
+    }
+
+    /// Pick the next pending job whose complete ZiSK proving identity is in
+    /// the prover's declaration. `None` preserves compatibility with older
+    /// daemons, which did not send capabilities.
+    pub async fn pick_next_job_with_capabilities(
+        &self,
+        prover_id: &str,
+        supported_vk_hashes: Option<&[B256]>,
+    ) -> Option<ZiskJob> {
         let now = std::time::Instant::now();
         let mut state = self.state.lock().await;
 
@@ -712,7 +745,20 @@ impl ZiskJobManager {
 
         // Offer the lowest pending batch: batch order is proving order.
         let batch_number = state
-            .batches_in(|job| matches!(job, BatchJob::Pending { .. }))
+            .batches_in(|job| {
+                let BatchJob::Pending { data, .. } = job else {
+                    return false;
+                };
+                let Ok(version) = ZiskProvingVersion::try_from(
+                    data.batch_metadata.batch_info.protocol_version.clone(),
+                ) else {
+                    return false;
+                };
+                let Some(supported_vk_hashes) = supported_vk_hashes else {
+                    return true;
+                };
+                supported_vk_hashes.contains(&version.verification_key_hash())
+            })
             .next()?;
         let Some(BatchJob::Pending {
             data: job_data,
@@ -722,16 +768,7 @@ impl ZiskJobManager {
             unreachable!("filtered to pending jobs");
         };
 
-        // The hash is already `0x`-prefixed. A second prefix would break the
-        // daemon's `--supported-vk` filter, which strips exactly one.
-        let vk_hash = job_data
-            .batch_metadata
-            .verification_key_hash()
-            .map(str::to_string)
-            .unwrap_or_else(|_| {
-                tracing::warn!(batch = batch_number, "VK hash missing");
-                String::new()
-            });
+        let vk_hash = Self::vk_hash(&job_data);
 
         let zisk_data = job_data.zisk_data.clone();
         let generation = state.issue_generation();
@@ -1053,13 +1090,11 @@ impl ZiskJobManager {
                     expected,
                 });
             }
-        } else if self.multi_proof_mode == MultiProofMode::Required {
-            // Fail closed: this proof is going on L1. A version with no pinned
-            // key set would accept a proof from any guest build, and startup
-            // cannot cover versions that arrive later through an upgrade — so
-            // the check belongs here, per batch. The job stays assigned and
-            // times out back to pending, and the commit gate holds the batch
-            // until the operator configures the version's keys.
+        } else {
+            // Protocol upgrades can arrive after startup, so the compiled
+            // release registry is checked again for every submission. Shadow
+            // mode must also fail closed: accepting an unknown guest there
+            // would make its comparison signal meaningless.
             let version = job_protocol_version.clone();
             ZISK_LANE_METRICS.vk_drift.inc();
             tracing::error!(
@@ -1067,14 +1102,10 @@ impl ZiskJobManager {
                 prover_id,
                 %reported_vk,
                 %version,
-                "no ZiSK VKs configured for this batch's protocol version — rejecting the \
-                 submission. Settlement waits for this proof, so it cannot be accepted \
-                 against an unpinned guest build; configure `prover_api.zisk_vks` for the \
-                 version."
+                "this server binary has no compiled ZiSK manifest for the batch's protocol \
+                 version — rejecting the submission"
             );
             return Err(ZiskSubmitError::MissingVersionKeys { version });
-        } else {
-            tracing::info!(batch = batch_number, %reported_vk, "ZiSK program VK reported (no expected VK configured for this protocol version)");
         }
 
         // Inner vadcop-final VK (rootCVadcopFinal) tripwire — same fail-closed

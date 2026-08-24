@@ -1,0 +1,55 @@
+{
+  "artifacts": {
+    "guest_archive": {
+      "asset": "zksync-os-zisk-guest-elfs-0.0.3.tar.gz",
+      "sha256": "465ab5e227b60fb23cb812882a16e87f8c0ae577158366c3178b1166a296a1e4",
+      "size": 1602465
+    },
+    "prover_archive": {
+      "asset": "zksync-os-zisk-prover-0.0.3-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "b9aa44366f466dbec032c736714b8a0dceb273e900c0878dd17cdfcaddb1fe04",
+      "size": 3603195
+    },
+    "prover_service": {
+      "asset": "zksync-os-zisk-prover-service",
+      "sha256": "36e0af704fbb294658be338135b830fcf1e6b676affb04801d56573e35a58efc",
+      "size": 7608320
+    }
+  },
+  "programs": {
+    "aggregator": {
+      "elf": {
+        "asset": "zksync-os-zisk-guest-aggregator",
+        "sha256": "f96f9285ca87083f322569d72fd379b67b1ee2ea3286c078c26e313acd27e7ae",
+        "size": 1720504
+      },
+      "program_vk": "0x4c3d7317a62f651d813ba6afbbce59e45eaa7c009ab2a9b51d2f0fb3e7987254"
+    },
+    "inner": {
+      "elf": {
+        "asset": "zksync-os-zisk-guest",
+        "sha256": "80b841c76445dd3c411cc1f11447cc85285521541378821442aef1f7262da932",
+        "size": 2617944
+      },
+      "program_vk": "0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec"
+    }
+  },
+  "release": {
+    "commit": "e603f74dcc70133d633717c8e34506a9ef23058b",
+    "repository": "matter-labs/zksync-os-zisk",
+    "tag": "0.0.3"
+  },
+  "schema_version": 2,
+  "toolchain": {
+    "zisk_version": "0.18.0"
+  },
+  "vadcop_final": {
+    "root_c": "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
+  },
+  "zisk_verification_key_hash": "0x718bdb59530514f9a62f16b2ba912de17188615d82aa31ec681be4b9cd332888",
+  "zisk_verification_key_hash_preimage": [
+    "programs.inner.program_vk",
+    "programs.aggregator.program_vk",
+    "vadcop_final.root_c"
+  ]
+}

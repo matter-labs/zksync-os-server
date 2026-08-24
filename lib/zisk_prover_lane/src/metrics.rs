@@ -37,13 +37,11 @@ pub struct ZiskLaneMetrics {
     pub blocked_submits: vise::Counter,
     /// A ZiSK prover submitted a proof whose embedded program VK differs
     /// from the server's expected one — the prover is running a different
-    /// guest build. Fires only when the batch's protocol version has a
-    /// `zisk_vks` entry.
+    /// guest build, or the batch has no compiled ZiSK release manifest.
     pub vk_drift: vise::Counter,
     /// A ZiSK prover submitted a proof whose embedded inner vadcop-final VK
     /// (`rootCVadcopFinal`) differs from the server's expected one — the
-    /// prover is running a different recursive setup. Fires only when the
-    /// batch's protocol version has a `zisk_vks` entry.
+    /// prover is running a different recursive setup.
     pub vadcop_vk_drift: vise::Counter,
     /// A per-batch ZiSK proof failed the server's off-chain verification after
     /// the commitment binding passed. In the per-batch PLONK lane this is the
@@ -87,12 +85,11 @@ pub struct ZiskLaneMetrics {
     pub shadow_execution_time: Histogram<Duration>,
     /// An aggregation prover submitted a range proof whose embedded
     /// aggregator program VK differs from the server's expected one.
-    /// Fires only when `zisk_aggregation.program_vk` is configured.
+    /// The expected value comes from the compiled ZiSK release manifest.
     pub aggregated_vk_drift: vise::Counter,
     /// An aggregation range's buffered per-batch inputs carry an inner
     /// vadcop-final VK (`rootCVadcopFinal`) differing from the server's
-    /// expected one. Fires only when the input's protocol version has a
-    /// `zisk_vks` entry.
+    /// expected one.
     pub aggregated_vadcop_vk_drift: vise::Counter,
     /// An aggregated range proof's committed binding digest disagreed with
     /// the digest recomputed from the buffered per-batch proofs.

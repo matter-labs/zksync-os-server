@@ -65,6 +65,8 @@ pub struct ZiskAggregationBatchProof {
 pub struct ZiskAggregationJobPayload {
     pub from_batch_number: u64,
     pub to_batch_number: u64,
+    /// Complete ZiSK proving identity for this range.
+    pub vk_hash: String,
     pub proofs: Vec<ZiskAggregationBatchProof>,
 }
 
@@ -152,22 +154,16 @@ async fn zisk_lane_status(State(state): State<AppState>) -> Response {
 /// Peek ZiSK batch data for a given batch number.
 /// Returns the bincode-serialized BatchInput for the ZiSK prover.
 ///
-/// The VK hash comes from the Airbender FRI job map — the batch's presence
-/// there is the 204-vs-404 signal — and the bytes from the ZiSK job manager.
 async fn peek_zisk_data(Path(batch_number): Path<u64>, State(state): State<AppState>) -> Response {
-    let Some(vk_hash) = state.fri_job_manager.peek_fri_vk_hash(batch_number).await else {
-        // Not in the FRI job map (yet, or already consumed).
-        return StatusCode::NO_CONTENT.into_response();
-    };
-    let zisk_bytes = match &state.zisk_job_manager {
-        Some(zisk_job_manager) => zisk_job_manager.peek_input(batch_number).await,
+    let job = match &state.zisk_job_manager {
+        Some(zisk_job_manager) => zisk_job_manager.peek_job(batch_number).await,
         None => None,
     };
-    match zisk_bytes {
-        Some(zisk_bytes) => Json(ZiskBatchDataPayload {
+    match job {
+        Some(job) => Json(ZiskBatchDataPayload {
             batch_number,
-            vk_hash,
-            zisk_data: general_purpose::STANDARD.encode(&zisk_bytes),
+            vk_hash: job.vk_hash,
+            zisk_data: general_purpose::STANDARD.encode(&job.zisk_data),
         })
         .into_response(),
         None => (
@@ -187,7 +183,11 @@ async fn pick_zisk_job(
     let Some(ref zisk_job_manager) = state.zisk_job_manager else {
         return (StatusCode::SERVICE_UNAVAILABLE, "ZiSK proving not enabled").into_response();
     };
-    match zisk_job_manager.pick_next_job(&query.id).await {
+    let supported_vk_hashes = query.supported_zisk_vk_hashes();
+    match zisk_job_manager
+        .pick_next_job_with_capabilities(&query.id, supported_vk_hashes.as_deref())
+        .await
+    {
         Some(job) => Json(ZiskBatchDataPayload {
             batch_number: job.batch_number,
             vk_hash: job.vk_hash,
@@ -238,10 +238,15 @@ async fn pick_zisk_aggregation_job(
         )
             .into_response();
     };
-    match zisk_aggregation_job_manager.pick_next_job(&query.id).await {
+    let supported_vk_hashes = query.supported_zisk_vk_hashes();
+    match zisk_aggregation_job_manager
+        .pick_next_job_with_capabilities(&query.id, supported_vk_hashes.as_deref())
+        .await
+    {
         Some(job) => Json(ZiskAggregationJobPayload {
             from_batch_number: job.from_batch,
             to_batch_number: job.to_batch,
+            vk_hash: job.vk_hash,
             proofs: job
                 .streams
                 .into_iter()

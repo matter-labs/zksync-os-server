@@ -6,7 +6,6 @@ use alloy::primitives::{Address, B256, BlockHash, Bytes, U128};
 use num::{BigInt, BigUint, rational::Ratio};
 use reth_net_nat::net_if::resolve_net_if_ip;
 use reth_network_peers::TrustedPeer;
-use serde::{Deserialize, Serialize};
 use smart_config::metadata::{SizeUnit, TimeUnit};
 use smart_config::value::SecretString;
 use smart_config::{
@@ -35,7 +34,7 @@ use zksync_os_observability::opentelemetry::OpenTelemetryLevel;
 use zksync_os_operator_signer::SignerConfig;
 use zksync_os_raft::RaftConsensusConfig;
 use zksync_os_tx_validators::deployment_filter;
-use zksync_os_types::{NodeRole, ProtocolSemanticVersion, PubdataMode};
+use zksync_os_types::{NodeRole, PubdataMode};
 
 mod build_external_config;
 mod cli;
@@ -1417,18 +1416,6 @@ fn multi_proof_requires_zisk_verification(root: &Config, value: &bool) -> bool {
     !root.prover_input_generator_config.multi_proof_verifier || *value
 }
 
-/// Required mode must pin the per-batch STF-guest keys. Without an entry, a
-/// proof from any guest build is accepted and carried to L1.
-fn multi_proof_requires_zisk_vks(root: &Config, value: &[ZiskVkConfigEntry]) -> bool {
-    !root.prover_input_generator_config.multi_proof_verifier || !value.is_empty()
-}
-
-/// Required mode must pin the aggregator guest VK for the same reason it pins
-/// the per-batch keys: the aggregated proof is what L1 verifies.
-fn multi_proof_requires_aggregator_program_vk(root: &Config, value: &Option<B256>) -> bool {
-    !root.prover_input_generator_config.multi_proof_verifier || value.is_some()
-}
-
 /// Required mode settles a MultiProof: a fake Airbender proof cannot compose
 /// with a ZiSK proof, so a fake route either strands the batch's ZiSK state or
 /// submits a payload the MultiProofVerifier rejects. Both fake pools have to be
@@ -1636,31 +1623,6 @@ pub struct ProverInputGeneratorConfig {
     pub zisk_shadow_execution: bool,
 }
 
-/// One protocol version's expected ZiSK verification keys. See
-/// [`ProverApiConfig::zisk_vks`]. Parsed from config as, e.g.:
-///
-/// ```yaml
-/// zisk_vks:
-///   - protocol_version: "0.31.0"
-///     program_vk: "0x..."
-///     vadcop_vk: "0x..."
-/// ```
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ZiskVkConfigEntry {
-    /// The protocol version whose STF guest build these keys pin, e.g.
-    /// `"0.31.0"`.
-    pub protocol_version: ProtocolSemanticVersion,
-    /// Expected program VK: the first 32 bytes of a ZiSK proof's public
-    /// values, fixed by the guest build (record it from the reproducible
-    /// build output).
-    pub program_vk: B256,
-    /// Expected inner vadcop-final VK / `rootCVadcopFinal`: the STF proof's
-    /// recursive verification key, at public-values bytes [288..320] and in
-    /// the tail of the vadcop_final stream. On L1 the same VK is pinned as
-    /// `rootCVadcopFinal`.
-    pub vadcop_vk: B256,
-}
-
 /// Only used on the Main Node.
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
@@ -1745,38 +1707,6 @@ pub struct ProverApiConfig {
     ))]
     pub commit_gate_admission_window: u64,
 
-    /// Expected ZiSK verification keys, keyed by protocol version — one
-    /// [`ZiskVkConfigEntry`] per version's STF guest build. A batch's per-batch
-    /// ZiSK proof is validated against the entry for its own protocol version,
-    /// so an upgrade window where two versions coexist validates each batch
-    /// against its own guest build — mirroring how the Airbender lane picks its
-    /// VK per batch. A future guest-changing upgrade is then a config-only
-    /// change: add the new version's entry. When a batch's protocol version has
-    /// an entry, a submission with a different program or vadcop VK is rejected
-    /// and counted (`zisk_lane_vk_drift`/`zisk_lane_vadcop_vk_drift`) — the
-    /// prover runs a different guest build. No entry for a version, or an empty
-    /// list: the reported VKs are only logged on each submit. The aggregation
-    /// stage reads the same entries: a range's buffered per-batch inputs are
-    /// checked against the vadcop VK of their own version
-    /// (`zisk_lane_aggregated_vadcop_vk_drift`). These entries hold the
-    /// per-batch STF-guest VKs; the aggregator guest VK
-    /// (`zisk_aggregation.program_vk`) stays a single value.
-    #[config(default, with = Serde![*])]
-    #[config_validate(custom(
-        |_root: &Config, value: &Vec<ZiskVkConfigEntry>| {
-            let mut seen = HashSet::new();
-            value.iter().all(|entry| seen.insert(&entry.protocol_version))
-        },
-        "must not contain duplicate protocol_version entries"
-    ))]
-    #[config_validate(custom(
-        multi_proof_requires_zisk_vks,
-        "must pin at least one protocol version's ZiSK VKs when \
-         `prover_input_generator.multi_proof_verifier=true`, or a proof from any \
-         guest build would be accepted and carried to L1."
-    ))]
-    pub zisk_vks: Vec<ZiskVkConfigEntry>,
-
     /// Whether the server runs the off-chain proof verification on each ZiSK
     /// submission. Default: true (the production setting). When true the server
     /// verifies the per-batch PLONK wire artifact and its key binding, the
@@ -1831,19 +1761,6 @@ pub struct ZiskAggregationConfig {
     /// and may take minutes, while native verification should finish promptly.
     #[config(default_t = Duration::from_secs(60))]
     pub verification_timeout: Duration,
-
-    /// Expected AGGREGATOR guest program VK: the first 32 bytes of an
-    /// aggregated proof's public values, fixed by the aggregator-guest
-    /// build (`zksync-os-zisk/guest-aggregator/GUEST_PROGRAM_VK`). When
-    /// set, a submission with a different VK is rejected and counted
-    /// (`zisk_lane_aggregated_vk_drift`). Unset: the reported VK is only
-    /// logged on each submit.
-    #[config_validate(custom(
-        multi_proof_requires_aggregator_program_vk,
-        "must be set when `prover_input_generator.multi_proof_verifier=true`: the \
-         aggregated proof is what L1 verifies, so its guest build has to be pinned."
-    ))]
-    pub program_vk: Option<B256>,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]

@@ -1371,6 +1371,12 @@ pub async fn run_zisk_gpu_prover(sequencer_url: &str, iterations: usize) {
         .arg("--aggregation")
         .arg("--aggregator-elf")
         .arg(&agg_elf_path)
+        .arg("--supported-vk")
+        .arg(
+            zisk_prover_lane::ZiskProvingVersion::V1
+                .verification_key_hash()
+                .to_string(),
+        )
         .arg("--iterations")
         .arg(iterations.to_string())
         .spawn()

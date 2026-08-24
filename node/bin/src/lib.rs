@@ -1223,18 +1223,21 @@ async fn run_main_node_pipeline(
         };
     }
 
+    crate::second_proof_runtime::validate_l1_compatibility(
+        config,
+        &node_state_on_startup.l1_state.diamond_proxy_l1,
+    )
+    .await
+    .expect("ZiSK proving release is incompatible with the current L1 state");
+
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
         .await
         .expect("Failed to initialize ProofStorage");
 
-    // Version-keyed expected ZiSK VKs for the per-batch STF-guest proof: each
-    // batch is validated against the entry for its own protocol version (see
-    // `ProverApiConfig::zisk_vks`), so an upgrade window with two versions
-    // validates each against its own guest build. The aggregation stage checks
-    // the inner vadcop VK of a range's buffered inputs against the same map. An
-    // empty map (no configured entries) means no expected VK — the reported VKs
-    // are only logged.
+    // ZiSK proving identities are compiled release manifests, like Airbender's
+    // `ProvingVersion`; the runtime expands their protocol mappings once and
+    // gives the same keys to both ZiSK stages.
     // Everything about the second proof system — whether it runs, whether
     // settlement waits for it, both lanes and the channels between them — is
     // decided and built in one place, in dependency order.

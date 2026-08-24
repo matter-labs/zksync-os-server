@@ -281,10 +281,26 @@ alloy::sol! {
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
+        function getVerifier() external view returns (address);
         function baseTokenGasPriceMultiplierNominator() external view returns (uint128);
         function baseTokenGasPriceMultiplierDenominator() external view returns (uint128);
         function getBaseToken() external view returns (address);
         function getSettlementLayer() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface IMultiProofTestnetVerifier {
+        function INNER_VERIFIER() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface IMultiProofVerifier {
+        function ziskRangeVerifier() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface IZiskVerifier {
+        function verificationKeyHash() external view returns (bytes32);
     }
 
     // Taken from `common/Config.sol`
@@ -852,6 +868,43 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("getProtocolVersion", Some(block_id))
+    }
+
+    /// Returns the verifier selected by the chain diamond.
+    pub async fn get_verifier(&self) -> Result<Address> {
+        self.instance
+            .getVerifier()
+            .call()
+            .await
+            .enrich("getVerifier", None)
+    }
+
+    /// Resolves the ZiSK verifier through the production or testnet multiproof
+    /// wrapper and returns the identity enforced by its L1 contract.
+    pub async fn get_zisk_verification_key_hash(&self) -> anyhow::Result<B256> {
+        let verifier = self.get_verifier().await?;
+        let testnet_wrapper = IMultiProofTestnetVerifier::new(verifier, self.provider());
+        let multiproof_verifier = match testnet_wrapper.INNER_VERIFIER().call().await {
+            Ok(inner) => inner,
+            Err(error) if is_method_missing(&error) => verifier,
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "failed to resolve MultiProofTestnetVerifier.INNER_VERIFIER: {error}"
+                ));
+            }
+        };
+
+        let multiproof = IMultiProofVerifier::new(multiproof_verifier, self.provider());
+        let zisk_verifier = multiproof
+            .ziskRangeVerifier()
+            .call()
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to resolve ZiSK range verifier: {error}"))?;
+        IZiskVerifier::new(zisk_verifier, self.provider())
+            .verificationKeyHash()
+            .call()
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to read ZiSK verification-key hash: {error}"))
     }
 
     /// Returns base token address.

@@ -440,7 +440,7 @@ mod tests {
                 range_size: 2,
                 assignment_timeout: Duration::from_secs(60),
                 verification_timeout: Duration::from_secs(60),
-                expected_program_vk: None,
+                expected_program_vks: HashMap::new(),
                 expected_inner_vks: HashMap::new(),
                 proof_verification_enabled: false,
                 mode,

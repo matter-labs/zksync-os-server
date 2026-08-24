@@ -30,18 +30,13 @@ empty-proof and mock-proof escape hatches.
 whose second proof never arrives is held at the commit gate and stalls block
 production rather than settling half-proved. Running it locally therefore also
 means turning off what `local-chains/local_dev.yaml` switches on for the fake
-path, and pinning the guest builds:
+path. The server pins the guest, aggregator, recursive setup, host prover and L1
+identity in its compiled ZiSK V1 release manifest:
 
 ```yaml
 prover_api:
   fake_fri_provers: { enabled: false }
   fake_snark_provers: { enabled: false }
-  zisk_vks:              # per protocol version, from the ZiSK guest build
-    - protocol_version: "0.31.0"
-      program_vk: "0x..."
-      vadcop_vk: "0x..."
-  zisk_aggregation:
-    program_vk: "0x..."   # from the aggregator guest build
 prover_input_generator:
   enable_input_generation: true
   zisk_shadow_execution: true   # the local arbiter for a commitment mismatch
