@@ -39,7 +39,7 @@
     "repository": "matter-labs/zksync-os-zisk",
     "tag": "0.0.3"
   },
-  "schema_version": 2,
+  "schema_version": 1,
   "toolchain": {
     "zisk_version": "0.18.0"
   },

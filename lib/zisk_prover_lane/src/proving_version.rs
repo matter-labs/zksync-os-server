@@ -161,7 +161,7 @@ impl ZiskReleaseManifest {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(self.schema_version == 2, "unsupported ZiSK manifest schema");
+        anyhow::ensure!(self.schema_version == 1, "unsupported ZiSK manifest schema");
         anyhow::ensure!(
             self.release.repository == "matter-labs/zksync-os-zisk",
             "unexpected ZiSK release repository"
@@ -266,6 +266,7 @@ mod tests {
         let manifest = ZiskProvingVersion::V1.manifest();
         manifest.validate().unwrap();
 
+        assert_eq!(manifest.schema_version, 1);
         assert_eq!(manifest.release.tag, "0.0.3");
         assert_eq!(
             manifest.zisk_verification_key_hash,
