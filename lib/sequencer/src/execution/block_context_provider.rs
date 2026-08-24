@@ -104,10 +104,10 @@ impl<Subpool: L2Subpool> BlockContextProvider<Subpool> {
         // Create stream:
         // - If available, upgrade tx goes first (expected to be the only tx in the block, enforced by sequencer).
         // - L1 transactions first, then L2 transactions.
-        // v32 moves interop roots to L1's MessageRoot. Key this off the version active before the
-        // block so the upgrade block remains upgrade-only and interop traffic starts in the first
-        // block executed entirely under v32.
-        let include_interop_traffic = previous_record.protocol_version.supports_l1_interop();
+        // Off until the timestamped `addInteropRootsInBatch` wire lands: zksync-os 0.5.0 rejects
+        // the untimestamped one this server still emits, and gating on `supports_l1_interop()`
+        // would fail every v32 block that imports a root. Roots stay queued in the subpool.
+        let include_interop_traffic = false;
         let best_txs = self
             .pool
             .best_transactions_stream(self.next_interop_tx_allowed_after, include_interop_traffic)
