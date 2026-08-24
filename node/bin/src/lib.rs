@@ -19,8 +19,10 @@ pub mod prover_api;
 mod prover_block;
 mod prover_input_generator;
 mod provider;
+mod second_proof_runtime;
 pub mod tree_manager;
 pub mod util;
+mod zisk_bytes;
 
 use crate::batch_sink::{BatchSink, NoOpSink, clear_failing_block_config_task};
 use crate::batcher::{Batcher, BatcherStartupConfig, util::load_genesis_stored_batch_info};
@@ -36,15 +38,15 @@ use crate::init_tx_forwarder::{build_consensus_tx_forwarder, build_static_tx_for
 use crate::l1_revert::revert_l1_on_startup;
 use crate::main_node_client::MainNodeClient;
 use crate::node_state_on_startup::NodeStateOnStartup;
+use crate::prover_api::batch_proving_pipeline_step::BatchProvingPipelineStep;
 use crate::prover_api::fake_fri_provers_pool::FakeFriProversPool;
 use crate::prover_api::fri_job_manager::FriJobManager;
-use crate::prover_api::fri_proving_pipeline_step::FriProvingPipelineStep;
 use crate::prover_api::gapless_committer::GaplessCommitter;
 use crate::prover_api::gapless_l1_proof_sender::GaplessL1ProofSender;
 use crate::prover_api::proof_storage::ProofStorage;
 use crate::prover_api::prover_server;
+use crate::prover_api::range_proving_pipeline_step::RangeProvingPipelineStep;
 use crate::prover_api::snark_job_manager::{FakeSnarkProver, SnarkJobManager};
-use crate::prover_api::snark_proving_pipeline_step::SnarkProvingPipelineStep;
 use crate::prover_input_generator::ProverInputGenerator;
 use crate::provider::{ProviderKind, build_node_provider};
 use crate::tree_manager::TreeManager;
@@ -447,7 +449,8 @@ pub async fn run(runtime: &Runtime, config: Config) -> ServerPorts {
         config.general_config.force_starting_block_number,
         ?node_startup_state,
         starting_block,
-        blocks_to_replay = node_startup_state.block_replay_storage_last_block + 1 - starting_block,
+        blocks_to_replay =
+            (node_startup_state.block_replay_storage_last_block + 1).saturating_sub(starting_block),
         "Node state on startup"
     );
 
@@ -1220,23 +1223,67 @@ async fn run_main_node_pipeline(
         };
     }
 
+    crate::second_proof_runtime::validate_l1_compatibility(
+        config,
+        &node_state_on_startup.l1_state.diamond_proxy_l1,
+    )
+    .await
+    .expect("ZiSK proving release is incompatible with the current L1 state");
+
     tracing::info!("Initializing ProofStorage");
     let proof_storage = ProofStorage::new(config.prover_api_config.proof_storage.clone())
         .await
         .expect("Failed to initialize ProofStorage");
 
-    let (fri_proving_step, fri_job_manager) = FriProvingPipelineStep::new(
+    // ZiSK proving identities are compiled release manifests, like Airbender's
+    // `ProvingVersion`; the runtime expands their protocol mappings once and
+    // gives the same keys to both ZiSK stages.
+    // Everything about the second proof system — whether it runs, whether
+    // settlement waits for it, both lanes and the channels between them — is
+    // decided and built in one place, in dependency order.
+    let second_proof = crate::second_proof_runtime::SecondProofRuntime::new(
+        config,
+        chain_id,
+        tree.clone(),
+        node_state_on_startup.l1_state.last_proved_batch,
+    );
+    let second_proof_system_config = second_proof.seal_config();
+    let zisk_handles = second_proof.handles();
+    let zisk_job_manager = zisk_handles.as_ref().map(|h| h.per_batch.clone());
+    let zisk_aggregation_job_manager = zisk_handles.map(|h| h.aggregation);
+
+    // Halt-on-mismatch (config, not deploy): a ZiSK commitment mismatch is a
+    // security event — one proof system is wrong. When armed, the mismatch
+    // fires this critical task, which panics to bring the node down (the same
+    // mechanism as the consistency checker's revert-on-divergence).
+    let mut second_proof = second_proof;
+    if let Some(halt_rx) = second_proof.take_halt() {
+        runtime.spawn_critical_task("zisk mismatch halt", async move {
+            if let Ok(msg) = halt_rx.await {
+                panic!("halting block production: {msg}");
+            }
+            // Sender dropped without firing (normal shutdown) — exit quietly.
+        });
+    }
+
+    // Each stage receives one value that already answers what its mode needs,
+    // rather than a manager, a flag and a channel it would have to re-check.
+    let (batch_stage_second_proof, range_stage_second_proof) = second_proof.into_stages();
+
+    let (fri_proving_step, fri_job_manager) = BatchProvingPipelineStep::new_with_zisk(
         proof_storage.clone(),
         node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.fri_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
+        batch_stage_second_proof,
     );
 
-    let (snark_proving_step, snark_job_manager) = SnarkProvingPipelineStep::new(
+    let (snark_proving_step, snark_job_manager) = RangeProvingPipelineStep::new_with_zisk(
         config.prover_api_config.max_fris_per_snark,
         node_state_on_startup.l1_state.last_proved_batch,
         config.prover_api_config.snark_job_timeout,
         config.prover_api_config.max_assigned_batch_range,
+        range_stage_second_proof,
     );
 
     let prover_api_port = if config.prover_api_config.enabled {
@@ -1250,6 +1297,8 @@ async fn run_main_node_pipeline(
             prover_server::run(
                 fri_job_manager.clone(),
                 snark_job_manager.clone(),
+                zisk_job_manager.clone(),
+                zisk_aggregation_job_manager.clone(),
                 proof_storage.clone(),
                 prover_listener,
                 shutdown,
@@ -1265,7 +1314,11 @@ async fn run_main_node_pipeline(
     }
 
     if config.prover_api_config.fake_snark_provers.enabled {
-        run_fake_snark_provers(&config.prover_api_config, runtime, snark_job_manager);
+        run_fake_snark_provers(
+            &config.prover_api_config,
+            runtime,
+            snark_job_manager.clone(),
+        );
     }
 
     if !config.prover_input_generator_config.enable_input_generation {
@@ -1296,6 +1349,7 @@ async fn run_main_node_pipeline(
             merkle_tree: tree.clone(),
             runtime: runtime.clone(),
             disabled: !config.prover_input_generator_config.enable_input_generation,
+            second_proof_system: config.prover_input_generator_config.second_proof_system,
         })
         .pipe(Batcher {
             startup_config: BatcherStartupConfig {
@@ -1315,6 +1369,7 @@ async fn run_main_node_pipeline(
             committed_batch_provider: committed_batch_provider.clone(),
             read_state: state.clone(),
             merkle_tree: tree,
+            second_proof: second_proof_system_config,
         })
         .pipe(BatchVerificationPipelineStep::new(
             config.batch_verification_config.clone().into(),
@@ -1453,8 +1508,10 @@ async fn run_en_pipeline(
         .pipe(TreeManager {
             tree: tree.clone(),
             runtime: runtime.clone(),
-        })
-        .pipe_if(
+        });
+
+    let snapshot_rx = {
+        let pipeline = pipeline.pipe_if(
             config.batch_verification_config.client_enabled,
             BatchVerificationResponder::new(
                 chain_id,
@@ -1469,10 +1526,10 @@ async fn run_en_pipeline(
             ),
             NoOpSink::new(),
         );
-
-    let components = pipeline.components();
-    pipeline.spawn();
-    let snapshot_rx = PipelineTracker::spawn(runtime, components);
+        let components = pipeline.components();
+        pipeline.spawn();
+        PipelineTracker::spawn(runtime, components)
+    };
 
     if config.general_config.run_priority_tree {
         let priority_tree_manager = PriorityTreeManager::new(

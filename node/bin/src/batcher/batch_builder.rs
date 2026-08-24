@@ -1,11 +1,14 @@
+use crate::batcher::zisk_batch::SecondProofSystemConfig;
 use crate::pig_telemetry::{BatchPigMode, BatchPigTelemetry, record_batch_pig_telemetry};
 use crate::prover_block::ProverBlock;
+use crate::zisk_bytes::ZiskBatchBytes;
 use alloy::primitives::Address;
+use alloy::primitives::B256;
 use anyhow::Context as _;
 use std::time::Duration;
 use zksync_os_batch_types::PendingBatchInfo;
 use zksync_os_batch_types::batcher_model::{
-    BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput,
+    BatchEnvelope, BatchForSigning, BatchMetadata, ProverInput, ProvingInputs, SecondProofInput,
 };
 use zksync_os_batcher_metrics::BatchExecutionStage;
 use zksync_os_contract_interface::models::{L2Log, StoredBatchInfo};
@@ -33,7 +36,8 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     sl_chain_id: u64,
     read_state: &ReadState,
     merkle_tree: &MerkleTree<RocksDBWrapper>,
-) -> anyhow::Result<BatchForSigning<ProverInput>> {
+    second_proof: Option<&SecondProofSystemConfig>,
+) -> anyhow::Result<BatchForSigning<ProvingInputs>> {
     let block_number_from = blocks.first().unwrap().record.block_context.block_number;
     let block_number_to = blocks.last().unwrap().record.block_context.block_number;
     let last_block_hash = blocks.last().unwrap().output.header.hash();
@@ -178,6 +182,94 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
         );
     }
 
+    // Second proof system: build its batch witness here, from the same blocks
+    // the primary lane just re-executed. A Fake batch carries no witness, so
+    // there is nothing to build.
+    let mut zisk_batch_data: Option<ZiskBatchBytes> = None;
+    let mut seal_shadow_commitment: Option<B256> = None;
+    // A batch at or below the L1 proved frontier is being re-sealed by startup
+    // catch-up; its proof is already on chain, so it needs no witness here.
+    let second_proof = second_proof.filter(|config| batch_number > config.last_proved_batch);
+    if let Some(second_proof) = second_proof
+        && !matches!(batch_prover_input, ProverInput::Fake)
+    {
+        zisk_prover_lane::count_batch_witness_attempt();
+        let seal_blocks: anyhow::Result<Vec<zisk_witness::ZiskSealBlock<'_>>> = blocks
+            .iter()
+            .map(|block| {
+                let tree_data = block.tree_data.as_ref().with_context(|| {
+                    format!(
+                        "block {} carries no tree data; the second proof system needs it to \
+                         build its witness",
+                        block.record.block_context.block_number
+                    )
+                })?;
+                Ok(zisk_witness::ZiskSealBlock {
+                    output: &block.output,
+                    record: &block.record,
+                    tree_data,
+                })
+            })
+            .collect();
+
+        let assembled = seal_blocks.and_then(|seal_blocks| {
+            crate::zisk_bytes::catch_zisk_panic(|| {
+                zisk_witness::build_batch_witness(
+                    &seal_blocks,
+                    read_state,
+                    merkle_tree,
+                    zisk_witness::BatchWitnessContext {
+                        pubdata_mode,
+                        multichain_root,
+                        sl_chain_id,
+                        batch_info: &batch_info,
+                        blob_sidecar: blob_sidecar.as_ref(),
+                        chain_config: second_proof.chain_config,
+                    },
+                )
+            })
+        });
+
+        match assembled {
+            Ok(data) => zisk_batch_data = Some(ZiskBatchBytes(data)),
+            // Where the second proof gates settlement a batch without its
+            // witness could never settle, so stop the seal instead of
+            // publishing data that would strand it.
+            Err(error) if second_proof.required => {
+                return Err(error.context(
+                    "ZiSK batch witness assembly failed while the second proof system is required",
+                ));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "ZiSK batch witness assembly failed: {error:#}; degrading this batch's ZiSK \
+                     data to None (primary Airbender lane unaffected)"
+                );
+            }
+        }
+    }
+
+    // The guest's own commitment travels with the job: it is the only local
+    // answer available later, when a prover's submission disagrees with the
+    // native result and the node must decide whether that is a divergence
+    // between the proof systems or just a bad prover.
+    if let (Some(second_proof), Some(zisk_data)) = (second_proof, &zisk_batch_data)
+        && let Some(shadow) = second_proof.shadow
+    {
+        let pairs: Vec<(&_, &_)> = blocks
+            .iter()
+            .map(|block| (&block.output, &block.record))
+            .collect();
+        seal_shadow_commitment = zisk_prover_lane::shadow_execute_zisk_batch(
+            zisk_data.as_slice(),
+            &prev_batch_info.state_commitment,
+            &batch_info,
+            chain_id,
+            shadow.halt_on_mismatch,
+            &pairs,
+        )?;
+    }
+
     // Detect any `SetSLChainId` system transaction across all blocks in the batch.
     // Excludes the sentinel value `u64::MAX` which is used during protocol upgrades and is
     // unrelated to gateway migrations.
@@ -214,7 +306,13 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
             multichain_root,
             set_sl_chain_id_migration_number,
         },
-        batch_prover_input,
+        ProvingInputs {
+            fri: batch_prover_input,
+            second_proof: zisk_batch_data.map(|bytes| SecondProofInput {
+                bytes: bytes.into_vec(),
+                seal_commitment: seal_shadow_commitment,
+            }),
+        },
     )
     .with_stage(BatchExecutionStage::BatchSealed);
 

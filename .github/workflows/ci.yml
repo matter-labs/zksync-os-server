@@ -17,6 +17,8 @@ env:
   RUST_BACKTRACE: 1
   TEST_RESULTS_XML: 'test-results.xml'
   PROVER_GPU_TESTS: 'prover-gpu-tests'
+  ZISK_VERSION: '0.18.0'
+  ZISK_RELEASE: '0.0.3'
   CUDAARCHS: '80;89;90'
   # Run tests 10 times in case of push to main branch to catch possible flakiness
   NEXTEST_ITERATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '--stress-count 10' || '' }}
@@ -194,6 +196,42 @@ jobs:
           cargo nextest archive --release -p zksync_os_integration_tests \
             --features gpu-prover-tests --test prover --archive-file ${PROVER_GPU_TESTS}.tar.zst
 
+      - name: Download and verify the ZiSK release manifest artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="${GITHUB_WORKSPACE}/lib/zisk_prover_lane/manifests/zisk-proving-v1.json"
+          release=$(jq -r '.release.tag' "$manifest")
+          toolchain=$(jq -r '.toolchain.zisk_version' "$manifest")
+          test "$release" = "$ZISK_RELEASE"
+          test "$toolchain" = "$ZISK_VERSION"
+
+          guest_archive=$(jq -r '.artifacts.guest_archive.asset' "$manifest")
+          prover_archive=$(jq -r '.artifacts.prover_archive.asset' "$manifest")
+          mkdir -p zisk-artifacts
+          gh release download "$release" -R matter-labs/zksync-os-zisk \
+            --dir zisk-artifacts --pattern "$guest_archive" --pattern "$prover_archive"
+
+          verify_artifact() {
+            local file="$1"
+            local query="$2"
+            local expected_sha expected_size
+            expected_sha=$(jq -r "${query}.sha256" "$manifest")
+            expected_size=$(jq -r "${query}.size" "$manifest")
+            echo "${expected_sha}  ${file}" | sha256sum -c
+            test "$(stat -c%s "$file")" = "$expected_size"
+          }
+
+          verify_artifact "zisk-artifacts/${guest_archive}" '.artifacts.guest_archive'
+          verify_artifact "zisk-artifacts/${prover_archive}" '.artifacts.prover_archive'
+          tar xzf "zisk-artifacts/${guest_archive}" -C zisk-artifacts
+          tar xzf "zisk-artifacts/${prover_archive}" -C zisk-artifacts
+          verify_artifact 'zisk-artifacts/zksync-os-zisk-guest' '.programs.inner.elf'
+          verify_artifact 'zisk-artifacts/zksync-os-zisk-guest-aggregator' '.programs.aggregator.elf'
+          verify_artifact 'zisk-artifacts/zksync-os-zisk-prover-service' '.artifacts.prover_service'
+
       - name: Upload tests
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -201,6 +239,14 @@ jobs:
           path: ${{ env.PROVER_GPU_TESTS }}.tar.zst
           if-no-files-found: error
           retention-days: 1 # delete sooner to not waste storage
+
+      - name: Upload verified ZiSK artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zisk-e2e-artifacts-${{ github.sha }}
+          path: zisk-artifacts
+          if-no-files-found: error
+          retention-days: 1
 
   #################################################
   #  Run prover integration tests on GPU machine  #
@@ -226,12 +272,27 @@ jobs:
         with:
           name: ${{ env.PROVER_GPU_TESTS }}
 
+      - name: Download verified ZiSK artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: zisk-e2e-artifacts-${{ github.sha }}
+          path: zisk-artifacts
+
+      # ziskup skips already-installed pieces, so the persistent runner pays the key downloads once.
+      - name: Install ZiSK toolchain and both proving keys
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/0xPolygonHermez/zisk/v${ZISK_VERSION}/ziskup/install.sh" -o /tmp/ziskup-install.sh
+          bash /tmp/ziskup-install.sh -v "${ZISK_VERSION}" --provingkey --gpu -y
+          echo "$HOME/.zisk/bin" >> "$GITHUB_PATH"
+          "$HOME/.zisk/bin/ziskup" setup_snark
+
+      # Cached in the persistent runner home, like the ZiSK proving keys.
       - name: Download CRS setup file
-        if: steps.cache-crs.outputs.cache-hit != 'true'
         env:
-          # Download CRS file from EU storage for GPU runner
           CRS_FILE_URL: https://storage.googleapis.com/matterlabs-setup-keys-europe/setup-keys/setup_compact.key
-        run: wget -q --show-progress "${CRS_FILE_URL}"
+        run: |
+          [ -f "$HOME/setup_compact.key" ] || wget -q -O "$HOME/setup_compact.key" "${CRS_FILE_URL}"
+          ln -sf "$HOME/setup_compact.key" setup_compact.key
 
       - name: Decompress L1 state fixtures
         run: |
@@ -244,12 +305,23 @@ jobs:
 
       # --workspace-remap is mandatory (!)
       # Otherwise, the prebuilt binary will not be able to find its dependencies and fails to execute
+      # The ZiSK lane is ARMED: a silent artifact skip or a disarmed VK tripwire is a failure.
+      # PRs run one real two-lane settle; the four-batch variant joins on main pushes.
       - name: Run prover tests on GPU
         env:
           COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
+          NEXTEST_FILTER: ${{ github.event_name == 'pull_request' && 'binary(prover) - test(two_lane_multibatch_e2e)' || 'binary(prover)' }}
+          ZISK_GPU_TESTS_REQUIRED: "1"
+          ZISK_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest
+          ZISK_AGG_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest-aggregator
+          ZISK_PROVER_BIN: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-prover-service
         run: |
+          export ZISK_PK="$HOME/.zisk/provingKey"
+          export ZISK_SK="$HOME/.zisk/provingKeySnark"
+          export ZISK_BINARY="$HOME/.zisk/bin/cargo-zisk"
+          chmod +x "${ZISK_PROVER_BIN}"
           ulimit -s 300000
-          cargo nextest run -E 'binary(prover)' --no-capture \
+          cargo nextest run -E "${NEXTEST_FILTER}" --no-capture --profile gpu \
             --archive-file "${PROVER_GPU_TESTS}.tar.zst" \
             --workspace-remap ${GITHUB_WORKSPACE}
 

@@ -46,6 +46,8 @@ runs:
           SUDO=sudo
         fi
         ${SUDO} apt update && ${SUDO} apt install -y libclang-dev wget jq libssl-dev pkg-config
+        # cargo-zisk's runtime set, per docker/zksync-os-zisk-prover in the guest repo (program-setup assembles and links at runtime).
+        ${SUDO} apt install -y --no-install-recommends curl ca-certificates xz-utils build-essential libgmp-dev openmpi-bin libopenmpi-dev libsodium-dev libomp-dev
 
     - name: Add cuda to path
       shell: 'bash -ex {0}'

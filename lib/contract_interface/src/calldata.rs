@@ -1,7 +1,29 @@
 use crate::models::{CommitBatchInfo, StoredBatchInfo};
 use crate::{IExecutor, IExecutorV29, IExecutorV30, IMultisigCommitter};
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
 use alloy::sol_types::{SolCall, SolValue};
+
+/// Proof calldata encoding version: the one-byte prefix of
+/// `proveBatchesSharedBridge`'s `_proofData`. The L1 sender writes it and
+/// [`decode_prove_proof_words`] requires it, so the two cannot drift apart.
+pub const PROOF_ENCODING_VERSION: u8 = 1;
+
+/// The proof words of a `proveBatchesSharedBridge` transaction, decoded from
+/// its calldata — `words[0]`'s low byte is the proof type the chain's verifier
+/// dispatched on. `None` for anything that is not such a call: block scans
+/// feed every transaction through.
+pub fn decode_prove_proof_words(input: &[u8]) -> Option<Vec<U256>> {
+    if input.len() < 4 || input[0..4] != IExecutor::proveBatchesSharedBridgeCall::SELECTOR {
+        return None;
+    }
+    let call = IExecutor::proveBatchesSharedBridgeCall::abi_decode(input).ok()?;
+    let proof_data: &[u8] = &call._proofData;
+    if proof_data.first() != Some(&PROOF_ENCODING_VERSION) {
+        return None;
+    }
+    let payload = IExecutor::proofPayloadCall::abi_decode_raw(&proof_data[1..]).ok()?;
+    Some(payload.proof)
+}
 
 const V29_ENCODING_VERSION: u8 = 2;
 const V30_ENCODING_VERSION: u8 = 3;
@@ -152,5 +174,72 @@ pub fn encode_commit_batch_data(
             [[V31_ENCODING_VERSION].to_vec(), encoded_data].concat()
         }
         _ => panic!("Unsupported protocol version: {protocol_version_minor}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::{B256, U256};
+
+    fn stored(batch_number: u64) -> IExecutor::StoredBatchInfo {
+        IExecutor::StoredBatchInfo {
+            batchNumber: batch_number,
+            batchHash: B256::repeat_byte(0x11),
+            indexRepeatedStorageChanges: 0,
+            numberOfLayer1Txs: U256::ZERO,
+            priorityOperationsHash: B256::repeat_byte(0x22),
+            dependencyRootsRollingHash: B256::repeat_byte(0x33),
+            l2LogsTreeRoot: B256::repeat_byte(0x44),
+            timestamp: U256::from(100),
+            commitment: B256::repeat_byte(0x55),
+        }
+    }
+
+    /// The calldata shape mirrors the L1 sender's encoder exactly: the
+    /// one-byte proof encoding version, then the raw-encoded proofPayload,
+    /// wrapped in a proveBatchesSharedBridge call.
+    #[test]
+    fn decodes_the_proof_words_of_a_prove_transaction() {
+        let proof_words = vec![
+            U256::from(5),
+            U256::ZERO,
+            U256::from(4),
+            U256::from(2u32 | (6 << 8)),
+            U256::ZERO,
+        ];
+        let payload = IExecutor::proofPayloadCall {
+            old: stored(0),
+            newInfo: vec![stored(1), stored(2)],
+            proof: proof_words.clone(),
+        };
+        let mut proof_data = vec![PROOF_ENCODING_VERSION];
+        payload.abi_encode_raw(&mut proof_data);
+        let input = IExecutor::proveBatchesSharedBridgeCall::new((
+            Address::repeat_byte(0xAA),
+            U256::from(1),
+            U256::from(2),
+            proof_data.into(),
+        ))
+        .abi_encode();
+
+        let words = decode_prove_proof_words(&input).expect("prove calldata decodes");
+        assert_eq!(words, proof_words);
+    }
+
+    /// Anything that is not a proveBatchesSharedBridge call decodes to None
+    /// rather than an error: block scans feed every transaction through.
+    #[test]
+    fn non_prove_calldata_is_none() {
+        assert!(decode_prove_proof_words(&[]).is_none());
+        assert!(decode_prove_proof_words(&[0xde, 0xad, 0xbe, 0xef, 0x00]).is_none());
+        let commit = IExecutor::commitBatchesSharedBridgeCall::new((
+            Address::repeat_byte(0xAA),
+            U256::from(1),
+            U256::from(2),
+            vec![0u8; 8].into(),
+        ))
+        .abi_encode();
+        assert!(decode_prove_proof_words(&commit).is_none());
     }
 }

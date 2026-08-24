@@ -1,0 +1,10 @@
+general:
+  protocol_version: "v31.0"
+  verification_key: "TBD"
+
+# The L1 state is the v31.0 state with the multiprover verifier set deployed on
+# top. See `bake-l1-state.sh` and `README.md`.
+base-chain: "v31.0"
+
+era-contracts:
+  sha: "6e26cdcdb7065be14fe8d2078d3e338a16f3d2d3"

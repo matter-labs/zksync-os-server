@@ -246,6 +246,19 @@ pub(super) async fn pick_snark_job(
             let to = batches.last().unwrap().0.batch_number;
             let vk_hash = batches.first().unwrap().0.vk_hash.clone();
 
+            // The assigned range IS the second proof system's aggregation
+            // range. Registering it here — rather than inside the SNARK
+            // manager — keeps the two lanes' managers unaware of each other;
+            // this layer already holds both. Registering at pick (rather than
+            // at submit) lets the aggregated proof be computed while the
+            // Airbender SNARK is still being proved; the bounds are
+            // authoritative once the submission lands.
+            if let Some(aggregation) = state.zisk_aggregation_job_manager.as_ref() {
+                aggregation
+                    .note_snark_range(zisk_prover_lane::BatchRange::of(from, to))
+                    .await;
+            }
+
             let fri_proofs = batches
                 .into_iter()
                 .filter_map(|(fri_job, proof)| match proof {

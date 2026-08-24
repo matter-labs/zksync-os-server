@@ -34,3 +34,6 @@ tracing.workspace = true
 itertools.workspace = true
 vise.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

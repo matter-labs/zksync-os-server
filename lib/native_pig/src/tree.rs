@@ -187,6 +187,13 @@ impl VersionedMerkleTree {
         }
     }
 
+    /// Root hash and leaf count at this tree's version.
+    pub fn root_info(&self) -> anyhow::Result<(B256, u64)> {
+        self.inner
+            .root_info(self.version)?
+            .ok_or_else(|| anyhow::anyhow!("tree version {} is missing", self.version))
+    }
+
     pub fn read(&mut self, key: B256) -> Option<B256> {
         let (proof, _) = self
             .inner

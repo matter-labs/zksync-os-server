@@ -654,6 +654,19 @@ pub struct GenesisConfig {
     /// Path to the file with genesis input.
     #[config_validate(required_if = NodeRole::MainNode)]
     pub genesis_input_path: Option<PathBuf>,
+
+    /// ZKsync OS chain-config parameter committed into the batch public input:
+    /// whether Gateway FRI-proof verification is enabled for this chain. Must
+    /// match the value the native STF runs with, or the two proof systems'
+    /// public inputs diverge.
+    #[config(default_t = false)]
+    pub fri_proof_verification_enabled: bool,
+
+    /// ZKsync OS chain-config parameter committed into the batch public input:
+    /// the per-transaction gas cap. Must match the value the native STF runs
+    /// with, or the two proof systems' public inputs diverge.
+    #[config(default_t = 1 << 24)]
+    pub max_tx_gas_limit: u64,
 }
 
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
@@ -1368,6 +1381,75 @@ fn is_positive_f64(&val: &f64) -> bool {
     val > 0.0
 }
 
+/// The multi-proof verifier submits a ZiSK proof to L1. Only the second proof
+/// system makes that proof. So `multi_proof_verifier` needs `second_proof_system`.
+fn multi_proof_requires_second_proof(root: &Config, value: &bool) -> bool {
+    !*value || root.prover_input_generator_config.second_proof_system
+}
+
+/// `max_fris_per_snark` must be at least 1 when the second proof system runs.
+/// The ZiSK lane always aggregates. One aggregation range covers one or more
+/// batches. The aggregator program VK does not depend on the range width. So
+/// any width of 1 or more is valid, but a width of 0 is not.
+fn zisk_max_fris_per_snark_valid(root: &Config, value: &usize) -> bool {
+    !root.prover_input_generator_config.second_proof_system || *value >= 1
+}
+
+/// Required mode settles every batch behind a real ZiSK proof, and a ZiSK proof
+/// exists only for a batch with a real witness. `enable_input_generation=false`
+/// emits `ProverInput::Fake`, whose seal builds no ZiSK input at all, so the
+/// commit gate would wait on a job that is never created.
+fn multi_proof_requires_real_input_generation(root: &Config, value: &bool) -> bool {
+    !root.prover_input_generator_config.multi_proof_verifier || *value
+}
+
+/// Required mode has no in-process ZiSK prover: every proof arrives over the
+/// prover API. With the API off, no batch could ever settle.
+fn multi_proof_requires_prover_api(root: &Config, value: &bool) -> bool {
+    !root.prover_input_generator_config.multi_proof_verifier || *value
+}
+
+/// Required mode puts the ZiSK proof on L1. Accepting one this node never
+/// verified off-chain turns a bad proof into a rejected L1 transaction, and in
+/// the aggregated case into a stalled settlement.
+fn multi_proof_requires_zisk_verification(root: &Config, value: &bool) -> bool {
+    !root.prover_input_generator_config.multi_proof_verifier || *value
+}
+
+/// Required mode settles a MultiProof: a fake Airbender proof cannot compose
+/// with a ZiSK proof, so a fake route either strands the batch's ZiSK state or
+/// submits a payload the MultiProofVerifier rejects. Both fake pools have to be
+/// off.
+fn multi_proof_forbids_fake_provers(root: &Config, value: &bool) -> bool {
+    !root.prover_input_generator_config.multi_proof_verifier || !*value
+}
+
+/// The commit gate holds a batch in the per-batch stage until every proof
+/// system has proved it, so the second lane must be able to hold that many
+/// jobs at once. A window wider than its active queue would push sealed inputs
+/// into the lane's backlog while nothing is actually in flight.
+fn commit_gate_window_fits_second_lane(root: &Config, value: &u64) -> bool {
+    !root.prover_input_generator_config.multi_proof_verifier
+        || (*value >= 1 && *value <= zisk_prover_lane::MAX_TOTAL_JOBS as u64)
+}
+
+/// A batch whose second proof disagrees with the primary one can only be
+/// classified against this node's own execution of the same batch, which is
+/// what seal-time shadow execution provides. Gating settlement on a proof the
+/// node could never classify would leave it with a halt path it can never
+/// take.
+fn multi_proof_requires_shadow_execution(root: &Config, value: &bool) -> bool {
+    !*value || root.prover_input_generator_config.zisk_shadow_execution
+}
+
+/// The aggregated lane forms groups of up to `max_fris_per_snark` consecutive
+/// batches. A group must fit in the assignment window. So
+/// `max_assigned_batch_range + 1` must be at least `max_fris_per_snark`.
+fn aggregation_range_window_fits(root: &Config, value: &usize) -> bool {
+    !root.prover_input_generator_config.second_proof_system
+        || root.prover_api_config.max_assigned_batch_range + 1 >= *value
+}
+
 #[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
 #[config(derive(Default))]
 pub struct L1WatcherConfig {
@@ -1465,7 +1547,7 @@ pub struct BatcherConfig {
 }
 
 /// Only used on the Main Node.
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct ProverInputGeneratorConfig {
     /// Whether to enable debug output in RiscV binary.
@@ -1482,7 +1564,63 @@ pub struct ProverInputGeneratorConfig {
     /// Used for tests and some testnets where the expensive RiscV witness computation
     /// is unnecessary.
     #[config(default_t = true)]
+    #[config_validate(custom(
+        multi_proof_requires_real_input_generation,
+        "must be true when `prover_input_generator.multi_proof_verifier=true`. \
+         A fake prover input builds no ZiSK witness, so the commit gate would wait \
+         forever for a second proof that no job was ever created for."
+    ))]
     pub enable_input_generation: bool,
+
+    /// Enable ZiSK (RV64IMA) proof generation alongside Airbender.
+    /// When true, generates ZiSK prover input for every batch and the
+    /// `MultiProofCombiner` combines both proofs for L1 verification.
+    /// Requires `zisk_*` paths to be configured below.
+    #[config(default_t = false)]
+    pub second_proof_system: bool,
+
+    /// When true, deploy and use the MultiProofVerifier on L1 which requires
+    /// BOTH Airbender and ZiSK proofs for every state transition.
+    /// Implies `second_proof_system = true`.
+    #[config(default_t = false)]
+    #[config_validate(custom(
+        multi_proof_requires_second_proof,
+        "requires `prover_input_generator.second_proof_system=true`. \
+         This mode submits a ZiSK proof to L1. Only the second proof system makes that proof."
+    ))]
+    #[config_validate(custom(
+        multi_proof_requires_shadow_execution,
+        "requires `prover_input_generator.zisk_shadow_execution=true`. \
+         Settlement then depends on the second proof, and a submission that disagrees with \
+         the primary lane can only be classified against this node's own execution."
+    ))]
+    pub multi_proof_verifier: bool,
+
+    /// When true, a ZiSK proof whose public values disagree with the batch
+    /// commitment halts the node (a mismatch means one proof system is wrong
+    /// — a security event). Default: continue — the mismatch is logged and
+    /// counted (`zisk_lane_commitment_mismatches`) and the job is retried, so
+    /// a faulty prover cannot stall the chain. The switch is config, not a
+    /// deploy. Also applies to `zisk_shadow_execution` mismatches.
+    #[config(default_t = false)]
+    pub halt_on_zisk_commitment_mismatch: bool,
+
+    /// When true, every sealed batch's ZiSK `BatchInput` is re-executed
+    /// in-process with the guest executor (CPU-only, no proving) and the
+    /// computed batch public input is compared against the expected one — the
+    /// full guest pipeline as an equivalence check per batch. A mismatch is
+    /// counted (`zisk_lane_commitment_mismatches`) and, under
+    /// `halt_on_zisk_commitment_mismatch`, fails batch sealing loudly.
+    /// Intended for equivalence testing and shadow deployments.
+    ///
+    /// This is *shadow equivalence*: the check re-executes on the CPU and
+    /// compares the batch commitment. It does not prove. Do not confuse it
+    /// with *shadow proving* (`second_proof_system = true` and
+    /// `multi_proof_verifier = false`). In shadow proving the daemon proves on
+    /// the GPU and the server verifies the proof, but the server does not send
+    /// the MultiProof to L1.
+    #[config(default_t = false)]
+    pub zisk_shadow_execution: bool,
 }
 
 /// Only used on the Main Node.
@@ -1491,6 +1629,11 @@ pub struct ProverInputGeneratorConfig {
 pub struct ProverApiConfig {
     /// Whether to enable prover server.
     #[config(default_t = true)]
+    #[config_validate(custom(
+        multi_proof_requires_prover_api,
+        "must be true when `prover_input_generator.multi_proof_verifier=true`. \
+         Every ZiSK proof arrives over this API; with it off, no batch can settle."
+    ))]
     pub enabled: bool,
 
     /// Prover API address to listen on.
@@ -1528,8 +1671,58 @@ pub struct ProverApiConfig {
     pub max_assigned_batch_range: usize,
 
     /// Max number of FRI proofs that will be aggregated to a single SNARK job.
+    ///
+    /// The two validators below hold the ZiSK<->Airbender-SNARK batching pairing
+    /// for the L1 rendezvous. A ZiSK aggregation range pairs with the Airbender
+    /// SNARK of the same batch range. Both are inert unless `second_proof_system`
+    /// is on.
     #[config(default_t = 10)]
+    #[config_validate(custom(
+        zisk_max_fris_per_snark_valid,
+        "must be at least 1 when `prover_input_generator.second_proof_system=true`. \
+         The ZiSK lane always aggregates: one aggregation range covers one or more \
+         batches, and the aggregator program VK does not depend on the range width."
+    ))]
+    #[config_validate(custom(
+        aggregation_range_window_fits,
+        "requires `prover_api.max_assigned_batch_range + 1 >= prover_api.max_fris_per_snark` \
+         when `prover_input_generator.second_proof_system=true`. The aggregated lane forms \
+         groups of up to max_fris_per_snark consecutive batches. A group does not fit \
+         in a smaller assignment window, so the lane stalls."
+    ))]
     pub max_fris_per_snark: usize,
+
+    /// How far the per-batch proving stage may run ahead of its oldest
+    /// batch that is not yet proved by every proof system, when the commit
+    /// gate is armed. Reaching it stops admission and, through the batcher's
+    /// backpressure, block production — the accepted cost of never committing
+    /// a batch that cannot settle. Must not exceed the second lane's active
+    /// queue, or the gate would push sealed inputs into its backlog while
+    /// nothing is in flight.
+    #[config(default_t = 10)]
+    #[config_validate(custom(
+        commit_gate_window_fits_second_lane,
+        "must be between 1 and the second lane's active queue: a wider window would park \
+         sealed inputs in that lane's backlog while nothing is in flight."
+    ))]
+    pub commit_gate_admission_window: u64,
+
+    /// Whether the server runs the off-chain proof verification on each ZiSK
+    /// submission. Default: true (the production setting). When true the server
+    /// verifies the per-batch PLONK wire artifact and its key binding, the
+    /// aggregated-range PLONK wire artifact, and the per-batch vadcop_final
+    /// STARK stream before it parks or composes a proof. Set it to false only
+    /// to skip the proof verification (for example in a controlled test setup).
+    /// The batch commitment check and the aggregated binding-digest check
+    /// always run; this toggle never affects them.
+    #[config(default_t = true)]
+    #[config_validate(custom(
+        multi_proof_requires_zisk_verification,
+        "must be true when `prover_input_generator.multi_proof_verifier=true`. \
+         Required mode puts the ZiSK proof on L1, so it may not skip off-chain \
+         verification."
+    ))]
+    pub zisk_proof_verification_enabled: bool,
 
     /// Default: store files in ./db/fri_proofs/ with 1GiB disk usage cap
     #[config(nest, default)]
@@ -1538,13 +1731,48 @@ pub struct ProverApiConfig {
     /// Stop accepting transactions when the prover pipeline falls this many batches behind
     /// its upstream. Applied to both FRI and SNARK job managers.
     pub max_batch_diff_to_upstream: Option<u64>,
+
+    /// ZiSK aggregation stage: collapse a range of per-batch ZiSK proofs
+    /// into one aggregator-guest proof for L1.
+    #[config(nest)]
+    pub zisk_aggregation: ZiskAggregationConfig,
 }
 
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+/// ZiSK aggregation stage. Mirrors the Airbender FRI→SNARK split: the
+/// per-batch pick/submit flow stays, but the daemon submits `vadcop_final`
+/// proof streams instead of PLONK-wrapped SNARKs, and an aggregation job
+/// (`/ZiSK-AGG/{pick,submit}`) collapses the streams of one Airbender
+/// SNARK range into a single range proof — the ZiSK half of that range's
+/// MultiProof. The stage is always active when `second_proof_system` is on;
+/// the daemon must run with `--aggregation`. Each aggregation range covers
+/// exactly one Airbender SNARK job, so the range width is
+/// `prover_api.max_fris_per_snark` and is not a separate knob. The ZiSK lane
+/// always aggregates, so a single ZiSK verification key (the aggregator's)
+/// covers any range width, including a range of one batch.
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
+#[config(derive(Default))]
+pub struct ZiskAggregationConfig {
+    /// Timeout after which an aggregation job is offered to another prover.
+    #[config(default_t = Duration::from_secs(600))]
+    pub job_timeout: Duration,
+
+    /// Timeout for server-side verification of a submitted aggregation proof.
+    /// This is deliberately separate from `job_timeout`: proving is external
+    /// and may take minutes, while native verification should finish promptly.
+    #[config(default_t = Duration::from_secs(60))]
+    pub verification_timeout: Duration,
+}
+
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct FakeFriProversConfig {
     /// Whether to enable the fake provers pool.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        multi_proof_forbids_fake_provers,
+        "must be false when `prover_input_generator.multi_proof_verifier=true`: a fake \
+         Airbender proof cannot be composed into a MultiProof."
+    ))]
     pub enabled: bool,
 
     /// Number of fake provers to run in parallel.
@@ -1569,11 +1797,16 @@ pub struct FakeFriProversConfig {
     pub timeout_frequency: f64,
 }
 
-#[derive(Clone, Debug, DescribeConfig, DeserializeConfig)]
+#[derive(Clone, Debug, DescribeConfig, DeserializeConfig, ConfigValidate)]
 #[config(derive(Default))]
 pub struct FakeSnarkProversConfig {
     /// Whether to enable the fake provers pool.
     #[config(default_t = false)]
+    #[config_validate(custom(
+        multi_proof_forbids_fake_provers,
+        "must be false when `prover_input_generator.multi_proof_verifier=true`: a fake \
+         Airbender proof cannot be composed into a MultiProof."
+    ))]
     pub enabled: bool,
 
     /// Only pick up jobs that are this time old.
@@ -2407,6 +2640,14 @@ mod tests {
     }
 
     #[test]
+    fn zisk_aggregation_has_independent_proving_and_verification_timeouts() {
+        let config = ZiskAggregationConfig::default();
+
+        assert_eq!(config.job_timeout, Duration::from_secs(600));
+        assert_eq!(config.verification_timeout, Duration::from_secs(60));
+    }
+
+    #[test]
     fn replay_archive_config_parses_filesystem_backend() {
         let config = parse_replay_archive_config([
             ("REPLAY_ARCHIVE_TYPE", "FileSystem"),
@@ -2582,6 +2823,8 @@ mod tests {
                 bytecode_supplier_address: Some(Address::with_last_byte(0x01)),
                 chain_id: Some(270),
                 genesis_input_path: Some("genesis.json".into()),
+                fri_proof_verification_enabled: false,
+                max_tx_gas_limit: 1 << 24,
             },
             rpc_config: RpcConfig::default(),
             mempool_config: MempoolConfig::default(),

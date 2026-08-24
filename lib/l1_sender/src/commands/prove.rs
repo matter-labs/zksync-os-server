@@ -12,11 +12,75 @@ use zksync_os_contract_interface::models::StoredBatchInfo;
 const OHBENDER_PROOF_TYPE: u32 = 2;
 const FAKE_PROOF_TYPE: u32 = 3;
 const FAKE_PROOF_MAGIC_VALUE: u32 = 13;
+const MULTI_PROOF_TYPE: u32 = 5;
+
+/// The L1 verifier-registry version for a proving execution version. The
+/// registry holds a sub-verifier per version, with 0 the default; V7 proofs
+/// verify under the default, so 7 maps to 0 rather than to a registration of
+/// its own.
+fn l1_verifier_version(proving_execution_version: Option<u32>) -> Result<u32, ProofEncodingError> {
+    match proving_execution_version {
+        // Fake proofs skip cryptographic verification; the default slot is fine.
+        None => Ok(0),
+        Some(6) => Ok(6),
+        Some(7) => Ok(0),
+        // Switch to 0 once the L1 default verifier becomes the V8 one (as done for V7).
+        Some(8) => Ok(8),
+        Some(version) => Err(ProofEncodingError::UnsupportedExecutionVersion { version }),
+    }
+}
+
+/// The type-5 proof words the on-chain `MultiProofVerifier` parses.
+///
+/// The outer header is the bare proof type: the verifier rejects a header
+/// with any bit at or above 8 set, so the verifier version must not be
+/// folded into it. Versioning lives in the Airbender sub-proof envelope
+/// instead — the inner `ZKsyncOSDualVerifier` parses the sub-proof's word 0
+/// as its own type-and-version header and chains the public-input hash from
+/// its word 1, where anything but zero alters the PLONK public input and
+/// fails the pairing with no named revert. `words[2]` counts the envelope:
+/// the inner verifier receives `words[3 .. 3 + words[2]]`.
+fn multiproof_proof_words(
+    airbender_proof: &[u8],
+    zisk_proof: &[u8],
+    verifier_version: u32,
+) -> Vec<U256> {
+    fn to_u256_chunks(bytes: &[u8]) -> impl Iterator<Item = U256> + '_ {
+        bytes.chunks_exact(32).map(|c| {
+            let arr: [u8; 32] = c.try_into().unwrap();
+            U256::from_be_bytes(arr)
+        })
+    }
+
+    let airbender_words = airbender_proof.len() / 32;
+    let mut words = vec![
+        U256::from(MULTI_PROOF_TYPE),
+        // Previous hash: proofs are generated to match the range perfectly.
+        U256::from(0),
+        U256::from(airbender_words + 2),
+        U256::from(OHBENDER_PROOF_TYPE | (verifier_version << 8)),
+        // The dual verifier's chaining seed. Zero and only zero: the chained
+        // value it receives is already complete.
+        U256::from(0),
+    ];
+    words.extend(to_u256_chunks(airbender_proof));
+    words.extend(to_u256_chunks(zisk_proof));
+    words
+}
 
 #[derive(Debug)]
 pub struct ProofCommand {
     batches: Vec<SignedBatchEnvelope<FriProof>>,
     proof: SnarkProof,
+}
+
+/// Errors from proof calldata encoding.
+#[derive(Debug, thiserror::Error)]
+pub enum ProofEncodingError {
+    #[error("Airbender proof length ({len}) is not a multiple of 32")]
+    AirbenderProofNotAligned { len: usize },
+    #[error("unsupported execution version: {version}")]
+    UnsupportedExecutionVersion { version: u32 },
 }
 
 impl ProofCommand {
@@ -26,6 +90,19 @@ impl ProofCommand {
             "ProofCommand must contain at least one batch"
         );
         Self { batches, proof }
+    }
+
+    /// Decompose into parts. Used for error recovery when downstream send fails.
+    pub fn batches(&self) -> &[SignedBatchEnvelope<FriProof>] {
+        &self.batches
+    }
+
+    pub fn proof(&self) -> &SnarkProof {
+        &self.proof
+    }
+
+    pub fn into_parts(self) -> (Vec<SignedBatchEnvelope<FriProof>>, SnarkProof) {
+        (self.batches, self.proof)
     }
 }
 
@@ -172,6 +249,11 @@ impl ProofCommand {
     }
 
     fn to_calldata_suffix(&self) -> Vec<u8> {
+        self.try_to_calldata_suffix()
+            .expect("proof calldata encoding failed: this is a critical pipeline bug")
+    }
+
+    fn try_to_calldata_suffix(&self) -> Result<Vec<u8>, ProofEncodingError> {
         let previous_batch_info = &self
             .batches
             .first()
@@ -183,18 +265,10 @@ impl ProofCommand {
             .iter()
             .map(|batch| batch.batch.batch_info.clone().into_stored())
             .collect();
-        // todo: awful and temporary
-        let verifier_version = match self.proof.proving_execution_version() {
-            // Use default verifier for fake proofs.
-            None => 0,
-            Some(6) => 6,
-            Some(7) => 0,
-            // Switch to 0 once the L1 default verifier becomes the V8 one (as done for V7).
-            Some(8) => 8,
-            Some(execution_version) => panic!(
-                "unsupported or old execution version: {execution_version}; there's no verifier defined for it"
-            ),
-        };
+        // One mapping for every proof kind: a MultiProof's Airbender sub-proof
+        // is verified by the same registered sub-verifier as a single-lane
+        // submission of the same proving version.
+        let verifier_version = l1_verifier_version(self.proof.proving_execution_version())?;
 
         // todo: remove tostring
         // v32.0 (proving V8) folds the chain config hash into the batch public input.
@@ -259,6 +333,20 @@ impl ProofCommand {
                 .chain(proof)
                 .collect()
             }
+            SnarkProof::MultiProof(multi_proof) => {
+                // The two shapes are invariants of the on-chain verifiers and
+                // are checked when the proofs are composed, so there is nothing
+                // to validate here.
+                // The type-5 payload carries the SNARK words only. The on-chain
+                // MultiProofVerifier reconstructs the ZiSK public values from its
+                // pinned VKs and the batch public inputs. The aggregation manager
+                // validates the binding digest off-chain before submission.
+                multiproof_proof_words(
+                    multi_proof.airbender_proof(),
+                    multi_proof.zisk_proof(),
+                    verifier_version,
+                )
+            }
         };
 
         let proof_payload = proofPayloadCall {
@@ -270,11 +358,151 @@ impl ProofCommand {
             proof,
         };
 
-        /// Current commitment encoding version as per protocol.
-        const SUPPORTED_ENCODING_VERSION: u8 = 1;
-
-        let mut proof_data = vec![SUPPORTED_ENCODING_VERSION];
+        let mut proof_data = vec![zksync_os_contract_interface::calldata::PROOF_ENCODING_VERSION];
         proof_payload.abi_encode_raw(&mut proof_data);
-        proof_data
+        Ok(proof_data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zksync_os_batch_types::batcher_model::{MultiProofSnarkProof, ZISK_SNARK_PROOF_BYTES};
+
+    /// The on-chain `MultiProofVerifier` rejects a header with any bit at or
+    /// above 8 set (`InvalidProofFormat`), and its Airbender inner verifier is
+    /// the `ZKsyncOSDualVerifier`, which parses `_proof[3]` as its own
+    /// type-and-version header and chains from `_proof[4]` — a non-zero seed
+    /// there changes the PLONK public input and fails the pairing with no
+    /// named revert. So: bare type 5, then the two-word envelope, with
+    /// `_proof[2]` counting the envelope.
+    #[test]
+    fn multiproof_words_carry_a_bare_type_5_header_and_the_airbender_envelope() {
+        let airbender = vec![0xAB; 64]; // two PLONK words
+        let zisk = vec![0xCD; ZISK_SNARK_PROOF_BYTES]; // 24 words
+
+        let words = multiproof_proof_words(&airbender, &zisk, 6);
+
+        assert_eq!(words.len(), 3 + 2 + 2 + 24);
+        assert_eq!(words[0], U256::from(MULTI_PROOF_TYPE));
+        assert_eq!(words[1], U256::ZERO);
+        assert_eq!(words[2], U256::from(2 + 2));
+        assert_eq!(words[3], U256::from(OHBENDER_PROOF_TYPE | (6 << 8)));
+        assert_eq!(words[4], U256::ZERO);
+        assert_eq!(words[5], U256::from_be_bytes([0xAB; 32]));
+        assert_eq!(words[6], U256::from_be_bytes([0xAB; 32]));
+        assert_eq!(words[7], U256::from_be_bytes([0xCD; 32]));
+        assert_eq!(words[30], U256::from_be_bytes([0xCD; 32]));
+    }
+
+    /// The dual verifier resolves the PLONK sub-verifier from the envelope's
+    /// version field, and the deploy registers versions 0 (the default, which
+    /// verifies V7 proofs) and 6 — the same registry the single-lane arm
+    /// targets, so the same mapping applies.
+    #[test]
+    fn l1_verifier_version_uses_the_registry_mapping() {
+        assert_eq!(l1_verifier_version(None).unwrap(), 0);
+        assert_eq!(l1_verifier_version(Some(6)).unwrap(), 6);
+        assert_eq!(l1_verifier_version(Some(7)).unwrap(), 0);
+        assert_eq!(l1_verifier_version(Some(8)).unwrap(), 8);
+        assert!(matches!(
+            l1_verifier_version(Some(9)),
+            Err(ProofEncodingError::UnsupportedExecutionVersion { version: 9 })
+        ));
+    }
+
+    #[test]
+    fn test_multi_proof_serde_roundtrip() {
+        let multi_proof =
+            MultiProofSnarkProof::new(vec![0xAB; 64], vec![0xCD; 768], 6).expect("well-shaped");
+        let snark = SnarkProof::MultiProof(multi_proof);
+        let json = serde_json::to_string(&snark).unwrap();
+        let decoded: SnarkProof = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.proving_execution_version(), Some(6));
+        assert_eq!(decoded.airbender_proof().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn test_multi_proof_proving_version() {
+        let snark = SnarkProof::MultiProof(
+            MultiProofSnarkProof::new(vec![], vec![0; ZISK_SNARK_PROOF_BYTES], 6)
+                .expect("well-shaped"),
+        );
+        assert_eq!(snark.proving_execution_version(), Some(6));
+
+        // A MultiProof carries two proofs; `airbender_proof` names which one.
+        let snark2 = SnarkProof::MultiProof(
+            MultiProofSnarkProof::new(vec![7; 32], vec![0; ZISK_SNARK_PROOF_BYTES], 5)
+                .expect("well-shaped"),
+        );
+        assert_eq!(snark2.airbender_proof(), Some(&[7u8; 32][..]));
+        assert_eq!(snark2.proving_execution_version(), Some(5));
+
+        // The shapes the on-chain verifiers require are checked here, not at
+        // the encoder.
+        assert!(MultiProofSnarkProof::new(vec![], vec![0; 10], 6).is_err());
+        assert!(
+            MultiProofSnarkProof::new(vec![0; 33], vec![0; ZISK_SNARK_PROOF_BYTES], 6).is_err()
+        );
+    }
+
+    #[test]
+    fn test_backward_compat_existing_variants() {
+        // Fake proof still works
+        let fake = SnarkProof::Fake;
+        assert_eq!(fake.proving_execution_version(), None);
+        assert!(fake.airbender_proof().is_none());
+
+        // Real proof still works
+        let real = SnarkProof::Real(zksync_os_batch_types::batcher_model::RealSnarkProof::V2 {
+            proof: vec![0xAA; 32],
+            proving_execution_version: 6,
+        });
+        assert_eq!(real.proving_execution_version(), Some(6));
+        assert_eq!(real.airbender_proof().unwrap().len(), 32);
+    }
+
+    /// The type promises its two shapes, and `serde` must not be able to hand
+    /// back a value that breaks them: `derive(Deserialize)` would write the
+    /// private fields directly, so deserialization goes through the
+    /// constructor.
+    #[test]
+    fn deserialization_cannot_bypass_the_shape_checks() {
+        let good = SnarkProof::MultiProof(
+            MultiProofSnarkProof::new(vec![0xAB; 64], vec![0xCD; ZISK_SNARK_PROOF_BYTES], 6)
+                .expect("well-shaped"),
+        );
+        let json = serde_json::to_string(&good).unwrap();
+        serde_json::from_str::<SnarkProof>(&json).expect("a valid value round-trips");
+
+        // A ZiSK proof one byte short, and an unaligned Airbender proof.
+        let short = json.replace(
+            &format!(
+                "\"zisk_proof\":[{}]",
+                vec!["205"; ZISK_SNARK_PROOF_BYTES].join(",")
+            ),
+            &format!(
+                "\"zisk_proof\":[{}]",
+                vec!["205"; ZISK_SNARK_PROOF_BYTES - 1].join(",")
+            ),
+        );
+        assert_ne!(short, json, "the fixture must actually shorten the proof");
+        assert!(
+            serde_json::from_str::<SnarkProof>(&short).is_err(),
+            "a short ZiSK proof must not deserialize"
+        );
+        let unaligned = json.replace(
+            &format!("\"airbender_proof\":[{}]", vec!["171"; 64].join(",")),
+            &format!("\"airbender_proof\":[{}]", vec!["171"; 63].join(",")),
+        );
+        assert_ne!(
+            unaligned, json,
+            "the fixture must actually unalign the proof"
+        );
+        assert!(
+            serde_json::from_str::<SnarkProof>(&unaligned).is_err(),
+            "an unaligned Airbender proof must not deserialize"
+        );
     }
 }

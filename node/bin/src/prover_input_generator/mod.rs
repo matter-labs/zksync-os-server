@@ -36,6 +36,10 @@ pub struct ProverInputGenerator<ReadState> {
     pub merkle_tree: MerkleTree<RocksDBWrapper>,
     /// When true, skip all computation and emit `ProverInput::Fake` for every block.
     pub disabled: bool,
+    /// When true, a second proof system builds its own witness at batch seal
+    /// and needs every block's tree data to do it. This lane computes nothing
+    /// for it — it only stops discarding what seal will need.
+    pub second_proof_system: bool,
 }
 
 #[async_trait]
@@ -99,7 +103,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             None => return Ok(()),
         };
         state_reporter.enter_state(GenericComponentState::Active);
-        let result = self.spawn_computation(first_item).await?;
+        let result = self.spawn_computation(first_item).await??;
         tracing::debug!(
             block_number = result.output.header.number,
             "sending block with prover input to batcher",
@@ -108,7 +112,8 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
 
         // Process remaining items with up to `maximum_in_flight_blocks` in parallel.
         // Results are delivered in arrival order via FuturesOrdered.
-        let mut pending: FuturesOrdered<oneshot::Receiver<ProverBlock>> = FuturesOrdered::new();
+        let mut pending: FuturesOrdered<oneshot::Receiver<Result<ProverBlock>>> =
+            FuturesOrdered::new();
         let mut input_done = false;
 
         loop {
@@ -132,7 +137,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                 }
                 Some(result) = pending.next(), if !pending.is_empty() => {
                     state_reporter.enter_state(GenericComponentState::Active);
-                    let item = result.map_err(|_| anyhow::anyhow!("prover input computation task dropped sender"))?;
+                    let item = result.map_err(|_| anyhow::anyhow!("prover input computation task dropped sender"))??;
                     tracing::debug!(
                         block_number = item.output.header.number,
                         "sending block with prover input to batcher",
@@ -151,7 +156,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
     /// a receiver for the result. The computation is tracked as a graceful task so its
     /// [`VersionedMerkleTree`] (holding the tree RocksDB lock) is guaranteed to be dropped
     /// before [graceful_shutdown_with_timeout] returns.
-    fn spawn_computation(&self, input: TreeBlock) -> oneshot::Receiver<ProverBlock> {
+    fn spawn_computation(&self, input: TreeBlock) -> oneshot::Receiver<Result<ProverBlock>> {
         let TreeBlock {
             output: block_output,
             record: replay_record,
@@ -176,20 +181,25 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
         if proving_version >= ProvingVersion::V8 {
             // V8 prover input is generated natively at batch seal time; pass the block's tree
             // data along so the batch run can serve tree queries without I/O.
-            let _ = result_tx.send(ProverBlock {
+            let _ = result_tx.send(Ok(ProverBlock {
                 output: block_output,
                 record: replay_record,
                 prover_input: ProverInput::Fake,
                 tree_output: tree.output,
                 tree_data: Some(tree),
-            });
+            }));
             return result_rx;
         }
 
         let versioned_tree = VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1);
 
+        let second_proof_system = self.second_proof_system;
         let mut handle = tokio::task::spawn_blocking(move || {
             let tree_output = tree.output;
+            // The primary lane consumes `tree` below. A second proof system
+            // builds its witness at seal from this block's touched keys and
+            // proof, so keep a copy for it — and only for it.
+            let tree_data = second_proof_system.then(|| tree.clone());
             let (prover_input_words, elapsed) = compute_prover_input(
                 &replay_record,
                 read_state,
@@ -206,19 +216,27 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
                 elapsed,
             });
             let prover_input = ProverInput::Real(prover_input_words);
-            ProverBlock {
+            Ok(ProverBlock {
                 output: block_output,
                 record: replay_record,
                 prover_input,
                 tree_output,
-                tree_data: None,
-            }
+                tree_data,
+            })
         });
         self.runtime.spawn_critical_with_graceful_shutdown_signal(
             "prover input computation",
             |shutdown| async move {
                 tokio::select! {
-                    Ok(result) = &mut handle => {
+                    join_result = &mut handle => {
+                        // A `JoinError` must become a value on the channel: leaving
+                        // the arm unmatched would hold `result_tx` until shutdown,
+                        // and the awaiting run loop would hang instead of failing.
+                        let result = join_result.unwrap_or_else(|join_error| {
+                            Err(anyhow::anyhow!(
+                                "prover input computation task failed: {join_error}"
+                            ))
+                        });
                         let _ = result_tx.send(result);
                     }
                     _guard = shutdown => {
