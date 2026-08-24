@@ -39,8 +39,8 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
-      # The guest checkout follows the server's own pin, so the fixtures can
-      # never be produced from a guest the server does not actually run.
+      # Deliberately built from the pinned rev, not release assets: fixture
+      # regeneration happens on guest ROTATIONS, which precede any release.
       - name: Resolve the pinned guest rev
         id: guest
         run: |

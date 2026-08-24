@@ -18,6 +18,8 @@ env:
   TEST_RESULTS_XML: 'test-results.xml'
   PROVER_GPU_TESTS: 'prover-gpu-tests'
   ZISK_VERSION: '0.18.0'
+  # Assets of the pinned guest (Cargo.toml rev 055e720 = tag 0.0.2; 0.0.3 ships the identical byte-frozen ELFs, re-verified below).
+  ZISK_RELEASE: '0.0.3'
   CUDAARCHS: '80;89;90'
   # Run tests 10 times in case of push to main branch to catch possible flakiness
   NEXTEST_ITERATIONS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '--stress-count 10' || '' }}
@@ -180,41 +182,31 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
-      # The ZiSK artifacts follow the server's own guest pin, so they can never drift from it.
-      - name: Resolve the pinned guest rev
-        id: guest
+      # Prebuilt ZiSK artifacts from the pinned release. The ELF hashes are re-verified against
+      # the same recorded pins the reproducible source builds enforce, so a release asset can
+      # never silently diverge from the byte-frozen guest sources.
+      - name: Download and verify the ZiSK release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZISK_GUEST_ELF_SHA256: '80b841c76445dd3c411cc1f11447cc85285521541378821442aef1f7262da932'
+          ZISK_AGG_ELF_SHA256: 'f96f9285ca87083f322569d72fd379b67b1ee2ea3286c078c26e313acd27e7ae'
         run: |
-          rev="$(grep -m1 'zksync-os-zisk-lib' Cargo.toml | sed -E 's/.*rev = "([0-9a-f]+)".*/\1/')"
-          echo "rev=${rev}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout the guest repo at the pinned rev
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: matter-labs/zksync-os-zisk
-          ref: ${{ steps.guest.outputs.rev }}
-          path: zisk-guest
-
-      - name: Build both guest ELFs (pinned container, recorded-hash verified)
-        working-directory: zisk-guest
-        run: |
-          ./build-guest.sh
-          ./build-aggregator.sh
-
-      - name: Build the ZiSK prover service
-        working-directory: zisk-guest/prover
-        run: |
-          # Unbind the nested crate from the server workspace cargo would otherwise resolve it against.
-          grep -q '^\[workspace\]' Cargo.toml || printf '\n[workspace]\n' >> Cargo.toml
-          cargo build --release --bin zksync-os-zisk-prover-service
+          mkdir -p zisk-artifacts && cd zisk-artifacts
+          gh release download "${ZISK_RELEASE}" -R matter-labs/zksync-os-zisk
+          sha256sum -c SHA256SUMS
+          tar xzf "zksync-os-zisk-guest-elfs-${ZISK_RELEASE}.tar.gz"
+          tar xzf "zksync-os-zisk-prover-${ZISK_RELEASE}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZISK_GUEST_ELF_SHA256}  zksync-os-zisk-guest" | sha256sum -c
+          echo "${ZISK_AGG_ELF_SHA256}  zksync-os-zisk-guest-aggregator" | sha256sum -c
 
       - name: Upload the ZiSK artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: zisk-e2e-artifacts
           path: |
-            zisk-guest/out/zksync-os-zisk-guest
-            zisk-guest/out/zksync-os-zisk-guest-aggregator
-            zisk-guest/prover/target/release/zksync-os-zisk-prover-service
+            zisk-artifacts/zksync-os-zisk-guest
+            zisk-artifacts/zksync-os-zisk-guest-aggregator
+            zisk-artifacts/zksync-os-zisk-prover-service
           if-no-files-found: error
           retention-days: 1
 
@@ -323,9 +315,9 @@ jobs:
         env:
           COMPACT_CRS_FILE: ${{ github.workspace }}/setup_compact.key
           ZISK_GPU_TESTS_REQUIRED: "1"
-          ZISK_ELF: ${{ github.workspace }}/zisk-artifacts/out/zksync-os-zisk-guest
-          ZISK_AGG_ELF: ${{ github.workspace }}/zisk-artifacts/out/zksync-os-zisk-guest-aggregator
-          ZISK_PROVER_BIN: ${{ github.workspace }}/zisk-artifacts/prover/target/release/zksync-os-zisk-prover-service
+          ZISK_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest
+          ZISK_AGG_ELF: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-guest-aggregator
+          ZISK_PROVER_BIN: ${{ github.workspace }}/zisk-artifacts/zksync-os-zisk-prover-service
           # Runbook section 4: the v31 pin set.
           ZISK_PROGRAM_VK: "0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec"
           ZISK_VADCOP_VK: "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
