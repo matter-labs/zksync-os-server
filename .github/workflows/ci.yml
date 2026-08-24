@@ -243,16 +243,6 @@ jobs:
           echo "${ZISK_GUEST_ELF_SHA256}  zksync-os-zisk-guest" | sha256sum -c
           echo "${ZISK_AGG_ELF_SHA256}  zksync-os-zisk-guest-aggregator" | sha256sum -c
 
-      # cargo-zisk's runtime set, per docker/zksync-os-zisk-prover in the guest repo (program-setup assembles and links at runtime).
-      - name: Install ZiSK runtime dependencies
-        run: |
-          SUDO=""
-          [ "$(id -u)" -ne 0 ] && SUDO="sudo"
-          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update
-          $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            curl ca-certificates xz-utils build-essential libgmp-dev \
-            openmpi-bin libopenmpi-dev libsodium-dev libomp-dev
-
       # ziskup skips already-installed pieces, so the persistent runner pays the key downloads once.
       - name: Install ZiSK toolchain and both proving keys
         run: |
