@@ -47,7 +47,6 @@ use crate::metrics::L1_SENDER_METRICS;
 use crate::pipeline_component::L1Sender;
 use crate::{FeeParams, L1SenderState, METHOD_NOT_FOUND_CODE, PreparedSidecar, SimPrefixEntry};
 use alloy::consensus::Transaction as ConsensusTransaction;
-use alloy::eips::BlockId;
 use alloy::network::{Ethereum, Network, TransactionResponse};
 use alloy::primitives::{Address, B256};
 use alloy::providers::Provider;
@@ -150,13 +149,19 @@ where
         mut inbound: PeekableReceiver<L1SenderCommand<Input>>,
         outbound: mpsc::Sender<SignedBatchEnvelope<FriProof>>,
         state_reporter: ComponentStateReporter,
+        latest_nonce: u64,
     ) -> anyhow::Result<()> {
         let command_name = Input::COMPONENT_ID.as_str();
         let operator_address = self.operator_address().await?;
         let window = self.config.command_limit.max(1);
 
         let start = self
-            .plan_pipelined_recovery(&mut inbound, &state_reporter, operator_address)
+            .plan_pipelined_recovery(
+                &mut inbound,
+                &state_reporter,
+                operator_address,
+                latest_nonce,
+            )
             .await?
             .context("inbound channel closed during in-flight recovery")?;
 
@@ -776,14 +781,9 @@ where
         inbound: &mut PeekableReceiver<L1SenderCommand<Input>>,
         state_reporter: &ComponentStateReporter,
         operator_address: Address,
+        latest_nonce: u64,
     ) -> anyhow::Result<Option<PipelinedStart<Input>>> {
         let command_name = Input::COMPONENT_ID.as_str();
-        let latest_nonce = self
-            .provider
-            .get_transaction_count(operator_address)
-            .block_id(BlockId::number(self.l1_block_number))
-            .await
-            .context("get confirmed transaction count")?;
         let pending_nonce = self
             .provider
             .get_transaction_count(operator_address)
