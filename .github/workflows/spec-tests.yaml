@@ -74,10 +74,19 @@ jobs:
         run: pip install -r ./python-scripts/requirements.txt
 
       - name: Install gETH node
+        env:
+          # The Launchpad PPA needs a live GPG key lookup on every run and periodically answers
+          # with `GPGKeyTemporarilyNotFoundError`, failing the job before any test runs.
+          # The official tarball has no such dependency and pins an exact build.
+          GETH_VERSION: 1.17.4-36a7dc72
         run: |
-          sudo add-apt-repository -y ppa:ethereum/ethereum
-          sudo apt-get update
-          sudo apt-get install ethereum --yes
+          curl -fsSL --retry 3 --retry-all-errors \
+            "https://gethstore.blob.core.windows.net/builds/geth-linux-amd64-${GETH_VERSION}.tar.gz" \
+            -o geth.tar.gz
+          tar -xzf geth.tar.gz
+          sudo install -m 0755 "geth-linux-amd64-${GETH_VERSION}/geth" /usr/local/bin/geth
+          rm -rf geth.tar.gz "geth-linux-amd64-${GETH_VERSION}"
+          geth version
 
       - name: Install yq
         env:
@@ -171,7 +180,8 @@ jobs:
     runs-on: matterlabs-ci-runner-high-performance
     env:
       RPC_URL: http://localhost:3050
-      CHAIN_ID: 6565
+      # CHAIN_ID is deliberately absent: it is read off the running node below. Declaring it
+      # here would shadow the value exported to GITHUB_ENV.
       # Use hardcoded rich wallet
       WALLET_ADDRESS: "0x36615Cf349d7F6344891B1e7CA7C72883F5dc049"
       PRIVATE_KEY: "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110"
@@ -218,6 +228,14 @@ jobs:
             sleep $INTERVAL
           done
           echo "Sequencer is up and running."
+
+      # The chain ID comes from the local chain state the server boots from, so it changes
+      # whenever that state is regenerated. Reading it from the node keeps the tests in sync.
+      - name: Resolve L2 chain ID
+        run: |
+          CHAIN_ID=$(cast chain-id --rpc-url "${RPC_URL}")
+          echo "Node reports L2 chain ID ${CHAIN_ID}"
+          echo "CHAIN_ID=${CHAIN_ID}" >> "${GITHUB_ENV}"
 
       - name: Checkout solidity tests
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
