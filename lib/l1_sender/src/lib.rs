@@ -884,36 +884,12 @@ where
     ) -> anyhow::Result<Vec<(alloy::primitives::B256, Input)>> {
         let command_name = Input::COMPONENT_ID.as_str();
         let operator_address = self.operator_address().await?;
-        // The pinned block can age out of the provider's available history
-        // before this component's FIRST command arrives and triggers recovery
-        // — observed with the prove sender, whose first command comes only
-        // when a whole range has both proofs, ~20 minutes after the pin on a
-        // fast test chain; an archival window can do the same on a real L1.
-        // The pin only guards the in-flight miscount race, and the pairing
-        // below is calldata-checked with a graceful mismatch path, so falling
-        // back to `latest` merely widens the confirmed window — strictly
-        // better than the alternative, which is a crash with no way forward.
-        let latest_nonce = match self
+        let latest_nonce = self
             .provider
             .get_transaction_count(operator_address)
             .block_id(BlockId::number(self.l1_block_number))
             .await
-        {
-            Ok(nonce) => nonce,
-            Err(err) => {
-                tracing::warn!(
-                    %err,
-                    l1_block_number = self.l1_block_number,
-                    "confirmed-nonce baseline block is no longer available; \
-                     falling back to the latest block"
-                );
-                self.provider
-                    .get_transaction_count(operator_address)
-                    .latest()
-                    .await
-                    .context("get confirmed transaction count (latest fallback)")?
-            }
-        };
+            .context("get confirmed transaction count")?;
         let pending_nonce = self
             .provider
             .get_transaction_count(operator_address)
