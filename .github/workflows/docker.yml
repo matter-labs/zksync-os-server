@@ -55,8 +55,12 @@ jobs:
         env:
           DOCKER_METADATA_SHORT_SHA_LENGTH: 7
         with:
+          # The unsuffixed ghcr packages belong to the public zksync-os-server
+          # repo; this fork can only write its own `-private` packages. A denied
+          # ghcr push aborts the whole multi-registry push, Artifact Registry
+          # included.
           images: |
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}-private
             us-docker.pkg.dev/matterlabs-infra/matterlabs-docker/${{ matrix.component }}
           tags: |
             type=raw,value=${{ inputs.tag_name }},enable=${{ inputs.tag_name != '' }}
@@ -69,7 +73,7 @@ jobs:
       - name: Define whether to save cache
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         id: set-cache-to
-        run: echo "cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:buildcache,mode=max" >> "${GITHUB_OUTPUT}"
+        run: echo "cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}-private:buildcache,mode=max" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
@@ -85,10 +89,14 @@ jobs:
             SCCACHE_GCS_SERVICE_ACCOUNT=gha-ci-runners@matterlabs-infra.iam.gserviceaccount.com
             SCCACHE_GCS_RW_MODE=READ_WRITE
             RUSTC_WRAPPER=sccache
+          # Cargo git dependencies may live in private repos; passed as a
+          # BuildKit secret so the token never lands in image layers.
+          secrets: |
+            github_token=${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: ${{ github.event_name != 'pull_request' }}
-          cache-from: 'type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:buildcache'
+          cache-from: 'type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}-private:buildcache'
           cache-to: ${{ steps.set-cache-to.outputs.cache-to }}
 
   sbom-generation:

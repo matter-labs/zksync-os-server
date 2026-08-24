@@ -57,6 +57,13 @@ jobs:
         with:
           ref: ${{ inputs.tag || '' }}
 
+      # This workflow does not use the `runner-setup` action, so the shared
+      # auth action is invoked directly here.
+      - name: Configure private repo auth
+        uses: ./.github/actions/private-git-auth
+        with:
+          token: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
+
       - name: Install linux packages
         if: ${{ runner.os == 'Linux' }}
         run: |

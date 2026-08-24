@@ -194,6 +194,8 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
+        with:
+          github_token: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
 
       - name: Decompress anvil state
         run: gzip -dfk ./local-chains/v31.0/l1-state.json.gz

@@ -24,6 +24,13 @@ inputs:
     description: 'Shared key for cache.'
     required: false
     default: 'dev'
+  github_token:
+    description: >-
+      Token with read access to private dependency repositories. Composite
+      actions cannot read `secrets` themselves, so callers must pass it in.
+      Leave empty for public-only builds.
+    required: false
+    default: ''
 
 
 outputs:
@@ -35,6 +42,12 @@ outputs:
 runs:
   using: composite
   steps:
+
+    # Must run before any step that resolves Cargo dependencies.
+    - name: Configure private repo auth
+      uses: ./.github/actions/private-git-auth
+      with:
+        token: ${{ inputs.github_token }}
 
     - name: Install linux packages
       shell: 'bash -ex {0}'
