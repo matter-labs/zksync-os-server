@@ -40,6 +40,8 @@ use zksync_os_status_server::StatusResponse;
 use zksync_os_types::{
     L1PriorityTxType, L1TxType, NodeRole, REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE,
 };
+#[cfg(feature = "prover-tests")]
+use zksync_os_types::{ProtocolSemanticVersion, ProverInputStrategy, require_proving_config};
 
 pub mod assert_traits;
 pub mod config;
@@ -966,27 +968,64 @@ impl AnvilL1 {
 }
 
 #[cfg(feature = "prover-tests")]
+struct ProverServiceFixture {
+    protocol_version: ProtocolSemanticVersion,
+    expected_prover_input: ProverInputStrategy,
+    prover_release: &'static str,
+}
+
+#[cfg(feature = "prover-tests")]
+fn prover_service_fixture(protocol_directory: &str) -> ProverServiceFixture {
+    match protocol_directory {
+        PROTOCOL_VERSION_V30_2 => ProverServiceFixture {
+            protocol_version: ProtocolSemanticVersion::new(0, 30, 2),
+            expected_prover_input: ProverInputStrategy::V6BlockInputs,
+            prover_release: "v0.7.1",
+        },
+        PROTOCOL_VERSION_V31_0 => ProverServiceFixture {
+            protocol_version: ProtocolSemanticVersion::new(0, 31, 0),
+            expected_prover_input: ProverInputStrategy::V7BlockInputs,
+            prover_release: "v0.8.0",
+        },
+        _ => panic!("no real-prover test fixture for local chain `{protocol_directory}`"),
+    }
+}
+
+#[cfg(feature = "prover-tests")]
 async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterations: usize) {
-    let protocol_version = tester.chain_layout.protocol_version();
-    let app_bin_path = match protocol_version {
-        PROTOCOL_VERSION_V30_2 => utils::materialize_multiblock_batch_bin(
+    let fixture = prover_service_fixture(tester.chain_layout.protocol_version());
+    let proving_config =
+        require_proving_config(&fixture.protocol_version, "integration-test prover startup")
+            .expect("prover tests require a registered proving stack");
+    assert_eq!(
+        proving_config.prover_input, fixture.expected_prover_input,
+        "real-prover test fixture does not match the registered proving stack"
+    );
+    let app_bin_path = match proving_config.prover_input {
+        ProverInputStrategy::V6BlockInputs => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
             "v6",
             zksync_os_multivm::apps::v6::MULTIBLOCK_BATCH,
         ),
-        PROTOCOL_VERSION_V31_0 => utils::materialize_multiblock_batch_bin(
+        ProverInputStrategy::V7BlockInputs => utils::materialize_multiblock_batch_bin(
             &tester.tempdir.path().join("app_bins"),
             "v7",
             zksync_os_multivm::apps::v7::MULTIBLOCK_BATCH,
         ),
-        _ => panic!("unsupported protocol version for prover tests"),
+        ProverInputStrategy::V8NativeBatch => {
+            panic!(
+                "prover-tests has no bundled external prover for stack {}",
+                proving_config.name
+            )
+        }
     };
     let trusted_setup_file = std::env::var("COMPACT_CRS_FILE").unwrap();
     let output_dir = tester.tempdir.path().join("outputs");
     std::fs::create_dir_all(&output_dir).unwrap();
 
     let path =
-        download_prover_and_unpack(protocol_version, cfg!(feature = "gpu-prover-tests")).await;
+        download_prover_and_unpack(fixture.prover_release, cfg!(feature = "gpu-prover-tests"))
+            .await;
 
     let mut child = tokio::process::Command::new(&path)
         .arg("--sequencer-urls")
@@ -1033,19 +1072,7 @@ async fn spawn_prover_service(tester: &Tester, sequencer_urls: &[String], iterat
 }
 
 #[cfg(feature = "prover-tests")]
-fn prover_release_for_protocol(protocol_version: &str) -> &'static str {
-    match protocol_version {
-        PROTOCOL_VERSION_V30_2 => "v0.7.1",
-        PROTOCOL_VERSION_V31_0 => "v0.8.0",
-        _ => {
-            panic!("unsupported protocol version `{protocol_version}` for prover binary selection")
-        }
-    }
-}
-
-#[cfg(feature = "prover-tests")]
-async fn download_prover_and_unpack(protocol_version: &str, gpu: bool) -> String {
-    let release_version = prover_release_for_protocol(protocol_version);
+async fn download_prover_and_unpack(release_version: &str, gpu: bool) -> String {
     let release_base_url = format!(
         "https://github.com/matter-labs/zksync-airbender-prover/releases/download/{release_version}"
     );

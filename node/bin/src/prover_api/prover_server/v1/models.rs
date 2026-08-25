@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use zksync_os_types::ProvingVersion;
+use zksync_os_types::proving_registry;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct BatchDataPayload {
@@ -17,7 +17,7 @@ pub(super) struct ProverQuery {
 }
 
 impl ProverQuery {
-    /// Proving versions this prover declared support for.
+    /// Verification-key hashes this prover declared support for.
     ///
     /// `None` means no declaration and the caller must not filter jobs. This is a
     /// backwards-compatibility layer: old provers don't send `supported_vk_hashes`
@@ -27,12 +27,12 @@ impl ProverQuery {
     /// multi-version provers, which become possible on the prover side with
     /// airbender v2.
     ///
-    /// A declared hash the server doesn't recognize is skipped with a warning: it's
-    /// most likely a proving version newer than this server, and the prover should
+    /// A declared hash the server doesn't recognize is skipped with a warning: it
+    /// most likely belongs to a proving version newer than this server, and the prover should
     /// still be served the versions both sides know. If nothing in the declaration
     /// is recognized, this returns `Some(vec![])` so that such a prover gets *no*
     /// jobs rather than any jobs.
-    pub fn supported_proving_versions(&self) -> Option<Vec<ProvingVersion>> {
+    pub fn supported_vk_hashes(&self) -> Option<Vec<&'static str>> {
         let hashes: Vec<&str> = self
             .supported_vk_hashes
             .iter()
@@ -45,11 +45,14 @@ impl ProverQuery {
             return None;
         }
 
-        let versions = hashes
+        let hashes = hashes
             .into_iter()
-            .filter_map(|hash| match ProvingVersion::try_from_vk_hash(hash) {
-                Ok(version) => Some(version),
-                Err(_) => {
+            .filter_map(|hash| {
+                if let Some(canonical_hash) =
+                    proving_registry().canonical_verification_key_hash(hash)
+                {
+                    Some(canonical_hash)
+                } else {
                     tracing::warn!(
                         prover_id = self.id,
                         vk_hash = hash,
@@ -60,7 +63,7 @@ impl ProverQuery {
             })
             .collect();
 
-        Some(versions)
+        Some(hashes)
     }
 }
 
@@ -100,7 +103,7 @@ pub(super) struct FailedProofResponse {
 #[cfg(test)]
 mod tests {
     use super::ProverQuery;
-    use zksync_os_types::ProvingVersion;
+    use zksync_os_types::proving_registry;
 
     const UNKNOWN_VK_HASH: &str =
         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
@@ -112,43 +115,41 @@ mod tests {
         }
     }
 
+    fn known_vk_hashes() -> Vec<&'static str> {
+        let mut hashes: Vec<_> = proving_registry()
+            .iter()
+            .map(|entry| entry.configuration.verification_key_hash)
+            .collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        hashes
+    }
+
     #[test]
     fn no_declaration_means_no_filter() {
-        assert_eq!(query(None).supported_proving_versions(), None);
+        assert_eq!(query(None).supported_vk_hashes(), None);
         // Declared-but-blank is treated the same as absent
-        assert_eq!(query(Some("")).supported_proving_versions(), None);
-        assert_eq!(query(Some(" ,, ")).supported_proving_versions(), None);
+        assert_eq!(query(Some("")).supported_vk_hashes(), None);
+        assert_eq!(query(Some(" ,, ")).supported_vk_hashes(), None);
     }
 
     #[test]
     fn known_hashes_are_parsed() {
-        let q = query(Some(&format!(
-            "{}, {}",
-            ProvingVersion::V7.vk_hash(),
-            ProvingVersion::V8.vk_hash()
-        )));
-        assert_eq!(
-            q.supported_proving_versions(),
-            Some(vec![ProvingVersion::V7, ProvingVersion::V8])
-        );
+        let known = known_vk_hashes();
+        let q = query(Some(&known.join(", ")));
+        assert_eq!(q.supported_vk_hashes(), Some(known));
     }
 
     #[test]
     fn unknown_hash_is_skipped_keeping_known_ones() {
-        let q = query(Some(&format!(
-            "{},{}",
-            UNKNOWN_VK_HASH,
-            ProvingVersion::V7.vk_hash()
-        )));
-        assert_eq!(
-            q.supported_proving_versions(),
-            Some(vec![ProvingVersion::V7])
-        );
+        let known = known_vk_hashes()[0];
+        let q = query(Some(&format!("{UNKNOWN_VK_HASH},{known}")));
+        assert_eq!(q.supported_vk_hashes(), Some(vec![known]));
     }
 
     #[test]
     fn all_unknown_hashes_mean_no_jobs_not_no_filter() {
         let q = query(Some(UNKNOWN_VK_HASH));
-        assert_eq!(q.supported_proving_versions(), Some(vec![]));
+        assert_eq!(q.supported_vk_hashes(), Some(vec![]));
     }
 }

@@ -625,17 +625,17 @@ impl ProcessL1Event for L1UpgradeTxWatcher {
             .await
             .map_err(L1WatcherError::Batch)?;
 
-        // In localhost environment, we may want to test upgrades to non-live versions, but
-        // we don't want to allow them anywhere else.
-        if !upgrade_info.protocol_version().is_live() {
+        // Localhost may test upgrades without a proving stack, but production chains must not
+        // activate a protocol that cannot enter the real proving pipeline.
+        if !upgrade_info.protocol_version().is_supported_for_proving() {
             tracing::warn!(
                 target_protocol_version = ?upgrade_info.protocol_version(),
-                "received a protocol version that is not marked as live"
+                "received a protocol version that is unsupported for proving"
             );
-            // Only allow non-live versions in localhost environment.
+            // Only allow protocols unsupported for proving in localhost environments.
             if self.provider_l1.get_chain_id().await? != ANVIL_L1_CHAIN_ID {
                 panic!(
-                    "Received an upgrade to a non-live protocol version: {:?}",
+                    "Received an upgrade to a protocol version unsupported for proving: {:?}",
                     upgrade_info.protocol_version()
                 );
             }
