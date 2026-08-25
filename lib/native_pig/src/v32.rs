@@ -29,7 +29,7 @@ pub(crate) fn chain_config_hash(chain_id: u64) -> anyhow::Result<B256> {
     Ok(B256::from(chain_config(chain_id)?.hash()))
 }
 
-pub(crate) fn generate_batch_run<ReadState: ReadStateHistory>(
+pub fn generate_batch_run<ReadState: ReadStateHistory>(
     blocks: &[NativeBatchBlock<'_>],
     read_state: &ReadState,
     merkle_tree: MerkleTree<RocksDBWrapper>,

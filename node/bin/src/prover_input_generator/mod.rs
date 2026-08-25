@@ -18,7 +18,7 @@ use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_observability::{ComponentStateReporter, GenericComponentState};
 use zksync_os_pipeline::{PeekableReceiver, PipelineComponent, SendAndRecordExt};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord, TreeBlock};
-use zksync_os_types::{ProvingVersion, PubdataMode, ZksyncOsEncode};
+use zksync_os_types::{ProverInputStrategy, PubdataMode, ZksyncOsEncode, require_proving_config};
 
 mod tree_adapter;
 
@@ -73,12 +73,14 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     return Ok(());
                 };
                 state_reporter.enter_state(GenericComponentState::Active);
-                // Even with PIG disabled, the V8+ batcher consumes per-block tree data at seal
-                // time (the native batch run produces the canonical commit data, not just the
-                // prover input); pre-V8 blocks don't need it.
-                let needs_tree_data =
-                    ProvingVersion::try_from(replay_record.protocol_version.clone())
-                        .is_ok_and(|v| v >= ProvingVersion::V8);
+                // Even with PIG disabled, native batch generation consumes per-block tree data
+                // at seal time because its run produces canonical commit data as well as prover
+                // input. Per-block generation consumes the tree data here instead.
+                let proving_config = require_proving_config(
+                    &replay_record.protocol_version,
+                    "disabled block prover-input generation",
+                )?;
+                let needs_tree_data = proving_config.prover_input.requires_native_batch_run();
                 output.send_and_record(
                     ProverBlock {
                         output: block_output,
@@ -99,7 +101,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
             None => return Ok(()),
         };
         state_reporter.enter_state(GenericComponentState::Active);
-        let result = self.spawn_computation(first_item).await?;
+        let result = self.spawn_computation(first_item)?.await?;
         tracing::debug!(
             block_number = result.output.header.number,
             "sending block with prover input to batcher",
@@ -125,7 +127,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> PipelineComponent
                     match maybe_item {
                         Some(item) => {
                             state_reporter.record_picked(item.output.header.number, Some(item.record.block_context.timestamp), None);
-                            pending.push_back(self.spawn_computation(item));
+                            pending.push_back(self.spawn_computation(item)?);
                         }
                         None => input_done = true,
                     }
@@ -151,7 +153,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
     /// a receiver for the result. The computation is tracked as a graceful task so its
     /// [`VersionedMerkleTree`] (holding the tree RocksDB lock) is guaranteed to be dropped
     /// before [graceful_shutdown_with_timeout] returns.
-    fn spawn_computation(&self, input: TreeBlock) -> oneshot::Receiver<ProverBlock> {
+    fn spawn_computation(
+        &self,
+        input: TreeBlock,
+    ) -> anyhow::Result<oneshot::Receiver<ProverBlock>> {
         let TreeBlock {
             output: block_output,
             record: replay_record,
@@ -165,25 +170,30 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             .adapt_for_protocol_version(&replay_record.protocol_version)
             .da_commitment_scheme();
         let block_number = replay_record.block_context.block_number;
-        let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
-            .expect("invalid protocol version");
+        let proving_config = require_proving_config(
+            &replay_record.protocol_version,
+            "block prover-input generation",
+        )?;
         tracing::debug!(
             block_number,
             "ProverInputGenerator started processing block {} with {} transactions",
             block_number,
             replay_record.transactions.len(),
         );
-        if proving_version >= ProvingVersion::V8 {
-            // V8 prover input is generated natively at batch seal time; pass the block's tree
-            // data along so the batch run can serve tree queries without I/O.
-            let _ = result_tx.send(ProverBlock {
-                output: block_output,
-                record: replay_record,
-                prover_input: ProverInput::Fake,
-                tree_output: tree.output,
-                tree_data: Some(tree),
-            });
-            return result_rx;
+        match proving_config.prover_input {
+            ProverInputStrategy::ZkOs0_2BlockInputs | ProverInputStrategy::ZkOs0_3BlockInputs => {}
+            ProverInputStrategy::ZkOs0_4NativeBatch => {
+                // V8 prover input is generated natively at batch seal time; pass the block's tree data
+                // along so the batch run can serve tree queries without I/O.
+                let _ = result_tx.send(ProverBlock {
+                    output: block_output,
+                    record: replay_record,
+                    prover_input: ProverInput::Fake,
+                    tree_output: tree.output,
+                    tree_data: Some(tree),
+                });
+                return Ok(result_rx);
+            }
         }
 
         let versioned_tree = VersionedMerkleTree::new(self.merkle_tree.clone(), block_number - 1);
@@ -197,11 +207,12 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
                 versioned_tree,
                 da_commitment_scheme,
                 enable_logging,
+                proving_config.prover_input,
             );
             record_block_pig_telemetry(BlockPigTelemetry {
                 chain_id: replay_record.block_context.chain_id,
                 block_number,
-                proving_version,
+                protocol_version: replay_record.protocol_version.clone(),
                 prover_input_words: prover_input_words.len(),
                 elapsed,
             });
@@ -230,7 +241,7 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             },
         );
 
-        result_rx
+        Ok(result_rx)
     }
 }
 
@@ -241,6 +252,7 @@ fn compute_prover_input(
     versioned_tree: VersionedMerkleTree,
     da_commitment_scheme: DACommitmentScheme,
     enable_logging: bool,
+    prover_input_strategy: ProverInputStrategy,
 ) -> (Vec<u32>, Duration) {
     let block_number = replay_record.block_context.block_number;
     let state_view = state_handle.state_view_at(block_number - 1).unwrap();
@@ -252,10 +264,8 @@ fn compute_prover_input(
 
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
-    let proving_version = ProvingVersion::try_from(replay_record.protocol_version.clone())
-        .expect("invalid protocol version");
-    let prover_input = match proving_version {
-        ProvingVersion::V6 => {
+    let prover_input = match prover_input_strategy {
+        ProverInputStrategy::ZkOs0_2BlockInputs => {
             use zk_ee_0_2_10::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -293,7 +303,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        ProvingVersion::V7 => {
+        ProverInputStrategy::ZkOs0_3BlockInputs => {
             use zk_ee_prev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -331,7 +341,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        ProvingVersion::V8 => {
+        ProverInputStrategy::ZkOs0_4NativeBatch => {
             unreachable!("V8 prover input is generated natively at batch seal time")
         }
     };

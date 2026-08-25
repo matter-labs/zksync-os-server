@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Notify};
 use zksync_os_batch_types::batcher_model::{BatchMetadata, SignedBatchEnvelope};
+use zksync_os_types::ProvingConfiguration;
 
 /// Concurrent map of prover jobs that support FRI and SNARK workflows.
 /// Imposes a limit on batch range
@@ -131,7 +132,7 @@ impl<T: Clone> ProverJobMap<T> {
     }
 
     /// Picks multiple consecutive jobs that satisfy the predicate.
-    /// Only returns consecutive batch ranges with no gaps, and all jobs must have the same prover_version.
+    /// Only returns consecutive batch ranges with no gaps and the same proving stack.
     ///
     /// The predicate receives (batch_number, &JobEntry<T>) and should return true for jobs that should be picked.
     ///
@@ -189,7 +190,7 @@ impl<T: Clone> ProverJobMap<T> {
                 (
                     FriJob {
                         batch_number: metadata.batch_number,
-                        vk_hash: metadata.proving_version.vk_hash().to_string(),
+                        vk_hash: metadata.verification_key_hash().to_string(),
                     },
                     entry.batch_envelope.data.clone(),
                 )
@@ -211,7 +212,7 @@ impl<T: Clone> ProverJobMap<T> {
     /// - Not exceeding the limit of selected jobs
     /// - Being either pending or timed out
     /// - Passing the external predicate
-    /// - Maintaining consecutive batch numbers and matching proving version
+    /// - Maintaining consecutive batch numbers and proving-stack identity
     fn is_job_eligible<F>(
         &self,
         already_selected_jobs: &[JobMetadata],
@@ -242,12 +243,12 @@ impl<T: Clone> ProverJobMap<T> {
             return false;
         }
 
-        // No gaps in batch numbers and all have the same proving version
+        // No gaps in batch numbers and all jobs must use the same registered proving stack.
         match already_selected_jobs.last() {
             None => true,
             Some(last) => {
                 last.batch_number + 1 == next_job_entry.metadata.batch_number
-                    && next_job_entry.metadata.proving_version == last.proving_version
+                    && std::ptr::eq(next_job_entry.metadata.proving_config, last.proving_config)
             }
         }
     }
@@ -280,16 +281,30 @@ impl<T: Clone> ProverJobMap<T> {
             .map(|entry| entry.batch_envelope.batch.clone())
     }
 
+    /// Returns proving configurations for every job in the inclusive range, or `None` if any
+    /// job is missing.
+    pub async fn get_job_proving_configs(
+        &self,
+        batch_number_from: u64,
+        batch_number_to: u64,
+    ) -> Option<Vec<&'static ProvingConfiguration>> {
+        let jobs = self
+            .lock_with_tracking(JobMapMethod::GetJobProvingConfigs)
+            .await;
+        (batch_number_from..=batch_number_to)
+            .map(|batch_number| {
+                jobs.get(&batch_number)
+                    .map(|entry| entry.metadata.proving_config)
+            })
+            .collect()
+    }
+
     /// If a job is present for given batch_number, returns (vk, prover_input)
     pub async fn get_prover_input(&self, batch_number: u64) -> Option<(&'static str, T)> {
         let jobs = self.lock_with_tracking(JobMapMethod::GetProverInput).await;
         jobs.get(&batch_number).map(|entry| {
             (
-                entry
-                    .batch_envelope
-                    .batch
-                    .verification_key_hash()
-                    .expect("VK hash must exist"),
+                entry.metadata.verification_key_hash(),
                 entry.batch_envelope.data.clone(),
             )
         })
@@ -458,7 +473,7 @@ impl<T: Clone> ProverJobMap<T> {
             .map(|(batch_number, entry)| JobState {
                 fri_job: FriJob {
                     batch_number: *batch_number,
-                    vk_hash: entry.metadata.proving_version.vk_hash().to_string(),
+                    vk_hash: entry.metadata.verification_key_hash().to_string(),
                 },
                 assigned_seconds_ago: entry
                     .metadata
@@ -505,7 +520,17 @@ mod tests {
         create_test_batch_envelope, create_test_batch_envelope_with_protocol_version,
     };
     use std::time::Duration;
-    use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion};
+    use zksync_os_types::{ProtocolSemanticVersion, require_proving_config};
+
+    const V6_PROTOCOL_1: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 1);
+    const V6_PROTOCOL_2: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 30, 2);
+    const V7_PROTOCOL: ProtocolSemanticVersion = ProtocolSemanticVersion::new(0, 31, 0);
+
+    fn v6_verification_key_hash() -> &'static str {
+        require_proving_config(&V6_PROTOCOL_1, "prover job-map test fixture")
+            .expect("V6 test fixture must be registered for proving")
+            .verification_key_hash
+    }
 
     #[tokio::test]
     async fn test_add_and_complete_job() {
@@ -526,6 +551,19 @@ mod tests {
 
         let metadata = map.get_job_batch_metadata(1).await;
         assert!(metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_job_proving_configs() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+
+        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope(2)).await;
+
+        let configs = map.get_job_proving_configs(1, 2).await.unwrap();
+        assert_eq!(configs.len(), 2);
+        assert!(std::ptr::eq(configs[0], configs[1]));
+        assert!(map.get_job_proving_configs(1, 3).await.is_none());
     }
 
     #[tokio::test]
@@ -552,26 +590,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pick_job_with_proving_version_filter() {
+    async fn test_pick_job_with_verification_key_filter() {
         let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Fri);
+        let target_vk = v6_verification_key_hash();
 
-        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            1,
+            V7_PROTOCOL,
+        ))
+        .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             2,
-            ProtocolSemanticVersion::new(0, 31, 0),
+            V6_PROTOCOL_1,
         ))
         .await;
 
         let job = map
-            .pick_job(Duration::ZERO, "prover-v7", |job| {
-                job.metadata.proving_version == ProvingVersion::V7
+            .pick_job(Duration::ZERO, "prover-for-vk", |job| {
+                job.metadata.verification_key_hash() == target_vk
             })
             .await;
 
         assert!(job.is_some());
         let (fri_job, _data) = job.unwrap();
         assert_eq!(fri_job.batch_number, 2);
-        assert_eq!(fri_job.vk_hash, ProvingVersion::V7.vk_hash());
+        assert_eq!(fri_job.vk_hash, target_vk);
 
         let status = map.status().await;
         assert_eq!(status[0].fri_job.batch_number, 1);
@@ -579,7 +622,7 @@ mod tests {
         assert_eq!(status[1].fri_job.batch_number, 2);
         assert_eq!(
             status[1].assigned_to_prover_id,
-            Some("prover-v7".to_string())
+            Some("prover-for-vk".to_string())
         );
     }
 
@@ -638,45 +681,79 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pick_multiple_jobs_with_proving_version_filter() {
+    async fn test_pick_multiple_jobs_with_verification_key_filter() {
         let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+        let target_vk = v6_verification_key_hash();
 
-        map.add_job(create_test_batch_envelope(1)).await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            1,
+            V7_PROTOCOL,
+        ))
+        .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             2,
-            ProtocolSemanticVersion::new(0, 31, 0),
+            V6_PROTOCOL_1,
         ))
         .await;
         map.add_job(create_test_batch_envelope_with_protocol_version(
             3,
-            ProtocolSemanticVersion::new(0, 31, 0),
+            V6_PROTOCOL_1,
         ))
         .await;
 
         let jobs = map
-            .pick_jobs_while_with_limit(5, "prover-v7", |job| {
-                job.metadata.proving_version == ProvingVersion::V7
+            .pick_jobs_while_with_limit(5, "prover-for-vk", |job| {
+                job.metadata.verification_key_hash() == target_vk
             })
             .await;
 
         assert_eq!(jobs.len(), 2);
         assert_eq!(jobs[0].0.batch_number, 2);
         assert_eq!(jobs[1].0.batch_number, 3);
-        assert!(
-            jobs.iter()
-                .all(|(fri_job, _)| fri_job.vk_hash == ProvingVersion::V7.vk_hash())
-        );
+        assert!(jobs.iter().all(|(fri_job, _)| fri_job.vk_hash == target_vk));
 
         let status = map.status().await;
         assert_eq!(status[0].fri_job.batch_number, 1);
         assert_eq!(status[0].assigned_to_prover_id, None);
         assert_eq!(
             status[1].assigned_to_prover_id,
-            Some("prover-v7".to_string())
+            Some("prover-for-vk".to_string())
         );
         assert_eq!(
             status[2].assigned_to_prover_id,
-            Some("prover-v7".to_string())
+            Some("prover-for-vk".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_snark_grouping_follows_proving_stack_identity() {
+        let map = ProverJobMap::new(Duration::from_secs(60), 100, ProverStage::Snark);
+
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            1,
+            V6_PROTOCOL_1,
+        ))
+        .await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            2,
+            V6_PROTOCOL_2,
+        ))
+        .await;
+        map.add_job(create_test_batch_envelope_with_protocol_version(
+            3,
+            V7_PROTOCOL,
+        ))
+        .await;
+
+        let jobs = map
+            .pick_jobs_while_with_limit(5, "prover-1", |_| true)
+            .await;
+
+        assert_eq!(
+            jobs.iter()
+                .map(|(job, _)| job.batch_number)
+                .collect::<Vec<_>>(),
+            vec![1]
         );
     }
 
