@@ -68,7 +68,7 @@ use zksync_os_batch_verification::{
     BatchVerificationResponder, effective_verification_policy,
 };
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_contract_interface::models::{BatchDaInputMode, ChainPubdataContent};
+use zksync_os_contract_interface::models::ChainPubdataContent;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
@@ -301,17 +301,18 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
     .expect("failed to pin the chain pubdata content");
     tracing::info!(pubdata_content = ?l1_state.pubdata_content, "Chain pubdata content");
 
+    // The pubdata mode has to produce the DA commitment scheme the chain is configured with: the
+    // `Committer` rejects any batch that declares a different one. This is the chain's DA *mechanism*
+    // and says nothing about its pubdata pricing — a logs-only validium publishes (little) pubdata
+    // through blobs and may still price as a validium.
     if let (Some(pubdata_mode), true) = (effective_pubdata_mode, node_role.is_main()) {
-        match (pubdata_mode, l1_state.da_input_mode) {
-            (PubdataMode::Calldata | PubdataMode::Blobs, BatchDaInputMode::Validium)
-            | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
-                panic!(
-                    "Pubdata mode doesn't correspond to pricing mode from the l1. \
-                    L1 mode: {:?}, effective pubdata mode: {:?}",
-                    l1_state.da_input_mode, pubdata_mode
-                );
-            }
-            _ => {}
+        let produced_scheme = pubdata_mode.da_commitment_scheme();
+        if produced_scheme != l1_state.l2_da_commitment_scheme {
+            panic!(
+                "Pubdata mode doesn't correspond to the DA commitment scheme from the L1. \
+                L1 scheme: {:?}, effective pubdata mode: {:?} (produces {:?})",
+                l1_state.l2_da_commitment_scheme, pubdata_mode, produced_scheme
+            );
         }
     }
 

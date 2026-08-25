@@ -64,8 +64,8 @@ pub enum ChainPubdataContent {
     FullPubdata,
     /// Only the mandatory L2->L1 log region — which carries the interop commitment tree leaves — is
     /// committed; state diffs and message preimages are published at the operator's discretion.
-    /// This is what a ZKsync OS validium runs with; it still publishes that region through the same
-    /// DA mechanism (blobs) a rollup uses.
+    /// This is what a ZKsync OS logs-only validium runs with; it still publishes that region through
+    /// the same DA mechanism (blobs) a rollup uses.
     LogsOnly,
 }
 

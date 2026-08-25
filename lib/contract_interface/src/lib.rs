@@ -276,6 +276,7 @@ alloy::sol! {
         function getTotalPriorityTxs() external view returns (uint256);
         function getPubdataPricingMode() external view returns (PubdataPricingMode);
         function getPubdataContent() external view returns (PubdataContent);
+        function getDAValidatorPair() external view returns (address, L2DACommitmentScheme);
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
@@ -826,6 +827,17 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("getPubdataPricingMode", None)
+    }
+
+    /// The chain's L2 DA commitment scheme — the mechanism its batches publish pubdata with. The
+    /// `Committer` requires every committed batch to declare exactly this scheme.
+    pub async fn get_l2_da_commitment_scheme(&self) -> Result<L2DACommitmentScheme> {
+        self.instance
+            .getDAValidatorPair()
+            .call()
+            .await
+            .map(|pair| pair._1)
+            .enrich("getDAValidatorPair", None)
     }
 
     /// The chain's pubdata content. Only exists on v32+ diamonds — callers must gate on the protocol
