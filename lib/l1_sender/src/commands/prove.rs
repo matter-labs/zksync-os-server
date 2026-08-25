@@ -201,8 +201,8 @@ impl ProofCommand {
         }
 
         let chain_config_hash = match first_config.fri {
-            FriProofConfiguration::PreV8 => None,
-            FriProofConfiguration::V8 { .. } => {
+            FriProofConfiguration::ProgramProof => None,
+            FriProofConfiguration::UnrolledProof { .. } => {
                 let chain_id = first_batch_info.commit_info.chain_id;
                 assert!(
                     self.batches

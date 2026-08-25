@@ -3,19 +3,22 @@ use super::ProtocolSemanticVersion;
 /// Concrete implementation used to produce the prover input for a sealed batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProverInputStrategy {
-    /// Generate V6 inputs per block and combine them when sealing the batch.
-    V6BlockInputs,
-    /// Generate V7 inputs per block and combine them when sealing the batch.
-    V7BlockInputs,
-    /// Preserve per-block tree data and re-execute the batch with the V8 program.
-    V8NativeBatch,
+    /// Generate per-block inputs with the zksync-os 0.2.x crates and combine them when sealing
+    /// the batch.
+    ZkOs0_2BlockInputs,
+    /// Generate per-block inputs with the zksync-os 0.3.x crates and combine them when sealing
+    /// the batch.
+    ZkOs0_3BlockInputs,
+    /// Preserve per-block tree data and re-execute the batch with the zksync-os 0.4.x multiblock
+    /// batch program, which produces the batch prover input directly.
+    ZkOs0_4NativeBatch,
 }
 
 impl ProverInputStrategy {
     pub const fn requires_native_batch_run(self) -> bool {
         match self {
-            Self::V6BlockInputs | Self::V7BlockInputs => false,
-            Self::V8NativeBatch => true,
+            Self::ZkOs0_2BlockInputs | Self::ZkOs0_3BlockInputs => false,
+            Self::ZkOs0_4NativeBatch => true,
         }
     }
 }
@@ -23,10 +26,13 @@ impl ProverInputStrategy {
 /// FRI proof decoding, verification, and public-input construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FriProofConfiguration {
-    /// Decode and verify a V6 or V7 proof using the pre-V8 public-input layout.
-    PreV8,
-    /// Decode and verify a V8 proof, using its public-input layout and registered application.
-    V8 {
+    /// Decode a fully recursed airbender 0.5.x `ProgramProof`. Its public input omits the chain
+    /// config hash, and the application is bound implicitly by the app-specific SNARK wrapper VK.
+    ProgramProof,
+    /// Decode an airbender 0.6.x `UnrolledProgramProof` recursed to the unified layer. Its public
+    /// input includes the chain config hash, and since the unified-layer verifier is
+    /// application-independent, the proof must be bound to `application_end_params` explicitly.
+    UnrolledProof {
         application_end_params: &'static [u32; 8],
     },
 }
@@ -41,7 +47,10 @@ pub struct ProvingStackConfiguration {
     pub verification_key_hash: &'static str,
     pub prover_input: ProverInputStrategy,
     pub fri: FriProofConfiguration,
-    /// Numeric selector encoded in the existing L1 proof calldata.
+    /// Index of the verifier this stack's SNARK proofs must be routed to in the L1 executor's
+    /// verifier registry, encoded into `_proof[0]`. `0` means "the contract's default verifier".
+    /// The numbering is fixed on-chain and inherited from the historical proving-version numbers,
+    /// so it is unrelated to this stack's zksync-os release.
     pub l1_verifier_selector: u32,
 }
 
@@ -107,12 +116,14 @@ pub struct UnsupportedProtocolForProving {
 
 /// Verification key hash generated from zksync-os v0.2.5, zksync-airbender v0.5.2 and
 /// zkos-wrapper v0.5.4.
-const V6_VK_HASH: &str = "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
+const ZK_OS_0_2_VK_HASH: &str =
+    "0x124ebcd537a1e1c152774dd18f67660e35625bba0b669bf3b4836d636b105337";
 /// Verification key hash generated from zksync-os v0.3.0, zksync-airbender v0.5.2 and
 /// zkos-wrapper v0.5.5.
-const V7_VK_HASH: &str = "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
+const ZK_OS_0_3_VK_HASH: &str =
+    "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd";
 /// Verification key hash generated from zksync-airbender v0.6.0-rc.2 and zkos-wrapper
-/// v0.6.0-rc.2; matches the V8 entry in zksync-airbender-prover.
+/// v0.6.0-rc.2; matches the 0.4.0 entry in zksync-airbender-prover.
 /// App-SPECIFIC: the SNARK wrapper runs with `check_aux_params`, constraining the FRI
 /// proof's registers 18..=25 to the app program's commitment in-circuit, so the VK
 /// binds `multiblock_batch.bin` (md5 31cb9cb3b42d4a183fb858594eeb8706, built from the
@@ -120,38 +131,39 @@ const V7_VK_HASH: &str = "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c72
 /// **100-bit security**: the level selects the `*_security_100_bits` recursion verifier
 /// binaries and so changes the recursion chain; the 80-bit hash for the same binary is a
 /// different value and is not interchangeable with this one.
-const V8_VK_HASH: &str = "0x9f7576b911e7d3f528d49f894208682c81800814db9e3beac7fc3b1c4d626e7a";
+const ZK_OS_0_4_VK_HASH: &str =
+    "0x9f7576b911e7d3f528d49f894208682c81800814db9e3beac7fc3b1c4d626e7a";
 
-static V6_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfiguration {
-    name: "V6",
-    verification_key_hash: V6_VK_HASH,
-    prover_input: ProverInputStrategy::V6BlockInputs,
-    fri: FriProofConfiguration::PreV8,
+static ZK_OS_0_2_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfiguration {
+    name: "zksync-os-0.2.x",
+    verification_key_hash: ZK_OS_0_2_VK_HASH,
+    prover_input: ProverInputStrategy::ZkOs0_2BlockInputs,
+    fri: FriProofConfiguration::ProgramProof,
     l1_verifier_selector: 6,
 };
 
-static V7_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfiguration {
-    name: "V7",
-    verification_key_hash: V7_VK_HASH,
-    prover_input: ProverInputStrategy::V7BlockInputs,
-    fri: FriProofConfiguration::PreV8,
-    // Selector 0 uses the L1 contract's default verifier, which is currently V7.
+static ZK_OS_0_3_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfiguration {
+    name: "zksync-os-0.3.x",
+    verification_key_hash: ZK_OS_0_3_VK_HASH,
+    prover_input: ProverInputStrategy::ZkOs0_3BlockInputs,
+    fri: FriProofConfiguration::ProgramProof,
+    // Selector 0 uses the L1 contract's default verifier, which is currently this stack's.
     l1_verifier_selector: 0,
 };
 
-/// `end_params` of the V8 multiblock batch program, built from the v0.4.0 release tag @ 69bc4305
-/// (md5 `31cb9cb3b42d4a183fb858594eeb8706`). The V8 FRI verifier is
+/// `end_params` of the zksync-os 0.4.x multiblock batch program, built from the v0.4.0 release
+/// tag @ 69bc4305 (md5 `31cb9cb3b42d4a183fb858594eeb8706`). The unified-layer FRI verifier is
 /// application-independent, so this value binds its proof to the registered batch program.
-const V8_APP_END_PARAMS: [u32; 8] = [
+const ZK_OS_0_4_APP_END_PARAMS: [u32; 8] = [
     1634684069, 1321011044, 3947845475, 1282304698, 3895515656, 1824728812, 3916768926, 1115552394,
 ];
 
-static V8_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfiguration {
-    name: "V8",
-    verification_key_hash: V8_VK_HASH,
-    prover_input: ProverInputStrategy::V8NativeBatch,
-    fri: FriProofConfiguration::V8 {
-        application_end_params: &V8_APP_END_PARAMS,
+static ZK_OS_0_4_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfiguration {
+    name: "zksync-os-0.4.x",
+    verification_key_hash: ZK_OS_0_4_VK_HASH,
+    prover_input: ProverInputStrategy::ZkOs0_4NativeBatch,
+    fri: FriProofConfiguration::UnrolledProof {
+        application_end_params: &ZK_OS_0_4_APP_END_PARAMS,
     },
     l1_verifier_selector: 8,
 };
@@ -159,23 +171,23 @@ static V8_PROVING_STACK: ProvingStackConfiguration = ProvingStackConfiguration {
 static REGISTRY_ENTRIES: [ProvingRegistryEntry; 5] = [
     ProvingRegistryEntry {
         protocol_version: ProtocolSemanticVersion::new(0, 30, 1),
-        configuration: &V6_PROVING_STACK,
+        configuration: &ZK_OS_0_2_PROVING_STACK,
     },
     ProvingRegistryEntry {
         protocol_version: ProtocolSemanticVersion::new(0, 30, 2),
-        configuration: &V6_PROVING_STACK,
+        configuration: &ZK_OS_0_2_PROVING_STACK,
     },
     ProvingRegistryEntry {
         protocol_version: ProtocolSemanticVersion::new(0, 31, 0),
-        configuration: &V7_PROVING_STACK,
+        configuration: &ZK_OS_0_3_PROVING_STACK,
     },
     ProvingRegistryEntry {
         protocol_version: ProtocolSemanticVersion::new(0, 31, 1),
-        configuration: &V7_PROVING_STACK,
+        configuration: &ZK_OS_0_3_PROVING_STACK,
     },
     ProvingRegistryEntry {
         protocol_version: ProtocolSemanticVersion::new(0, 32, 0),
-        configuration: &V8_PROVING_STACK,
+        configuration: &ZK_OS_0_4_PROVING_STACK,
     },
 ];
 
@@ -269,7 +281,7 @@ mod tests {
         if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(invalid("verification key hash is not 32-byte hex"));
         }
-        if let FriProofConfiguration::V8 {
+        if let FriProofConfiguration::UnrolledProof {
             application_end_params,
         } = configuration.fri
             && application_end_params.iter().all(|word| *word == 0)
@@ -305,7 +317,7 @@ mod tests {
     fn missing_exact_version_fails_closed() {
         static ENTRIES: [ProvingRegistryEntry; 1] = [ProvingRegistryEntry {
             protocol_version: ProtocolSemanticVersion::new(1, 0, 0),
-            configuration: &V7_PROVING_STACK,
+            configuration: &ZK_OS_0_3_PROVING_STACK,
         }];
         let registry = ProvingRegistry { entries: &ENTRIES };
         let missing = ProtocolSemanticVersion::new(1, 0, 1);
@@ -317,15 +329,15 @@ mod tests {
     fn distinct_stacks_cannot_share_an_api_verification_key() {
         static OTHER_STACK: ProvingStackConfiguration = ProvingStackConfiguration {
             name: "synthetic-distinct-stack",
-            verification_key_hash: V7_VK_HASH,
-            prover_input: ProverInputStrategy::V7BlockInputs,
-            fri: FriProofConfiguration::PreV8,
+            verification_key_hash: ZK_OS_0_3_VK_HASH,
+            prover_input: ProverInputStrategy::ZkOs0_3BlockInputs,
+            fri: FriProofConfiguration::ProgramProof,
             l1_verifier_selector: 0,
         };
         static ENTRIES: [ProvingRegistryEntry; 2] = [
             ProvingRegistryEntry {
                 protocol_version: ProtocolSemanticVersion::new(1, 0, 0),
-                configuration: &V7_PROVING_STACK,
+                configuration: &ZK_OS_0_3_PROVING_STACK,
             },
             ProvingRegistryEntry {
                 protocol_version: ProtocolSemanticVersion::new(1, 0, 1),

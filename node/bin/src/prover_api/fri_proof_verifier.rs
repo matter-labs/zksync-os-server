@@ -6,8 +6,8 @@ use zksync_os_types::{FriProofConfiguration, ProvingStackConfiguration};
 /// Expected batch public-input hash, as the final register values a valid FRI proof of this
 /// batch must expose.
 ///
-/// Pre-V8 the public input is `keccak(state_before || state_after || batch_output)`. The V8
-/// (zksync-os 0.4.0) batch public input is
+/// Up to zksync-os 0.3.x the public input is `keccak(state_before || state_after ||
+/// batch_output)`. The zksync-os 0.4.x batch public input is
 /// `keccak(state_before || state_after || chain_config_hash || batch_output)`, where
 /// `batch_output` uses the 0.4.0 layout without the leading chain id
 /// (see [`PendingBatchInfo::v32_batch_output_hash`](zksync_os_batch_types::PendingBatchInfo)).
@@ -17,12 +17,14 @@ pub fn expected_public_input_registers(
 ) -> Result<[u32; 8], SubmitError> {
     let state_before = batch_metadata.previous_stored_batch_info.state_commitment;
     let hash = match proving_config.fri {
-        FriProofConfiguration::V8 { .. } => {
+        FriProofConfiguration::UnrolledProof { .. } => {
             let batch_info = &batch_metadata.batch_info;
             let chain_config_hash =
                 zksync_os_native_pig::v32_chain_config_hash(batch_info.commit_info.chain_id)
                     .map_err(|err| {
-                        SubmitError::Other(format!("cannot compute V8 chain config hash: {err:#}"))
+                        SubmitError::Other(format!(
+                            "cannot compute zksync-os 0.4.x chain config hash: {err:#}"
+                        ))
                     })?;
             keccak256(
                 [
@@ -34,7 +36,7 @@ pub fn expected_public_input_registers(
                 .concat(),
             )
         }
-        FriProofConfiguration::PreV8 => {
+        FriProofConfiguration::ProgramProof => {
             let stored = batch_metadata.batch_info.clone().into_stored();
             keccak256(
                 [
@@ -49,8 +51,8 @@ pub fn expected_public_input_registers(
     Ok(hash_as_register_values(hash))
 }
 
-/// Verifies a pre-V8 (airbender 0.5.2 lane) FRI proof against the expected public input.
-pub fn verify_fri_proof(
+/// Verifies an airbender 0.5.2 `ProgramProof` against the expected public input.
+pub fn verify_program_proof(
     expected_hash_u32s: [u32; 8],
     proof: execution_utils_prev::ProgramProof,
     batch_number: u64,
@@ -73,15 +75,15 @@ pub fn verify_fri_proof(
     check_public_input(expected_hash_u32s, proof_final_register_values)
 }
 
-/// Verifies a V8 FRI proof (zksync-os 0.4.0 / airbender unrolled prover stack).
+/// Verifies an unrolled FRI proof (zksync-os 0.4.x / airbender 0.6.x unrolled prover stack).
 ///
-/// V8 provers submit an `UnrolledProgramProof` recursed up to the *unified* layer. The unified
+/// Such provers submit an `UnrolledProgramProof` recursed up to the *unified* layer. The unified
 /// recursion program is app-independent and embedded in `execution_utils`, so verification
 /// needs no app binary: we run the native unified-layer statement verifier to trustlessly extract
-/// the final register values, check that the proof's recursion chain is rooted in the V8 batch
-/// program (registers `[8..16]`), and compare registers `[..8]` against the expected batch
+/// the final register values, check that the proof's recursion chain is rooted in the registered
+/// batch program (registers `[8..16]`), and compare registers `[..8]` against the expected batch
 /// public input hash.
-pub fn verify_fri_proof_v8(
+pub fn verify_unrolled_program_proof(
     expected_hash_u32s: [u32; 8],
     proof: &execution_utils::unrolled::UnrolledProgramProof,
     batch_number: u64,
@@ -89,44 +91,46 @@ pub fn verify_fri_proof_v8(
 ) -> Result<(), SubmitError> {
     // Cheap consistency check of the carried chain fields (mirrors the airbender CLI's
     // `validate_recursion_chain`).
-    v8_verifier::validate_recursion_chain(proof).map_err(|msg| {
+    unrolled_verifier::validate_recursion_chain(proof).map_err(|msg| {
         tracing::warn!(
             batch_number,
             msg,
-            "V8 proof carries an invalid recursion chain"
+            "unrolled proof carries an invalid recursion chain"
         );
-        SubmitError::Other(format!("invalid V8 proof recursion chain: {msg}"))
+        SubmitError::Other(format!("invalid unrolled proof recursion chain: {msg}"))
     })?;
 
     // The unified-layer verifier returns Err on invalid proofs, but its internals can
     // still assert (panic) on malformed input; catch it so a bad proof is reported -
     // and persisted for debugging - as a verification failure.
     let proof_final_register_values: [u32; 16] =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| v8_verifier::verify(proof)))
-            .unwrap_or_else(|_| {
-                tracing::warn!(
-                    batch_number,
-                    "V8 unified-layer verifier panicked on a malformed proof"
-                );
-                Err(())
-            })
-            .map_err(|()| SubmitError::FriProofVerificationError {
-                expected_hash_u32s,
-                // The verifier failed before producing register values.
-                proof_final_register_values: [0u32; 16],
-            })?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unrolled_verifier::verify(proof)
+        }))
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                batch_number,
+                "unified-layer verifier panicked on a malformed proof"
+            );
+            Err(())
+        })
+        .map_err(|()| SubmitError::FriProofVerificationError {
+            expected_hash_u32s,
+            // The verifier failed before producing register values.
+            proof_final_register_values: [0u32; 16],
+        })?;
 
-    // Bind the proof to the V8 batch program. The unified-layer verifier is app-independent
-    // and authenticates the recursion chain it actually proved in registers [8..16]; only a
-    // chain rooted in the V8 batch program's end params is acceptable — otherwise any guest
-    // program exposing the right public-input hash would pass.
-    let expected_chain = v8_verifier::unified_level_data().expected_chain(app_end_params);
+    // Bind the proof to the registered batch program. The unified-layer verifier is
+    // app-independent and authenticates the recursion chain it actually proved in registers
+    // [8..16]; only a chain rooted in that program's end params is acceptable — otherwise any
+    // guest program exposing the right public-input hash would pass.
+    let expected_chain = unrolled_verifier::unified_level_data().expected_chain(app_end_params);
     if proof_final_register_values[8..16] != expected_chain {
         tracing::warn!(
             batch_number,
             ?expected_chain,
             actual_chain = ?&proof_final_register_values[8..16],
-            "V8 proof proves a different program (recursion chain mismatch)"
+            "unrolled proof proves a different program (recursion chain mismatch)"
         );
         return Err(SubmitError::FriProofVerificationError {
             expected_hash_u32s,
@@ -150,10 +154,10 @@ fn check_public_input(
         })
 }
 
-/// V8 unified-layer verification internals: the pinned airbender verifier (see
-/// `execution_utils` in the root `Cargo.toml`) plus the expected recursion chain that
-/// binds proofs to the V8 batch program.
-mod v8_verifier {
+/// Unified-layer verification internals: the pinned airbender verifier (see `execution_utils`
+/// in the root `Cargo.toml`) plus the expected recursion chain that binds proofs to the
+/// registered batch program.
+mod unrolled_verifier {
     use execution_utils::setups::{
         CompiledCircuitsSet, binary_u8_to_u32, get_unified_circuit_artifact_for_machine_type,
         pad_bytecode_bytes_for_proving, pad_bytecode_for_proving,
@@ -209,7 +213,7 @@ mod v8_verifier {
     }
 
     /// The unified-layer setup and circuit layouts are derived from the embedded recursion
-    /// programs once and cached. Application binding remains per registered V8 configuration.
+    /// programs once and cached. Application binding remains per registered proving stack.
     pub(super) fn unified_level_data() -> &'static UnifiedLevelData {
         static DATA: std::sync::OnceLock<UnifiedLevelData> = std::sync::OnceLock::new();
         DATA.get_or_init(|| {
@@ -314,30 +318,30 @@ fn extract_final_register_values(
 
 #[cfg(test)]
 mod tests {
-    use super::v8_verifier;
+    use super::unrolled_verifier;
     use zksync_os_types::{FriProofConfiguration, proving_registry};
 
-    fn v8_app_end_params() -> &'static [u32; 8] {
+    fn zk_os_0_4_app_end_params() -> &'static [u32; 8] {
         proving_registry()
             .iter()
             .map(|entry| entry.configuration)
             .find_map(|config| match config.fri {
-                FriProofConfiguration::V8 {
+                FriProofConfiguration::UnrolledProof {
                     application_end_params,
                 } => Some(application_end_params),
-                FriProofConfiguration::PreV8 => None,
+                FriProofConfiguration::ProgramProof => None,
             })
-            .expect("registry must contain a V8 proving stack")
+            .expect("registry must contain an unrolled-proof proving stack")
     }
 
     /// Cross-check that the runtime-derived expected recursion chain matches the value computed
-    /// offline from the V8 app binary and the embedded recursion programs at the pinned
-    /// airbender rev (see `V8_APP_END_PARAMS` provenance).
+    /// offline from the zksync-os 0.4.x app binary and the embedded recursion programs at the
+    /// pinned airbender rev (see `ZK_OS_0_4_APP_END_PARAMS` provenance).
     #[test]
     #[ignore = "recomputes recursion program setups; slow"]
-    fn v8_expected_recursion_chain_matches_offline_computation() {
+    fn expected_recursion_chain_matches_offline_computation() {
         assert_eq!(
-            v8_verifier::unified_level_data().expected_chain(v8_app_end_params()),
+            unrolled_verifier::unified_level_data().expected_chain(zk_os_0_4_app_end_params()),
             [
                 2902729799, 927442412, 3123877092, 3732377136, 1531132972, 664043840, 2228017786,
                 3356963117,
@@ -345,17 +349,17 @@ mod tests {
         );
     }
 
-    /// Smoke test for the V8 unified-layer verifier lane against a real proof produced by the
+    /// Smoke test for the unified-layer verifier lane against a real proof produced by the
     /// airbender CLI (at the rev pinned in the root `Cargo.toml`) with `--target recursion-unified`.
     ///
     /// Run manually:
-    ///   V8_PROOF_ARTIFACT_JSON=/path/to/proof.json \
-    ///     cargo test -p zksync_os_server --release v8_unified_layer_verifies_cli_proof -- --ignored
+    ///   UNROLLED_PROOF_ARTIFACT_JSON=/path/to/proof.json \
+    ///     cargo test -p zksync_os_server --release unified_layer_verifies_cli_proof -- --ignored
     #[test]
-    #[ignore = "needs a locally produced V8 proof artifact"]
-    fn v8_unified_layer_verifies_cli_proof() {
-        let path = std::env::var("V8_PROOF_ARTIFACT_JSON")
-            .expect("set V8_PROOF_ARTIFACT_JSON to an airbender CLI proof.json");
+    #[ignore = "needs a locally produced unrolled proof artifact"]
+    fn unified_layer_verifies_cli_proof() {
+        let path = std::env::var("UNROLLED_PROOF_ARTIFACT_JSON")
+            .expect("set UNROLLED_PROOF_ARTIFACT_JSON to an airbender CLI proof.json");
         let artifact: serde_json::Value =
             serde_json::from_reader(std::fs::File::open(&path).expect("cannot open proof file"))
                 .expect("proof file is not valid JSON");
@@ -364,17 +368,18 @@ mod tests {
             serde_json::from_value(artifact["proof"].clone())
                 .expect("artifact has no deserializable `proof` field");
 
-        v8_verifier::validate_recursion_chain(&proof)
-            .expect("V8 proof carries an invalid recursion chain");
-        let registers = v8_verifier::verify(&proof)
-            .expect("V8 unified-layer proof failed cryptographic verification");
+        unrolled_verifier::validate_recursion_chain(&proof)
+            .expect("proof carries an invalid recursion chain");
+        let registers = unrolled_verifier::verify(&proof)
+            .expect("unified-layer proof failed cryptographic verification");
         println!("final register values: {registers:?}");
 
-        let expected_chain = v8_verifier::unified_level_data().expected_chain(v8_app_end_params());
+        let expected_chain =
+            unrolled_verifier::unified_level_data().expected_chain(zk_os_0_4_app_end_params());
         assert_eq!(
             registers[8..16],
             expected_chain,
-            "proof recursion chain is not rooted in the V8 batch program"
+            "proof recursion chain is not rooted in the registered batch program"
         );
     }
 }

@@ -50,8 +50,8 @@ pub(crate) fn seal_batch<ReadState: ReadStateHistory>(
     let state_view = read_state.state_view_at(block_number_to)?;
     let multichain_root = read_multichain_root(state_view);
     let uses_native_batch = match proving_config.prover_input {
-        ProverInputStrategy::V6BlockInputs | ProverInputStrategy::V7BlockInputs => false,
-        ProverInputStrategy::V8NativeBatch => true,
+        ProverInputStrategy::ZkOs0_2BlockInputs | ProverInputStrategy::ZkOs0_3BlockInputs => false,
+        ProverInputStrategy::ZkOs0_4NativeBatch => true,
     };
     let (native_batch_run, native_pig_measurement) = if uses_native_batch {
         let native_blocks = blocks
@@ -235,12 +235,12 @@ fn compute_batch_prover_input(
     pubdata_mode: PubdataMode,
     native_batch_run: Option<NativeBatchRunOutput>,
 ) -> anyhow::Result<(ProverInput, Option<BatchPigMeasurement>)> {
-    use zk_os_forward_system_0_2_10::run::generate_batch_proof_input as generate_batch_proof_input_v6;
-    use zk_os_forward_system_prev::run::generate_batch_proof_input;
+    use zk_os_forward_system_0_2_10::run::generate_batch_proof_input as generate_batch_proof_input_0_2;
+    use zk_os_forward_system_prev::run::generate_batch_proof_input as generate_batch_proof_input_0_3;
 
-    // Pre-V8 batch PIG stitches together the per-block prover inputs, so a single fake block
-    // input forces the whole batch to a fake input. V8's real input comes from the native
-    // batch run instead and never reads per-block inputs.
+    // The per-block-input strategies stitch together the per-block prover inputs, so a single
+    // fake block input forces the whole batch to a fake input. The native-batch strategy's real
+    // input comes from the batch run instead and never reads per-block inputs.
     if !prover_input_strategy.requires_native_batch_run()
         && blocks
             .iter()
@@ -250,7 +250,7 @@ fn compute_batch_prover_input(
     }
 
     Ok(match prover_input_strategy {
-        ProverInputStrategy::V6BlockInputs => {
+        ProverInputStrategy::ZkOs0_2BlockInputs => {
             // TODO: in the long-term we should generate proof input per batch
             let started_at = std::time::Instant::now();
             let block_inputs = blocks
@@ -262,7 +262,7 @@ fn compute_batch_prover_input(
                 .map(|block| block.output.expect_pubdata_bytes())
                 .collect();
             let da_commitment_scheme = pubdata_mode.da_commitment_scheme() as u8;
-            let prover_input = generate_batch_proof_input_v6(
+            let prover_input = generate_batch_proof_input_0_2(
                 block_inputs,
                 da_commitment_scheme
                     .try_into()
@@ -279,7 +279,7 @@ fn compute_batch_prover_input(
                 }),
             )
         }
-        ProverInputStrategy::V7BlockInputs => {
+        ProverInputStrategy::ZkOs0_3BlockInputs => {
             // TODO: in the long-term we should generate proof input per batch
             let started_at = std::time::Instant::now();
             let block_inputs = blocks
@@ -291,7 +291,7 @@ fn compute_batch_prover_input(
                 .map(|block| block.output.expect_pubdata_bytes())
                 .collect();
             let da_commitment_scheme = pubdata_mode.da_commitment_scheme() as u8;
-            let prover_input = generate_batch_proof_input(
+            let prover_input = generate_batch_proof_input_0_3(
                 block_inputs,
                 da_commitment_scheme
                     .try_into()
@@ -308,10 +308,10 @@ fn compute_batch_prover_input(
                 }),
             )
         }
-        ProverInputStrategy::V8NativeBatch => (
+        ProverInputStrategy::ZkOs0_4NativeBatch => (
             ProverInput::Real(
                 native_batch_run
-                    .expect("V8 prover input must be computed via native batch run")
+                    .expect("prover input must be computed via native batch run")
                     .prover_input,
             ),
             None,
@@ -387,10 +387,10 @@ mod tests {
     }
 
     #[test]
-    fn v8_batch_prover_input_comes_from_native_batch_run() {
+    fn native_batch_prover_input_comes_from_native_batch_run() {
         let (prover_input, batch_pig_measurement) = compute_batch_prover_input(
             &[],
-            ProverInputStrategy::V8NativeBatch,
+            ProverInputStrategy::ZkOs0_4NativeBatch,
             PubdataMode::Calldata,
             Some(NativeBatchRunOutput {
                 prover_input: vec![7, 8, 9],
@@ -429,7 +429,7 @@ mod tests {
 
         let (prover_input, batch_pig_measurement) = compute_batch_prover_input(
             &[block],
-            ProverInputStrategy::V7BlockInputs,
+            ProverInputStrategy::ZkOs0_3BlockInputs,
             PubdataMode::Calldata,
             None,
         )

@@ -1,10 +1,10 @@
 general:
   zksync_os_version: "0.32.0"
-  # SNARK VK of the v32.0 / proving-V8 lane, generated with
+  # SNARK VK of the v32.0 proving lane, generated with
   #   zkos-wrapper generate-vk --bin multiblock_batch.bin --text multiblock_batch.text \
   #     --check-aux-params --trusted-setup setup_compact.key
-  # and registered on the chain's ZKsyncOSDualVerifier at verifier version 8 (the version
-  # the server encodes in `_proof[0]` for V8 proofs).
+  # and registered on the chain's ZKsyncOSDualVerifier at verifier version 8 (the
+  # `l1_verifier_selector` the server encodes in `_proof[0]` for v32.0 proofs).
   # Regenerated at 100-bit security against multiblock_batch.bin md5
   # 31cb9cb3b42d4a183fb858594eeb8706 (zksync-os v0.4.0 release tag @ 69bc4305).
   verification_key: "0x9f7576b911e7d3f528d49f894208682c81800814db9e3beac7fc3b1c4d626e7a"

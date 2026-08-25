@@ -11,7 +11,7 @@ pub(super) struct BatchDataPayload {
 #[derive(Debug, Deserialize)]
 pub(super) struct ProverQuery {
     pub id: String,
-    /// Comma-separated vk_hashes of the proving versions this prover supports.
+    /// Comma-separated vk_hashes of the proving stacks this prover supports.
     #[serde(default)]
     pub supported_vk_hashes: Option<String>,
 }
@@ -23,13 +23,13 @@ impl ProverQuery {
     /// backwards-compatibility layer: old provers don't send `supported_vk_hashes`
     /// and must keep receiving jobs as before.
     ///
-    /// Provers currently declare exactly one version; the list shape is for
-    /// multi-version provers, which become possible on the prover side with
+    /// Provers currently declare exactly one stack; the list shape is for
+    /// multi-stack provers, which become possible on the prover side with
     /// airbender v2.
     ///
     /// A declared hash the server doesn't recognize is skipped with a warning: it
-    /// most likely belongs to a proving version newer than this server, and the prover should
-    /// still be served the versions both sides know. If nothing in the declaration
+    /// most likely belongs to a proving stack newer than this server, and the prover should
+    /// still be served the stacks both sides know. If nothing in the declaration
     /// is recognized, this returns `Some(vec![])` so that such a prover gets *no*
     /// jobs rather than any jobs.
     pub fn supported_vk_hashes(&self) -> Option<Vec<&'static str>> {

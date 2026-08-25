@@ -336,8 +336,8 @@ impl FriJobManager {
         let expected_hash_u32s =
             fri_proof_verifier::expected_public_input_registers(proving_config, batch_metadata)?;
         match proving_config.fri {
-            FriProofConfiguration::PreV8 => {
-                tracing::debug!("Using 0.5.2 proof verifier for batch {}", batch_number);
+            FriProofConfiguration::ProgramProof => {
+                tracing::debug!("Using program-proof verifier for batch {}", batch_number);
                 let program_proof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
                         .map_err(|err| {
@@ -345,24 +345,28 @@ impl FriJobManager {
                             SubmitError::DeserializationFailed(err)
                         })?
                         .0;
-                fri_proof_verifier::verify_fri_proof(
+                fri_proof_verifier::verify_program_proof(
                     expected_hash_u32s,
                     program_proof,
                     batch_number,
                 )
             }
-            FriProofConfiguration::V8 {
+            FriProofConfiguration::UnrolledProof {
                 application_end_params,
             } => {
-                tracing::debug!("Using V8 proof verifier for batch {}", batch_number);
+                tracing::debug!("Using unrolled-proof verifier for batch {}", batch_number);
                 let program_proof: execution_utils::unrolled::UnrolledProgramProof =
                     bincode::serde::decode_from_slice(proof_bytes, bincode::config::standard())
                         .map_err(|err| {
-                            tracing::warn!(batch_number, ?err, "Failed to deserialize V8 proof");
+                            tracing::warn!(
+                                batch_number,
+                                ?err,
+                                "Failed to deserialize unrolled proof"
+                            );
                             SubmitError::DeserializationFailed(err)
                         })?
                         .0;
-                fri_proof_verifier::verify_fri_proof_v8(
+                fri_proof_verifier::verify_unrolled_program_proof(
                     expected_hash_u32s,
                     &program_proof,
                     batch_number,

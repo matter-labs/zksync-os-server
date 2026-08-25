@@ -103,7 +103,7 @@ impl NativeBatchRunOutput {
             self.canonical_commit_data(first_block_number, last_block_number),
         )?;
 
-        // Reconstruct the batch public input exactly as `verify_fri_proof_v8` will and compare
+        // Reconstruct the batch public input exactly as `verify_unrolled_program_proof` will and compare
         // it with the value the batch program computed; catches batch-output layout drift.
         let chain_config_hash = v32::chain_config_hash(chain_id)?;
         let reconstructed_public_input_hash = keccak256(

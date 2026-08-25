@@ -181,10 +181,10 @@ impl<ReadState: ReadStateHistory + Clone + Send + 'static> ProverInputGenerator<
             replay_record.transactions.len(),
         );
         match proving_config.prover_input {
-            ProverInputStrategy::V6BlockInputs | ProverInputStrategy::V7BlockInputs => {}
-            ProverInputStrategy::V8NativeBatch => {
-                // V8 prover input is generated natively at batch seal time; pass the block's tree data
-                // along so the batch run can serve tree queries without I/O.
+            ProverInputStrategy::ZkOs0_2BlockInputs | ProverInputStrategy::ZkOs0_3BlockInputs => {}
+            ProverInputStrategy::ZkOs0_4NativeBatch => {
+                // The native-batch lane generates prover input at batch seal time; pass the
+                // block's tree data along so the batch run can serve tree queries without I/O.
                 let _ = result_tx.send(ProverBlock {
                     output: block_output,
                     record: replay_record,
@@ -265,7 +265,7 @@ fn compute_prover_input(
     let prover_input_generation_latency =
         PROVER_INPUT_GENERATOR_METRICS.prover_input_generation[&"prover_input_generation"].start();
     let prover_input = match prover_input_strategy {
-        ProverInputStrategy::V6BlockInputs => {
+        ProverInputStrategy::ZkOs0_2BlockInputs => {
             use zk_ee_0_2_10::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -281,9 +281,9 @@ fn compute_prover_input(
             let list_source = TxListSource { transactions };
 
             let bin_bytes = if enable_logging {
-                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_LOGGING_ENABLED
+                zksync_os_multivm::apps::v0_2::SINGLEBLOCK_BATCH_LOGGING_ENABLED
             } else {
-                zksync_os_multivm::apps::v6::SINGLEBLOCK_BATCH_APP
+                zksync_os_multivm::apps::v0_2::SINGLEBLOCK_BATCH_APP
             };
 
             let da_commitment_scheme = (da_commitment_scheme as u8)
@@ -303,7 +303,7 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        ProverInputStrategy::V7BlockInputs => {
+        ProverInputStrategy::ZkOs0_3BlockInputs => {
             use zk_ee_prev::{
                 common_structs::ProofData, system::metadata::zk_metadata::BlockMetadataFromOracle,
             };
@@ -319,9 +319,9 @@ fn compute_prover_input(
             let list_source = TxListSource { transactions };
 
             let bin_bytes = if enable_logging {
-                zksync_os_multivm::apps::v7::SINGLEBLOCK_BATCH_LOGGING_ENABLED
+                zksync_os_multivm::apps::v0_3::SINGLEBLOCK_BATCH_LOGGING_ENABLED
             } else {
-                zksync_os_multivm::apps::v7::SINGLEBLOCK_BATCH_APP
+                zksync_os_multivm::apps::v0_3::SINGLEBLOCK_BATCH_APP
             };
 
             let da_commitment_scheme = (da_commitment_scheme as u8)
@@ -341,8 +341,8 @@ fn compute_prover_input(
             )
             .expect("proof gen failed")
         }
-        ProverInputStrategy::V8NativeBatch => {
-            unreachable!("V8 prover input is generated natively at batch seal time")
+        ProverInputStrategy::ZkOs0_4NativeBatch => {
+            unreachable!("native-batch prover input is generated at batch seal time")
         }
     };
     let latency = prover_input_generation_latency.observe();
