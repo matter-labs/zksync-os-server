@@ -5,6 +5,7 @@
 
 use alloy::consensus::BlobTransactionSidecar;
 use alloy::primitives::{B256, keccak256};
+use std::sync::OnceLock;
 use zksync_os_batch_types::{BlockMerkleTreeData, CanonicalBatchCommitData, PendingBatchInfo};
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_storage_api::{ReadStateHistory, ReplayRecord};
@@ -12,6 +13,40 @@ use zksync_os_types::{ProtocolSemanticVersion, ProvingVersion, PubdataMode};
 
 pub mod tree;
 mod v32;
+
+pub use zk_ee_0_4_0::common_structs::da_commitment_scheme::PubdataContent;
+
+/// The chain's pubdata content, set once at node startup from the value the chain holds on L1.
+///
+/// The node serves a single chain, and the value is part of every v32 batch's public input through
+/// the chain config hash, so it has to be identical in block execution, batch generation and proof
+/// verification alike. Rather than threading it through every one of those call paths, it is pinned
+/// here once — the chain cannot change it while committed-but-unverified batches exist (the L1
+/// `Admin.setPubdataContent` refuses), so a running node never observes it change.
+///
+/// Left unset it reads as `FullPubdata`, which is what every pre-v32 chain and every rollup runs
+/// with, and what tests and offline tooling that never talk to L1 expect.
+static CHAIN_PUBDATA_CONTENT: OnceLock<PubdataContent> = OnceLock::new();
+
+/// Pins the chain's pubdata content for this process. Called once during node startup with the value
+/// read from L1; calling it again with the same value is a no-op, with a different one is an error
+/// (nothing in a running node may execute under two different chain configs).
+pub fn set_chain_pubdata_content(pubdata_content: PubdataContent) -> anyhow::Result<()> {
+    let pinned = CHAIN_PUBDATA_CONTENT.get_or_init(|| pubdata_content);
+    anyhow::ensure!(
+        *pinned == pubdata_content,
+        "chain pubdata content already pinned to {pinned:?}, cannot switch to {pubdata_content:?}"
+    );
+    Ok(())
+}
+
+/// The pubdata content every v32 chain config in this process is built with.
+pub fn chain_pubdata_content() -> PubdataContent {
+    CHAIN_PUBDATA_CONTENT
+        .get()
+        .copied()
+        .unwrap_or(PubdataContent::FullPubdata)
+}
 
 /// Per-block input to [`generate_batch_run`].
 #[derive(Debug, Clone, Copy)]

@@ -22,6 +22,7 @@ use zksync_os_types::{PubdataMode, ZksyncOsEncode};
 /// public input, so proof verification must reconstruct it identically.
 pub(crate) fn chain_config(chain_id: u64) -> anyhow::Result<ChainConfig> {
     ChainConfig::new(chain_id, false, DEFAULT_MAX_TX_GAS_LIMIT)
+        .map(|config| config.with_pubdata_content(crate::chain_pubdata_content()))
         .map_err(|err| anyhow::anyhow!("invalid chain config: {err:?}"))
 }
 

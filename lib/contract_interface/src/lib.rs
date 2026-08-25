@@ -275,6 +275,7 @@ alloy::sol! {
         function getTotalBatchesExecuted() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
         function getPubdataPricingMode() external view returns (PubdataPricingMode);
+        function getPubdataContent() external view returns (PubdataContent);
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
@@ -282,6 +283,14 @@ alloy::sol! {
         function baseTokenGasPriceMultiplierDenominator() external view returns (uint128);
         function getBaseToken() external view returns (address);
         function getSettlementLayer() external view returns (address);
+    }
+
+    // Taken from `system-contracts/contracts/Constants.sol`. Which *part* of the pubdata a batch
+    // commits to; orthogonal to the DA commitment scheme (the publishing mechanism). ZKsync OS only,
+    // and only present on v32+ diamonds.
+    enum PubdataContent {
+        FULL_PUBDATA,
+        LOGS_ONLY
     }
 
     // Taken from `common/Config.sol`
@@ -817,6 +826,16 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("getPubdataPricingMode", None)
+    }
+
+    /// The chain's pubdata content. Only exists on v32+ diamonds — callers must gate on the protocol
+    /// version, since on an older one this decodes an empty return and fails.
+    pub async fn get_pubdata_content(&self) -> Result<PubdataContent> {
+        self.instance
+            .getPubdataContent()
+            .call()
+            .await
+            .enrich("getPubdataContent", None)
     }
 
     /// Returns true iff the contract has non-empty code at `block_id`.

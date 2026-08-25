@@ -1,6 +1,6 @@
 use crate::metrics::L1_STATE_METRICS;
-use crate::models::BatchDaInputMode;
-use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
+use crate::models::{BatchDaInputMode, ChainPubdataContent};
+use crate::{Bridgehub, MultisigCommitter, PubdataContent, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
 use alloy::providers::Provider;
@@ -37,8 +37,14 @@ pub struct L1State {
     /// Finalized L1 block number that was used to query `last_finalized_executed_batch`.
     pub finalized_l1_block_number: u64,
     pub da_input_mode: BatchDaInputMode,
+    /// Which part of the pubdata this chain's batches commit to, read from the chain itself. Part of
+    /// the batch public input, so the node must execute and prove with exactly this value.
+    pub pubdata_content: ChainPubdataContent,
     pub l1_chain_id: u64,
 }
+
+/// First protocol minor version whose Getters facet exposes `getPubdataContent`.
+const FIRST_PUBDATA_CONTENT_MINOR_VERSION: u64 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BatchFinality {
@@ -126,6 +132,9 @@ impl L1State {
             v => panic!("unexpected pubdata pricing mode: {}", v as u8),
         };
 
+        let pubdata_content =
+            Self::fetch_pubdata_content(&diamond_proxy_l1, latest_l1_block_number.into()).await?;
+
         let batch_verification = match MultisigCommitter::try_new(
             validator_timelock,
             diamond_proxy_l1.provider().clone(),
@@ -163,7 +172,31 @@ impl L1State {
             l1_block_number: latest_l1_block_number,
             finalized_l1_block_number,
             da_input_mode,
+            pubdata_content,
             l1_chain_id,
+        })
+    }
+
+    /// Reads the chain's pubdata content, defaulting to `FullPubdata` for chains that predate it.
+    ///
+    /// `getPubdataContent` was added to the Getters facet in v32; a v31 diamond has no such selector,
+    /// so the version is checked first rather than letting the call fail. `FullPubdata` is exactly
+    /// what a pre-v32 chain behaves as — its batch public input carries no chain config hash at all.
+    async fn fetch_pubdata_content(
+        diamond_proxy_l1: &ZkChain<NodeProvider>,
+        block_id: BlockId,
+    ) -> anyhow::Result<ChainPubdataContent> {
+        let raw_protocol_version = diamond_proxy_l1.get_raw_protocol_version(block_id).await?;
+        // Packed semver: `major << 64 | minor << 32 | patch`.
+        let minor: u64 = (raw_protocol_version >> 32u32).to::<u64>() & u64::from(u32::MAX);
+        if minor < FIRST_PUBDATA_CONTENT_MINOR_VERSION {
+            return Ok(ChainPubdataContent::FullPubdata);
+        }
+
+        Ok(match diamond_proxy_l1.get_pubdata_content().await? {
+            PubdataContent::FULL_PUBDATA => ChainPubdataContent::FullPubdata,
+            PubdataContent::LOGS_ONLY => ChainPubdataContent::LogsOnly,
+            v => panic!("unexpected pubdata content: {}", v as u8),
         })
     }
 
@@ -214,6 +247,7 @@ impl L1State {
             last_proved_batch: batch_finality.last_proved_batch,
             last_executed_batch: batch_finality.last_executed_batch,
             last_finalized_executed_batch,
+            pubdata_content: this.pubdata_content,
             l1_block_number,
             finalized_l1_block_number,
             da_input_mode: this.da_input_mode,

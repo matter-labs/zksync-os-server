@@ -68,7 +68,7 @@ use zksync_os_batch_verification::{
     BatchVerificationResponder, effective_verification_policy,
 };
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_contract_interface::models::BatchDaInputMode;
+use zksync_os_contract_interface::models::{BatchDaInputMode, ChainPubdataContent};
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
@@ -86,6 +86,7 @@ use zksync_os_mempool::Pool;
 use zksync_os_mempool::subpools::l2::L2Subpool;
 use zksync_os_merkle_tree::{MerkleTree, RocksDBWrapper};
 use zksync_os_metadata::NODE_VERSION;
+use zksync_os_native_pig::PubdataContent;
 use zksync_os_network::RecordOverride;
 use zksync_os_network::VerifyBatch;
 use zksync_os_network::protocol::{
@@ -290,6 +291,16 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         // External nodes do not produce blocks; pubdata mode is irrelevant for them.
         None
     };
+    // Pin the chain's pubdata content — read from L1 — before anything executes a block: it is part of
+    // every v32 batch's public input, so block execution, batch generation and proof verification all
+    // have to run with the chain's own value.
+    zksync_os_native_pig::set_chain_pubdata_content(match l1_state.pubdata_content {
+        ChainPubdataContent::FullPubdata => PubdataContent::FullPubdata,
+        ChainPubdataContent::LogsOnly => PubdataContent::LogsOnly,
+    })
+    .expect("failed to pin the chain pubdata content");
+    tracing::info!(pubdata_content = ?l1_state.pubdata_content, "Chain pubdata content");
+
     if let (Some(pubdata_mode), true) = (effective_pubdata_mode, node_role.is_main()) {
         match (pubdata_mode, l1_state.da_input_mode) {
             (PubdataMode::Calldata | PubdataMode::Blobs, BatchDaInputMode::Validium)

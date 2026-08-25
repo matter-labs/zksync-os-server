@@ -53,6 +53,22 @@ pub enum BatchDaInputMode {
     Validium,
 }
 
+/// User-friendly version of [`crate::PubdataContent`] with statically known possible variants.
+///
+/// Which part of the pubdata the chain's batches commit to. It is folded into every batch's public
+/// input through the ZKsync OS chain config hash, so the node must run with exactly the value the
+/// chain holds on L1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChainPubdataContent {
+    /// The whole pubdata is committed and published. Every pre-v32 chain, and every rollup.
+    FullPubdata,
+    /// Only the mandatory L2->L1 log region — which carries the interop commitment tree leaves — is
+    /// committed; state diffs and message preimages are published at the operator's discretion.
+    /// This is what a ZKsync OS validium runs with; it still publishes that region through the same
+    /// DA mechanism (blobs) a rollup uses.
+    LogsOnly,
+}
+
 /// User-friendly version of [`IExecutor::StoredBatchInfo`] containing
 /// fields that are relevant for ZKsync OS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
