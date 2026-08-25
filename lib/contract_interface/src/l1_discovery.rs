@@ -1,5 +1,5 @@
 use crate::metrics::L1_STATE_METRICS;
-use crate::models::{BatchDaInputMode, PubdataContent as ChainPubdataContent};
+use crate::models::{BatchDaInputMode, DACommitmentScheme, PubdataContent as ChainPubdataContent};
 use crate::{Bridgehub, MultisigCommitter, PubdataContent, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
@@ -38,6 +38,9 @@ pub struct L1State {
     pub finalized_l1_block_number: u64,
     pub da_input_mode: BatchDaInputMode,
     pub pubdata_content: ChainPubdataContent,
+    /// The mechanism this chain's batches publish pubdata with. Every committed batch has to declare
+    /// exactly this scheme, so the node's pubdata mode has to produce it.
+    pub l2_da_commitment_scheme: DACommitmentScheme,
     pub l1_chain_id: u64,
 }
 
@@ -140,6 +143,9 @@ impl L1State {
             Err(err) => return Err(err.into()),
         };
 
+        let l2_da_commitment_scheme: DACommitmentScheme =
+            diamond_proxy_l1.get_l2_da_commitment_scheme().await?.into();
+
         let batch_verification = match MultisigCommitter::try_new(
             validator_timelock,
             diamond_proxy_l1.provider().clone(),
@@ -178,6 +184,7 @@ impl L1State {
             finalized_l1_block_number,
             da_input_mode,
             pubdata_content,
+            l2_da_commitment_scheme,
             l1_chain_id,
         })
     }
@@ -233,6 +240,7 @@ impl L1State {
             finalized_l1_block_number,
             da_input_mode: this.da_input_mode,
             pubdata_content: this.pubdata_content,
+            l2_da_commitment_scheme: this.l2_da_commitment_scheme,
             l1_chain_id: this.l1_chain_id,
         })
     }
