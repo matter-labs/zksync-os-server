@@ -1,4 +1,6 @@
 use alloy::primitives::{Address, B256, BlockHash, BlockNumber, Sealed, U256};
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::convert::TryInto;
 use std::path::Path;
 use std::time::Duration;
@@ -9,7 +11,7 @@ use zksync_os_metadata::NODE_SEMVER_VERSION;
 use zksync_os_rocksdb::RocksDB;
 use zksync_os_rocksdb::db::{NamedColumnFamily, WriteBatch};
 use zksync_os_storage_api::{BlockContext, BlockHashes, ReadReplay, ReplayRecord, WriteReplay};
-use zksync_os_types::{BlockStartCursors, ProtocolSemanticVersion};
+use zksync_os_types::{BlockStartCursors, Eip2718, ProtocolSemanticVersion, ZkTransaction};
 
 /// A write-ahead log storing [`ReplayRecord`]s.
 ///
@@ -40,6 +42,10 @@ pub struct BlockReplayStorage {
 /// in [`BlockStartCursors`]. They are stored separately for historical reasons (each was added
 /// independently). A future migration should consolidate them into a single column family
 /// serializing the entire `BlockStartCursors` struct.
+///
+/// [`Self::Block`] and [`Self::HashToNumber`] are the target schema of an in-progress unification
+/// (folding everything below into one composite-keyed CF): phase 1, dual-written alongside
+/// everything else below, read by nothing yet. See [`UnifiedBlockRow`].
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
     /// Full [`BlockContext`], including the 256 previous block hashes (~8 KiB per block).
@@ -65,6 +71,15 @@ pub enum BlockReplayColumnFamily {
     CanonicalHash,
     /// Stores the latest appended block number under a fixed key.
     Latest,
+    /// Every field of [`ReplayRecord`] except the 256-hash window, in one blob per row, keyed by
+    /// `number(8B) ++ hash(32B)` (see [`BlockReplayStorage::composite_key`]). An override is then
+    /// just a normal write at a new key plus repointing [`Self::CanonicalHash`] — the old row
+    /// stays at its own key, untouched, no separate archival step. See [`UnifiedBlockRow`].
+    Block,
+    /// `hash -> number`, the reverse of [`Self::CanonicalHash`], letting a row in [`Self::Block`]
+    /// be found from its hash alone. Write-once: a hash is unique to its content (which includes
+    /// the block number), so this mapping never changes once written.
+    HashToNumber,
 }
 
 impl NamedColumnFamily for BlockReplayColumnFamily {
@@ -83,6 +98,8 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
         BlockReplayColumnFamily::StartingInteropFeeNumber,
         BlockReplayColumnFamily::CanonicalHash,
         BlockReplayColumnFamily::Latest,
+        BlockReplayColumnFamily::Block,
+        BlockReplayColumnFamily::HashToNumber,
     ];
 
     fn name(&self) -> &'static str {
@@ -100,6 +117,8 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
             BlockReplayColumnFamily::StartingInteropFeeNumber => "starting_interop_fee_number",
             BlockReplayColumnFamily::CanonicalHash => "canonical_hash",
             BlockReplayColumnFamily::Latest => "latest",
+            BlockReplayColumnFamily::Block => "block",
+            BlockReplayColumnFamily::HashToNumber => "hash_to_number",
         }
     }
 }
@@ -107,6 +126,17 @@ impl NamedColumnFamily for BlockReplayColumnFamily {
 impl BlockReplayStorage {
     /// Key under `Latest` CF for tracking the highest block number.
     const LATEST_KEY: &'static [u8] = b"latest_block";
+
+    /// Key into [`BlockReplayColumnFamily::Block`]: `number(8B, big-endian) ++ hash(32B)`. The
+    /// big-endian number prefix keeps rows in number order in the CF, so a range scan over a
+    /// span of canonical history (bulk EN sync, `replay_archive` recovery) is one sequential
+    /// pass instead of scattered point lookups across the hash keyspace.
+    fn composite_key(block_number: BlockNumber, hash: BlockHash) -> [u8; 40] {
+        let mut key = [0u8; 40];
+        key[..8].copy_from_slice(&block_number.to_be_bytes());
+        key[8..].copy_from_slice(hash.as_slice());
+        key
+    }
 
     pub async fn new(db_path: &Path, genesis: &Genesis) -> (Self, Option<Sealed<ReplayRecord>>) {
         let db = RocksDB::<BlockReplayColumnFamily>::new(db_path)
@@ -157,6 +187,13 @@ impl BlockReplayStorage {
     fn write_replay_unchecked(&self, sealed_record: Sealed<ReplayRecord>, is_canonical: bool) {
         // Prepare record
         let (record, block_hash) = sealed_record.split();
+        // Phase 1 of the replay-WAL unification (see `UnifiedBlockRow`): computed from `record`
+        // before anything below moves parts of it out.
+        let unified_row_value = bincode::serde::encode_to_vec(
+            UnifiedBlockRow::from_record(&record),
+            bincode::config::standard(),
+        )
+        .expect("Failed to serialize unified block row");
         // TODO: We want to change the key to be block_hash for all blocks
         let db_key = if is_canonical {
             record.block_context.block_number.to_be_bytes().to_vec()
@@ -200,6 +237,19 @@ impl BlockReplayStorage {
                 &block_hash.0,
             );
         }
+        // Phase 1 of the replay-WAL unification: dual-write into the new schema unconditionally
+        // (canonical or not — an override here is just a normal write at a new key, nothing else
+        // reads this yet, so there's nothing to keep consistent with the branch above).
+        batch.put_cf(
+            BlockReplayColumnFamily::Block,
+            &Self::composite_key(record.block_context.block_number, block_hash),
+            &unified_row_value,
+        );
+        batch.put_cf(
+            BlockReplayColumnFamily::HashToNumber,
+            &block_hash.0,
+            &record.block_context.block_number.to_be_bytes(),
+        );
         if self
             .latest_record_checked()
             .is_none_or(|l| l < record.block_context.block_number)
@@ -387,6 +437,43 @@ impl BlockReplayStorage {
                 bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
                     .expect("Failed to deserialize context")
                     .0
+            })
+    }
+
+    /// Reads back a row written to the phase-1 unified schema (see [`UnifiedBlockRow`]). Not
+    /// wired into any read path yet — used by tests to verify the dual-write is correct.
+    #[cfg(test)]
+    fn get_unified_row(
+        &self,
+        block_number: BlockNumber,
+        hash: BlockHash,
+    ) -> Option<UnifiedBlockRow> {
+        self.db
+            .get_cf(
+                BlockReplayColumnFamily::Block,
+                &Self::composite_key(block_number, hash),
+            )
+            .expect("Cannot read from DB")
+            .map(|bytes| {
+                bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+                    .expect("Failed to deserialize unified block row")
+                    .0
+            })
+    }
+
+    /// Resolves a block number from its hash via [`BlockReplayColumnFamily::HashToNumber`]. Not
+    /// wired into any read path yet — used by tests to verify the dual-write is correct.
+    #[cfg(test)]
+    fn get_number_for_hash(&self, hash: BlockHash) -> Option<BlockNumber> {
+        self.db
+            .get_cf(BlockReplayColumnFamily::HashToNumber, hash.as_slice())
+            .expect("Cannot read from DB")
+            .map(|bytes| {
+                let arr: [u8; 8] = bytes
+                    .as_slice()
+                    .try_into()
+                    .expect("HashToNumber value must be 8 bytes");
+                u64::from_be_bytes(arr)
             })
     }
 
@@ -811,6 +898,81 @@ impl StoredBlockContextV2 {
     }
 }
 
+/// Everything persisted for one block in [`BlockReplayColumnFamily::Block`]: all of
+/// [`BlockContext`] except the 256-hash window and the chain id (shared by all blocks, supplied
+/// by [`BlockReplayStorage`]'s in-memory `chain_id` field on read), plus this row's own immediate
+/// parent hash and the rest of [`ReplayRecord`] — including `previous_block_timestamp`, which
+/// isn't persisted anywhere else in this file (it's derived live on every read there instead).
+///
+/// Dual-written alongside every other column family for now; nothing reads it yet.
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct UnifiedBlockRow {
+    parent_hash: BlockHash,
+    block_number: u64,
+    timestamp: u64,
+    eip1559_basefee: U256,
+    pubdata_price: U256,
+    native_price: U256,
+    coinbase: Address,
+    gas_limit: u64,
+    pubdata_limit: u64,
+    mix_hash: U256,
+    execution_version: u32,
+    blob_fee: U256,
+    previous_block_timestamp: u64,
+    #[serde_as(as = "Vec<Eip2718>")]
+    transactions: Vec<ZkTransaction>,
+    node_version: semver::Version,
+    protocol_version: ProtocolSemanticVersion,
+    block_output_hash: B256,
+    force_preimages: Vec<(B256, Vec<u8>)>,
+    starting_cursors: BlockStartCursors,
+}
+
+impl UnifiedBlockRow {
+    fn from_record(record: &ReplayRecord) -> Self {
+        // Exhaustive destructuring keeps this in sync with `BlockContext`: a field added there
+        // fails compilation here, prompting a decision on whether and how to persist it.
+        let BlockContext {
+            chain_id: _,
+            block_number,
+            block_hashes,
+            timestamp,
+            eip1559_basefee,
+            pubdata_price,
+            native_price,
+            coinbase,
+            gas_limit,
+            pubdata_limit,
+            mix_hash,
+            execution_version,
+            blob_fee,
+        } = record.block_context;
+        Self {
+            parent_hash: BlockHash::from(block_hashes.0[255]),
+            block_number,
+            timestamp,
+            eip1559_basefee,
+            pubdata_price,
+            native_price,
+            coinbase,
+            gas_limit,
+            pubdata_limit,
+            mix_hash,
+            execution_version,
+            blob_fee,
+            previous_block_timestamp: record.previous_block_timestamp,
+            transactions: record.transactions.clone(),
+            node_version: record.node_version.clone(),
+            protocol_version: record.protocol_version.clone(),
+            block_output_hash: record.block_output_hash,
+            force_preimages: record.force_preimages.clone(),
+            starting_cursors: record.starting_cursors.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1071,5 +1233,65 @@ mod tests {
         // The new canonical rows reconstruct against the repointed index.
         assert_eq!(storage.get_replay_record(3), Some(new3));
         assert_eq!(storage.get_replay_record(4), Some(new4));
+    }
+
+    #[tokio::test]
+    async fn dual_write_populates_unified_block_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
+        let chain = make_chain(5);
+        for sealed in &chain {
+            storage.write(sealed.clone(), false).await.unwrap();
+        }
+
+        for sealed in &chain {
+            let number = sealed.block_context.block_number;
+            let hash = sealed.hash();
+            assert_eq!(
+                storage.get_unified_row(number, hash),
+                Some(UnifiedBlockRow::from_record(sealed.as_ref())),
+                "unified row mismatch for block {number}"
+            );
+            assert_eq!(
+                storage.get_number_for_hash(hash),
+                Some(number),
+                "hash-to-number mismatch for block {number}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dual_write_override_keeps_old_row_and_adds_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = BlockReplayStorage::new_without_genesis(dir.path(), 270);
+        let chain = make_chain(5);
+        for sealed in &chain {
+            storage.write(sealed.clone(), false).await.unwrap();
+        }
+
+        let old = &chain[4];
+        let mut replacement = old.as_ref().clone();
+        replacement.block_context.timestamp += 100;
+        let replacement_hash = fake_hash(999);
+        storage
+            .write(
+                Sealed::new_unchecked(replacement.clone(), replacement_hash),
+                true,
+            )
+            .await
+            .unwrap();
+
+        // With composite keys an override never touches the old row: it's simply a normal write
+        // at a new key. Both hashes stay resolvable to block 4, and both unified rows are intact.
+        assert_eq!(
+            storage.get_unified_row(4, old.hash()),
+            Some(UnifiedBlockRow::from_record(old.as_ref())),
+        );
+        assert_eq!(storage.get_number_for_hash(old.hash()), Some(4));
+        assert_eq!(
+            storage.get_unified_row(4, replacement_hash),
+            Some(UnifiedBlockRow::from_record(&replacement)),
+        );
+        assert_eq!(storage.get_number_for_hash(replacement_hash), Some(4));
     }
 }
