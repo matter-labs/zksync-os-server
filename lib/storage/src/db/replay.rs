@@ -38,47 +38,54 @@ pub struct BlockReplayStorage {
 
 /// Column families for storage of block replay commands.
 ///
-/// TODO(RocksDB migration): The four `Starting*` column families below correspond to fields
-/// in [`BlockStartCursors`]. They are stored separately for historical reasons (each was added
-/// independently). A future migration should consolidate them into a single column family
-/// serializing the entire `BlockStartCursors` struct.
-///
-/// [`Self::Block`] and [`Self::HashToNumber`] are the target schema of an in-progress unification
-/// (folding everything below into one composite-keyed CF): phase 1, dual-written alongside
-/// everything else below, read by nothing yet. See [`UnifiedBlockRow`].
+/// Mid-unification: [`Self::Block`] and [`Self::HashToNumber`] are the target schema, folding
+/// everything else here into one composite-keyed CF (see [`UnifiedBlockRow`]). Currently
+/// dual-written alongside the rest, and read by nothing yet — each variant below notes whether
+/// it's being removed or is part of the target schema.
 #[derive(Copy, Clone, Debug)]
 pub enum BlockReplayColumnFamily {
-    /// Full [`BlockContext`], including the 256 previous block hashes (~8 KiB per block).
-    /// For canonical rows this is a rollback-safety copy — reads prefer [`Self::ContextV2`].
-    /// Non-canonical (hash-keyed) rows live only here.
-    ///
-    /// TODO(RocksDB migration): stop writing canonical rows here and delete existing ones.
+    /// Being removed — folds into [`Self::Block`]. Full [`BlockContext`], including the 256
+    /// previous block hashes (~8 KiB per block). For canonical rows this is a rollback-safety
+    /// copy — reads prefer [`Self::ContextV2`]. Non-canonical (hash-keyed) rows live only here.
     Context,
-    /// Stripped [`BlockContext`] for canonical rows: everything except the 256 previous block
-    /// hashes, which are derivable data and get reconstructed from [`Self::CanonicalHash`] on
-    /// read (see [`StoredBlockContextV2`]).
+    /// Being removed — folds into [`Self::Block`]. Stripped [`BlockContext`] for canonical rows:
+    /// everything except the 256 previous block hashes, which are derivable data and get
+    /// reconstructed from [`Self::CanonicalHash`] on read (see [`StoredBlockContextV2`]).
     ContextV2,
+    /// Being removed — folds into [`Self::Block`].
     StartingL1SerialId,
+    /// Being removed — folds into [`Self::Block`].
     Txs,
+    /// Being removed — folds into [`Self::Block`].
     NodeVersion,
+    /// Being removed — folds into [`Self::Block`].
     ProtocolVersion,
+    /// Being removed — folds into [`Self::Block`].
     ForcePreimages,
+    /// Being removed — folds into [`Self::Block`].
     BlockOutputHash,
+    /// Being removed — folds into [`Self::Block`].
     StartingInteropRootId,
+    /// Being removed — folds into [`Self::Block`].
     StartingMigrationNumber,
+    /// Being removed — folds into [`Self::Block`].
     StartingInteropFeeNumber,
-    /// Mapping from block_number to block hash.
+    /// Staying — part of the target schema. Mapping from block_number to block hash.
     CanonicalHash,
-    /// Stores the latest appended block number under a fixed key.
+    /// Staying — part of the target schema. Stores the latest appended block number under a
+    /// fixed key.
     Latest,
-    /// Every field of [`ReplayRecord`] except the 256-hash window, in one blob per row, keyed by
+    /// Staying — the eventual sole per-row store, part of the target schema. Every field of
+    /// [`ReplayRecord`] except the 256-hash window, in one blob per row, keyed by
     /// `number(8B) ++ hash(32B)` (see [`BlockReplayStorage::composite_key`]). An override is then
     /// just a normal write at a new key plus repointing [`Self::CanonicalHash`] — the old row
     /// stays at its own key, untouched, no separate archival step. See [`UnifiedBlockRow`].
+    /// Dual-written for now; nothing reads it yet.
     Block,
-    /// `hash -> number`, the reverse of [`Self::CanonicalHash`], letting a row in [`Self::Block`]
-    /// be found from its hash alone. Write-once: a hash is unique to its content (which includes
-    /// the block number), so this mapping never changes once written.
+    /// Staying — part of the target schema. `hash -> number`, the reverse of
+    /// [`Self::CanonicalHash`], letting a row in [`Self::Block`] be found from its hash alone.
+    /// Write-once: a hash is unique to its content (which includes the block number), so this
+    /// mapping never changes once written. Dual-written for now; nothing reads it yet.
     HashToNumber,
 }
 
