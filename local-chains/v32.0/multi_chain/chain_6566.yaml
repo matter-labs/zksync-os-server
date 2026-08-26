@@ -12,3 +12,9 @@ l1_sender:
   operator_execute_sk: '0xaab971e3760af3990b8665258bb099d917be7c29a7f6a2ae50870ceca0789872'
 rpc:
   address: 0.0.0.0:3051
+sequencer:
+  tx_validator:
+    # See chain_6565.yaml — same fail-closed policy client, pointed at this chain's own instance.
+    policy_service:
+      url: 'http://127.0.0.1:8310'
+      auth_token: 'policy-6566-d7b6ff54189a954a83f75d89'

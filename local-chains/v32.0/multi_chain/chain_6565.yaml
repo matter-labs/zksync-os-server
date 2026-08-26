@@ -12,3 +12,13 @@ l1_sender:
   operator_execute_sk: '0xe047e59626543af623502ae68a42483bed3450168b2c67d1f821a194fbedefc1'
 rpc:
   address: 0.0.0.0:3050
+sequencer:
+  tx_validator:
+    # Prividium policy service: pre-execution admit + post-execution judge, evaluated at block build.
+    # FAIL-CLOSED — if this listener is unreachable, every tx is rejected. The permissions-api for
+    # THIS chain must be up with POLICY_PORT exposed before the node starts; comment this block out to
+    # run the chain without Prividium. `bypass_from` defaults to the bootloader and force-deployer, so
+    # the chain's own system txs (interop root imports among them) can't be denied by a broken service.
+    policy_service:
+      url: 'http://127.0.0.1:8010'
+      auth_token: 'policy-6565-eacc4f3d170bdd957b5fd41c'
