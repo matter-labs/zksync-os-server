@@ -154,6 +154,11 @@ pub fn zk_tx_into_revm_tx(
         .map_err(|e| anyhow::anyhow!("Failed to build TxEnv: {e:?}"))
 }
 
+// NOTE: when adding an `AtlasV4` (or later) arm here, you must also apply the
+// EIP-2935 pre-block system call in `node.rs` before the tx replay loop
+// (`zksync_os_revm::apply_pre_block_system_calls`); otherwise the checker
+// reports false divergences on those blocks. The tripwire in `node.rs` enforces
+// this — it fails until the call is wired.
 pub fn zk_spec_version(execution_version: ExecutionVersion) -> Option<ZkSpecId> {
     match execution_version {
         ExecutionVersion::V1 | ExecutionVersion::V2 | ExecutionVersion::V3 => {

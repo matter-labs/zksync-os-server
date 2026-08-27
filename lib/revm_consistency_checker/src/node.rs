@@ -159,6 +159,26 @@ where
                 .map_err(anyhow::Error::from)?;
 
             if let Some(zk_spec) = zk_spec {
+                // TRIPWIRE — do not relax without wiring the fix it points to.
+                // AtlasV4 (fusaka) adds EIP-2935: the STF writes the parent block
+                // hash into the history contract at the start of every block,
+                // before any transaction runs (`eip2935_system_part`). The
+                // per-tx replay below does NOT execute block-level system calls,
+                // so checking AtlasV4+ blocks without first applying that write
+                // would report false storage divergences (and, when reverts are
+                // enabled, blacklist signers and panic). Before mapping AtlasV4+
+                // in `zk_spec_version`, call
+                // `zksync_os_revm::apply_pre_block_system_calls(&mut evm, zk_spec,
+                // parent_hash)` before the tx loop (gated on the history account
+                // being a non-delegated contract), then raise this bound.
+                if zk_spec > ZkSpecId::AtlasV3 {
+                    anyhow::bail!(
+                        "revm consistency checker: EIP-2935 pre-block system call not \
+                         wired for {zk_spec:?}; apply zksync_os_revm::apply_pre_block_system_calls \
+                         before replaying transactions"
+                    );
+                }
+
                 let settlement_layer_chain_id = read_settlement_layer_chain_id(&mut state_view);
 
                 // Saturating: extreme fees are unrealistic; clamping keeps the
