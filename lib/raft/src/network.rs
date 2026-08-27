@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use openraft::Config;
 use openraft::error::{Fatal, RPCError, RaftError, ReplicationClosed, StreamingError, Unreachable};
-use openraft::network::{RPCOption, RaftNetwork, RaftNetworkFactory as OpenraftNetworkFactory};
+use openraft::network::{
+    Backoff, RPCOption, RaftNetwork, RaftNetworkFactory as OpenraftNetworkFactory,
+};
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse,
     SnapshotResponse, VoteRequest, VoteResponse,
@@ -15,6 +17,13 @@ use tokio::time::timeout;
 use zksync_os_consensus_types::{RaftNode, RaftTypeConfig, debug_display_raft_entry};
 use zksync_os_network::raft::protocol::{RaftRequestHandler, RaftRouter};
 use zksync_os_network::raft::wire::{RaftRequest, RaftResponse};
+
+const UNREACHABLE_BACKOFF_STEPS: [Duration; 4] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+];
 
 #[derive(Clone)]
 pub struct RaftRpcHandler {
@@ -129,6 +138,16 @@ impl RaftNetworkClient {
 }
 
 impl RaftNetwork<RaftTypeConfig> for RaftNetworkClient {
+    fn backoff(&self) -> Backoff {
+        Backoff::new(
+            UNREACHABLE_BACKOFF_STEPS
+                .into_iter()
+                .chain(std::iter::repeat(
+                    *UNREACHABLE_BACKOFF_STEPS.last().unwrap(),
+                )),
+        )
+    }
+
     async fn append_entries(
         &mut self,
         rpc: AppendEntriesRequest<RaftTypeConfig>,
