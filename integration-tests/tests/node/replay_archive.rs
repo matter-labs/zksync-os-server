@@ -72,6 +72,9 @@ async fn encrypted_replay_archive_recovers_node_storage_end_to_end(
         .await
         .context("failed to join RocksDB shutdown wait")?;
 
+    // Make sure the node stopped writing to rocksdb before we remove it for recovery.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
     tokio::fs::remove_dir_all(&rocks_db_path)
         .await
         .with_context(|| format!("failed to remove node storage {}", rocks_db_path.display()))?;
