@@ -115,6 +115,7 @@ async-trait.workspace = true
 jsonrpsee = { workspace = true, default-features = false, features = [
     "client",
 ] }
+jsonwebtoken.workspace = true
 rand.workspace = true
 rustls = { workspace = true }
 num.workspace = true
