@@ -39,8 +39,9 @@ pub struct L1State {
     pub da_input_mode: BatchDaInputMode,
     pub pubdata_content: ChainPubdataContent,
     /// The mechanism this chain's batches publish pubdata with. Every committed batch has to declare
-    /// exactly this scheme, so the node's pubdata mode has to produce it.
-    pub l2_da_commitment_scheme: DACommitmentScheme,
+    /// exactly this scheme, so the node's pubdata mode is derived from it — and `None`, on a diamond
+    /// that predates the scheme, is what makes the node fall back to a configured mode.
+    pub l2_da_commitment_scheme: Option<DACommitmentScheme>,
     pub l1_chain_id: u64,
 }
 
@@ -143,8 +144,10 @@ impl L1State {
             Err(err) => return Err(err.into()),
         };
 
-        let l2_da_commitment_scheme: DACommitmentScheme =
-            diamond_proxy_l1.get_l2_da_commitment_scheme().await?.into();
+        let l2_da_commitment_scheme: Option<DACommitmentScheme> = diamond_proxy_l1
+            .get_l2_da_commitment_scheme()
+            .await?
+            .map(Into::into);
 
         let batch_verification = match MultisigCommitter::try_new(
             validator_timelock,

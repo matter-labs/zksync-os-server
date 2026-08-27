@@ -754,7 +754,7 @@ mod tests {
             finalized_l1_block_number: 0,
             da_input_mode: BatchDaInputMode::Rollup,
             pubdata_content: PubdataContent::FullPubdata,
-            l2_da_commitment_scheme: DACommitmentScheme::BlobsZKsyncOS,
+            l2_da_commitment_scheme: Some(DACommitmentScheme::BlobsZKsyncOS),
             l1_chain_id: SL_CHAIN_ID,
         }
     }
