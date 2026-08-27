@@ -114,13 +114,27 @@ impl PolicyClient {
     /// Creates a per-transaction [`PolicySession`] with its own trace slot
     /// and pending-sender state. Use a separate session for each concurrent
     /// RPC simulation so their `begin_tx` / `finish_tx` hooks don't trample
-    /// each other's captured frames.
+    /// each other's captured frames. Runs the full `admit` + `judge` flow.
     pub fn session(&self, access_type: AccessType) -> PolicySession {
+        self.new_session(access_type, false)
+    }
+
+    /// Creates a session for the block-building (produce) path. The `admit`
+    /// check is skipped: every tx in a produced block already cleared `admit`
+    /// at RPC mempool entry, so re-admitting while sealing is redundant.
+    /// `judge` still runs in `finish_tx` against the real block execution.
+    /// Block-build traffic is always `Write`.
+    pub fn session_block_build(&self) -> PolicySession {
+        self.new_session(AccessType::Write, true)
+    }
+
+    fn new_session(&self, access_type: AccessType, skip_admit: bool) -> PolicySession {
         PolicySession {
             client: Arc::clone(&self.0),
             slot: tracer::new_slot(),
             pending_tx_from: None,
             access_type,
+            skip_admit,
         }
     }
 }
@@ -132,6 +146,11 @@ pub struct PolicySession {
     slot: TraceSlot,
     pending_tx_from: Option<Address>,
     access_type: AccessType,
+    /// When set, `begin_tx` skips the `admit` round trip. Used on the
+    /// block-building (produce) path: the tx already cleared `admit` at RPC
+    /// mempool entry, so re-admitting while sealing is redundant. `judge`
+    /// (post-execution) still runs.
+    skip_admit: bool,
 }
 
 impl PolicySession {
@@ -286,6 +305,13 @@ impl TxValidator for PolicySession {
         // Stash `from` so `finish_tx` can apply the same `bypass_from`
         // short-circuit.
         self.pending_tx_from = Some(ctx.from);
+        // Block-building path: the tx already cleared `admit` at RPC mempool
+        // entry, so the pre-execution check is redundant here. `judge` still
+        // runs in `finish_tx` against the real execution.
+        if self.skip_admit {
+            self.metrics().admit_skipped.inc();
+            return Ok(());
+        }
         tokio::runtime::Handle::current().block_on(self.admit(ctx))
     }
 

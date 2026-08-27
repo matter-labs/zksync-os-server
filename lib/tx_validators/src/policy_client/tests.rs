@@ -527,6 +527,57 @@ async fn judge_bypass_from_skips_call() {
     );
 }
 
+// ---------- Block-build session (admit skipped) ----------
+
+#[tokio::test]
+async fn block_build_session_skips_admit_but_still_judges() {
+    // The admit mock denies everything. A block-build session must never call
+    // /admit (the tx already cleared it at RPC mempool entry), so the tx is
+    // allowed despite the denial. /judge still runs and allows it.
+    let server = MockServer::start();
+    let admit_mock = server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": false}));
+    });
+    let judge_mock = server.mock(|when, then| {
+        when.method(Method::POST).path("/judge");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
+    let session = client.session_block_build();
+    let tracer = session.paired_tracer();
+    let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
+
+    assert!(
+        res.is_ok(),
+        "admit is skipped on block-build and judge allowed, got {res:?}"
+    );
+    assert_eq!(admit_mock.calls(), 0, "block-build must not call /admit");
+    assert_eq!(judge_mock.calls(), 1, "judge must still run on block-build");
+}
+
+#[tokio::test]
+async fn block_build_session_still_enforces_judge_denial() {
+    // Even with admit skipped, judge stays authoritative on the block-build
+    // path: a judge denial filters the tx out of the produced block.
+    let server = MockServer::start();
+    let admit_mock = server.mock(|when, then| {
+        when.method(Method::POST).path("/admit");
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    server.mock(|when, then| {
+        when.method(Method::POST).path("/judge");
+        then.status(200).json_body(json!({"allow": false}));
+    });
+    let client = PolicyClient::new(base_config(&server)).unwrap();
+    let session = client.session_block_build();
+    let tracer = session.paired_tracer();
+    let res = run_full_tx(session, tracer, test_context(), one_frame()).await;
+
+    assert!(matches!(res, Err(InvalidTransaction::FilteredByValidator)));
+    assert_eq!(admit_mock.calls(), 0, "block-build must not call /admit");
+}
+
 #[tokio::test]
 async fn judge_serialized_request_carries_captured_frames() {
     let server = MockServer::start();
