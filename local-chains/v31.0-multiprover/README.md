@@ -41,6 +41,15 @@ dual-ness so that cannot bake again.
 A guest ELF rotation rotates these pins, which means a regeneration of
 `ZiskVerifier` in era-contracts and a rebake here.
 
+STALE: the deployed `ZiskVerifier` in `l1-state.json.gz` reconstructs the
+320-byte ZiSK public values of the ZiSK v0.18.0 wire format. The server reads
+the v1.2.0-alpha format, whose public values are 576 bytes, so this chain
+cannot settle a multi-proof until the state is rebaked from an era-contracts
+checkout carrying the v1.2.0-alpha pins. The `Rotate program VK pins`
+workflow_dispatch in `matter-labs/zksync-os-zisk` produces the two program
+VKs; `rootCVadcopFinal` for that toolchain is
+`0x564c2b1bcbd5932c81cfad1fa786a98372eb3d6495257c2d944544334f84382f`.
+
 ## Regenerating the state
 
 `bake-l1-state.sh` loads `../v31.0/l1-state.json.gz` into anvil, deploys the

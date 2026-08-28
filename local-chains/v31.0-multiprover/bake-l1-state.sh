@@ -37,6 +37,13 @@ DIAMOND=0xb573DfdA099F9567c8E20d924A32A75bF834A5ef
 VERIFIER_SLOT=10
 
 # ZiSK pins baked into the generated `ZiskVerifier`.
+#
+# STALE: these belong to the ZiSK v0.18.0 toolchain and reconstruct 320-byte
+# public values. The server reads the v1.2.0-alpha wire format, so a rebake
+# needs an era-contracts checkout carrying the v1.2.0-alpha pins: the two
+# program VKs from the `Rotate program VK pins` workflow_dispatch in
+# matter-labs/zksync-os-zisk, and rootCVadcopFinal
+# 0x564c2b1bcbd5932c81cfad1fa786a98372eb3d6495257c2d944544334f84382f.
 EXPECTED_INNER_PROGRAM_VK=0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec
 EXPECTED_AGGREGATOR_PROGRAM_VK=0x4c3d7317a62f651d813ba6afbbce59e45eaa7c009ab2a9b51d2f0fb3e7987254
 EXPECTED_ROOT_C_VADCOP_FINAL=0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d

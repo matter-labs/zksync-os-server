@@ -3,7 +3,7 @@
 //! The per-batch lane produces `vadcop_final` streams; this manager buffers
 //! them and collapses a RANGE of them into one aggregation job, which the
 //! aggregator guest (`zksync-os-zisk/guest-aggregator`) verifies in-zkVM,
-//! committing the L1 binding digest over their chained batch public inputs.
+//! committing the L1 binding digest over their folded batch public inputs.
 //!
 //! # Range identity
 //!
@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-use crate::commitment::ZISK_PUBLIC_VALUES_BYTES;
+use crate::commitment::{ZISK_PUBLIC_VALUES_BYTES, committed_value};
 use crate::job_manager::{MultiProofMode, ZiskVkSet};
 use crate::metrics::ZISK_LANE_METRICS;
 use crate::proving_version::ZiskProvingVersion;
@@ -35,7 +35,7 @@ use crate::range::BatchRange;
 use zksync_os_batch_types::batcher_model::ZISK_SNARK_PROOF_BYTES;
 use zksync_os_types::ProtocolSemanticVersion;
 
-/// Cap on buffered per-batch inputs (~330 KiB each). When full, new
+/// Cap on buffered per-batch inputs (~360 KiB each). When full, new
 /// arrivals are dropped with a warning; the SNARK-side wait timeout is the
 /// operator backstop if aggregation provers stay offline.
 pub(crate) const MAX_BUFFERED_INPUTS: usize = 64;
@@ -141,8 +141,9 @@ pub struct ZiskAggregationJob {
 }
 
 /// A validated aggregated range proof parked until its Airbender SNARK
-/// arrives (the same 768-byte SNARK + 320-byte public-values wire shape as
-/// a per-batch proof; the binding digest sits at `public_values[32..64]`).
+/// arrives (the 768-byte SNARK + 576-byte public-values wire shape; the
+/// binding digest sits in the guest publics region, read with
+/// [`crate::committed_value`]).
 #[derive(Clone)]
 pub struct CompletedAggregatedProof {
     pub proof: Vec<u8>,
@@ -878,24 +879,26 @@ impl ZiskAggregationJobManager {
         })
     }
 
-    /// Phase 1: the wire shape of an aggregated-range submission.
+    /// Phase 1: the wire shape of an aggregated-range submission. Returns the
+    /// binding digest the proof commits, which only a well-shaped payload
+    /// carries.
     fn check_wire_shape(
         proof: &[u8],
         public_values: &[u8],
-    ) -> Result<(), ZiskAggregationSubmitError> {
+    ) -> Result<B256, ZiskAggregationSubmitError> {
         if proof.len() != ZISK_SNARK_PROOF_BYTES {
             return Err(ZiskAggregationSubmitError::InvalidProofSize {
                 got: proof.len(),
                 expected: ZISK_SNARK_PROOF_BYTES,
             });
         }
-        if public_values.len() != ZISK_PUBLIC_VALUES_BYTES {
-            return Err(ZiskAggregationSubmitError::InvalidPublicValuesSize {
+        match committed_value(public_values) {
+            Some(digest) if public_values.len() == ZISK_PUBLIC_VALUES_BYTES => Ok(digest),
+            _ => Err(ZiskAggregationSubmitError::InvalidPublicValuesSize {
                 got: public_values.len(),
                 expected: ZISK_PUBLIC_VALUES_BYTES,
-            });
+            }),
         }
-        Ok(())
     }
 
     /// Phase 2: the aggregator program-VK tripwire. A drift means the prover
@@ -963,11 +966,11 @@ impl ZiskAggregationJobManager {
 
     /// Submit an aggregated range proof.
     ///
-    /// Validates sizes, the aggregator-guest program-VK tripwire, and that
-    /// the proof's committed digest (`public_values[32..64]`) equals the
-    /// binding digest recomputed from the buffered per-batch streams, then
-    /// parks the proof in `completed` for the Airbender SNARK submission
-    /// path to compose the MultiProof (`take_completed`).
+    /// Validates sizes, the aggregator-guest program-VK tripwire, and that the
+    /// proof's committed digest equals the binding digest recomputed from the
+    /// buffered per-batch streams, then parks the proof in `completed` for the
+    /// Airbender SNARK submission path to compose the MultiProof
+    /// (`take_completed`).
     pub async fn submit_proof(
         &self,
         range: BatchRange,
@@ -977,7 +980,7 @@ impl ZiskAggregationJobManager {
     ) -> Result<(), ZiskAggregationSubmitError> {
         let (from_batch, to_batch) = (range.from(), range.to());
         // 1. Wire shape is checked before any state lookup.
-        Self::check_wire_shape(&proof, &public_values)?;
+        let reported_digest = Self::check_wire_shape(&proof, &public_values)?;
 
         let mut state = self.state.lock().await;
         // Borrow the assignment while validating. It remains intact while
@@ -1068,8 +1071,7 @@ impl ZiskAggregationJobManager {
             }
         };
 
-        let got = B256::from_slice(&public_values[32..64]);
-        if got != expected {
+        if reported_digest != expected {
             ZISK_LANE_METRICS.aggregated_digest_mismatches.inc();
             if state.requeue_or_abandon(range, failures, self.multi_proof_mode) {
                 ZISK_LANE_METRICS.unprovable.inc();
@@ -1077,7 +1079,7 @@ impl ZiskAggregationJobManager {
                     from = from_batch,
                     to = to_batch,
                     prover_id,
-                    %got,
+                    got = %reported_digest,
                     %expected,
                     attempts = MAX_DIGEST_MISMATCH_ATTEMPTS,
                     retained = self.multi_proof_mode == MultiProofMode::Required,
@@ -1091,13 +1093,13 @@ impl ZiskAggregationJobManager {
                     from = from_batch,
                     to = to_batch,
                     prover_id,
-                    %got,
+                    got = %reported_digest,
                     %expected,
                     "aggregated ZiSK proof binding-digest mismatch — requeueing range"
                 );
             }
             return Err(ZiskAggregationSubmitError::DigestMismatch(format!(
-                "committed digest {got} does not match expected {expected}"
+                "committed digest {reported_digest} does not match expected {expected}"
             )));
         }
 
@@ -1230,7 +1232,7 @@ impl ZiskAggregationJobManager {
                 to = to_batch,
                 prover_id,
                 aggregator_program_vk = %reported_vk,
-                digest = %got,
+                digest = %reported_digest,
                 late,
                 "aggregated ZiSK proof accepted and verified; shadow proving keeps it off L1, \
                  so the range is complete"
@@ -1243,7 +1245,7 @@ impl ZiskAggregationJobManager {
             to = to_batch,
             prover_id,
             aggregator_program_vk = %reported_vk,
-            digest = %got,
+            digest = %reported_digest,
             "aggregated ZiSK proof accepted, awaiting Airbender SNARK for multi-proof composition"
         );
         let parked = CompletedAggregatedProof {
@@ -1334,11 +1336,19 @@ impl ZiskAggregationJobManager {
 /// per-batch inputs of a range (in batch order):
 ///
 /// ```text
-/// digest    = keccak256(innerProgramVK ‖ rootCVadcopFinal ‖ chainedPI)
-/// chainedPI = _computeZKsyncOSHash(0, PI):   result = PI[0]
-///             then per input: result = keccak256(result ‖ PI[i]) >> 32
-/// PI[i]     = uint256(commitment_i) >> 32   (224-bit, big-endian words)
+/// digest    = keccak256(innerProgramVK ‖ rootCVadcopFinal ‖ rangePublicInput)
+/// rangePublicInput = ZKsyncOSVerifier.computeZKsyncOSHash(0, PI):
+///             folded = N == 1 ? PI[0] : keccak256(PI[0] ‖ … ‖ PI[N-1])
+///             rangePublicInput = folded >> 32
+/// PI[i]     = uint256(commitment_i)   (the full 32-byte commitment)
 /// ```
+///
+/// INVARIANT: the per-batch public inputs enter the fold untruncated and a
+/// one-batch range performs no keccak. The settlement layer takes
+/// `publicInputs[0]` verbatim for a single batch and hashes the plain
+/// concatenation otherwise, applying `PUBLIC_INPUT_SHIFT` once to the
+/// result. Truncating each input first, or shifting at every step, produces
+/// a digest the settlement layer never computes.
 ///
 /// Both VKs enter in their 32-byte big-endian wire forms. All batches must
 /// share one inner (program VK, vadcop VK) pair — the guest enforces the
@@ -1353,7 +1363,6 @@ pub(crate) fn expected_aggregated_public_input(
         return Err("empty range".into());
     };
 
-    let mut chained = shr32(&first.commitment);
     for (i, input) in rest.iter().enumerate() {
         if input.program_vk != first.program_vk {
             return Err(format!(
@@ -1367,22 +1376,29 @@ pub(crate) fn expected_aggregated_public_input(
                 i + 1
             ));
         }
-        let mut preimage = [0u8; 64];
-        preimage[..32].copy_from_slice(chained.as_slice());
-        preimage[32..].copy_from_slice(shr32(&input.commitment).as_slice());
-        chained = shr32(&keccak256(preimage));
     }
+
+    let folded = if rest.is_empty() {
+        first.commitment
+    } else {
+        let preimage: Vec<u8> = inputs
+            .iter()
+            .flat_map(|input| input.commitment.as_slice().iter().copied())
+            .collect();
+        keccak256(preimage)
+    };
+    let range_public_input = shr32(&folded);
 
     let mut binding = [0u8; 96];
     binding[..32].copy_from_slice(first.program_vk.as_slice());
     binding[32..64].copy_from_slice(first.vadcop_vk.as_slice());
-    binding[64..].copy_from_slice(chained.as_slice());
+    binding[64..].copy_from_slice(range_public_input.as_slice());
     Ok(keccak256(binding))
 }
 
-/// A 32-byte big-endian uint256 right-shifted 32 bits — the contracts'
-/// 224-bit public-input truncation, applied to per-batch public inputs and
-/// to every chain step.
+/// A 32-byte big-endian uint256 right-shifted 32 bits — the settlement
+/// layer's `PUBLIC_INPUT_SHIFT` truncation to 224 bits, applied once to the
+/// folded range value.
 fn shr32(word: &B256) -> B256 {
     let mut out = [0u8; 32];
     out[4..].copy_from_slice(&word.as_slice()[..28]);

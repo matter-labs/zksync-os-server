@@ -80,11 +80,10 @@ const TEST_CHAIN_ID: u64 = 270;
 
 fn manager(expected_vk: Option<B256>) -> ZiskJobManager {
     // A configured program VK arms the drift tripwire for the fixture's v31
-    // batches; the vadcop VK is pinned to zero so it matches the zeroed
-    // `public_values[288..320]` the plain fixtures carry, exercising the
-    // program VK alone. The per-batch PLONK lane submits well-shaped SNARK
-    // artifacts, which pass wire-form verification, so proof verification
-    // stays on here.
+    // batches; the vadcop VK is pinned to zero so it matches the zeroed VK the
+    // plain fixtures carry, exercising the program VK alone. The per-batch
+    // PLONK lane submits well-shaped SNARK artifacts, which pass wire-form
+    // verification, so proof verification stays on here.
     let expected_vks = expected_vk
         .map(|program_vk| {
             HashMap::from([(

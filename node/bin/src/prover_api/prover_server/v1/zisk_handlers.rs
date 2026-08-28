@@ -32,19 +32,16 @@ pub struct ZiskBatchDataPayload {
     pub zisk_data: String,
 }
 
-/// Payload for submitting a per-batch ZiSK proof.
-///
-/// Per-batch PLONK mode: `proof` is the 768-byte wrapped SNARK and
-/// `public_values` the 320-byte wire layout. Aggregated mode: `proof` is
-/// the raw `vadcop_final` proof stream (~330 KiB, it carries its own
-/// publics) and `public_values` must be empty.
+/// Payload for submitting a per-batch ZiSK proof: `proof` is the raw
+/// `vadcop_final` proof stream (~360 KiB, it carries its own publics) and
+/// `public_values` must be empty. The lane always aggregates, so a batch
+/// never carries its own PLONK wrap.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ZiskProofPayload {
     pub batch_number: u64,
-    /// Base64-encoded proof (see above for the per-mode shape).
+    /// Base64-encoded `vadcop_final` proof stream.
     pub proof: String,
-    /// Base64-encoded ZiSK public values (320 bytes in PLONK mode; empty
-    /// in aggregated mode).
+    /// Base64-encoded ZiSK public values; empty.
     #[serde(default)]
     pub public_values: String,
 }
@@ -55,7 +52,7 @@ pub struct ZiskProofPayload {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ZiskAggregationBatchProof {
     pub batch_number: u64,
-    /// Base64-encoded per-batch `vadcop_final` proof stream (~330 KiB).
+    /// Base64-encoded per-batch `vadcop_final` proof stream (~360 KiB).
     pub proof: String,
 }
 
@@ -77,8 +74,8 @@ pub struct ZiskAggregationProofPayload {
     pub to_batch_number: u64,
     /// Base64-encoded aggregated ZiSK SNARK proof (768 bytes).
     pub proof: String,
-    /// Base64-encoded aggregated public values (320 bytes; the aggregator
-    /// guest's binding digest sits at bytes [32..64]).
+    /// Base64-encoded aggregated public values (576 bytes; the aggregator
+    /// guest's binding digest sits in the guest publics region).
     pub public_values: String,
 }
 

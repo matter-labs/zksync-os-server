@@ -17,17 +17,20 @@ fn aggregation_mode(mode: MultiProofMode) -> ZiskAggregationMode {
     }
 }
 
+/// The lane fixture. Most tests leave proof verification off: the pinned
+/// `zisk-verifier` crate still reads the ZiSK v0.18.0 wire form and rejects
+/// the 576-byte public values this lane builds, while the behaviour under
+/// test — buffering, leasing, requeueing, the floor — does not depend on it.
+/// `verification_is_blocked_by_the_pinned_verifier` pins the armed path.
 fn manager(multi_proof_mode: MultiProofMode) -> ZiskAggregationJobManager {
-    manager_with_verification_timeout(multi_proof_mode, Duration::from_secs(60))
+    manager_with(multi_proof_mode, Duration::from_secs(60), false)
 }
 
-fn manager_with_verification_timeout(
+fn manager_with(
     multi_proof_mode: MultiProofMode,
     verification_timeout: Duration,
+    proof_verification_enabled: bool,
 ) -> ZiskAggregationJobManager {
-    // The submitted aggregated-range proofs are well-shaped SNARK
-    // artifacts, which pass the wire-form verification, so proof
-    // verification stays on here.
     // Aggregation refuses a protocol version whose keys are not compiled, so
     // the fixture pins the one its inputs carry.
     ZiskAggregationJobManager::new(ZiskAggregationLaneConfig {
@@ -42,7 +45,7 @@ fn manager_with_verification_timeout(
                 vadcop_vk: B256::repeat_byte(0xB2),
             },
         )]),
-        proof_verification_enabled: true,
+        proof_verification_enabled,
         mode: aggregation_mode(multi_proof_mode),
     })
 }
@@ -99,11 +102,9 @@ async fn pick_filters_aggregation_ranges_before_leasing() {
     assert_eq!(job.vk_hash, supported.to_string());
 }
 
-/// Aggregated public values for a range: the given digest at [32..64].
+/// Aggregated public values carrying the given binding digest.
 fn aggregated_pv(digest: B256) -> Vec<u8> {
-    let mut pv = vec![0u8; ZISK_PUBLIC_VALUES_BYTES];
-    pv[32..64].copy_from_slice(digest.as_slice());
-    pv
+    crate::commitment::synthetic_public_values(digest)
 }
 
 async fn expected_digest(manager: &ZiskAggregationJobManager, from: u64, to: u64) -> B256 {
@@ -114,23 +115,55 @@ async fn expected_digest(manager: &ZiskAggregationJobManager, from: u64, to: u64
     expected_aggregated_public_input(&inputs).expect("digest")
 }
 
-/// THE cross-stack binding vector (real 4-batch aggregation session,
-/// ZiSK v0.18.0). The aggregator guest's `cross_stack_binding_vector`
-/// test and `zksync-os-zisk/guest-aggregator/BINDING_VECTOR.md` pin
-/// the same values. Update all pins together.
+/// The compiled `zisk-verifier` is pinned to the ZiSK v0.18.0 wire form, so
+/// with verification on it rejects every v1.2.0-alpha range payload. The lane
+/// fails closed, which is the safe direction, but no range can be accepted
+/// until the crate pin moves. This test fails the moment the pin lands, which
+/// is when `manager` takes verification back on.
+#[tokio::test]
+async fn verification_is_blocked_by_the_pinned_verifier() {
+    let manager = manager_with(MultiProofMode::Required, Duration::from_secs(60), true);
+    let range = BatchRange::of(1, 1);
+    manager.note_snark_range(range).await;
+    feed(&manager, 1).await;
+    manager
+        .pick_next_job("agg-1")
+        .await
+        .expect("the range is ready to lease");
+
+    let digest = expected_digest(&manager, 1, 1).await;
+    let err = manager
+        .submit_proof(
+            range,
+            vec![0xAB; ZISK_SNARK_PROOF_BYTES],
+            aggregated_pv(digest),
+            "agg-1",
+        )
+        .await
+        .expect_err("the pinned verifier cannot read the current wire form");
+    assert!(
+        matches!(err, ZiskAggregationSubmitError::ProofVerificationFailed(_)),
+        "{err}"
+    );
+}
+
+/// THE cross-stack binding vector (real 4-batch aggregation session).
+/// The aggregator guest's `cross_stack_binding_vector` test and
+/// `zksync-os-zisk/guest-aggregator/BINDING_VECTOR.md` pin the same values.
+/// Update all pins together.
 #[test]
 fn binding_digest_matches_cross_stack_vector() {
-    let program_vk: B256 = "0x1d16f620e2bc7e58044df7ee8d4284422a0dd37cf151cf79ecf324c131e50468"
+    let program_vk: B256 = "0x8168c5d383a50a9c7a40561b82bf679cc6dfdab0308417b4fea653362d78d080"
         .parse()
         .unwrap();
     let vadcop_vk: B256 = "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
         .parse()
         .unwrap();
     let commitments = [
-        "0x6c41981c6fd0bd9a9262fe3dcc9fe4f0d8e142651f80316a8846d6922b5214ea",
-        "0x1f56fcbd24636dc0a635bc51808d7db9eabf3914f66611c93cf37ea440a5fe27",
-        "0x9d909d7416f29633c361bfc00073a9004423f0e1cc46105cdd24550543c0e41c",
-        "0x6ca5ada4916397cfb1b07a2f115f21fedf7e4a14a827995b3c5b392966532ad6",
+        "0x63c7606faee0ee9eff230fec391e64c0c82a0277947973ce7f6f1c9088c821dd",
+        "0x7d6a5ed6ffda210164c11dd6f6fccbd35c4ff70632e845a5bf256e3ec48940b9",
+        "0xd5a7b4485d1aece18348655132e73c86b23fa0f251adb173f80123d05a914f15",
+        "0xc5ed165443011bac65df4d0f4240de3429c033996e9fce630a631e117537cd61",
     ];
     let inputs: Vec<AggregationInput> = commitments
         .iter()
@@ -146,20 +179,39 @@ fn binding_digest_matches_cross_stack_vector() {
     let digest = expected_aggregated_public_input(&refs).unwrap();
     assert_eq!(
         format!("{digest:#x}"),
-        "0x7eabba6c7a68150706e10101195be54eaf3b39f699bc8da5f34c8033eedec13e"
+        "0xf29341c341f2622ba86a21bbb36dde9742e1983e531c278fd1cee04c6f823e2c"
     );
 }
 
-/// A single-batch range binds the first public input unhashed
-/// (`initialHash == 0` seeds the chain with PI[0]).
+/// A single-batch range takes the one public input verbatim and performs no
+/// keccak over it, which is the settlement layer's own special case.
 #[test]
-fn single_batch_digest_seeds_with_first_public_input() {
+fn single_batch_digest_folds_the_only_public_input_unhashed() {
     let a = input(0x11);
     let digest = expected_aggregated_public_input(&[&a]).unwrap();
     let mut binding = [0u8; 96];
     binding[..32].copy_from_slice(a.program_vk.as_slice());
     binding[32..64].copy_from_slice(a.vadcop_vk.as_slice());
     binding[64..].copy_from_slice(shr32(&a.commitment).as_slice());
+    assert_eq!(digest, keccak256(binding));
+}
+
+/// Two batches are the smallest range that folds, and the point where a
+/// per-input truncation would first show: the concatenation carries both
+/// commitments in full and the shift lands only on the folded result.
+#[test]
+fn multi_batch_digest_folds_untruncated_public_inputs() {
+    let a = input(0x11);
+    let b = input(0x22);
+    let digest = expected_aggregated_public_input(&[&a, &b]).unwrap();
+
+    let mut preimage = [0u8; 64];
+    preimage[..32].copy_from_slice(a.commitment.as_slice());
+    preimage[32..].copy_from_slice(b.commitment.as_slice());
+    let mut binding = [0u8; 96];
+    binding[..32].copy_from_slice(a.program_vk.as_slice());
+    binding[32..64].copy_from_slice(a.vadcop_vk.as_slice());
+    binding[64..].copy_from_slice(shr32(&keccak256(preimage)).as_slice());
     assert_eq!(digest, keccak256(binding));
 }
 
@@ -420,7 +472,7 @@ async fn timeout_reassigns_range() {
         verification_timeout: Duration::from_secs(60),
         expected_program_vks: HashMap::new(),
         expected_inner_vks: HashMap::new(),
-        proof_verification_enabled: true,
+        proof_verification_enabled: false,
         mode: aggregation_mode(MultiProofMode::Required),
     });
     manager.note_snark_range(BatchRange::of(1, 4)).await;
@@ -458,7 +510,7 @@ async fn submit_validation() {
                 vadcop_vk: B256::repeat_byte(0xB2),
             },
         )]),
-        proof_verification_enabled: true,
+        proof_verification_enabled: false,
         mode: aggregation_mode(MultiProofMode::Required),
     });
     manager.note_snark_range(BatchRange::of(1, 4)).await;
@@ -849,8 +901,7 @@ async fn a_verifying_range_is_neither_re_registered_nor_re_offered() {
 #[tokio::test]
 async fn an_expired_verifying_range_is_recovered_when_noted() {
     let timeouts_before = ZISK_LANE_METRICS.aggregation_verification_timeouts.get();
-    let manager =
-        manager_with_verification_timeout(MultiProofMode::Required, Duration::from_millis(10));
+    let manager = manager_with(MultiProofMode::Required, Duration::from_millis(10), false);
     let range = BatchRange::of(1, 4);
     manager.note_snark_range(range).await;
     for batch in range.batches() {
@@ -901,8 +952,7 @@ async fn blocking_verification_contains_panics() {
 #[tokio::test]
 async fn a_stale_verification_generation_cannot_finish_a_newer_attempt() {
     let superseded_before = ZISK_LANE_METRICS.superseded_submissions.get();
-    let manager =
-        manager_with_verification_timeout(MultiProofMode::Required, Duration::from_millis(10));
+    let manager = manager_with(MultiProofMode::Required, Duration::from_millis(10), false);
     let range = BatchRange::of(1, 4);
     manager.note_snark_range(range).await;
     for batch in range.batches() {
@@ -940,9 +990,12 @@ async fn a_stale_verification_generation_cannot_finish_a_newer_attempt() {
 /// shorter verification timeout nor request cancellation causes re-proving.
 #[tokio::test]
 async fn verification_queue_time_does_not_start_the_recovery_timeout() {
-    let manager = Arc::new(manager_with_verification_timeout(
+    // The armed verifier is the point here: the submission must queue on the
+    // verification semaphore, whatever verdict it would reach.
+    let manager = Arc::new(manager_with(
         MultiProofMode::Required,
         Duration::from_millis(10),
+        true,
     ));
     let range = BatchRange::of(1, 4);
     manager.note_snark_range(range).await;
