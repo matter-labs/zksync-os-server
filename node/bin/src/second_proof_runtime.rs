@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(
             validate_deployed_zisk_identity(
                 ProtocolSemanticVersion::new(0, 31, 0),
-                b256!("718bdb59530514f9a62f16b2ba912de17188615d82aa31ec681be4b9cd332888"),
+                b256!("15f1b441108707f731b74558e00bbb95ddc3220908c87376dd633696745346ef"),
             )
             .unwrap(),
             ZiskProvingVersion::V1

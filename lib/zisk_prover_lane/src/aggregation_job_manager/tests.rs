@@ -17,17 +17,20 @@ fn aggregation_mode(mode: MultiProofMode) -> ZiskAggregationMode {
     }
 }
 
+/// The lane fixture. Most tests leave proof verification off: the pinned
+/// `zisk-verifier` crate still reads the ZiSK v0.18.0 wire form and rejects
+/// the 576-byte public values this lane builds, while the behaviour under
+/// test — buffering, leasing, requeueing, the floor — does not depend on it.
+/// `verification_is_blocked_by_the_pinned_verifier` pins the armed path.
 fn manager(multi_proof_mode: MultiProofMode) -> ZiskAggregationJobManager {
-    manager_with_verification_timeout(multi_proof_mode, Duration::from_secs(60))
+    manager_with(multi_proof_mode, Duration::from_secs(60), false)
 }
 
-fn manager_with_verification_timeout(
+fn manager_with(
     multi_proof_mode: MultiProofMode,
     verification_timeout: Duration,
+    proof_verification_enabled: bool,
 ) -> ZiskAggregationJobManager {
-    // The submitted aggregated-range proofs are well-shaped SNARK
-    // artifacts, which pass the wire-form verification, so proof
-    // verification stays on here.
     // Aggregation refuses a protocol version whose keys are not compiled, so
     // the fixture pins the one its inputs carry.
     ZiskAggregationJobManager::new(ZiskAggregationLaneConfig {
@@ -42,7 +45,7 @@ fn manager_with_verification_timeout(
                 vadcop_vk: B256::repeat_byte(0xB2),
             },
         )]),
-        proof_verification_enabled: true,
+        proof_verification_enabled,
         mode: aggregation_mode(multi_proof_mode),
     })
 }
@@ -99,11 +102,9 @@ async fn pick_filters_aggregation_ranges_before_leasing() {
     assert_eq!(job.vk_hash, supported.to_string());
 }
 
-/// Aggregated public values for a range: the given digest at [32..64].
+/// Aggregated public values carrying the given binding digest.
 fn aggregated_pv(digest: B256) -> Vec<u8> {
-    let mut pv = vec![0u8; ZISK_PUBLIC_VALUES_BYTES];
-    pv[32..64].copy_from_slice(digest.as_slice());
-    pv
+    crate::commitment::synthetic_public_values(digest)
 }
 
 async fn expected_digest(manager: &ZiskAggregationJobManager, from: u64, to: u64) -> B256 {
@@ -112,6 +113,38 @@ async fn expected_digest(manager: &ZiskAggregationJobManager, from: u64, to: u64
         .map(|b| state.inputs.get(&b).expect("input buffered"))
         .collect();
     expected_aggregated_public_input(&inputs).expect("digest")
+}
+
+/// The compiled `zisk-verifier` is pinned to the ZiSK v0.18.0 wire form, so
+/// with verification on it rejects every v1.2.0-alpha range payload. The lane
+/// fails closed, which is the safe direction, but no range can be accepted
+/// until the crate pin moves. This test fails the moment the pin lands, which
+/// is when `manager` takes verification back on.
+#[tokio::test]
+async fn verification_is_blocked_by_the_pinned_verifier() {
+    let manager = manager_with(MultiProofMode::Required, Duration::from_secs(60), true);
+    let range = BatchRange::of(1, 1);
+    manager.note_snark_range(range).await;
+    feed(&manager, 1).await;
+    manager
+        .pick_next_job("agg-1")
+        .await
+        .expect("the range is ready to lease");
+
+    let digest = expected_digest(&manager, 1, 1).await;
+    let err = manager
+        .submit_proof(
+            range,
+            vec![0xAB; ZISK_SNARK_PROOF_BYTES],
+            aggregated_pv(digest),
+            "agg-1",
+        )
+        .await
+        .expect_err("the pinned verifier cannot read the current wire form");
+    assert!(
+        matches!(err, ZiskAggregationSubmitError::ProofVerificationFailed(_)),
+        "{err}"
+    );
 }
 
 /// THE cross-stack binding vector (real 4-batch aggregation session).
@@ -439,7 +472,7 @@ async fn timeout_reassigns_range() {
         verification_timeout: Duration::from_secs(60),
         expected_program_vks: HashMap::new(),
         expected_inner_vks: HashMap::new(),
-        proof_verification_enabled: true,
+        proof_verification_enabled: false,
         mode: aggregation_mode(MultiProofMode::Required),
     });
     manager.note_snark_range(BatchRange::of(1, 4)).await;
@@ -477,7 +510,7 @@ async fn submit_validation() {
                 vadcop_vk: B256::repeat_byte(0xB2),
             },
         )]),
-        proof_verification_enabled: true,
+        proof_verification_enabled: false,
         mode: aggregation_mode(MultiProofMode::Required),
     });
     manager.note_snark_range(BatchRange::of(1, 4)).await;
@@ -868,8 +901,7 @@ async fn a_verifying_range_is_neither_re_registered_nor_re_offered() {
 #[tokio::test]
 async fn an_expired_verifying_range_is_recovered_when_noted() {
     let timeouts_before = ZISK_LANE_METRICS.aggregation_verification_timeouts.get();
-    let manager =
-        manager_with_verification_timeout(MultiProofMode::Required, Duration::from_millis(10));
+    let manager = manager_with(MultiProofMode::Required, Duration::from_millis(10), false);
     let range = BatchRange::of(1, 4);
     manager.note_snark_range(range).await;
     for batch in range.batches() {
@@ -920,8 +952,7 @@ async fn blocking_verification_contains_panics() {
 #[tokio::test]
 async fn a_stale_verification_generation_cannot_finish_a_newer_attempt() {
     let superseded_before = ZISK_LANE_METRICS.superseded_submissions.get();
-    let manager =
-        manager_with_verification_timeout(MultiProofMode::Required, Duration::from_millis(10));
+    let manager = manager_with(MultiProofMode::Required, Duration::from_millis(10), false);
     let range = BatchRange::of(1, 4);
     manager.note_snark_range(range).await;
     for batch in range.batches() {
@@ -959,9 +990,12 @@ async fn a_stale_verification_generation_cannot_finish_a_newer_attempt() {
 /// shorter verification timeout nor request cancellation causes re-proving.
 #[tokio::test]
 async fn verification_queue_time_does_not_start_the_recovery_timeout() {
-    let manager = Arc::new(manager_with_verification_timeout(
+    // The armed verifier is the point here: the submission must queue on the
+    // verification semaphore, whatever verdict it would reach.
+    let manager = Arc::new(manager_with(
         MultiProofMode::Required,
         Duration::from_millis(10),
+        true,
     ));
     let range = BatchRange::of(1, 4);
     manager.note_snark_range(range).await;

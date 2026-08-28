@@ -310,7 +310,7 @@ impl ZiskJobState {
 
 /// The expected ZiSK verification keys of one protocol version's STF guest
 /// build: the program VK (public values `[0..32]`) and the inner vadcop-final
-/// VK / `rootCVadcopFinal` (public values `[288..320]`, or the `vadcop_final`
+/// VK / `rootCVadcopFinal` (public values `[544..576]`, or the `vadcop_final`
 /// stream tail in aggregated mode). Both are pinned together because a guest
 /// build fixes both at once.
 #[derive(Debug, Clone, Copy)]

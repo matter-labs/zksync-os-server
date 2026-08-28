@@ -1,4 +1,5 @@
 {
+  "_stale": "STALE: programs.inner.program_vk and programs.aggregator.program_vk are placeholders. The ZiSK 1.2.0-alpha guest ELFs rotate both keys, and the values are produced by the `Rotate program VK pins` workflow_dispatch in matter-labs/zksync-os-zisk. Until that dispatch runs and this manifest is refilled from its output, every ZiSK submission is rejected by the program-VK tripwire and the deployed-identity check at startup fails. The release and artifacts blocks still describe the 0.0.3 release and must be refilled from the same rotation.",
   "artifacts": {
     "guest_archive": {
       "asset": "zksync-os-zisk-guest-elfs-0.0.3.tar.gz",
@@ -23,7 +24,7 @@
         "sha256": "f96f9285ca87083f322569d72fd379b67b1ee2ea3286c078c26e313acd27e7ae",
         "size": 1720504
       },
-      "program_vk": "0x4c3d7317a62f651d813ba6afbbce59e45eaa7c009ab2a9b51d2f0fb3e7987254"
+      "program_vk": "0x0000000000000000000000000000000000000000000000000000000000000000"
     },
     "inner": {
       "elf": {
@@ -31,7 +32,7 @@
         "sha256": "80b841c76445dd3c411cc1f11447cc85285521541378821442aef1f7262da932",
         "size": 2617944
       },
-      "program_vk": "0x44e3d132399c8f3a03ce9672ba0ca00c6503db918731c7ab46d6faea445236ec"
+      "program_vk": "0x0000000000000000000000000000000000000000000000000000000000000000"
     }
   },
   "release": {
@@ -41,12 +42,12 @@
   },
   "schema_version": 1,
   "toolchain": {
-    "zisk_version": "0.18.0"
+    "zisk_version": "1.2.0-alpha"
   },
   "vadcop_final": {
-    "root_c": "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
+    "root_c": "0x564c2b1bcbd5932c81cfad1fa786a98372eb3d6495257c2d944544334f84382f"
   },
-  "zisk_verification_key_hash": "0x718bdb59530514f9a62f16b2ba912de17188615d82aa31ec681be4b9cd332888",
+  "zisk_verification_key_hash": "0x15f1b441108707f731b74558e00bbb95ddc3220908c87376dd633696745346ef",
   "zisk_verification_key_hash_preimage": [
     "programs.inner.program_vk",
     "programs.aggregator.program_vk",

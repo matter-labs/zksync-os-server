@@ -35,7 +35,10 @@ pub use aggregation_job_manager::{
 pub use aggregation_job_manager::{ZiskAggregationLaneConfig, ZiskAggregationMode};
 pub use bytes::ZiskBatchBytes;
 pub use combine::compose_multiproof;
-pub use commitment::{ZISK_PUBLIC_VALUES_BYTES, expected_zisk_public_input};
+pub use commitment::{
+    ZISK_COMMITTED_VALUE_RANGE, ZISK_PUBLIC_VALUES_BYTES, committed_value,
+    expected_zisk_public_input,
+};
 pub use job_manager::MAX_TOTAL_JOBS;
 pub use job_manager::{
     MultiProofMode, ZiskBatchStatus, ZiskJob, ZiskJobData, ZiskJobManager, ZiskQueueCounts,
@@ -49,8 +52,10 @@ pub use proving_version::{
 pub use range::{BatchRange, InvalidBatchRange};
 pub use shadow::shadow_execute_zisk_batch;
 
-/// Test-only proof-stream fixture, exposed for tests in other crates via the
+/// Test-only wire fixtures, exposed for tests in other crates via the
 /// `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
+pub use commitment::synthetic_public_values;
 #[cfg(any(test, feature = "test-support"))]
 pub use vadcop_stream::synthetic_stream;
 

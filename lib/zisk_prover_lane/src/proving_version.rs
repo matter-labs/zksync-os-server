@@ -10,6 +10,12 @@ use zksync_os_types::ProtocolSemanticVersion;
 /// reviewed binary change, not an operator-local key override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ZiskProvingVersion {
+    /// STALE: the compiled manifest carries placeholder program VKs. The ZiSK
+    /// 1.2.0-alpha guest ELFs rotate both keys, and the `Rotate program VK
+    /// pins` workflow_dispatch in `matter-labs/zksync-os-zisk` produces the
+    /// values. Until the manifest is refilled from its output, the program-VK
+    /// tripwire rejects every submission and the deployed-identity check
+    /// fails at startup.
     V1,
 }
 
@@ -270,7 +276,7 @@ mod tests {
         assert_eq!(manifest.release.tag, "0.0.3");
         assert_eq!(
             manifest.zisk_verification_key_hash,
-            b256!("718bdb59530514f9a62f16b2ba912de17188615d82aa31ec681be4b9cd332888")
+            b256!("15f1b441108707f731b74558e00bbb95ddc3220908c87376dd633696745346ef")
         );
         assert_eq!(
             manifest.artifacts.prover_service.sha256,

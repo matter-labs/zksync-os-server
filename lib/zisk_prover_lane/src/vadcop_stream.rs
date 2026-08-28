@@ -3,7 +3,7 @@
 //!
 //! In aggregated mode the daemon proves each batch WITHOUT the PLONK wrap
 //! and submits the raw proof stream (`zisk_common::Proof::get_proof_bytes()`
-//! layout, ZiSK v0.18.0) so the aggregator guest can later verify it
+//! layout, ZiSK v1.2.0-alpha) so the aggregator guest can later verify it
 //! in-zkVM. This module only parses: it validates the stream shape and
 //! extracts the values checked per batch — the inner guest's program VK
 //! (tripwire) and the committed batch public input. The STARK itself is
@@ -12,13 +12,15 @@
 //! Stream layout (u64 LE words):
 //!
 //! ```text
-//! [minimal=0][n_publics=68][program_vk(4)][publics(64)]
-//! [proof body(41_947)][vadcop_vk(4)]
+//! [minimal=0][n_publics=69][is_vadcop_final_proof=1][program_vk(4)]
+//! [publics(64)][proof body(46_078)][vadcop_vk(4)]
 //! ```
 //!
 //! `publics[0..8]` carry the STF guest's batch-commitment u32 words (one
-//! u32 per u64 word, packed little-endian by `ziskos::io::commit_slice`) —
-//! byte-identical to `public_values[32..64]` of the PLONK wire layout.
+//! u32 per u64 word, packed little-endian by `ziskos::io::commit_slice`).
+//! The same words reach the PLONK wire public values widened to u64, so
+//! the commitment lands in bytes `[32..96]` there, four significant bytes
+//! per eight-byte slot.
 //!
 //! The layout mirrors `zksync-os-zisk/guest-aggregator/src/lib.rs`, which
 //! is the parser the aggregator guest itself runs; the two must agree.
@@ -27,6 +29,13 @@ use alloy::primitives::B256;
 
 /// Words preceding the publics in a serialized proof: `[minimal][n_publics]`.
 pub const VADCOP_HEADER_WORDS: usize = 2;
+/// u64 words in the leading `is_vadcop_final_proof` public. The non-minimal
+/// vadcop_final circuit emits it at public index 0, ahead of the program VK.
+pub const VADCOP_LEAF_FLAG_WORDS: usize = 1;
+/// The `is_vadcop_final_proof` value of a leaf proof — one batch, proven by
+/// the STF guest. A fold output of ZiSK's own recurser carries 0, so this is
+/// the value that keeps a folded range out of a per-batch position.
+pub const VADCOP_LEAF_FLAG: u64 = 1;
 /// u64 words in the guest-ELF ROM root (program VK).
 pub const VADCOP_PROGRAM_VK_WORDS: usize = 4;
 /// u64 words in the publics region.
@@ -39,29 +48,33 @@ pub const VADCOP_COMMITMENT_WORDS: usize = 8;
 /// u64 words in the vadcop-final verification key trailing the stream.
 pub const VADCOP_VK_WORDS: usize = 4;
 /// u64 words in a non-minimal `vadcop_final` proof body under the pinned
-/// pil2-proofman v0.18.0 recursive setup. Must match
+/// pil2-proofman recursive setup, Poseidon1 hash family — the family
+/// `ziskos::zisklib::verify_zisk_proof` fixes. Must match
 /// `zksync-os-zisk-guest-aggregator::VADCOP_FINAL_BODY_WORDS`, which is
-/// asserted against the real `proofman-verifier` crate at the pinned tag.
-pub const VADCOP_FINAL_BODY_WORDS: usize = 41_947;
-/// Expected `n_publics` header word: program VK + publics.
-pub const VADCOP_EXPECTED_N_PUBLICS: u64 = (VADCOP_PROGRAM_VK_WORDS + VADCOP_PUBLICS_WORDS) as u64;
+/// asserted against the real `proofman-verifier` crate at the pinned version.
+pub const VADCOP_FINAL_BODY_WORDS: usize = 46_078;
+/// Expected `n_publics` header word: leaf flag + program VK + publics.
+pub const VADCOP_EXPECTED_N_PUBLICS: u64 =
+    (VADCOP_LEAF_FLAG_WORDS + VADCOP_PROGRAM_VK_WORDS + VADCOP_PUBLICS_WORDS) as u64;
 
 /// Total u64 words in a serialized non-minimal proof stream.
 pub const VADCOP_STREAM_WORDS: usize = VADCOP_HEADER_WORDS
+    + VADCOP_LEAF_FLAG_WORDS
     + VADCOP_PROGRAM_VK_WORDS
     + VADCOP_PUBLICS_WORDS
     + VADCOP_FINAL_BODY_WORDS
     + VADCOP_VK_WORDS;
-/// Total bytes in a serialized non-minimal proof stream (336_168).
+/// Total bytes in a serialized non-minimal proof stream (369_224).
 pub const ZISK_VADCOP_STREAM_BYTES: usize = VADCOP_STREAM_WORDS * 8;
 
 /// The public data of a validated `vadcop_final` proof stream, in the same
 /// serialization the rest of the stack uses:
 /// - VKs as the 32-byte big-endian value (the four u64 limbs, big-endian,
 ///   in order) — matching the compiled ZiSK manifest VK format and bytes
-///   `[0..32]` / `[288..320]` of the PLONK wire public values.
-/// - The commitment exactly as bytes `[32..64]` of the wire public values
-///   (u32 words packed little-endian).
+///   `[0..32]` / `[544..576]` of the PLONK wire public values.
+/// - The commitment as the 32 bytes the STF guest committed (u32 words
+///   packed little-endian), which the PLONK wire public values carry
+///   widened to u64 in bytes `[32..96]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VadcopStreamPublics {
     pub program_vk: B256,
@@ -84,11 +97,16 @@ fn vk_words_be(bytes: &[u8], first_word: usize) -> B256 {
 
 /// Validate the stream shape and extract its public data.
 ///
-/// Shape checks: exact byte length, non-minimal flag, publics count.
-/// Cryptographic verification of the STARK happens only inside the
+/// Shape checks: exact byte length, non-minimal flag, publics count, leaf
+/// flag. Cryptographic verification of the STARK happens only inside the
 /// aggregator guest; the caller must still validate the extracted
 /// commitment against the batch metadata and the program VK against the
 /// expected guest build.
+///
+/// INVARIANT: only a leaf proof is accepted. A fold output of ZiSK's own
+/// recurser is a valid STARK over the same keys, and its publics sit at the
+/// same offsets, so `is_vadcop_final_proof` is the only thing that separates
+/// one batch's proof from a folded range standing in for it.
 pub fn parse_vadcop_final_stream(bytes: &[u8]) -> Result<VadcopStreamPublics, String> {
     if bytes.len() != ZISK_VADCOP_STREAM_BYTES {
         return Err(format!(
@@ -109,12 +127,19 @@ pub fn parse_vadcop_final_stream(bytes: &[u8]) -> Result<VadcopStreamPublics, St
         ));
     }
 
-    let program_vk = vk_words_be(bytes, VADCOP_HEADER_WORDS);
+    let leaf_flag = word_at(bytes, VADCOP_HEADER_WORDS);
+    if leaf_flag != VADCOP_LEAF_FLAG {
+        return Err(format!(
+            "is_vadcop_final_proof is {leaf_flag}, expected leaf proof ({VADCOP_LEAF_FLAG})"
+        ));
+    }
+
+    let program_vk = vk_words_be(bytes, VADCOP_HEADER_WORDS + VADCOP_LEAF_FLAG_WORDS);
     let vadcop_vk = vk_words_be(bytes, VADCOP_STREAM_WORDS - VADCOP_VK_WORDS);
 
     // publics words 0..8, one u32 payload per u64 word, packed LE — the
     // `as u32` truncation matches ziskos's `PublicValues::new_from_u64`.
-    let publics_start = VADCOP_HEADER_WORDS + VADCOP_PROGRAM_VK_WORDS;
+    let publics_start = VADCOP_HEADER_WORDS + VADCOP_LEAF_FLAG_WORDS + VADCOP_PROGRAM_VK_WORDS;
     let mut commitment = [0u8; 32];
     for (i, chunk) in commitment.chunks_exact_mut(4).enumerate() {
         chunk.copy_from_slice(&(word_at(bytes, publics_start + i) as u32).to_le_bytes());
@@ -140,6 +165,7 @@ pub fn synthetic_stream(
     let mut words: Vec<u64> = Vec::with_capacity(VADCOP_STREAM_WORDS);
     words.push(0); // non-minimal
     words.push(VADCOP_EXPECTED_N_PUBLICS);
+    words.push(VADCOP_LEAF_FLAG);
     words.extend_from_slice(&program_vk);
     let mut publics = [0u64; VADCOP_PUBLICS_WORDS];
     for (i, p) in publics.iter_mut().take(VADCOP_COMMITMENT_WORDS).enumerate() {
@@ -204,9 +230,20 @@ mod tests {
         assert!(err.contains("minimal"), "{err}");
 
         let mut stream = synthetic_stream(PROGRAM_VK, VADCOP_VK, [0u8; 32]);
-        stream[8] = 67;
+        stream[8] = 68;
         let err = parse_vadcop_final_stream(&stream).unwrap_err();
         assert!(err.contains("n_publics"), "{err}");
+    }
+
+    /// A fold output of ZiSK's recurser has the leaf flag clear and is
+    /// otherwise well shaped, so this check is what keeps a folded range out
+    /// of a per-batch position.
+    #[test]
+    fn rejects_a_stream_that_is_not_a_leaf_proof() {
+        let mut stream = synthetic_stream(PROGRAM_VK, VADCOP_VK, [0u8; 32]);
+        stream[VADCOP_HEADER_WORDS * 8] = 0;
+        let err = parse_vadcop_final_stream(&stream).unwrap_err();
+        assert!(err.contains("is_vadcop_final_proof"), "{err}");
     }
 
     #[test]
@@ -214,7 +251,8 @@ mod tests {
         let mut stream = synthetic_stream(PROGRAM_VK, VADCOP_VK, [0x11u8; 32]);
         // Poison the high half of the first commitment word; the parser
         // must ignore it exactly like the guest's frame.commitment().
-        let first_publics_byte = (VADCOP_HEADER_WORDS + VADCOP_PROGRAM_VK_WORDS) * 8;
+        let first_publics_byte =
+            (VADCOP_HEADER_WORDS + VADCOP_LEAF_FLAG_WORDS + VADCOP_PROGRAM_VK_WORDS) * 8;
         stream[first_publics_byte + 4] = 0xDE;
         let publics = parse_vadcop_final_stream(&stream).expect("parses");
         assert_eq!(publics.commitment, B256::from([0x11u8; 32]));
