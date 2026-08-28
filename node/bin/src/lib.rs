@@ -66,7 +66,7 @@ use zksync_os_batch_verification::{
     BatchVerificationResponder, effective_verification_policy,
 };
 use zksync_os_contract_interface::l1_discovery::{BatchVerificationSL, L1State};
-use zksync_os_contract_interface::models::BatchDaInputMode;
+use zksync_os_contract_interface::models::DACommitmentScheme;
 use zksync_os_gas_adjuster::GasAdjuster;
 use zksync_os_genesis::{FileGenesisInputSource, Genesis, GenesisInputSource};
 use zksync_os_internal_config::InternalConfigManager;
@@ -281,24 +281,14 @@ pub async fn run(runtime: &Runtime, config: Config) -> ServerPorts {
 
     // Effective pubdata mode used by all block-producing components.
     let effective_pubdata_mode: Option<PubdataMode> = if node_role.is_main() {
-        Some(effective_main_node_pubdata_mode(&config))
+        Some(effective_main_node_pubdata_mode(
+            &config,
+            l1_state.l2_da_commitment_scheme,
+        ))
     } else {
         // External nodes do not produce blocks; pubdata mode is irrelevant for them.
         None
     };
-    if let (Some(pubdata_mode), true) = (effective_pubdata_mode, node_role.is_main()) {
-        match (pubdata_mode, l1_state.da_input_mode) {
-            (PubdataMode::Calldata | PubdataMode::Blobs, BatchDaInputMode::Validium)
-            | (PubdataMode::Validium, BatchDaInputMode::Rollup) => {
-                panic!(
-                    "Pubdata mode doesn't correspond to pricing mode from the l1. \
-                    L1 mode: {:?}, effective pubdata mode: {:?}",
-                    l1_state.da_input_mode, pubdata_mode
-                );
-            }
-            _ => {}
-        }
-    }
 
     prepare_raft_storage(&config).expect("failed to prepare raft storage");
 
@@ -1560,13 +1550,44 @@ fn check_batch_verification_mismatch(
     false
 }
 
-/// Returns the pubdata mode used by all block-producing components on the Main Node: the
-/// configured `l1_sender.pubdata_mode` (its presence is enforced here).
-fn effective_main_node_pubdata_mode(config: &Config) -> PubdataMode {
-    config
-        .l1_sender_config
-        .pubdata_mode
-        .expect("`l1_sender.pubdata_mode` is required on the Main Node")
+/// Returns the pubdata mode used by all block-producing components on the Main Node.
+///
+/// The chain's DA *mechanism* is already recorded on L1, and the `Committer` rejects any batch that
+/// declares a different one, so the operator does not have to restate it: with
+/// `l1_sender.pubdata_mode` unset the mode is derived from the chain's DA commitment scheme. A
+/// configured value is an override for the schemes that have none — and has to agree with L1.
+///
+/// None of this touches pubdata *pricing*, which is a free fee-policy choice: a logs-only validium
+/// publishes (little) pubdata through blobs and may still price as a validium.
+fn effective_main_node_pubdata_mode(
+    config: &Config,
+    l2_da_commitment_scheme: Option<DACommitmentScheme>,
+) -> PubdataMode {
+    match (config.l1_sender_config.pubdata_mode, l2_da_commitment_scheme) {
+        (Some(configured), Some(scheme)) => {
+            let produced_scheme = configured.da_commitment_scheme();
+            if produced_scheme != scheme {
+                panic!(
+                    "Pubdata mode doesn't correspond to the DA commitment scheme from the L1. \
+                    L1 scheme: {scheme:?}, configured pubdata mode: {configured:?} (produces \
+                    {produced_scheme:?}). Unset `l1_sender.pubdata_mode` to derive it from L1."
+                );
+            }
+            configured
+        }
+        (Some(configured), None) => configured,
+        (None, Some(scheme)) => PubdataMode::from_da_commitment_scheme(scheme).unwrap_or_else(|| {
+            panic!(
+                "The chain's DA commitment scheme on L1 ({scheme:?}) is not one a ZKsync OS server \
+                produces, so no pubdata mode can be derived from it; set `l1_sender.pubdata_mode` \
+                explicitly if this is intentional."
+            )
+        }),
+        (None, None) => panic!(
+            "`l1_sender.pubdata_mode` is required on a Main Node whose chain does not report a DA \
+            commitment scheme on L1"
+        ),
+    }
 }
 
 /// Counts commit transactions a previous session left in the L1 mempool (pending minus latest

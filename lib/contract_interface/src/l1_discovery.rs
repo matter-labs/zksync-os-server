@@ -1,5 +1,5 @@
 use crate::metrics::L1_STATE_METRICS;
-use crate::models::BatchDaInputMode;
+use crate::models::{BatchDaInputMode, DACommitmentScheme};
 use crate::{Bridgehub, MultisigCommitter, PubdataPricingMode, ZkChain};
 use alloy::eips::BlockId;
 use alloy::primitives::{Address, U256};
@@ -37,6 +37,10 @@ pub struct L1State {
     /// Finalized L1 block number that was used to query `last_finalized_executed_batch`.
     pub finalized_l1_block_number: u64,
     pub da_input_mode: BatchDaInputMode,
+    /// The mechanism this chain's batches publish pubdata with. Every committed batch has to declare
+    /// exactly this scheme, so the node's pubdata mode is derived from it — and `None`, on a diamond
+    /// that predates the scheme, is what makes the node fall back to a configured mode.
+    pub l2_da_commitment_scheme: Option<DACommitmentScheme>,
     pub l1_chain_id: u64,
 }
 
@@ -126,6 +130,11 @@ impl L1State {
             v => panic!("unexpected pubdata pricing mode: {}", v as u8),
         };
 
+        let l2_da_commitment_scheme: Option<DACommitmentScheme> = diamond_proxy_l1
+            .get_l2_da_commitment_scheme()
+            .await?
+            .map(Into::into);
+
         let batch_verification = match MultisigCommitter::try_new(
             validator_timelock,
             diamond_proxy_l1.provider().clone(),
@@ -163,6 +172,7 @@ impl L1State {
             l1_block_number: latest_l1_block_number,
             finalized_l1_block_number,
             da_input_mode,
+            l2_da_commitment_scheme,
             l1_chain_id,
         })
     }
@@ -217,6 +227,7 @@ impl L1State {
             l1_block_number,
             finalized_l1_block_number,
             da_input_mode: this.da_input_mode,
+            l2_da_commitment_scheme: this.l2_da_commitment_scheme,
             l1_chain_id: this.l1_chain_id,
         })
     }
