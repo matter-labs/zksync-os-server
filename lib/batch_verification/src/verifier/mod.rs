@@ -310,7 +310,9 @@ mod tests {
     use zksync_os_batch_types::BlockMerkleTreeData;
     use zksync_os_batch_types::PendingBatchInfo;
     use zksync_os_batch_types::batcher_model::{BatchEnvelope, BatchMetadata, ProverInput};
-    use zksync_os_contract_interface::models::{BatchDaInputMode, StoredBatchInfo};
+    use zksync_os_contract_interface::models::{
+        BatchDaInputMode, DACommitmentScheme, StoredBatchInfo,
+    };
     use zksync_os_contract_interface::{Bridgehub, ZkChain};
     use zksync_os_genesis::{FileGenesisInputSource, GenesisState, build_genesis};
     use zksync_os_interface::traits::{PreimageSource, ReadStorage};
@@ -743,6 +745,7 @@ mod tests {
             l1_block_number: 0,
             finalized_l1_block_number: 0,
             da_input_mode: BatchDaInputMode::Rollup,
+            l2_da_commitment_scheme: Some(DACommitmentScheme::BlobsZKsyncOS),
             l1_chain_id: SL_CHAIN_ID,
         }
     }

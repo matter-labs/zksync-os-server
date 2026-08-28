@@ -1301,8 +1301,13 @@ pub struct L1SenderConfig {
     #[config(default_t = true)]
     pub enabled: bool,
 
-    /// Pubdata mode used by block-producing components on the Main Node. Required at runtime on
-    /// Main Nodes; External Nodes never produce blocks and may leave it unset.
+    /// Pubdata mode used by block-producing components on the Main Node: the DA *mechanism* the
+    /// chain publishes with (`Blobs`, `Calldata` or `Validium`).
+    ///
+    /// Leave it unset: the Main Node derives it from the chain's DA commitment scheme on L1, which
+    /// is the value the `Committer` enforces on every batch anyway. Set it only for a chain whose
+    /// scheme a ZKsync OS server cannot produce (third-party DA), in which case it must still agree
+    /// with L1. External Nodes never produce blocks and always leave it unset.
     #[config(with = Serde![str])]
     pub pubdata_mode: Option<PubdataMode>,
 

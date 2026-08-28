@@ -278,6 +278,7 @@ alloy::sol! {
         function getTotalBatchesExecuted() external view returns (uint256);
         function getTotalPriorityTxs() external view returns (uint256);
         function getPubdataPricingMode() external view returns (PubdataPricingMode);
+        function getDAValidatorPair() external view returns (address, L2DACommitmentScheme);
         function getAdmin() external view returns (address);
         function getChainTypeManager() external view returns (address);
         function getProtocolVersion() external view returns (uint256);
@@ -812,6 +813,28 @@ impl<P: Provider> ZkChain<P> {
             .call()
             .await
             .enrich("getPubdataPricingMode", None)
+    }
+
+    /// The chain's L2 DA commitment scheme — the mechanism its batches publish pubdata with. The
+    /// `Committer` requires every committed batch to declare exactly this scheme.
+    ///
+    /// `None` on a diamond that predates the scheme: it either has no getter at all, or returns the
+    /// L2 DA validator address where the scheme now sits, which does not decode as the enum. Such a
+    /// chain cannot have its pubdata mode derived and has to configure one.
+    pub async fn get_l2_da_commitment_scheme(&self) -> Result<Option<L2DACommitmentScheme>> {
+        match self.instance.getDAValidatorPair().call().await {
+            Ok(pair) => Ok(match pair._1 {
+                L2DACommitmentScheme::__Invalid => None,
+                scheme => Some(scheme),
+            }),
+            Err(err)
+                if is_method_missing(&err)
+                    || matches!(err, alloy::contract::Error::AbiError(_)) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(Error::Call(Box::new(err), "getDAValidatorPair".to_string())),
+        }
     }
 
     /// Returns true iff the contract has non-empty code at `block_id`.
