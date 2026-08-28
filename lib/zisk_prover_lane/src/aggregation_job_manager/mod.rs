@@ -3,7 +3,7 @@
 //! The per-batch lane produces `vadcop_final` streams; this manager buffers
 //! them and collapses a RANGE of them into one aggregation job, which the
 //! aggregator guest (`zksync-os-zisk/guest-aggregator`) verifies in-zkVM,
-//! committing the L1 binding digest over their chained batch public inputs.
+//! committing the L1 binding digest over their folded batch public inputs.
 //!
 //! # Range identity
 //!
@@ -1334,11 +1334,19 @@ impl ZiskAggregationJobManager {
 /// per-batch inputs of a range (in batch order):
 ///
 /// ```text
-/// digest    = keccak256(innerProgramVK ‖ rootCVadcopFinal ‖ chainedPI)
-/// chainedPI = _computeZKsyncOSHash(0, PI):   result = PI[0]
-///             then per input: result = keccak256(result ‖ PI[i]) >> 32
-/// PI[i]     = uint256(commitment_i) >> 32   (224-bit, big-endian words)
+/// digest    = keccak256(innerProgramVK ‖ rootCVadcopFinal ‖ rangePublicInput)
+/// rangePublicInput = ZKsyncOSVerifier.computeZKsyncOSHash(0, PI):
+///             folded = N == 1 ? PI[0] : keccak256(PI[0] ‖ … ‖ PI[N-1])
+///             rangePublicInput = folded >> 32
+/// PI[i]     = uint256(commitment_i)   (the full 32-byte commitment)
 /// ```
+///
+/// INVARIANT: the per-batch public inputs enter the fold untruncated and a
+/// one-batch range performs no keccak. The settlement layer takes
+/// `publicInputs[0]` verbatim for a single batch and hashes the plain
+/// concatenation otherwise, applying `PUBLIC_INPUT_SHIFT` once to the
+/// result. Truncating each input first, or shifting at every step, produces
+/// a digest the settlement layer never computes.
 ///
 /// Both VKs enter in their 32-byte big-endian wire forms. All batches must
 /// share one inner (program VK, vadcop VK) pair — the guest enforces the
@@ -1353,7 +1361,6 @@ pub(crate) fn expected_aggregated_public_input(
         return Err("empty range".into());
     };
 
-    let mut chained = shr32(&first.commitment);
     for (i, input) in rest.iter().enumerate() {
         if input.program_vk != first.program_vk {
             return Err(format!(
@@ -1367,22 +1374,29 @@ pub(crate) fn expected_aggregated_public_input(
                 i + 1
             ));
         }
-        let mut preimage = [0u8; 64];
-        preimage[..32].copy_from_slice(chained.as_slice());
-        preimage[32..].copy_from_slice(shr32(&input.commitment).as_slice());
-        chained = shr32(&keccak256(preimage));
     }
+
+    let folded = if rest.is_empty() {
+        first.commitment
+    } else {
+        let preimage: Vec<u8> = inputs
+            .iter()
+            .flat_map(|input| input.commitment.as_slice().iter().copied())
+            .collect();
+        keccak256(preimage)
+    };
+    let range_public_input = shr32(&folded);
 
     let mut binding = [0u8; 96];
     binding[..32].copy_from_slice(first.program_vk.as_slice());
     binding[32..64].copy_from_slice(first.vadcop_vk.as_slice());
-    binding[64..].copy_from_slice(chained.as_slice());
+    binding[64..].copy_from_slice(range_public_input.as_slice());
     Ok(keccak256(binding))
 }
 
-/// A 32-byte big-endian uint256 right-shifted 32 bits — the contracts'
-/// 224-bit public-input truncation, applied to per-batch public inputs and
-/// to every chain step.
+/// A 32-byte big-endian uint256 right-shifted 32 bits — the settlement
+/// layer's `PUBLIC_INPUT_SHIFT` truncation to 224 bits, applied once to the
+/// folded range value.
 fn shr32(word: &B256) -> B256 {
     let mut out = [0u8; 32];
     out[4..].copy_from_slice(&word.as_slice()[..28]);

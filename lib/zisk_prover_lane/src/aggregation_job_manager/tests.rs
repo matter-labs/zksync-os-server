@@ -114,23 +114,23 @@ async fn expected_digest(manager: &ZiskAggregationJobManager, from: u64, to: u64
     expected_aggregated_public_input(&inputs).expect("digest")
 }
 
-/// THE cross-stack binding vector (real 4-batch aggregation session,
-/// ZiSK v0.18.0). The aggregator guest's `cross_stack_binding_vector`
-/// test and `zksync-os-zisk/guest-aggregator/BINDING_VECTOR.md` pin
-/// the same values. Update all pins together.
+/// THE cross-stack binding vector (real 4-batch aggregation session).
+/// The aggregator guest's `cross_stack_binding_vector` test and
+/// `zksync-os-zisk/guest-aggregator/BINDING_VECTOR.md` pin the same values.
+/// Update all pins together.
 #[test]
 fn binding_digest_matches_cross_stack_vector() {
-    let program_vk: B256 = "0x1d16f620e2bc7e58044df7ee8d4284422a0dd37cf151cf79ecf324c131e50468"
+    let program_vk: B256 = "0x8168c5d383a50a9c7a40561b82bf679cc6dfdab0308417b4fea653362d78d080"
         .parse()
         .unwrap();
     let vadcop_vk: B256 = "0xcf2a309856f107b143836ada112806da71ae11567fa3f2d2050baba5381c7b7d"
         .parse()
         .unwrap();
     let commitments = [
-        "0x6c41981c6fd0bd9a9262fe3dcc9fe4f0d8e142651f80316a8846d6922b5214ea",
-        "0x1f56fcbd24636dc0a635bc51808d7db9eabf3914f66611c93cf37ea440a5fe27",
-        "0x9d909d7416f29633c361bfc00073a9004423f0e1cc46105cdd24550543c0e41c",
-        "0x6ca5ada4916397cfb1b07a2f115f21fedf7e4a14a827995b3c5b392966532ad6",
+        "0x63c7606faee0ee9eff230fec391e64c0c82a0277947973ce7f6f1c9088c821dd",
+        "0x7d6a5ed6ffda210164c11dd6f6fccbd35c4ff70632e845a5bf256e3ec48940b9",
+        "0xd5a7b4485d1aece18348655132e73c86b23fa0f251adb173f80123d05a914f15",
+        "0xc5ed165443011bac65df4d0f4240de3429c033996e9fce630a631e117537cd61",
     ];
     let inputs: Vec<AggregationInput> = commitments
         .iter()
@@ -146,20 +146,39 @@ fn binding_digest_matches_cross_stack_vector() {
     let digest = expected_aggregated_public_input(&refs).unwrap();
     assert_eq!(
         format!("{digest:#x}"),
-        "0x7eabba6c7a68150706e10101195be54eaf3b39f699bc8da5f34c8033eedec13e"
+        "0xf29341c341f2622ba86a21bbb36dde9742e1983e531c278fd1cee04c6f823e2c"
     );
 }
 
-/// A single-batch range binds the first public input unhashed
-/// (`initialHash == 0` seeds the chain with PI[0]).
+/// A single-batch range takes the one public input verbatim and performs no
+/// keccak over it, which is the settlement layer's own special case.
 #[test]
-fn single_batch_digest_seeds_with_first_public_input() {
+fn single_batch_digest_folds_the_only_public_input_unhashed() {
     let a = input(0x11);
     let digest = expected_aggregated_public_input(&[&a]).unwrap();
     let mut binding = [0u8; 96];
     binding[..32].copy_from_slice(a.program_vk.as_slice());
     binding[32..64].copy_from_slice(a.vadcop_vk.as_slice());
     binding[64..].copy_from_slice(shr32(&a.commitment).as_slice());
+    assert_eq!(digest, keccak256(binding));
+}
+
+/// Two batches are the smallest range that folds, and the point where a
+/// per-input truncation would first show: the concatenation carries both
+/// commitments in full and the shift lands only on the folded result.
+#[test]
+fn multi_batch_digest_folds_untruncated_public_inputs() {
+    let a = input(0x11);
+    let b = input(0x22);
+    let digest = expected_aggregated_public_input(&[&a, &b]).unwrap();
+
+    let mut preimage = [0u8; 64];
+    preimage[..32].copy_from_slice(a.commitment.as_slice());
+    preimage[32..].copy_from_slice(b.commitment.as_slice());
+    let mut binding = [0u8; 96];
+    binding[..32].copy_from_slice(a.program_vk.as_slice());
+    binding[32..64].copy_from_slice(a.vadcop_vk.as_slice());
+    binding[64..].copy_from_slice(shr32(&keccak256(preimage)).as_slice());
     assert_eq!(digest, keccak256(binding));
 }
 
