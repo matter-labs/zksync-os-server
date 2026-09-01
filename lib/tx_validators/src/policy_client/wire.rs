@@ -1,6 +1,6 @@
 //! JSON wire types for `/admit` and `/judge`.
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
 use zksync_os_interface::tracing::BeginTxContext;
 
@@ -19,6 +19,10 @@ pub(super) struct AdmitRequest<'a> {
     pub calldata: &'a [u8],
     pub gas_limit: u64,
     pub access_type: AccessType,
+    /// Absent on the block-build and gas-estimation paths, which have no single
+    /// transaction in hand.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<B256>,
 }
 
 impl<'a> AdmitRequest<'a> {
@@ -26,6 +30,7 @@ impl<'a> AdmitRequest<'a> {
         ctx: &'a BeginTxContext<'a>,
         protocol_version: &'a str,
         access_type: AccessType,
+        tx_hash: Option<B256>,
     ) -> Self {
         Self {
             protocol_version,
@@ -35,6 +40,7 @@ impl<'a> AdmitRequest<'a> {
             calldata: ctx.calldata,
             gas_limit: ctx.gas_limit,
             access_type,
+            tx_hash,
         }
     }
 }

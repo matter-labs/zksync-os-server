@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use alloy::primitives::{Address, U256, address};
+use alloy::primitives::{Address, U256, address, b256};
 use httpmock::{Method, MockServer};
 use serde_json::json;
 use tokio::task::spawn_blocking;
@@ -210,6 +210,45 @@ async fn serialized_request_matches_context() {
     assert_eq!(parsed["calldata"].as_str().unwrap(), "0xdeadbeef");
     assert_eq!(parsed["gasLimit"].as_u64().unwrap(), 100_000);
     assert_eq!(parsed["accessType"].as_str().unwrap(), "write");
+}
+
+/// Captures the `/admit` body of one allowed call.
+async fn admit_body(session: PolicySession, server: &MockServer) -> serde_json::Value {
+    let body: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let body_c = body.clone();
+    server.mock(|when, then| {
+        when.method(Method::POST)
+            .path("/admit")
+            .is_true(move |req| {
+                *body_c.lock().unwrap() = Some(req.body().as_ref().to_vec());
+                true
+            });
+        then.status(200).json_body(json!({"allow": true}));
+    });
+    let _ = run_begin_tx(session, test_context()).await;
+    let recorded = body.lock().unwrap().take().expect("body captured");
+    serde_json::from_slice(&recorded).unwrap()
+}
+
+#[tokio::test]
+async fn admit_carries_the_transaction_hash_when_the_transaction_is_known() {
+    let server = MockServer::start();
+    let client = PolicyClient::new(base_config(&server)).unwrap();
+    let hash = b256!("0x00000000000000000000000000000000000000000000000000000000000000aa");
+
+    let parsed = admit_body(client.session_for_tx(AccessType::Write, hash), &server).await;
+
+    assert_eq!(parsed["txHash"].as_str().unwrap(), hash.to_string());
+}
+
+#[tokio::test]
+async fn admit_omits_the_transaction_hash_where_no_transaction_is_in_hand() {
+    let server = MockServer::start();
+    let client = PolicyClient::new(base_config(&server)).unwrap();
+
+    let parsed = admit_body(client.session(AccessType::Write), &server).await;
+
+    assert!(parsed.get("txHash").is_none());
 }
 
 #[tokio::test]
