@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, B256};
 use secrecy::SecretString;
 use zksync_os_interface::error::InvalidTransaction;
 use zksync_os_interface::tracing::{
@@ -121,6 +121,16 @@ impl PolicyClient {
             slot: tracer::new_slot(),
             pending_tx_from: None,
             access_type,
+            tx_hash: None,
+        }
+    }
+
+    /// Two transactions differing only by nonce are identical in the rest of the
+    /// request, so without the hash a decision granted for one admits the others.
+    pub fn session_for_tx(&self, access_type: AccessType, tx_hash: B256) -> PolicySession {
+        PolicySession {
+            tx_hash: Some(tx_hash),
+            ..self.session(access_type)
         }
     }
 }
@@ -132,6 +142,7 @@ pub struct PolicySession {
     slot: TraceSlot,
     pending_tx_from: Option<Address>,
     access_type: AccessType,
+    tx_hash: Option<B256>,
 }
 
 impl PolicySession {
@@ -152,8 +163,12 @@ impl PolicySession {
             metrics.admit_bypassed.inc();
             return Ok(());
         }
-        let request =
-            AdmitRequest::from_context(ctx, &self.client.protocol_version, self.access_type);
+        let request = AdmitRequest::from_context(
+            ctx,
+            &self.client.protocol_version,
+            self.access_type,
+            self.tx_hash,
+        );
         let started = Instant::now();
         let result = self.post_and_parse(Endpoint::Admit(request)).await;
         metrics.admit_latency.observe(started.elapsed());

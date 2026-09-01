@@ -117,7 +117,7 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
                     .unwrap_or_else(|| build_pending_block_context(&storage, chain_id));
                 let storage_view =
                     storage.state_at_block_number_or_latest(block_context.block_number)?;
-                let mut policy_session = policy_client.session(AccessType::Write);
+                let mut policy_session = policy_client.session_for_tx(AccessType::Write, hash);
                 let mut tracer = policy_session.paired_tracer();
                 crate::sandbox::execute_with(
                     zk_tx,
