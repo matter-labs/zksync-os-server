@@ -66,8 +66,10 @@ impl<RpcStorage: ReadRpcStorage> InteropCommitmentTreeReader<RpcStorage> {
         let request = TransactionRequest::default()
             .to(L2_INTEROP_COMMITMENT_TREE_ADDRESS)
             .input(calldata.into());
+        // Internal variant: this is the node reading its own commitment tree, not a user call, so the
+        // policy validator must not run (see `call_impl_internal`).
         self.eth_call_handler
-            .call_impl(request, Some(block), None, None)
+            .call_impl_internal(request, Some(block), None, None)
             .map_err(|source| InteropCommitmentTreeError::Call { method, source })
     }
 

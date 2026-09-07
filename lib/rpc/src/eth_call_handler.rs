@@ -49,10 +49,11 @@ pub struct EthCallHandler<RpcStorage> {
 }
 
 /// Lets the interop fee updater (in `zksync_os_mempool`) issue read-only local `eth_call`s
-/// without depending on this crate.
+/// without depending on this crate. Internal variant: no user is behind these calls, so the policy
+/// validator must not run (see `call_impl_internal`).
 impl<RpcStorage: ReadRpcStorage> zksync_os_mempool::LocalEthCall for EthCallHandler<RpcStorage> {
     fn call(&self, request: TransactionRequest, block: Option<BlockId>) -> anyhow::Result<Bytes> {
-        self.call_impl(request, block, None, None)
+        self.call_impl_internal(request, block, None, None)
             .map_err(anyhow::Error::from)
     }
 }
@@ -319,6 +320,29 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<Bytes, EthCallError> {
+        self.call_with_policy(request, block, state_overrides, block_overrides, true)
+    }
+
+    /// `eth_call` for the node's OWN reads of system contracts (e.g. the interop commitment tree
+    /// reader), with the policy validator skipped.
+    pub(crate) fn call_impl_internal(
+        &self,
+        request: TransactionRequest,
+        block: Option<BlockId>,
+        state_overrides: Option<StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+    ) -> Result<Bytes, EthCallError> {
+        self.call_with_policy(request, block, state_overrides, block_overrides, false)
+    }
+
+    fn call_with_policy(
+        &self,
+        request: TransactionRequest,
+        block: Option<BlockId>,
+        state_overrides: Option<StateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+        apply_policy: bool,
+    ) -> Result<Bytes, EthCallError> {
         let mut execution_env = self.prepare_execution_env(request, block, block_overrides)?;
         execution_env.block_context.eip1559_basefee = U256::from(0);
 
@@ -336,6 +360,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         let mut policy_session = self
             .policy_client
             .as_ref()
+            .filter(|_| apply_policy)
             .filter(|_| tx_type_runs_policy(tx_type))
             .map(|client| client.session(AccessType::Read));
         let res = simulate_with_optional_policy(
