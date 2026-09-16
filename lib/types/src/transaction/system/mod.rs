@@ -152,6 +152,16 @@ impl SystemTxEnvelope {
         }
     }
 
+    /// Log id of the last interop root imported by an
+    /// [`ImportInteropRoots`](SystemTxType::ImportInteropRoots) transaction, carried as the
+    /// transaction's uniqueness salt (see [`Self::import_interop_roots`]).
+    ///
+    /// It lets a node learn how far the chain's interop cursor moved from the transaction alone,
+    /// without having observed those roots on L1 itself. Meaningless for other subtypes.
+    pub fn interop_roots_last_log_id(&self) -> u64 {
+        self.inner.salt
+    }
+
     pub fn hash(&self) -> &B256 {
         &self.hash
     }

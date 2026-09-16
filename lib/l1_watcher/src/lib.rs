@@ -19,7 +19,7 @@ mod upgrade_tx_watcher;
 pub use upgrade_tx_watcher::L1UpgradeTxWatcher;
 
 mod interop_watcher;
-pub use interop_watcher::InteropWatcher;
+pub use interop_watcher::{InteropRootSources, InteropWatcher};
 
 mod watcher;
 pub use watcher::{L1Watcher, StartResolver};

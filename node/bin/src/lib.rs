@@ -800,6 +800,7 @@ pub async fn run(runtime: &Runtime, config: Config) -> ServerPorts {
             node_role,
             chain_id,
             interop_roots_per_tx: config.sequencer_config.interop_roots_per_tx,
+            interop_root_sources: config.sequencer_config.interop_root_sources(),
             bytecode_supplier_address,
             l1_watcher_config: config.l1_watcher_config.clone().into(),
             interop_fee_updater_config: config.interop_fee_updater_config.clone().into(),

@@ -2,7 +2,7 @@ pub use self::cli::ConfigArgs;
 pub(crate) use self::metrics::report_static_config_metrics;
 use self::util::{SecretKeyDeserializer, SignerConfigDeserializer};
 use crate::{command_source::RebuildOptions, default_protocol_version::DEFAULT_ROCKS_DB_PATH};
-use alloy::primitives::{Address, B256, BlockHash, Bytes, U128};
+use alloy::primitives::{Address, B256, BlockHash, Bytes, ChainId, U128};
 use num::{BigInt, BigUint, rational::Ratio};
 use reth_net_nat::net_if::resolve_net_if_ip;
 use reth_network_peers::TrustedPeer;
@@ -27,6 +27,7 @@ use zksync_os_l1_sender::config::{
     DEFAULT_NONCE_ERROR_MAX_ATTEMPTS, DEFAULT_NONCE_ERROR_RETRY_BACKOFF,
     DEFAULT_REQUIRED_CONFIRMATIONS_L1,
 };
+use zksync_os_l1_watcher::InteropRootSources;
 use zksync_os_mempool::SubPoolLimit;
 use zksync_os_network::{NodeRecord, PeerId, SecretKey};
 use zksync_os_observability::LogFormat;
@@ -869,6 +870,35 @@ pub struct SequencerConfig {
     #[config(default_t = 100)]
     pub interop_roots_per_tx: usize,
 
+    /// Whether this chain imports interop roots published on L1 by other chains.
+    ///
+    /// Every imported root produces an `ImportInteropRoots` system transaction, and those seal a
+    /// batch, so a chain pays a batch — and the proving behind it — for every root the shared
+    /// `MessageRoot` emits, however little interop traffic it receives. Setting this to `false`
+    /// stops the import and the L1 scan behind it.
+    ///
+    /// A chain cannot verify cross-chain messages against roots it did not import, so only turn
+    /// this off for a chain that receives no interop transactions. Nothing is lost permanently:
+    /// the interop cursor does not advance past a skipped root, so turning it back on imports
+    /// everything published in the meantime (which can be a large backlog).
+    #[config(default_t = true)]
+    pub import_interop_roots: bool,
+
+    /// Restricts interop root import to roots published by these chain ids.
+    ///
+    /// Empty (the default) imports roots from every chain. Same trade-off as
+    /// `import_interop_roots`, at a finer grain: list the chains this one expects interop from.
+    ///
+    /// Skipped roots hold the interop cursor back, so a restart rescans L1 from the last root that
+    /// was actually imported — the longer a chain runs with a narrow list, the further back that
+    /// scan starts. `import_interop_roots = false` has no such cost: it starts no watcher at all.
+    #[config(default, with = Delimited::new(","))]
+    #[config_validate(custom(
+        |root: &Config, value: &HashSet<ChainId>| root.sequencer_config.import_interop_roots || value.is_empty(),
+        "cannot list interop root source chains while `sequencer.import_interop_roots` is `false`"
+    ))]
+    pub interop_root_source_chains: HashSet<ChainId>,
+
     /// Delay between 2 consecutive service blocks.
     /// Defaults to 3 times of usual block time, to allow passing other transactions in between
     #[config(default_t = Duration::from_millis(750))]
@@ -916,6 +946,19 @@ pub struct SequencerConfig {
     /// Transaction validator configuration.
     #[config(nest)]
     pub tx_validator: TxValidatorConfig,
+}
+
+impl SequencerConfig {
+    pub fn interop_root_sources(&self) -> InteropRootSources {
+        match (
+            self.import_interop_roots,
+            self.interop_root_source_chains.is_empty(),
+        ) {
+            (false, _) => InteropRootSources::None,
+            (true, true) => InteropRootSources::All,
+            (true, false) => InteropRootSources::Only(self.interop_root_source_chains.clone()),
+        }
+    }
 }
 
 /// Configuration for all transaction validators applied during block production.
@@ -2399,6 +2442,36 @@ mod tests {
             .unwrap()
     }
 
+    fn parse_sequencer_config<const N: usize>(env_vars: [(&str, &str); N]) -> SequencerConfig {
+        let schema = ConfigSchema::new(&SequencerConfig::DESCRIPTION, "sequencer");
+        let repo = ConfigRepository::new(&schema).with(Environment::from_iter("", env_vars));
+        repo.single::<SequencerConfig>().unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn interop_roots_are_imported_from_every_chain_by_default() {
+        let config = parse_sequencer_config([]);
+
+        assert_eq!(config.interop_root_sources(), InteropRootSources::All);
+    }
+
+    #[test]
+    fn interop_root_import_can_be_turned_off() {
+        let config = parse_sequencer_config([("SEQUENCER_IMPORT_INTEROP_ROOTS", "false")]);
+
+        assert_eq!(config.interop_root_sources(), InteropRootSources::None);
+    }
+
+    #[test]
+    fn interop_root_import_can_be_restricted_to_listed_chains() {
+        let config = parse_sequencer_config([("SEQUENCER_INTEROP_ROOT_SOURCE_CHAINS", "271,300")]);
+
+        assert_eq!(
+            config.interop_root_sources(),
+            InteropRootSources::Only(HashSet::from([271, 300]))
+        );
+    }
+
     #[test]
     fn replay_archive_config_defaults_to_noop() {
         let config = parse_replay_archive_config([]);
@@ -2727,6 +2800,20 @@ mod tests {
         );
         assert!(
             err.contains("`batch_verification.client_enabled` requires `network.enabled=true`")
+        );
+    }
+
+    #[tokio::test]
+    async fn interop_root_source_chains_cannot_contradict_a_disabled_import() {
+        let mut config = base_config(NodeRole::MainNode);
+        config.sequencer_config.import_interop_roots = false;
+        config.sequencer_config.interop_root_source_chains = HashSet::from([271]);
+
+        let err = config.validate().await.unwrap_err().to_string();
+
+        assert!(
+            err.contains("cannot list interop root source chains"),
+            "{err}"
         );
     }
 
