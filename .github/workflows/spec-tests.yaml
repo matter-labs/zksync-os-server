@@ -49,7 +49,7 @@ jobs:
 
   # Run Eth spec tests on gETH node
   geth-tests:
-    runs-on: matterlabs-ci-runner-high-performance
+    runs-on: matterlabs-ci-runner-large
     env:
       L1_RPC_URL: http://localhost:8545
       CHAIN_ID: 1337
