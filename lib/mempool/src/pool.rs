@@ -20,7 +20,8 @@ use zksync_os_contract_interface::l1_discovery::L1State;
 use zksync_os_genesis::Genesis;
 use zksync_os_interface::types::AccountDiff;
 use zksync_os_l1_watcher::{
-    InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig, StartResolver,
+    InteropRootSources, InteropWatcher, L1TxWatcher, L1UpgradeTxWatcher, L1WatcherConfig,
+    StartResolver,
 };
 use zksync_os_storage_api::ReplayRecord;
 use zksync_os_types::{
@@ -52,6 +53,8 @@ pub struct Config {
     pub node_role: NodeRole,
     pub chain_id: ChainId,
     pub interop_roots_per_tx: usize,
+    /// Chains whose interop roots this node imports; see `sequencer.import_interop_roots`.
+    pub interop_root_sources: InteropRootSources,
     pub bytecode_supplier_address: Address,
     pub l1_watcher_config: L1WatcherConfig,
     pub interop_fee_updater_config: InteropFeeUpdaterConfig,
@@ -81,13 +84,26 @@ impl<T: L2Subpool> Pool<T> {
         .await
         .context("failed to start L1 upgrade transaction watcher")?;
 
-        let interop_watcher = InteropWatcher::create_watcher(
-            config.l1_watcher_config.clone(),
-            l1_state.bridgehub_l1.clone(),
-            interop_roots_subpool.clone(),
-        )
-        .await
-        .context("failed to create interop roots watcher")?;
+        // Importing nothing means there is nothing to scan L1 for: skipping the watcher entirely
+        // also skips the binary search for the cursor's L1 block and the catch-up sweep to the tip.
+        let interop_watcher = if config.interop_root_sources == InteropRootSources::None {
+            tracing::warn!(
+                "interop root import is disabled — this chain will not be able to verify \
+                 cross-chain messages until it is re-enabled"
+            );
+            None
+        } else {
+            Some(
+                InteropWatcher::create_watcher(
+                    config.l1_watcher_config.clone(),
+                    l1_state.bridgehub_l1.clone(),
+                    config.interop_root_sources.clone(),
+                    interop_roots_subpool.clone(),
+                )
+                .await
+                .context("failed to create interop roots watcher")?,
+            )
+        };
 
         let l1_tx_watcher = L1TxWatcher::create_watcher(
             config.l1_watcher_config.clone(),
@@ -100,7 +116,7 @@ impl<T: L2Subpool> Pool<T> {
         let subcomponents = Subcomponents {
             upgrade_watcher: Some(upgrade_watcher),
             l1_tx_watcher: Some(l1_tx_watcher),
-            interop_watcher: Some(interop_watcher),
+            interop_watcher,
         };
 
         Ok(Self {
@@ -335,7 +351,7 @@ impl<T: L2Subpool> Pool<T> {
             .await;
         let last_interop_log_id = self
             .interop_roots_subpool
-            .on_canonical_state_change(interop_txs)
+            .on_canonical_state_change(interop_txs, strict_subpool_cleanup)
             .await;
         let last_interop_fee_number = self
             .interop_fee_subpool

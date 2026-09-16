@@ -7,6 +7,8 @@ pub struct L1Metrics {
     pub most_recently_scanned_l1_block: LabeledFamily<&'static str, Gauge<BlockNumber>>,
     #[metrics(labels = ["event"])]
     pub events_loaded: LabeledFamily<&'static str, Counter>,
+    /// Interop roots dropped because their source chain is not imported by this node.
+    pub interop_roots_skipped: Counter,
 }
 
 #[vise::register]
