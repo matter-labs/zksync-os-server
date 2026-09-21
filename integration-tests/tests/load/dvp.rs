@@ -85,10 +85,27 @@ impl Tokens {
     }
 
     async fn supplies(&self) -> anyhow::Result<[U256; 2]> {
-        Ok([
-            self.asset.totalSupply().call().await?,
-            self.cash.totalSupply().call().await?,
-        ])
+        // Receipts may become visible before the pipelined replay WAL exposes their block
+        // to eth_call. This also happens after setup's last approval, before load begins.
+        tokio::time::timeout(RECEIPT_TIMEOUT, async {
+            let mut supplies = [U256::ZERO; 2];
+            for (supply, token) in supplies.iter_mut().zip([&self.asset, &self.cash]) {
+                loop {
+                    match token.totalSupply().call().await {
+                        Ok(value) => {
+                            *supply = value;
+                            break;
+                        }
+                        Err(err) if err.to_string().contains("block `latest` not found") => {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+            }
+            anyhow::Ok(supplies)
+        })
+        .await?
     }
 }
 
@@ -325,18 +342,99 @@ impl ParallelDvp {
         let tokens = Tokens::deploy(tester).await?;
         let mut pairs = Vec::with_capacity(buyers.len());
         let mut initial_nonces = Vec::with_capacity(buyers.len());
-        for buyer in buyers {
-            let mut pair = Pair::prepare_with_buyer(tester, &tokens, lots, buyer.clone()).await?;
-            initial_nonces.push(
-                pair.buyer_provider
-                    .get_transaction_count(buyer.address())
+        let provider = DynProvider::new(tester.l2_provider.clone());
+        let chain_id = provider.get_chain_id().await?;
+        let deployer = tester.l2_wallet.default_signer().address();
+        let mut nonce = provider.get_transaction_count(deployer).await?;
+        // Queue setup in bounded batches instead of waiting for a block after every tx.
+        // Reducing block_time to accelerate serial setup also caps parallel block age,
+        // which changes the timed workload. Keep the ordinary block timing instead.
+        for batch in buyers.chunks(128) {
+            let mut pending = Vec::with_capacity(batch.len() * 5);
+            for buyer in batch {
+                let seller_key = keccak256(format!("loadtest-dvp-seller-{}", buyer.address()));
+                let seller = PrivateKeySigner::from_slice(seller_key.as_slice())?;
+                let settlement = deployer.create(nonce);
+                pending.push((
+                    TestDvp::deploy_builder(
+                        provider.clone(),
+                        *tokens.asset.address(),
+                        *tokens.cash.address(),
+                        seller.address(),
+                        buyer.address(),
+                        U256::from(ASSET_AMOUNT),
+                        U256::from(CASH_AMOUNT),
+                    )
+                    .gas(3_000_000)
+                    .gas_price(0)
+                    .send()
                     .await?,
-            );
-            // Signing is done before the timed run; close the two setup connections per pair
-            // so thousands of idle receipt subscriptions do not compete with the shared feeder.
-            pair.buyer_provider = DynProvider::new(tester.l2_provider.clone());
-            pair.seller_provider = pair.buyer_provider.clone();
-            pairs.push(pair);
+                    Some(settlement),
+                ));
+                nonce += 1;
+                // Preserve deploy/mint/mint nonce order so cached corpus addresses stay valid.
+                for (token, owner, amount) in [
+                    (&tokens.asset, &seller, ASSET_AMOUNT),
+                    (&tokens.cash, buyer, CASH_AMOUNT),
+                ] {
+                    let budget = U256::from(lots) * U256::from(amount);
+                    pending.push((
+                        token
+                            .mint(owner.address(), budget)
+                            .gas(300_000)
+                            .gas_price(0)
+                            .send()
+                            .await?,
+                        None,
+                    ));
+                    nonce += 1;
+                    let approval = TxEip1559 {
+                        chain_id,
+                        nonce: 0, // Each deterministic buyer/seller is fresh on this test chain.
+                        gas_limit: 100_000,
+                        max_fee_per_gas: 0,
+                        max_priority_fee_per_gas: 0,
+                        to: TxKind::Call(*token.address()),
+                        value: U256::ZERO,
+                        access_list: Default::default(),
+                        input: TestERC20::approveCall {
+                            _spender: settlement,
+                            _value: budget,
+                        }
+                        .abi_encode()
+                        .into(),
+                    };
+                    let signature = owner.sign_hash_sync(&approval.signature_hash())?;
+                    pending.push((
+                        provider
+                            .send_raw_transaction(&approval.into_signed(signature).encoded_2718())
+                            .await?,
+                        None,
+                    ));
+                }
+                pairs.push(Pair {
+                    buyer: buyer.clone(),
+                    seller: seller.address(),
+                    buyer_provider: provider.clone(),
+                    seller_provider: provider.clone(),
+                    settlement,
+                    lots,
+                });
+            }
+            for (tx, deployment) in pending {
+                let receipt = successful(tx).await?;
+                if let Some(address) = deployment {
+                    anyhow::ensure!(
+                        receipt.contract_address == Some(address),
+                        "unexpected DvP deployment address"
+                    );
+                }
+            }
+            for buyer in batch {
+                let nonce = provider.get_transaction_count(buyer.address()).await?;
+                anyhow::ensure!(nonce == 1, "DvP buyer approval nonce mismatch");
+                initial_nonces.push(nonce);
+            }
         }
         let supplies = tokens.supplies().await?;
         Ok(Self {
@@ -384,19 +482,8 @@ impl ParallelDvp {
 
     pub(super) async fn verify(&self, counts: &[u64]) -> anyhow::Result<()> {
         assert_eq!(counts.len(), self.pairs.len());
-        // Final receipts can be visible just before the parallel WAL writer catches up.
-        tokio::time::timeout(RECEIPT_TIMEOUT, async {
-            loop {
-                match self.tokens.asset.totalSupply().call().await {
-                    Ok(_) => break anyhow::Ok(()),
-                    Err(err) if err.to_string().contains("not found") => {
-                        tokio::time::sleep(Duration::from_millis(100)).await
-                    }
-                    Err(err) => return Err(err.into()),
-                }
-            }
-        })
-        .await??;
+        // Wait for the replay WAL before querying each pair's state.
+        assert_eq!(self.tokens.supplies().await?, self.supplies);
         for (i, (pair, &count)) in self.pairs.iter().zip(counts).enumerate() {
             pair.assert_settled(&self.tokens, count).await?;
             assert_eq!(

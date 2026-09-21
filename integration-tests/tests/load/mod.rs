@@ -1371,8 +1371,6 @@ async fn effective_parallel_impl(
             eth_call_available,
             "DvP verification requires the replay WAL"
         );
-        // Only affects serial setup; timed parallel production uses the linger above.
-        config.sequencer_config.block_time = Duration::from_millis(5);
     }
     let tester = env.launch(config).await?;
 
@@ -1744,14 +1742,12 @@ async fn effective_parallel_impl(
             }
         });
         started.notified().await;
-        // Setup traffic (funding, deploy, mints) went through the same admission path and
-        // VmWrapper — zero the profiling accumulators so the journey panel shows run-only
-        // averages.
-        zksync_os_rpc::admission_profile_reset();
-        zksync_os_sequencer::execution::vm_wrapper::vm_execute_reset();
         tracing::info!("start signal received — load begins");
     }
 
+    // Exclude setup traffic from the demo counters and end-of-run profiling snapshot.
+    zksync_os_rpc::admission_profile_reset();
+    zksync_os_sequencer::execution::vm_wrapper::vm_execute_reset();
     let start = Instant::now();
     let deadline = start + duration;
 
@@ -2065,6 +2061,31 @@ async fn effective_parallel_impl(
         rtt_max_total = rtt_max_total.max(outcome.rtt_max);
     }
     let load_elapsed = start.elapsed();
+    // Stop CPU profiling at receipt drain; the exhaustive DvP eth_call checks below
+    // are outside the measured workload and can otherwise dominate the flamegraph.
+    if let (Some(guard), Some(path)) = (profiler_guard, flamegraph_path.as_ref()) {
+        match guard.report().build() {
+            Ok(report) => {
+                let file = std::fs::File::create(path)?;
+                report.flamegraph(file)?;
+                tracing::info!(path, "wrote flamegraph");
+            }
+            Err(err) => tracing::warn!(%err, "failed to build profiler report"),
+        }
+    }
+    let corpus_len = txs_per_file();
+    tracing::info!(
+        min_accepted = expected_per_wallet.iter().min().copied().unwrap_or(0),
+        max_accepted = expected_per_wallet.iter().max().copied().unwrap_or(0),
+        exhausted_wallets = expected_per_wallet
+            .iter()
+            .filter(|&&count| count == corpus_len)
+            .count(),
+        "per-wallet corpus usage"
+    );
+    if let Some(profile) = zksync_os_rpc::admission_profile_snapshot() {
+        tracing::info!(?profile, "RPC admission profile at receipt drain");
+    }
     if receipt_failed > 0 {
         // Tell apart "accepted but never executed" (sequencer-side loss: the wallet's on-chain
         // nonce stalls below its chunk's accepted rounds) from "executed but receipt not
@@ -2133,18 +2154,6 @@ async fn effective_parallel_impl(
             received > U256::ZERO,
             "recipient 0 has zero token balance after the ERC20 run"
         );
-    }
-
-    // Render the flamegraph (if profiling was enabled) before computing the summary.
-    if let (Some(guard), Some(path)) = (profiler_guard, flamegraph_path.as_ref()) {
-        match guard.report().build() {
-            Ok(report) => {
-                let file = std::fs::File::create(path)?;
-                report.flamegraph(file)?;
-                tracing::info!(path, "wrote flamegraph");
-            }
-            Err(err) => tracing::warn!(%err, "failed to build profiler report"),
-        }
     }
 
     let elapsed = load_elapsed;

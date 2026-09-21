@@ -137,3 +137,52 @@ settled and verified 11,909,984 swaps in 61.008 seconds including receipt drain,
 or **195,221 swaps/s**. A preceding 60-second run with a larger receipt cache
 reached 192,270 swaps/s. These numbers include RPC admission and execution in the
 benchmark configuration described above, not tree processing or L1 settlement.
+
+On the Threadripper PRO 9985WX (64 cores / 128 threads, Vast instance 51893085),
+use the following configuration from the repository root. Leave CPU affinity
+unrestricted and unset `TOKIO_WORKER_THREADS`. The measured run used tmpfs for
+the corpus and temporary databases; it includes RocksDB execution-state access,
+but does not measure physical-disk durability or tree/prover throughput.
+
+```shell
+mkdir -p /dev/shm/dvp-corpus /dev/shm/dvp-bench-tmp
+ulimit -n 65536
+env -u TOKIO_WORKER_THREADS -u LOAD_TEST_FLAMEGRAPH \
+  TMPDIR=/dev/shm/dvp-bench-tmp LOADTEST_CORPUS_DIR=/dev/shm/dvp-corpus \
+  LOADTEST_TXS_PER_FILE=60000 LOAD_TEST_DURATION_SECS=60 LOAD_TEST_WALLETS=1024 \
+  LOAD_TEST_HTTP=1 LOAD_TEST_RPC_LISTENERS=128 LOAD_TEST_SUBMIT_PIPELINE=32 \
+  LOAD_TEST_READER_THREADS=48 LOAD_TEST_WAIT_FOR_RECEIPTS=false LOAD_TEST_FINAL_RECEIPTS=true \
+  PARALLEL_BLOCKS=192 PARALLEL_BLOCK_LINGER_MS=20 DVP_MAX_TX=500 \
+  sequencer_block_time=250ms general_state_backend=FullDiffs \
+  general_blocks_to_retain_in_memory=1000000 \
+  sequencer_parallel_elide_tree_manager=true sequencer_parallel_skip_replay_wal=false \
+  backpressure_default_block_diff_limit=3072 RPC_CALL_METRICS_SAMPLE=64 \
+  RUST_LOG=warn,suite=info,suite::load::corpus=error \
+  cargo test --locked --release -p zksync_os_integration_tests --test suite \
+  effective_parallel_dvp_tps -- --nocapture
+```
+
+Reference result (2026-09-21): **391,116 verified swaps/s**, with 23,580,960 swaps
+in 60.292 seconds including receipt drain and no exhausted wallets. Each swap executes both ERC-20 legs;
+the TPS count is swaps, not individual token transfers. All 1,024 final receipts
+and every pair's state checks passed. Two earlier 60-second runs with 30,000
+transactions per wallet reached 407,784 and 408,079 swaps/s, but the repeat run
+exhausted 256 wallets; use the larger corpus to keep every wallet supplied.
+
+The parallel DvP setup batches deployments, mints, and approvals, and checks every
+setup receipt. It preserves the original deployment nonce order, so previously
+generated corpora remain valid. The old setup forced `block_time` to 5 ms, which
+also capped parallel block age despite `PARALLEL_BLOCK_LINGER_MS=20`. Removing
+that override increased average block occupancy from 141 to 378 swaps in matched
+1,024-wallet profiles and raised throughput from 291k to 387k swaps/s. Restoring
+only the 5 ms cap in the batched harness reproduced 291k swaps/s and 142 swaps per
+block. Keep block age separate from the idle linger when tuning.
+
+Wallet count also matters: the ERC-20 command's 12,288 wallets are not a good
+starting point for this DvP workload. With normal block timing, that configuration
+verified 127k swaps/s in a 20-second run; 1,024 wallets reached the result above.
+Use `LOAD_TEST_FLAMEGRAPH=/path/to/profile.svg` and `PARALLEL_PRODUCER_PROFILE=1`
+with `zksync_os_sequencer::execution::block_executor=info` in `RUST_LOG` to inspect
+CPU costs and block occupancy. Profiles stop at receipt drain, before final state
+queries. The `per-wallet corpus usage` summary reports exhausted wallets; increase
+`LOADTEST_TXS_PER_FILE` if any wallet runs out during a longer/faster run.
