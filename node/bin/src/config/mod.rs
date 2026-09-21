@@ -507,6 +507,11 @@ pub struct GeneralConfig {
     #[config(default_t = 512)]
     pub blocks_to_retain_in_memory: usize,
 
+    /// Retain event and L2-to-L1 logs in the live receipt window for functional checks.
+    /// Defaults to lean, log-free receipts on this benchmark branch; does not enable DB persistence.
+    #[config(default_t = false)]
+    pub retain_receipt_logs: bool,
+
     /// **IMPORTANT: It must be set for an external node. However, setting this DOES NOT make the node into an external node.
     /// [`GeneralConfig::node_role`] is the source of truth for node type. **
     #[config(default_t = None)]

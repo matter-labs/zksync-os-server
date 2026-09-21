@@ -45,6 +45,8 @@ pub struct RepositoryInMemory {
     /// blocks are pruned to bound memory. `u64::MAX` disables pruning (e.g. inside `RepositoryManager`,
     /// which prunes itself).
     max_blocks_to_retain: u64,
+    /// Opt in to full receipts for functional tests; throughput benches keep lean receipts.
+    retain_receipt_logs: bool,
 }
 
 impl RepositoryInMemory {
@@ -59,7 +61,14 @@ impl RepositoryInMemory {
             latest_block: watch::channel(0).0,
             block_sender: broadcast::channel(BLOCK_NOTIFICATION_CHANNEL_SIZE).0,
             max_blocks_to_retain: UNBOUNDED_RETENTION,
+            retain_receipt_logs: false,
         }
+    }
+
+    /// Retain event and L2-to-L1 logs in the in-memory receipt window.
+    pub fn with_receipt_logs(mut self, retain: bool) -> Self {
+        self.retain_receipt_logs = retain;
+        self
     }
 
     /// Build a standalone in-memory repository (no RocksDB) seeded with the genesis block, keeping
@@ -158,6 +167,7 @@ impl RepositoryInMemory {
                 log_prefix[tx_index],
                 gas_prefix[tx_index],
                 tx,
+                self.retain_receipt_logs,
             ));
             stored_vec.push(stored_tx);
         }
@@ -512,20 +522,31 @@ fn transaction_to_api_data(
     number_of_logs_before_this_tx: u64,
     cumulative_gas_used_before_this_tx: u64,
     tx: ZkTransaction,
+    retain_receipt_logs: bool,
 ) -> StoredTxData {
     let tx_output = block_output.tx_results[index].as_ref().ok().unwrap();
 
-    // BENCHMARK BRANCH: receipts are stored lean — no event logs, no L2->L1 logs (and therefore
-    // zero blooms), cutting the dominant per-tx receipt cost in RAM and in the repository DB.
-    // Status / cumulative gas / contract_address survive, so receipt-status checks and contract
-    // deploys still work; `eth_getLogs` and log subscriptions return nothing.
+    // BENCHMARK BRANCH: lean receipts remain the default. Functional scenarios can opt in
+    // to logs and blooms so successful events and reverted-event rollback are observable.
     let receipt = ZkReceiptEnvelope::from_typed(
         tx.tx_type(),
         ZkReceipt {
             status: matches!(tx_output.execution_result, ExecutionResult::Success(_)).into(),
             cumulative_gas_used: cumulative_gas_used_before_this_tx + tx_output.gas_used,
-            logs: Vec::new(),
-            l2_to_l1_logs: Vec::new(),
+            logs: if retain_receipt_logs {
+                tx_output.logs.clone()
+            } else {
+                Vec::new()
+            },
+            l2_to_l1_logs: if retain_receipt_logs {
+                tx_output
+                    .l2_to_l1_logs
+                    .iter()
+                    .map(|log| log.log.clone().into())
+                    .collect()
+            } else {
+                Vec::new()
+            },
         },
     );
     let meta = TxMeta {

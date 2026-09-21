@@ -59,6 +59,12 @@ impl RepositoryManager {
         }
     }
 
+    /// Retain logs in the live receipt window; this does not change benchmark DB persistence.
+    pub fn with_receipt_logs(mut self, retain: bool) -> Self {
+        self.in_memory = self.in_memory.with_receipt_logs(retain);
+        self
+    }
+
     // fixme: as this loop is not tied to state compacting, it can fall behind and result in
     //        unrecoverable state on restart
     pub async fn run_persist_loop(self) {

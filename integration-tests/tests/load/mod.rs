@@ -26,6 +26,7 @@ use zksync_os_tx_validators::deployment_filter;
 use zksync_os_types::{L2Envelope, ZkEnvelope, ZkTransaction, ZksyncOsEncode};
 
 mod corpus;
+mod dvp;
 
 /// How long to wait for a single transaction's receipt before giving up.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1284,12 +1285,21 @@ async fn effective_parallel_erc20_tps(env: TestEnvironment) -> anyhow::Result<()
     effective_parallel_impl(env, EffectiveWorkload::Erc20).await
 }
 
+/// Pre-signed DvP settlements using the same RPC batching and parallel lanes as the ERC20 bench.
+/// Each buyer owns a distinct seller/settlement pair; both transferFrom legs stay in its lane.
+#[test_multisetup([NEXT_TO_L1])]
+#[test_runtime(flavor = "multi_thread")]
+async fn effective_parallel_dvp_tps(env: TestEnvironment) -> anyhow::Result<()> {
+    effective_parallel_impl(env, EffectiveWorkload::Dvp).await
+}
+
 /// Workload for [`effective_parallel_impl`]. Fees are zero either way, so `Erc20` wallets need
 /// token balance but no ETH.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum EffectiveWorkload {
     Eth,
     Erc20,
+    Dvp,
 }
 
 async fn effective_parallel_impl(
@@ -1319,6 +1329,7 @@ async fn effective_parallel_impl(
     config.sequencer_config.max_transactions_in_block = match workload {
         EffectiveWorkload::Eth => 29_200,
         EffectiveWorkload::Erc20 => env_or("ERC20_MAX_TX", 1_000),
+        EffectiveWorkload::Dvp => env_or("DVP_MAX_TX", 250),
     };
     config.sequencer_config.block_gas_limit = 1_000_000_000_000;
     config.sequencer_config.parallel_blocks = k;
@@ -1355,6 +1366,14 @@ async fn effective_parallel_impl(
     // the final config to know which post-run checks are possible.
     let eth_call_available = config.sequencer_config.parallel_blocks <= 1
         || !config.sequencer_config.parallel_skip_replay_wal;
+    if workload == EffectiveWorkload::Dvp {
+        anyhow::ensure!(
+            eth_call_available,
+            "DvP verification requires the replay WAL"
+        );
+        // Only affects serial setup; timed parallel production uses the linger above.
+        config.sequencer_config.block_time = Duration::from_millis(5);
+    }
     let tester = env.launch(config).await?;
 
     let duration = Duration::from_secs(env_or("LOAD_TEST_DURATION_SECS", 60));
@@ -1363,6 +1382,12 @@ async fn effective_parallel_impl(
     let submit_pipeline: usize = env_or("LOAD_TEST_SUBMIT_PIPELINE", 1);
     let wait_for_receipts = env_flag("LOAD_TEST_WAIT_FOR_RECEIPTS", true);
     let wait_for_final_receipts = !wait_for_receipts && env_flag("LOAD_TEST_FINAL_RECEIPTS", false);
+    if workload == EffectiveWorkload::Dvp {
+        anyhow::ensure!(
+            wait_for_receipts || wait_for_final_receipts,
+            "DvP needs per-tx or final receipts before state verification"
+        );
+    }
     let mut rpc_urls = tester.l2_rpc_ws_urls();
     // Real JSON-RPC batch frames only exist over HTTP: the alloy ws transport flattens
     // `new_batch()` into individual messages, so over ws every tx pays its own frame decode +
@@ -1412,7 +1437,7 @@ async fn effective_parallel_impl(
     // and fingerprint. Explicit gas + gas price: `eth_estimateGas` doesn't work under the
     // in-memory backend (no historical state to estimate against).
     let token_addr = match workload {
-        EffectiveWorkload::Eth => None,
+        EffectiveWorkload::Eth | EffectiveWorkload::Dvp => None,
         EffectiveWorkload::Erc20 => {
             let deploy_receipt = TestERC20::deploy_builder(
                 tester.l2_provider.clone(),
@@ -1433,6 +1458,15 @@ async fn effective_parallel_impl(
             Some(token_addr)
         }
     };
+
+    let dvp = if workload == EffectiveWorkload::Dvp {
+        Some(dvp::ParallelDvp::prepare(&tester, &signers, txs_per_file()).await?)
+    } else {
+        None
+    };
+    let initial_nonces: Vec<u64> = (0..num_wallets)
+        .map(|i| dvp.as_ref().map_or(0, |dvp| dvp.initial_nonce(i)))
+        .collect();
 
     // Each wallet's real-signed corpus (one-time; real ECDSA signing is expensive). Distinct
     // corpus families per test/workload so they never invalidate each other's files; the
@@ -1458,10 +1492,16 @@ async fn effective_parallel_impl(
                 recipients[i],
                 txs_per_file(),
             ),
+            EffectiveWorkload::Dvp => {
+                dvp.as_ref()
+                    .unwrap()
+                    .ensure_corpus(chain_id, i, txs_per_file())
+            }
         })
         .collect::<anyhow::Result<_>>()?;
 
     match workload {
+        EffectiveWorkload::Dvp => {} // Both token budgets and approvals were prepared above.
         EffectiveWorkload::Eth => {
             // Fund every sender from alice (covers the per-tx value; fees are 0). Split at most
             // half of alice's balance evenly so total funding never exceeds what she holds.
@@ -1815,14 +1855,12 @@ async fn effective_parallel_impl(
         }
     }
 
-    /// One chunk pipeline's result: the wallets it owns, how many FULL nonce rounds it
-    /// accepted (the per-wallet expected-nonce floor for the stall audit), round-trip stats,
+    /// One chunk pipeline's result: exact accepted counts for its wallets, round-trip stats,
     /// and receipt-waiter failures (per-tx receipts mode). Final receipts are confirmed inside
     /// the chunk task itself (see below), so they don't appear here.
     struct ChunkOutcome {
         wallet_base: usize,
-        wallet_count: usize,
-        full_rounds: u64,
+        accepted_per_wallet: Vec<u64>,
         rtt_count: u32,
         rtt_sum: Duration,
         rtt_max: Duration,
@@ -1844,37 +1882,35 @@ async fn effective_parallel_impl(
         let root = root.clone();
         chunk_tasks.spawn(async move {
             let wallet_base = chunk_index * submit_pipeline;
-            let mut wallet_count = 0usize;
-            let mut full_rounds = 0u64;
-            let mut final_targets: Vec<(B256, Instant)> = Vec::new();
+            let wallet_count = submit_pipeline.min(num_wallets - wallet_base);
+            let mut accepted_per_wallet = vec![0u64; wallet_count];
+            let mut final_targets: Vec<Option<(B256, Instant)>> = vec![None; wallet_count];
             let (mut rtt_count, mut rtt_sum, mut rtt_max) = (0u32, Duration::ZERO, Duration::ZERO);
             let mut receipts: JoinSet<anyhow::Result<()>> = JoinSet::new();
             while Instant::now() < deadline {
                 let Some(chunk) = queue.recv().await else {
                     break; // this chunk's corpus slice is exhausted
                 };
-                wallet_count = wallet_count.max(chunk.len());
-                let chunk_len = chunk.len();
                 let sent_at = Instant::now();
                 // One JSON-RPC batch per nonce round; on admission throttling retry only the
                 // rejected entries (accepted ones are already in their lanes, and this chunk's
                 // next round starts only after the current one fully lands — per-wallet order
                 // holds with no global coordination).
-                let mut remaining = chunk;
+                let mut remaining: Vec<_> = chunk.into_iter().enumerate().collect();
                 let mut accepted = Vec::with_capacity(remaining.len());
                 loop {
                     let mut batch = client.new_batch();
                     let mut waiters = Vec::with_capacity(remaining.len());
-                    for raw in &remaining {
+                    for (_, raw) in &remaining {
                         waiters.push(batch.add_call::<_, B256>("eth_sendRawTransaction", raw)?);
                     }
                     batch.send().await?;
                     let mut rejected = Vec::with_capacity(remaining.len());
-                    for (raw, w) in remaining.iter().zip(waiters) {
+                    for ((index, raw), w) in remaining.iter().zip(waiters) {
                         match w.await {
-                            Ok(h) => accepted.push(h),
+                            Ok(h) => accepted.push((*index, h)),
                             Err(e) if e.to_string().contains("accepting") => {
-                                rejected.push(raw.clone());
+                                rejected.push((*index, raw.clone()));
                             }
                             Err(e) => return Err(anyhow::Error::from(e)),
                         }
@@ -1897,11 +1933,14 @@ async fn effective_parallel_impl(
                 submitted.fetch_add(accepted.len() as u64, Ordering::Relaxed);
                 submit_latency_micros.fetch_add(rtt.as_micros() as u64, Ordering::Relaxed);
                 submit_batches.fetch_add(1, Ordering::Relaxed);
-                if accepted.len() == chunk_len {
-                    full_rounds += 1;
+                for &(index, hash) in &accepted {
+                    accepted_per_wallet[index] += 1;
+                    if wait_for_final_receipts {
+                        final_targets[index] = Some((hash, sent_at));
+                    }
                 }
                 if wait_for_receipts {
-                    for hash in accepted {
+                    for (_, hash) in accepted {
                         let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
                         let confirmed = confirmed.clone();
                         let latency_micros = latency_micros.clone();
@@ -1959,8 +1998,6 @@ async fn effective_parallel_impl(
                             anyhow::Ok(())
                         });
                     }
-                } else if wait_for_final_receipts {
-                    final_targets = accepted.iter().map(|hash| (*hash, sent_at)).collect();
                 }
             }
             // Release this chunk's queue so its reader group can wind down.
@@ -1971,7 +2008,7 @@ async fn effective_parallel_impl(
             // later chunks keep producing blocks. Per-wallet nonce ordering makes the final
             // receipt prove the wallet's whole chain executed.
             if wait_for_final_receipts {
-                for (hash, sent_at) in final_targets.drain(..) {
+                for (hash, sent_at) in final_targets.into_iter().flatten() {
                     let receipt = PendingTransactionBuilder::new(root.clone(), hash)
                         .with_timeout(Some(RECEIPT_TIMEOUT))
                         .get_receipt()
@@ -1999,8 +2036,7 @@ async fn effective_parallel_impl(
             }
             anyhow::Ok(ChunkOutcome {
                 wallet_base,
-                wallet_count,
-                full_rounds,
+                accepted_per_wallet,
                 rtt_count,
                 rtt_sum,
                 rtt_max,
@@ -2018,10 +2054,8 @@ async fn effective_parallel_impl(
     let (mut rtt_sum_total, mut rtt_max_total) = (Duration::ZERO, Duration::ZERO);
     while let Some(res) = chunk_tasks.join_next().await {
         let outcome = res??;
-        let end = (outcome.wallet_base + outcome.wallet_count).min(num_wallets);
-        for wallet in outcome.wallet_base..end {
-            expected_per_wallet[wallet] = outcome.full_rounds;
-        }
+        let end = outcome.wallet_base + outcome.accepted_per_wallet.len();
+        expected_per_wallet[outcome.wallet_base..end].copy_from_slice(&outcome.accepted_per_wallet);
         receipt_failed += outcome.receipt_failed;
         if receipt_errors.len() < 8 {
             receipt_errors.extend(outcome.receipt_errors);
@@ -2030,6 +2064,7 @@ async fn effective_parallel_impl(
         rtt_sum_total += outcome.rtt_sum;
         rtt_max_total = rtt_max_total.max(outcome.rtt_max);
     }
+    let load_elapsed = start.elapsed();
     if receipt_failed > 0 {
         // Tell apart "accepted but never executed" (sequencer-side loss: the wallet's on-chain
         // nonce stalls below its chunk's accepted rounds) from "executed but receipt not
@@ -2040,14 +2075,14 @@ async fn effective_parallel_impl(
             let nonce = receipt_provider
                 .get_transaction_count(signer.address())
                 .await?;
-            if nonce < expected_per_wallet[i] {
+            if nonce < initial_nonces[i] + expected_per_wallet[i] {
                 stalled += 1;
                 if stalled <= 16 {
                     tracing::error!(
                         wallet = i,
                         address = %signer.address(),
                         on_chain_nonce = nonce,
-                        expected = expected_per_wallet[i],
+                        expected = initial_nonces[i] + expected_per_wallet[i],
                         "wallet nonce chain stalled: its tx at nonce `on_chain_nonce` was accepted but never executed"
                     );
                 }
@@ -2055,6 +2090,19 @@ async fn effective_parallel_impl(
         }
         anyhow::bail!(
             "{receipt_failed} receipt waits failed; {stalled} of {num_wallets} wallets have stalled nonce chains; first errors: {receipt_errors:#?}"
+        );
+    }
+
+    if let Some(dvp) = &dvp {
+        dvp.verify(&expected_per_wallet).await?;
+        let verified_swaps: u64 = expected_per_wallet.iter().sum();
+        anyhow::ensure!(verified_swaps > 0, "no DvP swaps completed");
+        assert_eq!(verified_swaps, submitted.load(Ordering::Relaxed));
+        tracing::info!(
+            verified_swaps,
+            ?load_elapsed,
+            verified_dvp_tps = verified_swaps as f64 / load_elapsed.as_secs_f64(),
+            "parallel DvP balances, allowances, nonces and supplies verified"
         );
     }
 
@@ -2099,7 +2147,7 @@ async fn effective_parallel_impl(
         }
     }
 
-    let elapsed = start.elapsed();
+    let elapsed = load_elapsed;
     let submitted = submitted.load(Ordering::Relaxed);
     let confirmed = confirmed.load(Ordering::Relaxed);
     let final_receipts_confirmed = final_receipts_confirmed.load(Ordering::Relaxed);

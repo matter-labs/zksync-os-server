@@ -260,7 +260,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         config.general_config.rocks_db_path.join(REPOSITORY_DB_NAME),
         &genesis,
     )
-    .await;
+    .await
+    .with_receipt_logs(config.general_config.retain_receipt_logs);
     // Bench-only: pure in-memory repository (no RocksDB), keeping only the most recent
     // `blocks_to_retain_in_memory` blocks to bound memory.
     #[cfg(feature = "in-memory-storage")]
@@ -268,7 +269,8 @@ pub async fn run<State: ReadStateHistory + WriteState + StateInitializer + Clone
         &genesis,
         config.general_config.blocks_to_retain_in_memory as u64,
     )
-    .await;
+    .await
+    .with_receipt_logs(config.general_config.retain_receipt_logs);
 
     // Apply the `from_block_hash` idempotency guard once, up front, to derive the *effective*
     // rebuild config used for the rest of startup. If the configured rebuild already ran on a

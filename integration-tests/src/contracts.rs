@@ -36,6 +36,13 @@ alloy::sol!(
 );
 
 alloy::sol!(
+    /// Fixed-lot, atomic delivery-versus-payment settlement for two test tokens.
+    #[sol(rpc)]
+    TestDvp,
+    "test-contracts/out/TestDvp.sol/TestDvp.json"
+);
+
+alloy::sol!(
     /// Contract that calls `TracingSecondary` internally.
     #[sol(rpc)]
     TracingPrimary,
