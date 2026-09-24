@@ -76,3 +76,5 @@ at your option.
 - [Discord](https://join.zksync.dev/)
 - [Mirror](https://zksync.mirror.xyz/)
 - [Youtube](https://www.youtube.com/@zksync-io)
+
+<!-- ci trigger check 2026-09-24T22:08:56Z -->
