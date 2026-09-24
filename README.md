@@ -26,7 +26,7 @@ The ZKsync OS Server design optimizes for throughput, low latency, and a seamles
 
 ## Quickstart
 
-To run server locally with in-memory L1 node and dummy proofs, run the following commands:
+To run the server locally with an in-memory L1 node and dummy proofs, run the following commands:
 ```bash
 # Launch zksync-os-server on the default port 3050
 # This also starts in-memory L1 node as a background process.
