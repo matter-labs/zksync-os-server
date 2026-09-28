@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ZKsync OS — Live Throughput</title>
+<title>ZKsync OS — Atomic DvP Live</title>
 <style>
   /* Single dark theme by design: this page lives on projectors. */
   :root {
@@ -95,7 +95,7 @@
      Symmetric lanes, rows 2-6 each: RPC (User → Submitted → Verified) and Sequencer
      (In lane → Executed → In block). The routed elbow leaves Verified (bottom of RPC),
      climbs the full gap column, and enters In lane (top of Sequencer) from the left.
-     Column 4 holds the end-to-end total, vertically centered. */
+     Column 4 holds the approximate stage sum, vertically centered. */
   .journey {
     flex: none;
     width: clamp(510px, 40vw, 650px);
@@ -322,18 +322,20 @@
   .odometer {
     font-family: var(--mono);
     font-variant-numeric: tabular-nums;
-    font-size: clamp(60px, 10.5vw, 170px);
+    font-size: clamp(60px, 8.5vw, 150px);
     font-weight: 700;
     line-height: 1;
     letter-spacing: -0.02em;
     white-space: nowrap;
   }
-  .eth-line {
+  .swap-terms {
     margin-top: 0.5em;
-    font-size: clamp(16px, 2.1vw, 30px);
+    font-size: clamp(15px, 1.5vw, 23px);
     color: var(--ink-2);
   }
-  .eth-line b { color: var(--ink); font-weight: 650; }
+  .measurement-note { margin: 14px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.5; }
+  .swap-terms small { font-size: 0.7em; }
+  .swap-terms b { color: var(--ink); font-weight: 650; }
 
   .row {
     display: flex;
@@ -503,8 +505,8 @@
   <header>
     <div class="brand">ZKsync OS · Live</div>
     <div class="hright">
-      <span class="chip">ERC-20 transfers</span>
-      <span class="chip"><b id="accounts">—</b>&nbsp;accounts</span>
+      <span class="chip">Atomic DvP</span>
+      <span class="chip"><b id="accounts">—</b>&nbsp;pairs</span>
       <div class="countdown" id="countdown"></div>
       <div class="phase waiting" id="phase"><span class="dot"></span><span id="phase-text">waiting for node</span></div>
     </div>
@@ -514,23 +516,23 @@
     <div class="stage">
       <div class="stage-top">
         <div class="stage-main">
-          <div class="odo-label">ERC-20 transfers processed</div>
+          <div class="odo-label">Atomic swaps</div>
           <div class="odometer" id="odo">0</div>
-          <div class="eth-line" id="eth-line">&nbsp;</div>
+          <div class="swap-terms"><b>3 ASSET</b> · Seller → Buyer<br><b>7 CASH</b> · Buyer → Seller<br><small>One transaction. Both legs succeed or both revert.</small></div>
         </div>
         <div class="journey">
           <div class="j-head">
-            <span class="k">Transaction journey</span>
+            <span class="k">Atomic swap journey</span>
             <span class="j-mode" id="j-mode">awaiting run</span>
           </div>
           <div class="j-grid">
             <div class="j-lane-tag" style="grid-area:1/1">RPC</div>
             <div class="j-lane-tag" style="grid-area:1/3">Sequencer</div>
-            <div class="j-node" style="grid-area:2/1"><span class="j-dot"></span><span class="j-name">User</span></div>
+            <div class="j-node" style="grid-area:2/1"><span class="j-dot"></span><span class="j-name">Buyer</span></div>
             <div class="j-vlink" style="grid-area:3/1"><span class="j-lat">JSON-RPC</span></div>
-            <div class="j-node" style="grid-area:4/1"><span class="j-dot"></span><span class="j-name">Submitted</span></div>
+            <div class="j-node" style="grid-area:4/1"><span class="j-dot"></span><span class="j-name">Received</span></div>
             <div class="j-vlink" style="grid-area:5/1; --jd:.2s"><span class="j-lat"><b id="j-verify">—</b> verify sig</span></div>
-            <div class="j-node" style="grid-area:6/1"><span class="j-dot"></span><span class="j-name">Verified</span></div>
+            <div class="j-node" style="grid-area:6/1"><span class="j-dot"></span><span class="j-name">Signature OK</span></div>
             <div class="j-elbow" style="grid-area:2/2/span 5/3; --jd:.4s">
               <span class="j-eseg j-e-bottom"></span>
               <span class="j-eseg j-e-vert"></span>
@@ -540,12 +542,12 @@
             </div>
             <div class="j-node" style="grid-area:2/3"><span class="j-dot"></span><span class="j-name">In lane</span></div>
             <div class="j-vlink" style="grid-area:3/3; --jd:.6s"><span class="j-lat"><b id="j-vm">—</b> ZKsync OS VM</span></div>
-            <div class="j-node" style="grid-area:4/3"><span class="j-dot"></span><span class="j-name">Executed</span></div>
+            <div class="j-node" style="grid-area:4/3"><span class="j-dot"></span><span class="j-name">Both legs executed</span></div>
             <div class="j-vlink" style="grid-area:5/3; --jd:.8s"><span class="j-lat"><b id="j-seal">—</b> sealed</span></div>
             <div class="j-node" style="grid-area:6/3"><span class="j-dot"></span><span class="j-txt"><span class="j-name">In block</span><span class="j-sub" id="j-block"></span></span></div>
             <div class="j-total-box" style="grid-area:2/4/span 5/5">
               <span class="j-tv">&asymp; <b id="j-total">—</b></span>
-              <span class="j-cap">end-to-end</span>
+              <span class="j-cap">stage estimate</span>
             </div>
           </div>
         </div>
@@ -554,9 +556,9 @@
       <div class="row">
         <div class="groups">
           <div class="group">
-            <div class="cell"><span class="k" id="tps-label">Txs / second</span><span class="v" id="tps">0</span></div>
-            <div class="cell"><span class="k">Peak txs / s</span><span class="v" id="peak">0</span></div>
-            <div class="cell"><span class="k">Avg time / tx</span><span class="v"><span id="txtime">—</span><span class="u">µs</span></span></div>
+            <div class="cell"><span class="k" id="tps-label">TPS</span><span class="v" id="tps">0</span></div>
+            <div class="cell"><span class="k">Peak TPS</span><span class="v" id="peak">0</span></div>
+            <div class="cell"><span class="k">1 / rate</span><span class="v"><span id="txtime">—</span><span class="u">µs</span></span></div>
           </div>
           <div class="group">
             <div class="cell"><span class="k">Block height</span><span class="v" id="height">—</span></div>
@@ -573,21 +575,23 @@
           <div class="spark-head">
             <span class="k">Throughput — last 60 seconds</span>
             <span class="legend">
-              <span><span class="sw"></span>live tx/s</span>
-              <span><span class="sw ref"></span>1,000,000 tx/s</span>
+              <span><span class="sw"></span>live TPS</span>
+              <span><span class="sw ref"></span>400,000 target</span>
             </span>
           </div>
           <canvas id="spark"></canvas>
         </div>
       </div>
+      <p class="measurement-note">One atomic swap = one transaction = two token transfers.<br>Final balances, allowances and nonces are verified in the terminal.</p>
     </div>
   </main>
 
   <!-- start gate -->
   <div class="overlay" id="gate-overlay">
     <div class="gbrand">ZKsync OS</div>
-    <h1>One million transactions per second, live.</h1>
-    <button id="start-btn">Start</button>
+    <h1>Delivery and payment.<br>One atomic swap.</h1>
+    <div class="swap-terms">3 ASSET for 7 CASH · Both legs succeed or both revert.</div>
+    <button id="start-btn">Start DvP</button>
     <div id="gate-status">connecting to node…</div>
   </div>
 
@@ -601,8 +605,8 @@
   var STATS = qs.get("stats") || (isFile ? "http://127.0.0.1:7777/stats" : "/stats");
   var DURATION_S = parseInt(qs.get("duration") || "60", 10);
 
-  // Ethereum mainnet ~1.2M transactions per day (public explorer figures).
-  var ETH_TXS_PER_DAY = 1200000;
+  // Presentation target; live counters measure submissions, not verified settlements.
+  var TARGET_SWAPS_PER_SECOND = 400000;
   var POLL_MS = 200;
   var LIVE_ENTER_BPS = 50;   // blocks/s fallback threshold when /stats is unavailable
   var LIVE_EXIT_BPS = 20;    // below this (after being live) the run is over
@@ -625,6 +629,7 @@
   var failStreak = 0;        // consecutive failed polls (tunnel hiccup vs real teardown)
   var lastStats = null;      // last /stats payload seen
   var lastSubmitted = null, lastSubmittedAt = null;
+  var submissionEnded = false;
 
   // ---- transaction-journey latencies (µs), smoothed windowed averages ----
   var jVerify = 0, jRoute = 0, jVm = 0;
@@ -744,7 +749,8 @@
     state = "live";
     liveStartBlock = bn;
     document.body.classList.add("live");
-    liveStartAt = now;
+    liveStartAt = now - (lastStats && typeof lastStats.elapsed_s === "number"
+      ? lastStats.elapsed_s * 1000 : 0);
     cumTxs = 0;
     cumGas = 0;
     dispTxs = 0;
@@ -777,6 +783,25 @@
         if (stats.duration_s) DURATION_S = stats.duration_s;
         var acc = document.getElementById("accounts");
         if (stats.wallets) acc.textContent = fmt(stats.wallets);
+      }
+
+      if (state === "live") {
+        var elapsed = stats && typeof stats.elapsed_s === "number"
+          ? stats.elapsed_s : (now - liveStartAt) / 1000;
+        if (elapsed >= DURATION_S || (stats && stats.load_finished)) {
+          // The load generator deliberately stops at its deadline. Keep the measured
+          // submission window, including genuine dips, but don't append drain/idle rates.
+          if (!submissionEnded) {
+            submissionEnded = true;
+            doneAt = sparkData.length ? sparkData[sparkData.length - 1][0] : now;
+            setPhase("live", "draining receipts");
+          }
+          if (stats && typeof stats.submitted === "number") cumTxs = stats.submitted;
+          if (stats && stats.load_finished) {
+            finish(now);
+            return;
+          }
+        }
       }
 
       if (!rpcRes || !rpcRes.result) {
@@ -814,7 +839,7 @@
       var txc = (blk.transactions || []).length;
       var gas = parseInt(blk.gasUsed || "0x0", 16);
 
-      if (lastBlock !== null && lastPollAt !== null) {
+      if (lastBlock !== null && lastPollAt !== null && !submissionEnded) {
         var dt = (now - lastPollAt) / 1000;
         var dBlocks = Math.max(0, bn - lastBlock);
         // Seed EMAs from the first measurement instead of blending up from zero — a
@@ -845,7 +870,8 @@
           sparkData.push([now, rate]);
           while (sparkData.length && now - sparkData[0][0] > 60000) sparkData.shift();
 
-          if (bps < LIVE_EXIT_BPS && now - liveStartAt > MIN_LIVE_MS) {
+          if (!(stats && typeof stats.elapsed_s === "number") &&
+              bps < LIVE_EXIT_BPS && now - liveStartAt > MIN_LIVE_MS) {
             if (lowSince === null) lowSince = now;
             if (now - lowSince > EXIT_GRACE_MS) finish(now);
           } else {
@@ -880,14 +906,11 @@
   function finish(now) {
     if (state === "done") return;
     state = "done";
-    // Trim the drain-phase cliff off the chart tail so the curve ends at cruise altitude,
-    // and pin the frozen time axis to the last kept sample.
-    while (sparkData.length > 2 && sparkData[sparkData.length - 1][1] < peakTps * 0.5) {
-      sparkData.pop();
-    }
+    // Freeze at the final sample inside the submission window.
     doneAt = sparkData.length ? sparkData[sparkData.length - 1][0] : now;
     document.body.classList.remove("live");
-    finalSecs = Math.min((now - liveStartAt) / 1000, DURATION_S);
+    finalSecs = Math.min(lastStats && typeof lastStats.elapsed_s === "number"
+      ? lastStats.elapsed_s : (now - liveStartAt) / 1000, DURATION_S);
     finalTotal = lastStats && lastStats.submitted ? lastStats.submitted : cumTxs;
     finalAvg = finalTotal / finalSecs;
     var finalBlocks = Math.max(1, (lastBlock || 0) - liveStartBlock);
@@ -906,7 +929,7 @@
     document.body.classList.add("done");
     document.getElementById("j-mode").textContent = "run average";
     renderJourney();
-    setPhase("done", "run complete");
+    setPhase("done", "run summary");
   }
 
   // ---- animation loop: roll the odometer smoothly between polls ----
@@ -915,7 +938,8 @@
     var dt = (now - lastFrame) / 1000;
     lastFrame = now;
     if (state === "live") {
-      dispTxs += rate * dt;
+      if (submissionEnded) dispTxs = cumTxs;
+      else dispTxs += rate * dt;
       // gentle correction toward the exact count
       dispTxs += (cumTxs - dispTxs) * Math.min(1, dt * 2);
       var left = Math.max(0, DURATION_S - (now - liveStartAt) / 1000);
@@ -943,15 +967,11 @@
     document.getElementById("gasblock").textContent =
       shownGasPerBlock > 0 ? Math.round(shownGasPerBlock / 1e6) : "—";
     var done = state === "done";
-    document.getElementById("tps-label").textContent = done ? "Avg txs / second" : "Txs / second";
+    document.getElementById("tps-label").textContent = done ? "Average TPS" : "TPS";
     document.getElementById("bps-label").textContent = done ? "Avg blocks / s" : "Blocks / second";
     document.getElementById("blockms-label").textContent = done ? "Avg block time" : "Block time";
     document.getElementById("ggas-label").textContent = done ? "Avg gas / second" : "Gas / second";
     document.getElementById("gasblock-label").textContent = done ? "Avg gas / block" : "Gas / block";
-    var days = dispTxs / ETH_TXS_PER_DAY;
-    document.getElementById("eth-line").innerHTML = days > 0.05
-      ? "&asymp; <b>" + days.toFixed(1) + " days</b> of Ethereum mainnet traffic"
-      : "&nbsp;";
     drawSpark();
     requestAnimationFrame(frame);
   }
@@ -968,18 +988,17 @@
     ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
     ctx.clearRect(0, 0, w, h);
     if (sparkData.length < 2) return;
-    var now = state === "done" && doneAt !== null ? doneAt : performance.now();
+    var now = doneAt !== null ? doneAt : performance.now();
     var max = 1;
     for (var i = 0; i < sparkData.length; i++) max = Math.max(max, sparkData[i][1]);
     max *= 1.15;
-    // 1M reference line, when in range
-    if (max > 1000000 * 0.6) {
-      var refY = h - (1000000 / max) * h;
-      ctx.strokeStyle = "rgba(159,176,191,0.35)";
-      ctx.setLineDash([5, 5]);
-      ctx.beginPath(); ctx.moveTo(0, refY); ctx.lineTo(w, refY); ctx.stroke();
-      ctx.setLineDash([]);
-    }
+    // Keep the DvP target visible even when throughput is below it.
+    max = Math.max(max, TARGET_SWAPS_PER_SECOND * 1.15);
+    var refY = h - (TARGET_SWAPS_PER_SECOND / max) * h;
+    ctx.strokeStyle = "rgba(159,176,191,0.35)";
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath(); ctx.moveTo(0, refY); ctx.lineTo(w, refY); ctx.stroke();
+    ctx.setLineDash([]);
     // Time axis grows with the run (full-width line from the first seconds) and settles
     // into the rolling 60s window — no sliver of a chart hugging the right edge early on.
     var span = liveStartAt !== null

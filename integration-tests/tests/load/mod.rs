@@ -1612,6 +1612,11 @@ async fn effective_parallel_impl(
         });
     }
 
+    // Share the actual load interval with the dashboard so receipt drain is not plotted
+    // as a throughput collapse after submissions have stopped.
+    let demo_load_start = Arc::new(std::sync::OnceLock::<Instant>::new());
+    let demo_load_finished = Arc::new(AtomicBool::new(false));
+
     // Demo-only start gate: with `LOAD_TEST_DEMO_PORT=<port>` set, everything above (funding,
     // deploy, mints, corpus) is prepared and the run PARKS here until the dashboard's Start
     // button is pressed. The listener below is the whole demo infrastructure: it serves the
@@ -1660,6 +1665,8 @@ async fn effective_parallel_impl(
         let stats_wallets = num_wallets;
         let stats_lanes = k;
         let stats_duration = duration.as_secs();
+        let stats_load_start = demo_load_start.clone();
+        let stats_load_finished = demo_load_finished.clone();
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else {
@@ -1671,6 +1678,8 @@ async fn effective_parallel_impl(
                 let stats_receipts = stats_receipts.clone();
                 let stats_submit_latency = stats_submit_latency.clone();
                 let stats_submit_batches = stats_submit_batches.clone();
+                let stats_load_start = stats_load_start.clone();
+                let stats_load_finished = stats_load_finished.clone();
                 tokio::spawn(async move {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     let mut buf = [0u8; 2048];
@@ -1680,6 +1689,10 @@ async fn effective_parallel_impl(
                         started.notify_one();
                         ("200 OK", "started".to_string())
                     } else if request.starts_with("GET /stats") {
+                        let load_finished = stats_load_finished.load(Ordering::Acquire);
+                        let elapsed_s = stats_load_start
+                            .get()
+                            .map_or(0.0, |start| start.elapsed().as_secs_f64());
                         // Exact live counters straight from the load generator — the
                         // dashboard prefers these over block-derived estimates. The
                         // per-stage latencies come from the in-process node's profiling
@@ -1710,7 +1723,8 @@ async fn effective_parallel_impl(
                             format!(
                                 "{{\"submitted\":{},\"receipts\":{},\"wallets\":{},\"lanes\":{},\"duration_s\":{},\
                                  \"submit_rtt_us\":{:.1},\"verify_us\":{:.2},\"route_us\":{:.2},\
-                                 \"admit_us\":{:.2},\"adm_samples\":{},\"vm_us\":{:.2},\"vm_txs\":{}}}",
+                                 \"admit_us\":{:.2},\"adm_samples\":{},\"vm_us\":{:.2},\"vm_txs\":{},\
+                                 \"elapsed_s\":{:.6},\"load_finished\":{}}}",
                                 stats_submitted.load(Ordering::Relaxed),
                                 stats_receipts.load(Ordering::Relaxed),
                                 stats_wallets,
@@ -1723,6 +1737,8 @@ async fn effective_parallel_impl(
                                 adm_samples,
                                 vm_us,
                                 vm_txs,
+                                elapsed_s,
+                                load_finished,
                             ),
                         )
                     } else if request.starts_with("GET / ") || request.starts_with("GET /?") {
@@ -1749,6 +1765,7 @@ async fn effective_parallel_impl(
     zksync_os_rpc::admission_profile_reset();
     zksync_os_sequencer::execution::vm_wrapper::vm_execute_reset();
     let start = Instant::now();
+    demo_load_start.set(start).expect("load starts once");
     let deadline = start + duration;
 
     // Wallets are split into fixed chunks of up to `submit_pipeline`; each chunk pipelines its
@@ -2061,6 +2078,7 @@ async fn effective_parallel_impl(
         rtt_max_total = rtt_max_total.max(outcome.rtt_max);
     }
     let load_elapsed = start.elapsed();
+    demo_load_finished.store(true, Ordering::Release);
     // Stop CPU profiling at receipt drain; the exhaustive DvP eth_call checks below
     // are outside the measured workload and can otherwise dominate the flamegraph.
     if let (Some(guard), Some(path)) = (profiler_guard, flamegraph_path.as_ref()) {
