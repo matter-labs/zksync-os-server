@@ -20,6 +20,7 @@ mod result;
 mod rpc_storage;
 mod simulate;
 pub use rpc_storage::{ReadRpcStorage, RpcStorage};
+mod call_tracer_config;
 mod debug_impl;
 mod imt;
 pub mod js_tracer;

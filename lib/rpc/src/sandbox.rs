@@ -1,6 +1,7 @@
+use crate::call_tracer_config::CallTracerConfig;
 use crate::trace_filter::{is_asset_tracker_root_call, without_ignored_roots};
 use alloy::primitives::{Address, B256, Bytes, U256};
-use alloy::rpc::types::trace::geth::{CallConfig, CallFrame, CallLogFrame};
+use alloy::rpc::types::trace::geth::{CallFrame, CallLogFrame};
 use alloy::sol_types::{ContractError, GenericRevertReason};
 use zksync_os_evm_errors::EvmError;
 use zksync_os_interface::error::InvalidTransaction;
@@ -71,13 +72,9 @@ pub fn call_trace_simulate(
     tx: ZkTransaction,
     mut block_context: BlockContext,
     state_view: impl ViewState,
-    call_config: CallConfig,
+    config: CallTracerConfig,
 ) -> anyhow::Result<CallFrame> {
-    let mut tracer = CallTracer::new_with_config(
-        vec![tx.clone()],
-        call_config.with_log.unwrap_or_default(),
-        call_config.only_top_call.unwrap_or_default(),
-    );
+    let mut tracer = CallTracer::new_with_config(vec![tx.clone()], config);
     let encoded_tx = tx.encode();
 
     block_context.eip1559_basefee = U256::from(0);
@@ -111,13 +108,9 @@ pub fn call_trace(
     txs: Vec<ZkTransaction>,
     block_context: BlockContext,
     state_view: impl ViewState,
-    call_config: CallConfig,
+    config: CallTracerConfig,
 ) -> anyhow::Result<Vec<CallFrame>> {
-    let mut tracer = CallTracer::new_with_config(
-        txs.clone(),
-        call_config.with_log.unwrap_or_default(),
-        call_config.only_top_call.unwrap_or_default(),
-    );
+    let mut tracer = CallTracer::new_with_config(txs.clone(), config);
 
     let tx_source = TxListSource {
         transactions: txs.into_iter().map(|tx| tx.encode()).collect(),
@@ -196,6 +189,7 @@ pub struct CallTracer {
     current_tx_top_level_execution_succeeded: bool,
     collect_logs: bool,
     only_top_call: bool,
+    include_all_l1_tx_calls: bool,
 
     create_operation_requested: Option<CreateType>,
 }
@@ -209,8 +203,7 @@ enum CreateType {
 impl CallTracer {
     pub fn new_with_config(
         input_transactions: Vec<ZkTransaction>,
-        collect_logs: bool,
-        only_top_call: bool,
+        config: CallTracerConfig,
     ) -> Self {
         Self {
             input_transactions,
@@ -220,8 +213,9 @@ impl CallTracer {
             finished_calls: vec![],
             current_call_depth: 0,
             current_tx_top_level_execution_succeeded: false,
-            collect_logs,
-            only_top_call,
+            collect_logs: config.with_log,
+            only_top_call: config.only_top_call,
+            include_all_l1_tx_calls: config.include_all_l1_tx_calls,
             create_operation_requested: None,
         }
     }
@@ -254,6 +248,62 @@ impl CallTracer {
         without_ignored_roots(roots, |root| {
             is_asset_tracker_root_call(root.from, root.to, root.input.as_ref())
         })
+    }
+
+    /// Wraps all root frames of a transaction in a synthetic frame that mirrors the transaction.
+    ///
+    /// Used with `include_all_l1_tx_calls`: an L1->L2 transaction has auxiliary root frames
+    /// (bootloader calls to the asset tracker) around the main transaction frame. The wrapper keeps
+    /// the single-root shape clients expect while preserving every root frame as a child, in
+    /// execution order. Its result (error, revert reason, output) comes from the main transaction
+    /// frame. Its `value` is zero: the value transfer is already reported by the main frame.
+    fn multi_root_frame(&self, roots: Vec<CallFrame>) -> CallFrame {
+        debug_assert!(roots.len() > 1);
+        let tx = self.input_transactions.get(self.transactions.len());
+        let main_root = roots
+            .iter()
+            .find(|root| !is_asset_tracker_root_call(root.from, root.to, root.input.as_ref()))
+            .or(roots.last())
+            .expect("multi-root trace is non-empty");
+
+        let (from, to, input, gas) = match tx {
+            Some(tx) => (
+                tx.signer(),
+                tx.to(),
+                tx.input().clone(),
+                U256::from(tx.gas_limit()),
+            ),
+            None => (
+                main_root.from,
+                main_root.to,
+                main_root.input.clone(),
+                main_root.gas,
+            ),
+        };
+        let output = main_root.output.clone();
+        let error = main_root.error.clone();
+        let revert_reason = main_root.revert_reason.clone();
+        let gas_used = roots.iter().map(|root| root.gas_used).sum();
+
+        CallFrame {
+            from,
+            gas,
+            gas_used,
+            to,
+            input,
+            output,
+            error,
+            revert_reason,
+            calls: roots,
+            logs: vec![],
+            value: Some(U256::ZERO),
+            typ: if to.is_some() {
+                "CALL".to_string()
+            } else {
+                "CREATE".to_string()
+            },
+            ..Default::default()
+        }
     }
 }
 
@@ -413,17 +463,22 @@ impl EvmTracer for CallTracer {
         // Sanity check
         assert!(self.create_operation_requested.is_none());
 
-        let roots =
-            Self::without_asset_tracker_root_frames(std::mem::take(&mut self.finished_calls));
-        // A transaction always produces exactly one genuine root frame; the bootloader's
-        // asset-tracker root (the only other depth-1 frame) is filtered out above.
-        assert!(
-            roots.len() <= 1,
-            "unexpected multi-root trace: {} roots remain after stripping asset-tracker roots",
-            roots.len()
-        );
-        match roots.into_iter().next() {
-            None => {
+        let finished_calls = std::mem::take(&mut self.finished_calls);
+        let roots = if self.include_all_l1_tx_calls {
+            finished_calls
+        } else {
+            let roots = Self::without_asset_tracker_root_frames(finished_calls);
+            // A transaction always produces exactly one genuine root frame; the bootloader's
+            // asset-tracker roots (the only other depth-1 frames) are filtered out above.
+            assert!(
+                roots.len() <= 1,
+                "unexpected multi-root trace: {} roots remain after stripping asset-tracker roots",
+                roots.len()
+            );
+            roots
+        };
+        match roots.len() {
+            0 => {
                 // We can have some edge cases when tx fails before any call frame is created.
                 // In this case currently we populate minimal call frame info from the input tx data.
                 if let Some(frame) = self.failed_before_execution_frame() {
@@ -431,8 +486,15 @@ impl EvmTracer for CallTracer {
                     self.top_level_execution_succeeded.push(false);
                 }
             }
-            Some(root) => {
+            1 => {
+                let root = roots.into_iter().next().expect("exactly one root");
                 self.transactions.push(root);
+                self.top_level_execution_succeeded
+                    .push(self.current_tx_top_level_execution_succeeded);
+            }
+            _ => {
+                let frame = self.multi_root_frame(roots);
+                self.transactions.push(frame);
                 self.top_level_execution_succeeded
                     .push(self.current_tx_top_level_execution_succeeded);
             }
@@ -688,6 +750,7 @@ mod tests {
     use alloy::sol_types::{Revert, SolError};
     use zksync_os_interface::tracing::EvmTracer;
     use zksync_os_interface::types::ExecutionOutput;
+    use zksync_os_types::{L1Envelope, L1PriorityTxType, L1Tx};
 
     #[derive(Default)]
     struct TestStack;
@@ -929,7 +992,14 @@ mod tests {
 
     #[test]
     fn only_top_call_ignores_nested_logs() {
-        let mut tracer = CallTracer::new_with_config(vec![], true, true);
+        let mut tracer = CallTracer::new_with_config(
+            vec![],
+            CallTracerConfig {
+                with_log: true,
+                only_top_call: true,
+                ..Default::default()
+            },
+        );
         tracer.current_call_depth = 2;
         tracer.unfinished_calls.push(make_empty_call_frame());
 
@@ -944,7 +1014,13 @@ mod tests {
 
     #[test]
     fn only_top_call_ignores_nested_selfdestruct() {
-        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        let mut tracer = CallTracer::new_with_config(
+            vec![],
+            CallTracerConfig {
+                only_top_call: true,
+                ..Default::default()
+            },
+        );
         tracer.current_call_depth = 2;
         tracer.unfinished_calls.push(make_empty_call_frame());
 
@@ -962,7 +1038,13 @@ mod tests {
 
     #[test]
     fn only_top_call_ignores_nested_create_bytecode_changes() {
-        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        let mut tracer = CallTracer::new_with_config(
+            vec![],
+            CallTracerConfig {
+                only_top_call: true,
+                ..Default::default()
+            },
+        );
         tracer.current_call_depth = 2;
         let original_output = Bytes::from(vec![0xca, 0xfe]);
         tracer.unfinished_calls.push(CallFrame {
@@ -982,7 +1064,13 @@ mod tests {
 
     #[test]
     fn only_top_call_ignores_nested_create_pre_frame_opcode_error() {
-        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        let mut tracer = CallTracer::new_with_config(
+            vec![],
+            CallTracerConfig {
+                only_top_call: true,
+                ..Default::default()
+            },
+        );
         tracer.current_call_depth = 1;
         tracer.unfinished_calls.push(make_empty_call_frame());
         tracer.on_create_request(false);
@@ -995,7 +1083,13 @@ mod tests {
 
     #[test]
     fn only_top_call_ignores_nested_create_pre_frame_call_error() {
-        let mut tracer = CallTracer::new_with_config(vec![], false, true);
+        let mut tracer = CallTracer::new_with_config(
+            vec![],
+            CallTracerConfig {
+                only_top_call: true,
+                ..Default::default()
+            },
+        );
         tracer.current_call_depth = 1;
         tracer.unfinished_calls.push(make_empty_call_frame());
         tracer.on_create_request(true);
@@ -1004,5 +1098,210 @@ mod tests {
 
         assert!(tracer.unfinished_calls[0].error.is_none());
         assert!(tracer.create_operation_requested.is_none());
+    }
+
+    fn make_l1_priority_tx() -> ZkTransaction {
+        let inner = L1Tx {
+            hash: B256::ZERO,
+            initiator: Address::from([0xaa; 20]),
+            to: Address::from([0xbb; 20]),
+            gas_limit: 1_000_000,
+            gas_per_pubdata_byte_limit: 800,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            nonce: 0,
+            value: U256::from(5),
+            to_mint: U256::from(5),
+            refund_recipient: Address::from([0xcc; 20]),
+            input: Bytes::from(vec![0x01, 0x02]),
+            factory_deps: vec![],
+            marker: std::marker::PhantomData::<L1PriorityTxType>,
+        };
+        L1Envelope { inner }.into()
+    }
+
+    fn make_asset_tracker_root_frame(gas_used: u64) -> CallFrame {
+        CallFrame {
+            from: L2_BASE_TOKEN_ADDRESS,
+            to: Some(ASSET_TRACKER_ADDRESS),
+            input: Bytes::copy_from_slice(&ASSET_TRACKER_ROOT_SELECTOR),
+            gas: U256::from(u64::MAX),
+            gas_used: U256::from(gas_used),
+            value: Some(U256::ZERO),
+            ..make_empty_call_frame()
+        }
+    }
+
+    fn make_main_root_frame(gas_used: u64) -> CallFrame {
+        CallFrame {
+            from: Address::from([0xaa; 20]),
+            to: Some(Address::from([0xbb; 20])),
+            input: Bytes::from(vec![0x01, 0x02]),
+            gas: U256::from(900_000),
+            gas_used: U256::from(gas_used),
+            value: Some(U256::from(5)),
+            calls: vec![make_create_call_frame()],
+            ..make_empty_call_frame()
+        }
+    }
+
+    fn all_l1_tx_calls_config() -> CallTracerConfig {
+        CallTracerConfig {
+            include_all_l1_tx_calls: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn finish_tx_with_all_l1_tx_calls_wraps_root_frames_in_tx_frame() {
+        let tx = make_l1_priority_tx();
+        let mut tracer = CallTracer::new_with_config(vec![tx.clone()], all_l1_tx_calls_config());
+
+        tracer.begin_tx(&[]);
+        tracer
+            .finished_calls
+            .push(make_asset_tracker_root_frame(100));
+        tracer.finished_calls.push(make_main_root_frame(1_000));
+        tracer
+            .finished_calls
+            .push(make_asset_tracker_root_frame(10));
+        tracer.finish_tx();
+
+        assert_eq!(tracer.transactions.len(), 1);
+        let wrapper = &tracer.transactions[0];
+        assert_eq!(wrapper.from, tx.signer());
+        assert_eq!(wrapper.to, tx.to());
+        assert_eq!(&wrapper.input, tx.input());
+        assert_eq!(wrapper.gas, U256::from(tx.gas_limit()));
+        assert_eq!(wrapper.gas_used, U256::from(1_110));
+        assert_eq!(wrapper.value, Some(U256::ZERO));
+        assert_eq!(wrapper.typ, "CALL");
+        assert!(wrapper.logs.is_empty());
+
+        let children: Vec<_> = wrapper.calls.iter().map(|call| call.to).collect();
+        assert_eq!(
+            children,
+            vec![
+                Some(ASSET_TRACKER_ADDRESS),
+                Some(Address::from([0xbb; 20])),
+                Some(ASSET_TRACKER_ADDRESS),
+            ]
+        );
+        assert_eq!(
+            wrapper.calls[1].calls.len(),
+            1,
+            "main root keeps its subcalls"
+        );
+        assert!(tracer.finished_calls.is_empty());
+        assert_eq!(tracer.top_level_execution_succeeded, vec![true]);
+    }
+
+    #[test]
+    fn finish_tx_with_all_l1_tx_calls_takes_result_from_main_root() {
+        let mut tracer =
+            CallTracer::new_with_config(vec![make_l1_priority_tx()], all_l1_tx_calls_config());
+        let mut main_root = make_main_root_frame(1_000);
+        main_root.error = Some("execution reverted".to_string());
+        main_root.revert_reason = Some("boom".to_string());
+        main_root.output = Some(Bytes::from(vec![0xde, 0xad]));
+
+        tracer.begin_tx(&[]);
+        tracer
+            .finished_calls
+            .push(make_asset_tracker_root_frame(100));
+        tracer.finished_calls.push(main_root);
+        tracer
+            .finished_calls
+            .push(make_asset_tracker_root_frame(10));
+        tracer.finish_tx();
+
+        let wrapper = &tracer.transactions[0];
+        assert_eq!(wrapper.error.as_deref(), Some("execution reverted"));
+        assert_eq!(wrapper.revert_reason.as_deref(), Some("boom"));
+        assert_eq!(wrapper.output, Some(Bytes::from(vec![0xde, 0xad])));
+    }
+
+    #[test]
+    fn finish_tx_with_all_l1_tx_calls_keeps_single_root_unchanged() {
+        let mut tracer =
+            CallTracer::new_with_config(vec![make_l1_priority_tx()], all_l1_tx_calls_config());
+
+        tracer.begin_tx(&[]);
+        tracer.finished_calls.push(make_main_root_frame(1_000));
+        tracer.finish_tx();
+
+        assert_eq!(tracer.transactions.len(), 1);
+        let root = &tracer.transactions[0];
+        assert_eq!(root.to, Some(Address::from([0xbb; 20])));
+        assert_eq!(root.value, Some(U256::from(5)));
+        assert_eq!(root.gas_used, U256::from(1_000));
+        assert_eq!(
+            root.calls.len(),
+            1,
+            "no wrapper is added around a single root"
+        );
+        assert_eq!(root.calls[0].typ, "CREATE");
+    }
+
+    #[test]
+    fn finish_tx_with_all_l1_tx_calls_falls_back_to_tx_frame_without_roots() {
+        let tx = make_l1_priority_tx();
+        let mut tracer = CallTracer::new_with_config(vec![tx.clone()], all_l1_tx_calls_config());
+
+        tracer.begin_tx(&[]);
+        tracer.finish_tx();
+
+        assert_eq!(tracer.transactions.len(), 1);
+        let frame = &tracer.transactions[0];
+        assert_eq!(
+            frame.error.as_deref(),
+            Some("transaction failed before execution")
+        );
+        assert_eq!(frame.from, tx.signer());
+        assert!(frame.calls.is_empty());
+        assert_eq!(tracer.top_level_execution_succeeded, vec![false]);
+    }
+
+    #[test]
+    fn finish_tx_with_all_l1_tx_calls_wraps_without_input_tx_using_main_root() {
+        let mut tracer = CallTracer::new_with_config(vec![], all_l1_tx_calls_config());
+        let main_root = make_main_root_frame(1_000);
+
+        tracer.begin_tx(&[]);
+        tracer
+            .finished_calls
+            .push(make_asset_tracker_root_frame(100));
+        tracer.finished_calls.push(main_root.clone());
+        tracer.finish_tx();
+
+        let wrapper = &tracer.transactions[0];
+        assert_eq!(wrapper.from, main_root.from);
+        assert_eq!(wrapper.to, main_root.to);
+        assert_eq!(wrapper.input, main_root.input);
+        assert_eq!(wrapper.gas, main_root.gas);
+        assert_eq!(wrapper.value, Some(U256::ZERO));
+        assert_eq!(wrapper.calls.len(), 2);
+    }
+
+    #[test]
+    fn finish_tx_without_all_l1_tx_calls_keeps_dropping_asset_tracker_roots() {
+        let mut tracer =
+            CallTracer::new_with_config(vec![make_l1_priority_tx()], CallTracerConfig::default());
+
+        tracer.begin_tx(&[]);
+        tracer
+            .finished_calls
+            .push(make_asset_tracker_root_frame(100));
+        tracer.finished_calls.push(make_main_root_frame(1_000));
+        tracer
+            .finished_calls
+            .push(make_asset_tracker_root_frame(10));
+        tracer.finish_tx();
+
+        assert_eq!(tracer.transactions.len(), 1);
+        let root = &tracer.transactions[0];
+        assert_eq!(root.to, Some(Address::from([0xbb; 20])));
+        assert_eq!(root.gas_used, U256::from(1_000));
+        assert_eq!(root.calls.len(), 1);
     }
 }
