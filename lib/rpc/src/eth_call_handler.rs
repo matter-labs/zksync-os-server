@@ -1,4 +1,5 @@
 use crate::call_fees::{CallFees, CallFeesError};
+use crate::call_tracer_config::CallTracerConfig;
 use crate::config::RpcConfig;
 use crate::js_tracer;
 use crate::metrics::API_METRICS;
@@ -11,7 +12,7 @@ use alloy::eips::BlockId;
 use alloy::network::TransactionBuilder;
 use alloy::primitives::{Address, B256, Bytes, Signature, TxKind, U256};
 use alloy::rpc::types::state::StateOverride;
-use alloy::rpc::types::trace::geth::{CallConfig, GethTrace};
+use alloy::rpc::types::trace::geth::GethTrace;
 use alloy::rpc::types::{BlockOverrides, TransactionRequest};
 use derive_more::Deref;
 use serde_json::Value as JsonValue;
@@ -364,7 +365,7 @@ impl<RpcStorage: ReadRpcStorage> EthCallHandler<RpcStorage> {
         &self,
         request: TransactionRequest,
         block: Option<BlockId>,
-        call_config: CallConfig,
+        call_config: CallTracerConfig,
         state_overrides: Option<StateOverride>,
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> Result<GethTrace, EthCallError> {

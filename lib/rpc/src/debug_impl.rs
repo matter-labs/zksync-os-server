@@ -1,3 +1,4 @@
+use crate::call_tracer_config::CallTracerConfig;
 use crate::eth_call_handler::{EthCallError, EthCallHandler};
 use crate::result::{ToRpcResult, unimplemented_rpc_err};
 use crate::{ReadRpcStorage, sandbox};
@@ -5,7 +6,7 @@ use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::genesis::ChainConfig;
 use alloy::primitives::{B256, BlockHash, Bytes, TxHash};
 use alloy::rpc::types::trace::geth::{
-    CallConfig, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
+    GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
     GethDebugTracingOptions, GethTrace, TraceResult,
 };
 use alloy::rpc::types::{Bundle, StateContext, TransactionRequest};
@@ -70,10 +71,7 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
         let prev_state_view = self.storage.state_view_at(block.number - 1)?;
         match tracer {
             GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer) => {
-                let call_config = opts
-                    .tracer_config
-                    .clone()
-                    .into_call_config()
+                let call_config = CallTracerConfig::from_tracer_config(opts.tracer_config.clone())
                     .map_err(|_| DebugError::InvalidTracerConfig)?;
 
                 match sandbox::call_trace(txs, block_context, prev_state_view, call_config) {
@@ -173,10 +171,9 @@ impl<RpcStorage: ReadRpcStorage> DebugNamespace<RpcStorage> {
                 state_overrides,
                 block_overrides,
             ) => {
-                let call_config: CallConfig = tracing_options
-                    .tracer_config
-                    .into_call_config()
-                    .map_err(|_| DebugError::InvalidTracerConfig)?;
+                let call_config =
+                    CallTracerConfig::from_tracer_config(tracing_options.tracer_config)
+                        .map_err(|_| DebugError::InvalidTracerConfig)?;
                 Ok(self.eth_call_handler.call_trace_impl(
                     request,
                     block_id,
