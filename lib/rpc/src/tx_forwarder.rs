@@ -1,4 +1,4 @@
-use alloy::primitives::{B256, Bytes};
+use alloy::primitives::{B256, Bytes, U256};
 use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
 use std::collections::HashMap;
@@ -75,19 +75,21 @@ impl TxForwarder {
         .map(|_| ())
     }
 
-    /// Forwards `eth_sendRawTransactionSync`, giving up after `timeout`. The caller should
-    /// include the time the upstream node may spend waiting for a receipt.
+    /// Forwards `eth_sendRawTransactionSync`, asking the upstream node to wait up to `max_wait`
+    /// for a receipt. Passing the wait explicitly keeps the bound independent of the upstream
+    /// node's own default, so the forward gives up after `max_wait + timeout`.
     pub(crate) async fn forward_raw_transaction_sync(
         &self,
         tx_hash: B256,
         tx_bytes: &Bytes,
+        max_wait: Duration,
         timeout: Duration,
     ) -> Result<Option<ZkTransactionReceipt>, TxForwardError> {
         self.forward_with_timeout(
             tx_hash,
             tx_bytes,
-            TxForwardCall::SendRawTransactionSync,
-            timeout,
+            TxForwardCall::SendRawTransactionSync { max_wait },
+            max_wait + timeout,
         )
         .await
     }
@@ -156,10 +158,13 @@ impl TxForwarder {
                 let _ = endpoint.provider.send_raw_transaction(tx_bytes).await?;
                 Ok(None)
             }
-            TxForwardCall::SendRawTransactionSync => Ok(Some(
+            TxForwardCall::SendRawTransactionSync { max_wait } => Ok(Some(
                 endpoint
                     .provider
-                    .raw_request("eth_sendRawTransactionSync".into(), (tx_bytes.clone(),))
+                    .raw_request(
+                        "eth_sendRawTransactionSync".into(),
+                        (tx_bytes.clone(), U256::from(max_wait.as_millis())),
+                    )
                     .await?,
             )),
         }
@@ -170,7 +175,7 @@ impl TxForwarder {
             TxForwardCall::SendRawTransaction => {
                 tracing::debug!(%tx_hash, "not forwarding transaction: node is leader");
             }
-            TxForwardCall::SendRawTransactionSync => {
+            TxForwardCall::SendRawTransactionSync { .. } => {
                 tracing::debug!(%tx_hash, "not forwarding sync transaction: node is leader");
             }
         }
@@ -194,7 +199,7 @@ impl TxForwarder {
             (TxForwardCall::SendRawTransaction, None) => {
                 tracing::debug!(%tx_hash, rpc_url = %endpoint.rpc_url, "forwarding transaction");
             }
-            (TxForwardCall::SendRawTransactionSync, Some(leader)) => {
+            (TxForwardCall::SendRawTransactionSync { .. }, Some(leader)) => {
                 tracing::debug!(
                     %tx_hash,
                     leader = %leader,
@@ -202,7 +207,7 @@ impl TxForwarder {
                     "forwarding sync transaction to consensus leader"
                 );
             }
-            (TxForwardCall::SendRawTransactionSync, None) => {
+            (TxForwardCall::SendRawTransactionSync { .. }, None) => {
                 tracing::debug!(%tx_hash, rpc_url = %endpoint.rpc_url, "forwarding sync transaction");
             }
         }
@@ -212,7 +217,7 @@ impl TxForwarder {
 #[derive(Clone, Copy)]
 enum TxForwardCall {
     SendRawTransaction,
-    SendRawTransactionSync,
+    SendRawTransactionSync { max_wait: Duration },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -221,7 +226,11 @@ pub enum TxForwardError {
     NoKnownLeader,
     #[error("no RPC forwarder is configured for consensus leader {0}")]
     NoProvider(String),
-    #[error("upstream node did not respond within {0:?}")]
+    /// The upstream node may have received the transaction, so its outcome is unknown.
+    #[error(
+        "upstream node did not respond within {0:?}; the transaction may still be included, \
+         check its status by hash before re-signing"
+    )]
     Timeout(Duration),
     #[error(transparent)]
     Rpc(#[from] RpcError<TransportErrorKind>),
@@ -283,11 +292,82 @@ mod tests {
         assert!(matches!(err, TxForwardError::Timeout(t) if t == timeout));
         assert!(err.is_upstream_unavailable());
 
+        let max_wait = Duration::from_millis(100);
         let err = forwarder
-            .forward_raw_transaction_sync(B256::ZERO, &Bytes::from_static(&[1]), timeout)
+            .forward_raw_transaction_sync(B256::ZERO, &Bytes::from_static(&[1]), max_wait, timeout)
             .await
             .unwrap_err();
-        assert!(matches!(err, TxForwardError::Timeout(_)));
+        assert!(matches!(err, TxForwardError::Timeout(t) if t == max_wait + timeout));
+    }
+
+    /// Serves one JSON-RPC request: returns its `params` and answers with an EIP-7966 timeout.
+    async fn capture_one_request() -> (String, tokio::task::JoinHandle<serde_json::Value>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let body = loop {
+                let mut chunk = [0u8; 4096];
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0, "connection closed before the request was complete");
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                    continue;
+                };
+                let len: usize = head
+                    .lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        k.eq_ignore_ascii_case("content-length")
+                            .then(|| v.trim().parse().unwrap())
+                    })
+                    .unwrap();
+                if body.len() >= len {
+                    break body[..len].to_owned();
+                }
+            };
+            let request: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "error": { "code": 4, "message": "timeout" },
+            })
+            .to_string();
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{response}",
+                response.len()
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+            request["params"].clone()
+        });
+        (url, handle)
+    }
+
+    #[tokio::test]
+    async fn sync_forward_passes_max_wait_to_upstream() {
+        let (url, request) = capture_one_request().await;
+        let err = forwarder(&url)
+            .forward_raw_transaction_sync(
+                B256::ZERO,
+                &Bytes::from_static(&[1]),
+                Duration::from_millis(1500),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err.as_rpc_error(), Some(RpcError::ErrorResp(p)) if p.code == 4),
+            "{err:?}"
+        );
+
+        let params = request.await.unwrap();
+        assert_eq!(params[0], "0x01");
+        // 1500 ms, hex-encoded as a quantity.
+        assert_eq!(params[1], "0x5dc");
     }
 
     #[tokio::test]

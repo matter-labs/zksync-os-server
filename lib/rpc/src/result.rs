@@ -204,14 +204,22 @@ fn forward_error_to_rpc_err(
                 payload.data.clone(),
             )
         }
+        // The timeout message already says the outcome is unknown.
+        TxForwardError::Timeout(_) => {
+            rpc_error_with_code(UPSTREAM_UNAVAILABLE_ERROR_CODE, display.to_string())
+        }
+        // Not "not delivered": a proxy's 502/504 or a reset mid-response may
+        // come after the upstream node got the request. Re-sending the same
+        // signed transaction is always safe; re-signing may not be.
         err if err.is_upstream_unavailable() => rpc_error_with_code(
             UPSTREAM_UNAVAILABLE_ERROR_CODE,
-            format!("upstream node unavailable, retry later: {display}"),
+            format!(
+                "upstream node unavailable: {display}; retry by re-sending the same signed transaction"
+            ),
         ),
-        TxForwardError::Rpc(_)
-        | TxForwardError::NoKnownLeader
-        | TxForwardError::NoProvider(_)
-        | TxForwardError::Timeout(_) => internal_rpc_err(display.to_string()),
+        TxForwardError::Rpc(_) | TxForwardError::NoKnownLeader | TxForwardError::NoProvider(_) => {
+            internal_rpc_err(display.to_string())
+        }
     }
 }
 
@@ -355,9 +363,15 @@ mod tests {
     }
 
     #[test]
+    fn timeout_says_outcome_is_unknown() {
+        let (code, message) = code_and_message(TxForwardError::Timeout(Duration::from_secs(5)));
+        assert_eq!(code, UPSTREAM_UNAVAILABLE_ERROR_CODE);
+        assert!(message.contains("may still be included"), "{message}");
+    }
+
+    #[test]
     fn upstream_unavailable_maps_to_resource_unavailable() {
         for err in [
-            TxForwardError::Timeout(Duration::from_secs(5)),
             TxForwardError::NoKnownLeader,
             TxForwardError::Rpc(TransportErrorKind::custom_str("connection refused")),
             TxForwardError::Rpc(TransportErrorKind::http_error(503, "bad gateway".into())),
@@ -365,7 +379,8 @@ mod tests {
             let (code, message) = code_and_message(err);
             assert_eq!(code, UPSTREAM_UNAVAILABLE_ERROR_CODE);
             assert!(
-                message.starts_with("upstream node unavailable"),
+                message.starts_with("upstream node unavailable")
+                    && message.contains("re-sending the same signed transaction"),
                 "{message}"
             );
         }

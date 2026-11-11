@@ -217,12 +217,16 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             // EN path. Main is the source of truth: forward the sync call and
             // return main's verdict (receipt, rejection, or timeout) directly.
             //
-            // Main waits for a receipt for up to its own
-            // `send_raw_transaction_sync_timeout` (the caller's max_wait_ms is
-            // not forwarded), so the forward is bounded by that plus
-            // `tx_forwarding_timeout`. This assumes the EN and main share the
-            // same sync timeout; the bound only exists so a hung main cannot
-            // hold the request open indefinitely.
+            // The effective wait (caller's max_wait_ms, else our default) is
+            // passed to main explicitly, and the forward gives up after that
+            // wait plus `tx_forwarding_timeout`. This bounds a hung main
+            // without depending on main's own sync-timeout config.
+            //
+            // Trade-off: if main has not answered by then, we report the
+            // outcome as unknown although main may still include the tx. The
+            // error says so, telling the client to check by hash before
+            // re-signing. Without the bound, the client's own HTTP timeout
+            // would hit the same ambiguity, only later.
             //
             // If the future is dropped before we learn main's verdict (e.g.,
             // client disconnect), `local_cleanup` removes the orphaned local
@@ -236,8 +240,8 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
                     .forward_raw_transaction_sync(
                         tx_hash,
                         &bytes,
-                        self.config.send_raw_transaction_sync_timeout
-                            + self.config.tx_forwarding_timeout,
+                        timeout_duration,
+                        self.config.tx_forwarding_timeout,
                     )
                     .await
             };
