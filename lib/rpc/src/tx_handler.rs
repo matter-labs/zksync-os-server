@@ -166,7 +166,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             let mut local_cleanup = RemoveOnDrop::new(&self.mempool, hash);
             let forwarding_result = {
                 let _guard = ForwardingLatencyGuard::new();
-                tx_forwarder.forward_raw_transaction(hash, &tx_bytes).await
+                tx_forwarder
+                    .forward_raw_transaction(hash, &tx_bytes, self.config.tx_forwarding_timeout)
+                    .await
             };
             // We do not need to wait for pending transaction here, so it's safe to forget about it
             if let Err(err) = forwarding_result {
@@ -215,9 +217,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             // EN path. Main is the source of truth: forward the sync call and
             // return main's verdict (receipt, rejection, or timeout) directly.
             //
-            // No client-side timeout wraps this call so the EN cannot disagree
-            // with main on the outcome. The trade-off is that main's config
-            // default bounds the wait, not the caller's max_wait_ms.
+            // Main waits for a receipt for up to its own
+            // `send_raw_transaction_sync_timeout` (the caller's max_wait_ms is
+            // not forwarded), so the forward is bounded by that plus
+            // `tx_forwarding_timeout`. This assumes the EN and main share the
+            // same sync timeout; the bound only exists so a hung main cannot
+            // hold the request open indefinitely.
             //
             // If the future is dropped before we learn main's verdict (e.g.,
             // client disconnect), `local_cleanup` removes the orphaned local
@@ -228,7 +233,12 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             let forwarding_result = {
                 let _guard = ForwardingLatencyGuard::new();
                 forwarder
-                    .forward_raw_transaction_sync(tx_hash, &bytes)
+                    .forward_raw_transaction_sync(
+                        tx_hash,
+                        &bytes,
+                        self.config.send_raw_transaction_sync_timeout
+                            + self.config.tx_forwarding_timeout,
+                    )
                     .await
             };
             match forwarding_result {
@@ -330,6 +340,7 @@ impl From<&EthSendRawTransactionError> for TxRejectionReason {
             EthSendRawTransactionError::GasRateLimited { .. } => Self::GasRateLimited,
             EthSendRawTransactionError::ForwardError(err) => match err {
                 TxForwardError::Rpc(RpcError::ErrorResp(_)) => Self::ForwardRejected,
+                TxForwardError::Timeout(_) => Self::ForwardTimeout,
                 _ => Self::ForwardTransportError,
             },
             EthSendRawTransactionError::PoolError(pool_err) => Self::from(&pool_err.kind),

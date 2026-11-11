@@ -125,6 +125,11 @@ pub struct RpcConfig {
     /// Default timeout for `eth_sendRawTransactionSync`
     pub send_raw_transaction_sync_timeout: Duration,
 
+    /// Timeout for forwarding a transaction to the upstream node (the main node on ENs, the
+    /// leader on consensus followers). For `eth_sendRawTransactionSync`,
+    /// `send_raw_transaction_sync_timeout` is added on top.
+    pub tx_forwarding_timeout: Duration,
+
     /// Factor applied to the pending block base fee returned by `eth_gasPrice`.
     pub gas_price_scale_factor: f64,
 

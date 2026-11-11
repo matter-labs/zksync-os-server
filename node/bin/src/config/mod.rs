@@ -1060,6 +1060,12 @@ pub struct RpcConfig {
     #[config(default_t = 2 * TimeUnit::Seconds)]
     pub send_raw_transaction_sync_timeout: Duration,
 
+    /// Timeout for forwarding a transaction to the upstream node (the main node on ENs, the
+    /// leader on consensus followers). For `eth_sendRawTransactionSync`, the upstream node may
+    /// wait for a receipt before replying, so `send_raw_transaction_sync_timeout` is added on top.
+    #[config(default_t = 5 * TimeUnit::Seconds)]
+    pub tx_forwarding_timeout: Duration,
+
     /// Factor applied to the pending block base fee returned by `eth_gasPrice`.
     /// Some tools, e.g. Metamask, submit transactions with `maxFeePerGas=eth_gasPrice`, so it's important for multiplier to be `> 1`.
     #[config(default_t = 1.5)]
@@ -2058,6 +2064,7 @@ impl From<RpcConfig> for zksync_os_rpc::RpcConfig {
             l2_signer_blacklist: c.l2_signer_blacklist,
             stale_filter_ttl: c.stale_filter_ttl,
             send_raw_transaction_sync_timeout: c.send_raw_transaction_sync_timeout,
+            tx_forwarding_timeout: c.tx_forwarding_timeout,
             gas_price_scale_factor: c.gas_price_scale_factor,
             estimate_gas_pubdata_price_factor: c.estimate_gas_pubdata_price_factor,
             rate_limits: c.rate_limits.into(),

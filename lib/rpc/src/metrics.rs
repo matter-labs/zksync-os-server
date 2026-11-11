@@ -148,6 +148,8 @@ pub enum TxRejectionReason {
     BlacklistedSigner,
     /// Forwarding the transaction to the main node failed (transport error).
     ForwardTransportError,
+    /// Forwarding the transaction to the main node timed out.
+    ForwardTimeout,
     /// Forwarding the transaction to the main node failed (main node rejected it).
     ForwardRejected,
     /// Transaction already exists in the pool.

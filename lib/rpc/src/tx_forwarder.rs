@@ -2,6 +2,7 @@ use alloy::primitives::{B256, Bytes};
 use alloy::providers::{DynProvider, Provider};
 use alloy::transports::{RpcError, TransportErrorKind};
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio::sync::watch;
 use zksync_os_raft::RaftConsensusStatus;
 use zksync_os_rpc_api::types::ZkTransactionReceipt;
@@ -57,23 +58,52 @@ impl TxForwarder {
         }
     }
 
+    /// Forwards `eth_sendRawTransaction`, giving up after `timeout`.
     pub(crate) async fn forward_raw_transaction(
         &self,
         tx_hash: B256,
         tx_bytes: &Bytes,
+        timeout: Duration,
     ) -> Result<(), TxForwardError> {
-        self.forward(tx_hash, tx_bytes, TxForwardCall::SendRawTransaction)
-            .await
-            .map(|_| ())
+        self.forward_with_timeout(
+            tx_hash,
+            tx_bytes,
+            TxForwardCall::SendRawTransaction,
+            timeout,
+        )
+        .await
+        .map(|_| ())
     }
 
+    /// Forwards `eth_sendRawTransactionSync`, giving up after `timeout`. The caller should
+    /// include the time the upstream node may spend waiting for a receipt.
     pub(crate) async fn forward_raw_transaction_sync(
         &self,
         tx_hash: B256,
         tx_bytes: &Bytes,
+        timeout: Duration,
     ) -> Result<Option<ZkTransactionReceipt>, TxForwardError> {
-        self.forward(tx_hash, tx_bytes, TxForwardCall::SendRawTransactionSync)
+        self.forward_with_timeout(
+            tx_hash,
+            tx_bytes,
+            TxForwardCall::SendRawTransactionSync,
+            timeout,
+        )
+        .await
+    }
+
+    /// Bounds the whole forward, so an upstream node that accepts the connection but never
+    /// answers cannot hold the caller's request open indefinitely.
+    async fn forward_with_timeout(
+        &self,
+        tx_hash: B256,
+        tx_bytes: &Bytes,
+        call: TxForwardCall,
+        timeout: Duration,
+    ) -> Result<Option<ZkTransactionReceipt>, TxForwardError> {
+        tokio::time::timeout(timeout, self.forward(tx_hash, tx_bytes, call))
             .await
+            .map_err(|_| TxForwardError::Timeout(timeout))?
     }
 
     async fn forward(
@@ -191,6 +221,8 @@ pub enum TxForwardError {
     NoKnownLeader,
     #[error("no RPC forwarder is configured for consensus leader {0}")]
     NoProvider(String),
+    #[error("upstream node did not respond within {0:?}")]
+    Timeout(Duration),
     #[error(transparent)]
     Rpc(#[from] RpcError<TransportErrorKind>),
 }
@@ -201,5 +233,85 @@ impl TxForwardError {
             Self::Rpc(err) => Some(err),
             _ => None,
         }
+    }
+
+    /// Whether the upstream node could not be reached or did not answer in time, as opposed
+    /// to answering with a rejection. These failures are transient, so callers may retry.
+    pub(crate) fn is_upstream_unavailable(&self) -> bool {
+        match self {
+            Self::Timeout(_) | Self::NoKnownLeader | Self::Rpc(RpcError::Transport(_)) => true,
+            Self::NoProvider(_) | Self::Rpc(_) => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::providers::ProviderBuilder;
+    use tokio::net::TcpListener;
+
+    /// Starts a TCP server that accepts connections and never answers.
+    async fn blackhole_url() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn forwarder(url: &str) -> TxForwarder {
+        let provider = ProviderBuilder::new()
+            .connect_http(url.parse().unwrap())
+            .erased();
+        TxForwarder::static_target(TxForwardEndpoint::new(url.to_owned(), provider))
+    }
+
+    #[tokio::test]
+    async fn forward_times_out_when_upstream_hangs() {
+        let forwarder = forwarder(&blackhole_url().await);
+        let timeout = Duration::from_millis(200);
+
+        let err = forwarder
+            .forward_raw_transaction(B256::ZERO, &Bytes::from_static(&[1]), timeout)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TxForwardError::Timeout(t) if t == timeout));
+        assert!(err.is_upstream_unavailable());
+
+        let err = forwarder
+            .forward_raw_transaction_sync(B256::ZERO, &Bytes::from_static(&[1]), timeout)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TxForwardError::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn refused_connection_is_upstream_unavailable() {
+        // Bind and drop to get a local port that nothing listens on.
+        let addr = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let forwarder = forwarder(&format!("http://{addr}"));
+
+        let err = forwarder
+            .forward_raw_transaction(
+                B256::ZERO,
+                &Bytes::from_static(&[1]),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, TxForwardError::Rpc(RpcError::Transport(_))),
+            "{err:?}"
+        );
+        assert!(err.is_upstream_unavailable());
     }
 }

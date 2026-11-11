@@ -181,9 +181,15 @@ impl<Ok> ToRpcResult<Ok, EthSendRawTransactionSyncError>
     }
 }
 
+/// EIP-1474 "Resource unavailable". Returned when a transaction could not be forwarded because
+/// the upstream node (main node or consensus leader) is unreachable or did not answer in time.
+/// Unlike -32603, it tells the client the failure is transient and the request can be retried.
+pub const UPSTREAM_UNAVAILABLE_ERROR_CODE: i32 = -32002;
+
 /// Converts tx forwarding errors into a jsonrpsee error object.
 /// Preserves the original JSON-RPC error code when the remote node returned one.
-/// Local routing failures and transport failures fall back to internal error (-32603).
+/// An unreachable or unresponsive upstream node maps to [`UPSTREAM_UNAVAILABLE_ERROR_CODE`];
+/// other local failures fall back to internal error (-32603).
 fn forward_error_to_rpc_err(
     forward_err: &TxForwardError,
     display: &impl fmt::Display,
@@ -198,9 +204,14 @@ fn forward_error_to_rpc_err(
                 payload.data.clone(),
             )
         }
-        TxForwardError::Rpc(_) | TxForwardError::NoKnownLeader | TxForwardError::NoProvider(_) => {
-            internal_rpc_err(display.to_string())
-        }
+        err if err.is_upstream_unavailable() => rpc_error_with_code(
+            UPSTREAM_UNAVAILABLE_ERROR_CODE,
+            format!("upstream node unavailable, retry later: {display}"),
+        ),
+        TxForwardError::Rpc(_)
+        | TxForwardError::NoKnownLeader
+        | TxForwardError::NoProvider(_)
+        | TxForwardError::Timeout(_) => internal_rpc_err(display.to_string()),
     }
 }
 
@@ -328,5 +339,52 @@ impl fmt::Display for RevertError {
             write!(f, ": {error}")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::rpc::json_rpc::ErrorPayload;
+    use alloy::transports::TransportErrorKind;
+    use std::time::Duration;
+
+    fn code_and_message(err: TxForwardError) -> (i32, String) {
+        let obj = forward_error_to_rpc_err(&err, &err);
+        (obj.code(), obj.message().to_owned())
+    }
+
+    #[test]
+    fn upstream_unavailable_maps_to_resource_unavailable() {
+        for err in [
+            TxForwardError::Timeout(Duration::from_secs(5)),
+            TxForwardError::NoKnownLeader,
+            TxForwardError::Rpc(TransportErrorKind::custom_str("connection refused")),
+            TxForwardError::Rpc(TransportErrorKind::http_error(503, "bad gateway".into())),
+        ] {
+            let (code, message) = code_and_message(err);
+            assert_eq!(code, UPSTREAM_UNAVAILABLE_ERROR_CODE);
+            assert!(
+                message.starts_with("upstream node unavailable"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_rejection_keeps_its_code() {
+        let payload = ErrorPayload {
+            code: -32000,
+            message: "nonce too low".into(),
+            data: None,
+        };
+        let (code, _) = code_and_message(TxForwardError::Rpc(RpcError::ErrorResp(payload)));
+        assert_eq!(code, -32000);
+    }
+
+    #[test]
+    fn missing_provider_stays_internal() {
+        let (code, _) = code_and_message(TxForwardError::NoProvider("peer".into()));
+        assert_eq!(code, jsonrpsee::types::error::INTERNAL_ERROR_CODE);
     }
 }
