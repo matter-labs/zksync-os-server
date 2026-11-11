@@ -217,16 +217,9 @@ impl<RpcStorage: ReadRpcStorage, Mempool: L2Subpool> TxHandler<RpcStorage, Mempo
             // EN path. Main is the source of truth: forward the sync call and
             // return main's verdict (receipt, rejection, or timeout) directly.
             //
-            // The effective wait (caller's max_wait_ms, else our default) is
-            // passed to main explicitly, and the forward gives up after that
-            // wait plus `tx_forwarding_timeout`. This bounds a hung main
-            // without depending on main's own sync-timeout config.
-            //
-            // Trade-off: if main has not answered by then, we report the
-            // outcome as unknown although main may still include the tx. The
-            // error says so, telling the client to check by hash before
-            // re-signing. Without the bound, the client's own HTTP timeout
-            // would hit the same ambiguity, only later.
+            // We pass our wait to main and give up after it plus
+            // `tx_forwarding_timeout`. On timeout main may still include the
+            // tx, so the error reports the outcome as unknown.
             //
             // If the future is dropped before we learn main's verdict (e.g.,
             // client disconnect), `local_cleanup` removes the orphaned local
